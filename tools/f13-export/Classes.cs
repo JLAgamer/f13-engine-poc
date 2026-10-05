@@ -197,6 +197,7 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
                 return j;
             }
             case USkeletalMeshComponent:
+            case not null when type == "DestructibleComponent": // door leaves: a UDestructibleMesh is a skeletal mesh
             {
                 var mesh = Load(t.GetOrDefault<FPackageIndex?>("SkeletalMesh")) as USkeletalMesh;
                 if (mesh != null) { queueMesh(mesh); j["Mesh"] = meshFile(mesh); }
