@@ -163,9 +163,6 @@ fn spawn_props(mut commands: Commands, assets: Res<AssetServer>, level: Res<crat
 
     for (id, actor) in world.spawned_actors() {
         let Some(info) = classes.get(&actor.class) else { continue };
-        if classes.is_child_of(&actor.class, "SCBarricade") {
-            continue; // its open/closed/destroyed meshes overlap until barricades are implemented
-        }
         let root = commands.spawn((to_transform(&actor.transform), Visibility::default(), Name::new(actor.class.clone()))).id();
         entities.insert(id, root);
         let mut drawer = None;
@@ -175,6 +172,7 @@ fn spawn_props(mut commands: Commands, assets: Res<AssetServer>, level: Res<crat
             (commands.spawn((t, Visibility::default(), ChildOf(root))).id(), t)
         });
         let mut leaf_center = Vec3::ZERO;
+        let mut parts: HashMap<&str, Entity> = HashMap::new();
         for c in &info.components {
             let Some(mesh) = &c.mesh else { continue };
             if c.hidden || ["Destroyed", "Broken", "Broke"].iter().any(|s| c.name.contains(s)) {
@@ -188,6 +186,7 @@ fn spawn_props(mut commands: Commands, assets: Res<AssetServer>, level: Res<crat
                 continue;
             }
             let child = commands.spawn((WorldAssetRoot(scene(mesh)), local(c), ChildOf(root))).id();
+            parts.insert(c.name.as_str(), child);
             if c.name == "AnimatedMesh" {
                 commands.entity(child).insert(Drawer { closed: local(c) });
                 drawer = Some(child);
@@ -215,6 +214,44 @@ fn spawn_props(mut commands: Commands, assets: Res<AssetServer>, level: Res<crat
                 target: 0.0,
             });
             *counts.entry("doors").or_default() += 1;
+        }
+        if classes.is_child_of(&actor.class, "SCBarricade") {
+            // The plank across the door (`..._01_a`, horizontal) vs the one stood against the wall (`..._01_b`).
+            let get = |n: &str| parts.get(n).copied().into_iter().collect::<Vec<_>>();
+            commands.entity(root).insert(crate::windows::Barricade {
+                enabled: false,
+                door: None,
+                up: get("S_Interactive_Door_Barricade_01_b"),
+                down: get("Mesh"),
+            });
+            *counts.entry("barricades").or_default() += 1;
+        }
+        if classes.is_child_of(&actor.class, "SCWindow") {
+            let wi = info.components.iter().find(|c| c.kind == "SCInteractComponent");
+            let f = |name: &str, default: f32| classes.prop(&actor.class, name).as_f64().map_or(default, |v| v as f32);
+            // The moving pane slides to OpenLocation, relative to its parent (the frame).
+            let pane = info.components.iter().find(|c| c.name == "Moveable Pane").and_then(|c| {
+                let e = *parts.get(c.name.as_str())?;
+                let closed = local(c);
+                let parent = c.parent.as_deref().and_then(|p| info.components.iter().find(|x| x.name == p)).map_or(Transform::IDENTITY, local);
+                let open_ue = classes.prop(&actor.class, "OpenLocation");
+                let d = |k: &str| open_ue[k].as_f64().unwrap_or(0.0) as f32 / 100.0;
+                let offset = parent.rotation * Vec3::new(d("X"), d("Z"), d("Y"));
+                Some((e, closed, Transform { translation: closed.translation + offset, ..closed }))
+            });
+            let glass = ["Moveable Pane", "StaticPane"].iter().filter_map(|n| parts.get(n).copied()).collect();
+            commands.entity(root).insert(crate::windows::Window {
+                open: false,
+                destroyed: false,
+                interact: wi.map_or(Vec3::Y * 1.6, |c| local(c).translation),
+                reach: wi.map_or(150.0, |c| reach(c, 150.0)),
+                dive_damage: f("DiveDamage", 20.0),
+                vault_damage: f("VaultDamage", 15.0),
+                take_vault_damage: classes.prop(&actor.class, "bTakeVaultDamage").as_bool().unwrap_or(false),
+                pane,
+                glass,
+            });
+            *counts.entry("windows").or_default() += 1;
         }
         if classes.is_child_of(&actor.class, "SCItem") && counselor_can_use {
             let large = f13_core::spawn::ClassQuery::is_large(&classes, &actor.class);

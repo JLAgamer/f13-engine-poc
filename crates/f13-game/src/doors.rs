@@ -8,8 +8,11 @@
 //!   from outside a locked one (unlock). Toggles the lock.
 //! - A press is a release before the hold starts (`MinInteractHoldTime`), as with the game's hold interactables.
 //!
+//! - A door with a barricade (windows.rs) uses it instead of the lock: hold from inside toggles it, and a barred door
+//!   doesn't open.
+//!
 //! PLACEHOLDERS: the swing (90 degrees, away from whoever opens it, in [`SWING_SECONDS`]) stands in for the
-//! special-move montages and the door's anim driver; barricades aren't linked yet.
+//! special-move montages and the door's anim driver.
 
 use bevy::prelude::*;
 
@@ -45,11 +48,13 @@ impl Door {
         forward.dot(at - door.translation()) < 0.0
     }
 
-    /// What a counselor at `at` may do: (press: open/close, hold: lock/unlock). From outside, a locked door offers
-    /// only the hold, which unlocks it (`UnlockDoorOutside`); from inside a closed lockable door offers both.
-    pub fn can_interact(&self, door: &GlobalTransform, at: Vec3) -> (bool, bool) {
-        let press = !self.locked;
-        let hold = if Door::is_inside(door, at) { !self.open && self.lockable } else { self.locked };
+    /// What a counselor at `at` may do: (press: open/close, hold: lock/unlock or barricade). From outside, a locked
+    /// door offers only the hold, which unlocks it (`UnlockDoorOutside`); from inside a closed door offers the
+    /// lock, or its barricade when it has one (`barricade` = Some(enabled)).
+    pub fn can_interact(&self, door: &GlobalTransform, at: Vec3, barricade: Option<bool>) -> (bool, bool) {
+        let barred = barricade == Some(true);
+        let press = !self.locked && !barred;
+        let hold = if Door::is_inside(door, at) { !self.open && (self.lockable || barricade.is_some()) } else { self.locked };
         (press, hold)
     }
 

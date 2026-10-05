@@ -10,6 +10,7 @@
 
 use crate::player::{Player, PlayerCamera, PlayerTuning};
 use crate::doors::Door;
+use crate::windows::{Barricade, Window, WindowAction};
 use crate::props::{Cabinet, Drawer, InCabinet, Item, Vehicle};
 use crate::vehicle::Driving;
 use bevy::prelude::*;
@@ -60,6 +61,7 @@ enum Target {
     Repair(Entity, usize),
     Seat(Entity),
     Door(Entity),
+    Window(Entity),
 }
 
 #[derive(Resource, Default)]
@@ -87,7 +89,13 @@ impl Plugin for InteractPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Interaction>()
             .add_systems(Startup, spawn_prompt)
-            .add_systems(Update, (add_inventory, choose_target, act, drop_item, use_item, update_prompt, crate::doors::swing_doors).chain());
+            .add_systems(
+            Update,
+            (add_inventory, crate::windows::link_barricades, choose_target, act, drop_item, use_item, update_prompt)
+                .chain()
+                .before(crate::doors::swing_doors),
+        )
+        .add_systems(Update, (crate::doors::swing_doors, crate::windows::update_window_visuals));
     }
 }
 
@@ -121,6 +129,8 @@ fn choose_target(
     cabinets: Query<(Entity, &Cabinet, &GlobalTransform)>,
     vehicles: Query<(Entity, &Vehicle, &GlobalTransform)>,
     doors: Query<(Entity, &Door, &GlobalTransform)>,
+    windows: Query<(Entity, &Window, &GlobalTransform)>,
+    barricades: Query<&Barricade>,
     mut interaction: ResMut<Interaction>,
 ) {
     if interaction.busy() {
@@ -166,10 +176,13 @@ fn choose_target(
         }
     }
     for (e, d, gxf) in &doors {
-        let (press, hold) = d.can_interact(gxf, xf.translation);
+        let (press, hold) = d.can_interact(gxf, xf.translation, barricade_of(&barricades, e));
         if press || hold {
             consider(gxf.transform_point(d.interact), d.reach, Target::Door(e));
         }
+    }
+    for (e, w, gxf) in &windows {
+        consider(gxf.transform_point(w.interact), w.reach, Target::Window(e));
     }
     let target = best.map(|(_, t)| t);
     if target != interaction.target {
@@ -187,16 +200,17 @@ fn act(
     mouse: Res<ButtonInput<MouseButton>>,
     tuning: Res<PlayerTuning>,
     mut rng: ResMut<crate::GameRng>,
-    mut player: Single<(Entity, &Transform, &mut Inventory, &Player), Without<Driving>>,
+    mut player: Single<(Entity, &mut Transform, &mut Inventory, &mut Player), Without<Driving>>,
     items: Query<&Item>,
     mut cabinets: Query<&mut Cabinet>,
     mut drawers: Query<(&Drawer, &mut Transform), Without<Player>>,
     mut vehicles: Query<&mut Vehicle>,
     mut doors: Query<(&mut Door, &GlobalTransform)>,
+    (mut windows, mut barricades): (Query<(&mut Window, &GlobalTransform)>, Query<&mut Barricade>),
     mut visibility: Query<&mut Visibility>,
 ) {
     let Some(target) = interaction.target else { return };
-    let (player_entity, player_xf, ref mut inv, p) = *player;
+    let (player_entity, ref mut player_xf, ref mut inv, ref mut p) = *player;
     match target {
         Target::Item(e) if keys.just_pressed(KeyCode::KeyE) => {
             let Ok(item) = items.get(e) else { return };
@@ -270,7 +284,8 @@ fn act(
                 interaction.hold_done = keys.pressed(KeyCode::KeyE);
                 return;
             }
-            let (press, hold) = door.can_interact(gxf, player_xf.translation);
+            let barricade = barricades.iter().find(|b| b.door == Some(d)).map(|b| b.enabled);
+            let (press, hold) = door.can_interact(gxf, player_xf.translation, barricade);
             // Press = let go before the hold starts; hold = keep holding for the door's hold time.
             let started = interaction.hold.as_ref().is_some_and(|h| h.started);
             if keys.just_released(KeyCode::KeyE) && !started && press {
@@ -287,11 +302,64 @@ fn act(
             let mut events = Vec::new();
             h.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
             if events.contains(&MinigameEvent::Completed) {
-                let what = door.toggle_lock();
+                let what = match barricades.iter_mut().find(|b| b.door == Some(d)) {
+                    // A barricade only moves while the door is shut (OnUsedBarricade).
+                    Some(mut b) if !door.open => {
+                        b.enabled = !b.enabled;
+                        if b.enabled { "barricaded" } else { "unbarricaded" }
+                    }
+                    Some(_) => "open (can't barricade)",
+                    None => door.toggle_lock(),
+                };
                 info!("door {what}");
                 interaction.hold = None;
                 interaction.hold_done = true;
                 interaction.target = None;
+            }
+        }
+        Target::Window(w) => {
+            let Ok((mut window, gxf)) = windows.get_mut(w) else { return };
+            if interaction.hold_done {
+                interaction.hold_done = keys.pressed(KeyCode::KeyE);
+                return;
+            }
+            let started = interaction.hold.as_ref().is_some_and(|h| h.started);
+            if keys.just_released(KeyCode::KeyE) && !started {
+                interaction.hold = None;
+                let action = window.press_action(p.counselor.sprinting, p.counselor.wounded);
+                match action {
+                    WindowAction::Open => window.open = true,
+                    _ => {
+                        // Through the window (instantly, for now), taking any damage.
+                        let damage = window.damage(action);
+                        if action == WindowAction::Dive && !window.open {
+                            window.destroyed = true;
+                        }
+                        player_xf.translation = Window::landing(gxf, window.interact, player_xf.translation);
+                        if damage > 0.0 {
+                            p.counselor.take_damage(f13_core::health::Hit { amount: damage, ..Default::default() }, &tuning.counselor);
+                        }
+                        p.velocity = Vec2::ZERO;
+                        info!("window {action:?}: {damage:.0} damage, health {:.0}", p.counselor.health);
+                        interaction.target = None;
+                        return;
+                    }
+                }
+                info!("window {action:?}");
+                return;
+            }
+            if !keys.pressed(KeyCode::KeyE) || !window.can_hold() {
+                interaction.hold = None;
+                return;
+            }
+            let h = interaction.hold.get_or_insert_with(|| HoldInteraction::new(0.5, false));
+            let mut events = Vec::new();
+            h.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
+            if events.contains(&MinigameEvent::Completed) {
+                window.open = false;
+                info!("window Close");
+                interaction.hold = None;
+                interaction.hold_done = true;
             }
         }
         Target::Seat(v) if keys.just_pressed(KeyCode::KeyE) => {
@@ -326,6 +394,10 @@ fn dial(h: &HoldInteraction, t: &f13_core::minigame::MinigameTuning) -> String {
             }
         })
         .collect()
+}
+
+fn barricade_of(barricades: &Query<&Barricade>, door: Entity) -> Option<bool> {
+    barricades.iter().find(|b| b.door == Some(door)).map(|b| b.enabled)
 }
 
 /// Puts an item back in the world at the counselor's feet.
@@ -391,12 +463,13 @@ fn update_prompt(
     interaction: Res<Interaction>,
     tuning: Res<PlayerTuning>,
     doors: Query<(&Door, &GlobalTransform)>,
-    player: Single<(&Inventory, Has<Driving>, &Transform, Option<&UsingItem>), With<Player>>,
+    (windows, barricades): (Query<&Window>, Query<&Barricade>),
+    player: Single<(&Inventory, Has<Driving>, &Transform, Option<&UsingItem>, &Player)>,
     items: Query<&Item>,
     vehicles: Query<&Vehicle>,
     mut text: Single<&mut Text, With<PromptText>>,
 ) {
-    let (inv, driving, _, using) = *player;
+    let (inv, driving, _, using, p) = *player;
     let name = |e: Entity| items.get(e).map_or("?".to_string(), |i| i.name.clone());
     let mut lines = vec![format!(
         "Hands: {}   Pockets: [{}] ({}/{})",
@@ -433,15 +506,34 @@ fn update_prompt(
                 }
             }
             Some(Target::Seat(_)) => lines.push("[E] Get in (driver)".into()),
+            Some(Target::Window(w)) => {
+                if let Ok(window) = windows.get(w) {
+                    let press = match window.press_action(p.counselor.sprinting, p.counselor.wounded) {
+                        WindowAction::Dive => "[E] Dive through",
+                        WindowAction::Open => "[E] Open window",
+                        _ => "[E] Climb through",
+                    };
+                    lines.push(if window.can_hold() { format!("{press}   [Hold E] Close") } else { press.to_string() });
+                }
+            }
             Some(Target::Door(d)) => {
                 if let Ok((door, gxf)) = doors.get(d) {
-                    let (press, hold) = door.can_interact(gxf, player.2.translation);
+                    let barricade = barricades.iter().find(|b| b.door == Some(d)).map(|b| b.enabled);
+                    let (press, hold) = door.can_interact(gxf, player.2.translation, barricade);
                     let mut s = Vec::new();
                     if press {
                         s.push(if door.open { "[E] Close door" } else { "[E] Open door" });
                     }
                     if hold {
-                        s.push(if door.locked { "[Hold E] Unlock" } else { "[Hold E] Lock" });
+                        s.push(match barricade {
+                            Some(true) => "[Hold E] Remove barricade",
+                            Some(false) => "[Hold E] Barricade",
+                            None if door.locked => "[Hold E] Unlock",
+                            None => "[Hold E] Lock",
+                        });
+                    }
+                    if barricade == Some(true) && !hold {
+                        s.push("Barricaded");
                     }
                     lines.push(s.join("   "));
                 }

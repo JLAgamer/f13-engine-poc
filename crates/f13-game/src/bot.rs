@@ -4,8 +4,9 @@
 //! with the keys, then drive into a car escape zone. Logs every step; exits when it escapes (or gives up).
 //!
 //! `--bot-heal`: fetch a first aid spray and use it (start hurt with `--health`); exits when healed.
-//! `--bot-door`: at the nearest door: open and close it from outside, lock it from inside, check a press no longer
-//! opens it, unlock it from outside, open it; saves a screenshot of the open door (temp f13-bot-door.png).
+//! `--bot-door`: doors, barricades and windows ([`FX_STEPS`]): open/close/lock/unlock the nearest lockable door,
+//! barricade the nearest barred door and check it holds from both sides, then open a window, climb in, close it,
+//! dive out through the glass (20 damage) and climb back in; screenshots to temp f13-bot-fixture-*.png.
 //! `--bot-dodge`: enter combat stance and double-tap S, A, D; logs how far each dodge moved (needs open ground).
 
 use crate::interact::{Carried, Inventory, UsingItem, FIRST_AID};
@@ -69,24 +70,64 @@ struct Bot {
     second_tap: bool,
     /// Keep E down across frames (a hold) instead of re-pressing it each frame.
     hold_e: bool,
-    door: Option<Entity>,
+    /// Fixture test targets: lockable door, barricaded door, window.
+    fixtures: [Option<Entity>; 3],
     door_ok: bool,
 }
 
 impl Default for Bot {
     fn default() -> Self {
-        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false, hold_e: false, door: None, door_ok: false }
+        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false, hold_e: false, fixtures: [None; 3], door_ok: false }
     }
 }
 
-/// Door test: (from outside, hold instead of press, then open?, then locked?).
-const DOOR_STEPS: [(bool, bool, bool, bool); 6] = [
-    (true, false, true, false),  // open from outside
-    (true, false, false, false), // close it
-    (false, true, false, true),  // lock from inside
-    (false, false, false, true), // a press doesn't open a locked door
-    (true, true, false, false),  // unlock from outside
-    (true, false, true, false),  // open it
+/// What a fixture step acts on.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Fx {
+    Door,
+    BarredDoor,
+    Window,
+}
+
+/// State the fixture checks look at, taken after each step.
+struct Snap {
+    door_open: bool,
+    door_locked: bool,
+    barred: bool,
+    window_open: bool,
+    window_broken: bool,
+    /// The counselor is on the window's inside.
+    inside: bool,
+    health: f32,
+}
+
+struct FxStep {
+    what: &'static str,
+    fx: Fx,
+    /// Where to stand (None: stay where the last step left us, e.g. after going through a window).
+    outside: Option<bool>,
+    hold: bool,
+    sprint: bool,
+    expect: fn(&Snap) -> bool,
+}
+
+const FX_STEPS: &[FxStep] = &[
+    FxStep { what: "open from outside", fx: Fx::Door, outside: Some(true), hold: false, sprint: false, expect: |s| s.door_open },
+    FxStep { what: "close", fx: Fx::Door, outside: Some(true), hold: false, sprint: false, expect: |s| !s.door_open },
+    FxStep { what: "lock from inside", fx: Fx::Door, outside: Some(false), hold: true, sprint: false, expect: |s| s.door_locked },
+    FxStep { what: "a press does not open it", fx: Fx::Door, outside: Some(false), hold: false, sprint: false, expect: |s| !s.door_open },
+    FxStep { what: "unlock from outside", fx: Fx::Door, outside: Some(true), hold: true, sprint: false, expect: |s| !s.door_locked },
+    FxStep { what: "open it", fx: Fx::Door, outside: Some(true), hold: false, sprint: false, expect: |s| s.door_open },
+    FxStep { what: "barricade from inside", fx: Fx::BarredDoor, outside: Some(false), hold: true, sprint: false, expect: |s| s.barred },
+    FxStep { what: "barred: press from inside", fx: Fx::BarredDoor, outside: Some(false), hold: false, sprint: false, expect: |s| !s.door_open },
+    FxStep { what: "barred: press from outside", fx: Fx::BarredDoor, outside: Some(true), hold: false, sprint: false, expect: |s| !s.door_open },
+    FxStep { what: "remove barricade", fx: Fx::BarredDoor, outside: Some(false), hold: true, sprint: false, expect: |s| !s.barred },
+    FxStep { what: "open it", fx: Fx::BarredDoor, outside: Some(false), hold: false, sprint: false, expect: |s| s.door_open },
+    FxStep { what: "open window from outside", fx: Fx::Window, outside: Some(true), hold: false, sprint: false, expect: |s| s.window_open },
+    FxStep { what: "climb in", fx: Fx::Window, outside: None, hold: false, sprint: false, expect: |s| s.inside && s.health == 100.0 },
+    FxStep { what: "close it from inside", fx: Fx::Window, outside: None, hold: true, sprint: false, expect: |s| !s.window_open },
+    FxStep { what: "dive out through the glass", fx: Fx::Window, outside: None, hold: false, sprint: true, expect: |s| !s.inside && s.window_broken && s.health == 80.0 },
+    FxStep { what: "climb back in over the broken glass", fx: Fx::Window, outside: None, hold: false, sprint: false, expect: |s| s.inside },
 ];
 
 fn place(player: &mut Transform, at: Vec3) {
@@ -116,7 +157,12 @@ fn run_bot(
     carried: Query<&Item, With<Carried>>,
     cabinets: Query<(&Cabinet, &GlobalTransform)>,
     mut vehicles: Query<(Entity, &Vehicle, &GlobalTransform, &mut Transform), Without<Player>>,
-    (zones, doors): (Query<(&EscapeZone, &GlobalTransform)>, Query<(Entity, &crate::doors::Door, &GlobalTransform)>),
+    (zones, doors, windows, barricades): (
+        Query<(&EscapeZone, &GlobalTransform)>,
+        Query<(Entity, &crate::doors::Door, &GlobalTransform)>,
+        Query<(Entity, &crate::windows::Window, &GlobalTransform)>,
+        Query<&crate::windows::Barricade>,
+    ),
     escaped: Option<Res<Escaped>>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -144,9 +190,16 @@ fn run_bot(
                 return;
             }
             if bot.goal == Goal::Door {
+                // Nearest lockable door, nearest door with a barricade, nearest window.
                 let me = pxf.translation;
-                bot.door = doors.iter().min_by(|a, b| a.2.translation().distance(me).total_cmp(&b.2.translation().distance(me))).map(|d| d.0);
-                info!("bot: testing door {:?}", bot.door);
+                let near = |p: Vec3| p.distance(me);
+                let barred = |e: Entity| barricades.iter().any(|b| b.door == Some(e));
+                let pick = |want_bar: bool| {
+                    doors.iter().filter(|d| barred(d.0) == want_bar).min_by(|a, b| near(a.2.translation()).total_cmp(&near(b.2.translation()))).map(|d| d.0)
+                };
+                let window = windows.iter().min_by(|a, b| near(a.2.translation()).total_cmp(&near(b.2.translation()))).map(|w| w.0);
+                bot.fixtures = [pick(false), pick(true), window];
+                info!("bot: fixtures {:?}", bot.fixtures);
                 bot.step = Step::Door(0);
                 bot.timer = 0.0;
                 return;
@@ -311,29 +364,44 @@ fn run_bot(
             }
         }
         Step::Door(i) => {
-            let Some((_, door, dxf)) = bot.door.and_then(|d| doors.get(d).ok()) else { bot.step = Step::Done; return };
-            if i == DOOR_STEPS.len() {
+            if i == FX_STEPS.len() {
                 bot.door_ok = true;
                 bot.step = Step::Done;
                 return;
             }
-            let (outside, hold, expect_open, expect_locked) = DOOR_STEPS[i];
-            // Stand 0.8 m out from the interact point on the chosen side (the door's forward is outside).
-            let at = dxf.transform_point(door.interact);
-            let fwd = (dxf.rotation() * Vec3::X).with_y(0.0).normalize_or_zero();
-            let stand = at + fwd * if outside { 0.8 } else { -0.8 } - Vec3::Y * 1.0;
-            place(pxf, stand);
+            let step = &FX_STEPS[i];
+            let target = bot.fixtures[step.fx as usize];
+            let Some((interact, gxf)) = target.and_then(|e| match step.fx {
+                Fx::Window => windows.get(e).ok().map(|(_, w, x)| (w.interact, *x)),
+                _ => doors.get(e).ok().map(|(_, d, x)| (d.interact, *x)),
+            }) else {
+                error!("bot: no fixture for {:?}", step.fx);
+                bot.step = Step::Done;
+                return;
+            };
+            // Stand 0.8 m from the interact point on the chosen side (outside = the fixture's forward side).
+            let at = gxf.transform_point(interact);
+            let fwd = (gxf.rotation() * Vec3::X).with_y(0.0).normalize_or_zero();
+            if let Some(outside) = step.outside {
+                let stand = Vec3::new(at.x, gxf.translation().y, at.z) + fwd * if outside { 0.8 } else { -0.8 };
+                if bot.timer < 0.5 {
+                    place(pxf, stand);
+                }
+            }
             look_at(&mut camera, pxf, at);
+            if step.sprint && bot.timer < 2.0 {
+                keys.press(KeyCode::ShiftLeft);
+            }
             if bot.timer < 0.5 {
                 return;
             }
-            if hold && bot.timer < 2.0 {
+            if step.hold && bot.timer < 2.0 {
                 keys.press(KeyCode::KeyE);
                 bot.hold_e = true;
                 return;
             }
             bot.hold_e = false;
-            if !hold && !bot.second_tap {
+            if !step.hold && !bot.second_tap {
                 keys.press(KeyCode::KeyE); // one frame: released next frame, so it reads as a press
                 bot.second_tap = true;
                 return;
@@ -341,14 +409,38 @@ fn run_bot(
             if bot.timer < 2.5 {
                 return;
             }
-            let ok = door.open == expect_open && door.locked == expect_locked;
-            info!("bot: door step {i} ({} {}): open {} locked {} angle {:.0} -> {}", if outside { "outside" } else { "inside" }, if hold { "hold" } else { "press" }, door.open, door.locked, door.angle.to_degrees(), if ok { "ok" } else { "WRONG" });
+            keys.release(KeyCode::ShiftLeft);
+            let door = target.filter(|_| step.fx != Fx::Window).and_then(|e| doors.get(e).ok());
+            let window = bot.fixtures[2].and_then(|e| windows.get(e).ok());
+            let snap = Snap {
+                door_open: door.is_some_and(|d| d.1.open),
+                door_locked: door.is_some_and(|d| d.1.locked),
+                barred: door.is_some_and(|d| barricades.iter().any(|b| b.door == Some(d.0) && b.enabled)),
+                window_open: window.is_some_and(|w| w.1.open),
+                window_broken: window.is_some_and(|w| w.1.destroyed),
+                inside: window.is_some_and(|w| crate::windows::Window::is_inside(w.2, pxf.translation)),
+                health: p.counselor.health,
+            };
+            let ok = (step.expect)(&snap);
+            info!(
+                "bot: {:?} step {i} ({}): door open {} locked {} barred {} | window open {} broken {} inside {} | health {:.0} -> {}",
+                step.fx,
+                step.what,
+                snap.door_open,
+                snap.door_locked,
+                snap.barred,
+                snap.window_open,
+                snap.window_broken,
+                snap.inside,
+                snap.health,
+                if ok { "ok" } else { "WRONG" }
+            );
             if !ok {
                 bot.step = Step::Done;
                 return;
             }
-            if i == 0 {
-                let path = std::env::temp_dir().join("f13-bot-door.png");
+            if matches!(i, 0 | 6 | 14) {
+                let path = std::env::temp_dir().join(format!("f13-bot-fixture-{i}.png"));
                 commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
             }
             bot.step = Step::Door(i + 1);

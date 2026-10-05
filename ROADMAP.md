@@ -32,7 +32,8 @@ Mechanics: counselor side
 - [x] Cabinets (drawers): search, items inside
 - [x] Doors: leaves exported and swinging on their pivot, open/close, lock/unlock by side (doors.rs; swing timing is a
   placeholder for the special-move montages)
-- [ ] Barricades, windows (open, vault, dive)
+- [x] Barricades (replace the lock, only on a closed door) and windows: open, close, vault, dive (breaks the glass,
+  DiveDamage); windows.rs. Vault/dive are instant moves for now; barricade mesh placement unverified
 - [ ] Hiding: closets, beds
 - [x] Health, wounded, death, blocking damage, first aid (f13-core::health); limp animation later
 - [ ] Weapons and combat: hit, stun, block

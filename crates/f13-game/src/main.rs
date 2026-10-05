@@ -9,6 +9,7 @@ mod doors;
 mod interact;
 mod player;
 mod props;
+mod windows;
 mod vehicle;
 
 use bevy::asset::AssetPlugin;
