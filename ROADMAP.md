@@ -62,9 +62,20 @@ Presentation
 - [x] Map, characters and car exported to glTF (`tools/f13-export`)
 - [x] Map loaded in Bevy with its cabin layouts (`f13-game`)
 - [ ] Materials: cabins, terrain layers, water, SpeedTree pine leaves
-- [x] Car, furniture, doors' frames and items placed in the scene (door leaves are destructible meshes: not exported yet)
+- [x] Car, furniture, doors (frames and leaves), windows, barricades and items placed in the scene
+- [ ] Barricade plank: check its placement (not visible across the door in a screenshot)
+- [ ] Counselor model: Vanessa's outfit, hair and face attached to the head bone (now a capsule; her mesh is the bare
+      base body)
+- [ ] Jason model (Part 2)
 - [ ] Characters placed in the scene
-- [ ] Animations (placeholder until retargeting works)
+- [ ] Animations (placeholder until retargeting works): locomotion, limp when wounded, stumbles, dodges, first aid,
+      repairs, car enter/exit
+- [ ] Special moves: door open/close/lock and window open/close/vault/dive montages (now a fixed 0.5 s, 90° door swing
+      and instant vault/dive)
+- [ ] Repair minigame dial UI (now a text dial in the HUD)
+- [ ] HUD: health, stamina, fear and inventory (now debug text)
+- [ ] Night lighting, fog, flashlight
+- [ ] Audio: footsteps, music and Jason's stingers, doors, windows, car
 
 Setup
 - [x] Tools refuse a packed (stock) install with a clear message; they need the content extracted to loose files
