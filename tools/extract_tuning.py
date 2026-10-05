@@ -211,7 +211,13 @@ def main():
     ap.add_argument("--out", default=os.path.join(os.path.expanduser("~"), ".f13-rs", "tuning.json"))
     a = ap.parse_args()
     content = os.path.join(a.game, "SummerCamp", "Content")
-    exe = os.path.join(a.game, "SummerCamp", "Binaries", "Win64", "SummerCamp.exe")
+    if not os.path.isfile(os.path.join(content, "Characters", "Killers", "Jason", "Base", "Jason_Base.uasset")):
+        paks = os.path.join(content, "Paks")
+        packed = os.path.isdir(paks) and any(f.lower().endswith(".pak") for f in os.listdir(paks))
+        sys.exit(f'"{a.game}" is a stock install: its content is still packed in Content/Paks/*.pak.\n'
+                 "Extract the main pak to loose files under SummerCamp/Content first (the usual modding setup)."
+                 if packed else f'"{a.game}" has no extracted game content under SummerCamp/Content.')
+    exe =os.path.join(a.game, "SummerCamp", "Binaries", "Win64", "SummerCamp.exe")
     consts = read_exe_constants(exe)
     conv = Converter(content, a.uassetgui)
     try:

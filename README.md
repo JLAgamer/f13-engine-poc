@@ -33,7 +33,7 @@ any constant from it.
 
 ## Meshes and maps from your own install
 `tools/f13-export` is a small C# tool (.NET 10, using [CUE4Parse](https://github.com/FabianFG/CUE4Parse)) that
-reads your install's loose files and writes glTF meshes, PNG textures, material info and level layouts:
+reads your install's loose files and writes glTF meshes, PNG textures, material info and level layouts (see the note below):
 
 ```
 dotnet run --project tools/f13-export -- --game "<path to F13Game>" --out "<export dir>" mvp
@@ -45,6 +45,9 @@ dotnet run --project tools/f13-export -- --game "<path to F13Game>" --out "<expo
 - `classes.json`: Blueprint classes the match can spawn (cabinets, items, cars, doors...): parents, defaults and
   components in actor space. Level files also carry each gameplay actor's properties and components.
 - Keep the export directory outside this repository.
+- Both tools need the game's content extracted to loose files under `SummerCamp/Content` (the usual modding
+  setup). A stock install keeps it in `Content/Paks/*.pak`, which isn't a standard Unreal pak, so it can't be read
+  yet; the tools detect this and say so.
 
 View the map (Crystal Lake, small; `--layout` picks one of its four cabin layouts):
 

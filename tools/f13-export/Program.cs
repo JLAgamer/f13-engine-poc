@@ -40,7 +40,13 @@ if (game == null || outDir == null || rest.Count == 0)
     return 2;
 }
 
-Serilog.Log.Logger = new Serilog.LoggerConfiguration().MinimumLevel.Warning().WriteTo.Console().CreateLogger();
+if (InstallProblem(game) is { } problem)
+{
+    Console.Error.WriteLine(problem);
+    return 1;
+}
+
+Serilog.Log.Logger =new Serilog.LoggerConfiguration().MinimumLevel.Warning().WriteTo.Console().CreateLogger();
 PropertyUtil.SearchPropertyInTemplate = true;
 foreach (var c in new[] { "InstancedStaticMeshComponent", "HierarchicalInstancedStaticMeshComponent", "FoliageInstancedStaticMeshComponent" })
     ObjectTypeRegistry.RegisterClass(c, typeof(F13InstancedMeshComponent)); // Blueprint component instances only store deltas from their templates
@@ -219,6 +225,23 @@ string ToFile(string objectPath)
     return p;
 }
 
+// Why --game can't be read, or null. The tool needs the game's content extracted to loose files: the stock pak is
+// not a standard Unreal pak (custom footer, protected index), so CUE4Parse can't mount it.
+static string? InstallProblem(string game)
+{
+    var root = Path.Combine(game, "SummerCamp");
+    if (!Directory.Exists(root))
+        return $"--game: no SummerCamp folder in \"{game}\"; pass the F13Game install folder (the one containing SummerCamp).";
+    if (File.Exists(Path.Combine(root, "Content", "Maps", "CrystalLake_Small", "CrystalLake_Small.umap")))
+        return null;
+    var paks = Path.Combine(root, "Content", "Paks");
+    var packed = Directory.Exists(paks) && Directory.EnumerateFiles(paks, "*.pak").Any();
+    return packed
+        ? $"\"{game}\" is a stock install: its content is still packed in Content/Paks/*.pak, which this tool can't read.\n" +
+          "Extract the main pak to loose files under SummerCamp/Content first (the usual modding setup), then run this again."
+        : $"\"{game}\" has no extracted game content (SummerCamp/Content/Maps/CrystalLake_Small is missing).";
+}
+
 static string OutPath(UStaticMesh mesh) => new StaticMeshExporter(mesh).SavePath + ".glb";
 
 static Xform Xf(FTransform t) => new()
@@ -295,7 +318,10 @@ void WriteMaterialIndex()
 {
     var root = Path.GetFullPath(outDir!);
     var index = new SortedDictionary<string, MaterialInfo>(StringComparer.OrdinalIgnoreCase);
-    foreach (var file in Directory.EnumerateFiles(Path.Combine(root, "SummerCamp"), "*.json", SearchOption.AllDirectories))
+    var exported = Path.Combine(root, "SummerCamp");
+    if (!Directory.Exists(exported))
+        return; // nothing was exported
+    foreach (var file in Directory.EnumerateFiles(exported, "*.json", SearchOption.AllDirectories))
     {
         var rel = Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/');
         var pkg = rel[..^".json".Length];
