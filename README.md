@@ -69,13 +69,15 @@ a fixed fear level for testing. Health is the game's (wounded at 50, dead at 0);
 
 Items, cabinets and cars spawn as in the game (`--seed n` repeats a match; the log lists where the cars and parts
 are). E picks up (preferring what the camera looks at), searches drawers and installs parts, G drops the held
-item, 1-3 use the small item in that pocket (first aid heals after its 2 s animation). Repairs are the game's skill check: hold E
+item, 1-3 use the small item in that pocket. Doors: E opens/closes, hold E from inside a closed door to lock or
+unlock it (from outside, hold E unlocks a locked one) (first aid heals after its 2 s animation). Repairs are the game's skill check: hold E
 and, when the needle reaches a pip on the dial in the HUD, press its mouse button (R = right, L = left); hits speed
 the repair up, misses roll it back. Escape by car: install the gas
 can and the battery, get in the driver's seat (E), hold E to start with the keys in your pockets (about 5 s), drive (WASD) into
 a car escape zone; F gets out. `--near-car` starts you next to a car. `--bot-escape` plays the whole escape
 automatically (teleporting between goals) and exits when done; `--bot-heal` fetches and uses a first aid spray;
-`--bot-dodge` dodges in each direction and checks the distance and stamina.
+`--bot-dodge` dodges in each direction and checks the distance and stamina; `--bot-door` opens, closes, locks and
+unlocks a door from both sides.
 `--speed x` runs the game clock faster (bots included; 4 keeps every result the same and cuts a bot run to ~15 s).
 
 ## Tests

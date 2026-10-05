@@ -30,7 +30,9 @@ Mechanics: counselor side
 - [x] Car: enter/exit, start, escape volume
 - [ ] Car handling from the game's vehicle setup (now a placeholder kinematic car)
 - [x] Cabinets (drawers): search, items inside
-- [ ] Doors and windows: open, lock, barricade, window dive
+- [x] Doors: leaves exported and swinging on their pivot, open/close, lock/unlock by side (doors.rs; swing timing is a
+  placeholder for the special-move montages)
+- [ ] Barricades, windows (open, vault, dive)
 - [ ] Hiding: closets, beds
 - [x] Health, wounded, death, blocking damage, first aid (f13-core::health); limp animation later
 - [ ] Weapons and combat: hit, stun, block

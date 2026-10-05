@@ -128,6 +128,11 @@ fn move_near_car(
     commands.remove_resource::<NearCar>();
 }
 
+/// A boolean class default (C++ constructor defaults aren't in the export, hence `default`).
+fn actor_bool(classes: &ClassDb, class: &str, name: &str, default: bool) -> bool {
+    classes.prop(class, name).as_bool().unwrap_or(default)
+}
+
 fn reach(c: &f13_data::level::ComponentInfo, default: f32) -> f32 {
     c.props["DistanceLimit"].as_f64().map_or(default, |d| d as f32)
 }
@@ -164,9 +169,22 @@ fn spawn_props(mut commands: Commands, assets: Res<AssetServer>, level: Res<crat
         let root = commands.spawn((to_transform(&actor.transform), Visibility::default(), Name::new(actor.class.clone()))).id();
         entities.insert(id, root);
         let mut drawer = None;
+        let is_door = classes.is_child_of(&actor.class, "SCDoor");
+        let pivot = is_door.then(|| info.components.iter().find(|c| c.name == "Pivot")).flatten().map(|p| {
+            let t = local(p);
+            (commands.spawn((t, Visibility::default(), ChildOf(root))).id(), t)
+        });
+        let mut leaf_center = Vec3::ZERO;
         for c in &info.components {
             let Some(mesh) = &c.mesh else { continue };
             if c.hidden || ["Destroyed", "Broken", "Broke"].iter().any(|s| c.name.contains(s)) {
+                continue;
+            }
+            // Door leaves hang on the pivot (actor-space transforms re-expressed relative to it).
+            if let (Some((p, pt)), Some("Pivot")) = (pivot, c.parent.as_deref()) {
+                let rel = Transform::from_matrix(pt.to_matrix().inverse() * local(c).to_matrix());
+                leaf_center = rel.translation;
+                commands.spawn((WorldAssetRoot(scene(mesh)), rel, ChildOf(p)));
                 continue;
             }
             let child = commands.spawn((WorldAssetRoot(scene(mesh)), local(c), ChildOf(root))).id();
@@ -181,6 +199,23 @@ fn spawn_props(mut commands: Commands, assets: Res<AssetServer>, level: Res<crat
         let counselor_can_use = interact.is_none_or(|c| {
             !c.props["ActorIgnoreList"].as_array().into_iter().flatten().any(|a| a["AssetPathName"].as_str().is_some_and(|p| p.ends_with(".SCCounselorCharacter")))
         });
+        if let Some((pivot, pivot_closed)) = pivot {
+            let door_interact = info.components.iter().find(|c| c.name == "InteractComponent");
+            commands.entity(root).insert(crate::doors::Door {
+                open: false,
+                locked: false,
+                lockable: actor_bool(&classes, &actor.class, "bIsLockable", true),
+                pivot,
+                pivot_closed,
+                interact: door_interact.map_or(Vec3::Y, |c| local(c).translation),
+                reach: door_interact.map_or(200.0, |c| reach(c, 200.0)),
+                hold_time: door_interact.and_then(|c| c.props["HoldTimeLimit"].as_f64()).map_or(0.5, |v| v as f32),
+                leaf_center,
+                angle: 0.0,
+                target: 0.0,
+            });
+            *counts.entry("doors").or_default() += 1;
+        }
         if classes.is_child_of(&actor.class, "SCItem") && counselor_can_use {
             let large = f13_core::spawn::ClassQuery::is_large(&classes, &actor.class);
             commands.entity(root).insert(Item {

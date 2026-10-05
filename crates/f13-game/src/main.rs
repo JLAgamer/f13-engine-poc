@@ -1,10 +1,11 @@
 //! f13-game: currently a viewer for the MVP map (Crystal Lake, small) built from the player's own export.
 //!
-//!   cargo run -p f13-game --release -- --export <dir made by tools/f13-export> [--layout 1-4] [--seed n] [--near-car] [--bot-escape] [--bot-heal] [--bot-dodge] [--grass]
+//!   cargo run -p f13-game --release -- --export <dir made by tools/f13-export> [--layout 1-4] [--seed n] [--near-car] [--bot-escape] [--bot-heal] [--bot-dodge] [--bot-door] [--grass]
 //!       [--fly] [--model] [--demo] [--fear 0-100] [--health 1-100] [--speed x] [--tuning file] [--aerial] [--no-foliage] [--screenshot out.png]
 //!   Default: play as Vanessa (see player.rs for controls). --fly: free camera instead.   (screenshot: wait for loading, save one frame, exit)
 
 mod bot;
+mod doors;
 mod interact;
 mod player;
 mod props;
@@ -33,6 +34,7 @@ struct Args {
     bot_escape: bool,
     bot_heal: bool,
     bot_dodge: bool,
+    bot_door: bool,
     grass: bool,
     aerial: bool,
     fly: bool,
@@ -55,6 +57,7 @@ fn parse_args() -> Args {
     let mut bot_escape = false;
     let mut bot_heal = false;
     let mut bot_dodge = false;
+    let mut bot_door = false;
     let mut grass = false;
     let mut aerial = false;
     let mut fly = false;
@@ -76,6 +79,7 @@ fn parse_args() -> Args {
             "--bot-escape" => bot_escape = true,
             "--bot-heal" => bot_heal = true,
             "--bot-dodge" => bot_dodge = true,
+            "--bot-door" => bot_door = true,
             "--grass" => grass = true,
             "--aerial" => aerial = true,
             "--fly" => fly = true,
@@ -97,7 +101,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, grass, aerial, fly, model, demo, fear, speed, health, tuning, foliage, screenshot }
+    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, grass, aerial, fly, model, demo, fear, speed, health, tuning, foliage, screenshot }
 }
 
 #[derive(Resource)]
@@ -223,6 +227,8 @@ fn main() {
             app.add_plugins(bot::BotPlugin(bot::Goal::Heal));
         } else if args.bot_dodge {
             app.add_plugins(bot::BotPlugin(bot::Goal::Dodge));
+        } else if args.bot_door {
+            app.add_plugins(bot::BotPlugin(bot::Goal::Door));
         }
     }
     if let Some(path) = args.screenshot.clone() {

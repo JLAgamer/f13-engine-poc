@@ -4,6 +4,8 @@
 //! with the keys, then drive into a car escape zone. Logs every step; exits when it escapes (or gives up).
 //!
 //! `--bot-heal`: fetch a first aid spray and use it (start hurt with `--health`); exits when healed.
+//! `--bot-door`: at the nearest door: open and close it from outside, lock it from inside, check a press no longer
+//! opens it, unlock it from outside, open it; saves a screenshot of the open door (temp f13-bot-door.png).
 //! `--bot-dodge`: enter combat stance and double-tap S, A, D; logs how far each dodge moved (needs open ground).
 
 use crate::interact::{Carried, Inventory, UsingItem, FIRST_AID};
@@ -20,6 +22,7 @@ pub enum Goal {
     Escape,
     Heal,
     Dodge,
+    Door,
 }
 
 pub struct BotPlugin(pub Goal);
@@ -45,6 +48,8 @@ enum Step {
     Heal,
     /// Dodge number `i` (0 back, 1 left, 2 right).
     Dodge(usize),
+    /// Door test step `i` (see [`DOOR_STEPS`]).
+    Door(usize),
     Done,
 }
 
@@ -62,13 +67,27 @@ struct Bot {
     dodges_ok: usize,
     /// The first tap of a double tap was pressed last frame.
     second_tap: bool,
+    /// Keep E down across frames (a hold) instead of re-pressing it each frame.
+    hold_e: bool,
+    door: Option<Entity>,
+    door_ok: bool,
 }
 
 impl Default for Bot {
     fn default() -> Self {
-        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false }
+        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false, hold_e: false, door: None, door_ok: false }
     }
 }
+
+/// Door test: (from outside, hold instead of press, then open?, then locked?).
+const DOOR_STEPS: [(bool, bool, bool, bool); 6] = [
+    (true, false, true, false),  // open from outside
+    (true, false, false, false), // close it
+    (false, true, false, true),  // lock from inside
+    (false, false, false, true), // a press doesn't open a locked door
+    (true, true, false, false),  // unlock from outside
+    (true, false, true, false),  // open it
+];
 
 fn place(player: &mut Transform, at: Vec3) {
     player.translation = at;
@@ -97,7 +116,7 @@ fn run_bot(
     carried: Query<&Item, With<Carried>>,
     cabinets: Query<(&Cabinet, &GlobalTransform)>,
     mut vehicles: Query<(Entity, &Vehicle, &GlobalTransform, &mut Transform), Without<Player>>,
-    zones: Query<(&EscapeZone, &GlobalTransform)>,
+    (zones, doors): (Query<(&EscapeZone, &GlobalTransform)>, Query<(Entity, &crate::doors::Door, &GlobalTransform)>),
     escaped: Option<Res<Escaped>>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -106,7 +125,10 @@ fn run_bot(
     bot.total += dt;
     mouse.release(MouseButton::Left);
     mouse.release(MouseButton::Right);
-    for k in [KeyCode::KeyE, KeyCode::KeyW, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::KeyC, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD] {
+    if !bot.hold_e {
+        keys.release(KeyCode::KeyE);
+    }
+    for k in [KeyCode::KeyW, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::KeyC, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD] {
         keys.release(k);
     }
     if bot.total > 240.0 && bot.step != Step::Done {
@@ -119,6 +141,14 @@ fn run_bot(
         Step::Start => {
             // Let the map finish loading (in real time: frames hitch while assets stream in, whatever --speed).
             if bot.timer < 3.0 || real.elapsed_secs() < 6.0 {
+                return;
+            }
+            if bot.goal == Goal::Door {
+                let me = pxf.translation;
+                bot.door = doors.iter().min_by(|a, b| a.2.translation().distance(me).total_cmp(&b.2.translation().distance(me))).map(|d| d.0);
+                info!("bot: testing door {:?}", bot.door);
+                bot.step = Step::Door(0);
+                bot.timer = 0.0;
                 return;
             }
             if bot.goal == Goal::Dodge {
@@ -280,6 +310,51 @@ fn run_bot(
                 bot.step = Step::Done;
             }
         }
+        Step::Door(i) => {
+            let Some((_, door, dxf)) = bot.door.and_then(|d| doors.get(d).ok()) else { bot.step = Step::Done; return };
+            if i == DOOR_STEPS.len() {
+                bot.door_ok = true;
+                bot.step = Step::Done;
+                return;
+            }
+            let (outside, hold, expect_open, expect_locked) = DOOR_STEPS[i];
+            // Stand 0.8 m out from the interact point on the chosen side (the door's forward is outside).
+            let at = dxf.transform_point(door.interact);
+            let fwd = (dxf.rotation() * Vec3::X).with_y(0.0).normalize_or_zero();
+            let stand = at + fwd * if outside { 0.8 } else { -0.8 } - Vec3::Y * 1.0;
+            place(pxf, stand);
+            look_at(&mut camera, pxf, at);
+            if bot.timer < 0.5 {
+                return;
+            }
+            if hold && bot.timer < 2.0 {
+                keys.press(KeyCode::KeyE);
+                bot.hold_e = true;
+                return;
+            }
+            bot.hold_e = false;
+            if !hold && !bot.second_tap {
+                keys.press(KeyCode::KeyE); // one frame: released next frame, so it reads as a press
+                bot.second_tap = true;
+                return;
+            }
+            if bot.timer < 2.5 {
+                return;
+            }
+            let ok = door.open == expect_open && door.locked == expect_locked;
+            info!("bot: door step {i} ({} {}): open {} locked {} angle {:.0} -> {}", if outside { "outside" } else { "inside" }, if hold { "hold" } else { "press" }, door.open, door.locked, door.angle.to_degrees(), if ok { "ok" } else { "WRONG" });
+            if !ok {
+                bot.step = Step::Done;
+                return;
+            }
+            if i == 0 {
+                let path = std::env::temp_dir().join("f13-bot-door.png");
+                commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+            }
+            bot.step = Step::Door(i + 1);
+            bot.second_tap = false;
+            bot.timer = 0.0;
+        }
         Step::Dodge(i) => {
             if i == 3 {
                 bot.step = Step::Done;
@@ -317,6 +392,7 @@ fn run_bot(
                     Goal::Escape => escaped.is_some(),
                     Goal::Heal => p.counselor.health >= 100.0,
                     Goal::Dodge => bot.dodges_ok == 3,
+                    Goal::Door => bot.door_ok,
                 };
                 exit.write(if ok { AppExit::Success } else { AppExit::error() });
             }

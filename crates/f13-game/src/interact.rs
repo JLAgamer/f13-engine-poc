@@ -9,6 +9,7 @@
 //! PLACEHOLDER: opening a cabinet is instant.
 
 use crate::player::{Player, PlayerCamera, PlayerTuning};
+use crate::doors::Door;
 use crate::props::{Cabinet, Drawer, InCabinet, Item, Vehicle};
 use crate::vehicle::Driving;
 use bevy::prelude::*;
@@ -58,6 +59,7 @@ enum Target {
     Cabinet(Entity),
     Repair(Entity, usize),
     Seat(Entity),
+    Door(Entity),
 }
 
 #[derive(Resource, Default)]
@@ -65,6 +67,8 @@ pub struct Interaction {
     target: Option<Target>,
     /// The hold interaction (repair) in progress.
     pub hold: Option<HoldInteraction>,
+    /// A hold finished while E is still down: its release isn't a press.
+    hold_done: bool,
 }
 
 impl Interaction {
@@ -83,7 +87,7 @@ impl Plugin for InteractPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Interaction>()
             .add_systems(Startup, spawn_prompt)
-            .add_systems(Update, (add_inventory, choose_target, act, drop_item, use_item, update_prompt).chain());
+            .add_systems(Update, (add_inventory, choose_target, act, drop_item, use_item, update_prompt, crate::doors::swing_doors).chain());
     }
 }
 
@@ -116,6 +120,7 @@ fn choose_target(
     carried: Query<&Item, With<Carried>>,
     cabinets: Query<(Entity, &Cabinet, &GlobalTransform)>,
     vehicles: Query<(Entity, &Vehicle, &GlobalTransform)>,
+    doors: Query<(Entity, &Door, &GlobalTransform)>,
     mut interaction: ResMut<Interaction>,
 ) {
     if interaction.busy() {
@@ -160,6 +165,12 @@ fn choose_target(
             consider(gxf.transform_point(v.driver_seat), v.seat_reach + 60.0, Target::Seat(e));
         }
     }
+    for (e, d, gxf) in &doors {
+        let (press, hold) = d.can_interact(gxf, xf.translation);
+        if press || hold {
+            consider(gxf.transform_point(d.interact), d.reach, Target::Door(e));
+        }
+    }
     let target = best.map(|(_, t)| t);
     if target != interaction.target {
         interaction.hold = None;
@@ -181,6 +192,7 @@ fn act(
     mut cabinets: Query<&mut Cabinet>,
     mut drawers: Query<(&Drawer, &mut Transform), Without<Player>>,
     mut vehicles: Query<&mut Vehicle>,
+    mut doors: Query<(&mut Door, &GlobalTransform)>,
     mut visibility: Query<&mut Visibility>,
 ) {
     let Some(target) = interaction.target else { return };
@@ -251,6 +263,36 @@ fn act(
             info!("{}: {} installed", vehicle.class, vehicle.repairs[i].name);
             interaction.hold = None;
             interaction.target = None;
+        }
+        Target::Door(d) => {
+            let Ok((mut door, gxf)) = doors.get_mut(d) else { return };
+            if interaction.hold_done {
+                interaction.hold_done = keys.pressed(KeyCode::KeyE);
+                return;
+            }
+            let (press, hold) = door.can_interact(gxf, player_xf.translation);
+            // Press = let go before the hold starts; hold = keep holding for the door's hold time.
+            let started = interaction.hold.as_ref().is_some_and(|h| h.started);
+            if keys.just_released(KeyCode::KeyE) && !started && press {
+                let what = door.press(gxf, player_xf.translation);
+                info!("door {what}");
+                interaction.hold = None;
+                return;
+            }
+            if !keys.pressed(KeyCode::KeyE) || !hold {
+                interaction.hold = None;
+                return;
+            }
+            let h = interaction.hold.get_or_insert_with(|| HoldInteraction::new(door.hold_time, false));
+            let mut events = Vec::new();
+            h.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
+            if events.contains(&MinigameEvent::Completed) {
+                let what = door.toggle_lock();
+                info!("door {what}");
+                interaction.hold = None;
+                interaction.hold_done = true;
+                interaction.target = None;
+            }
         }
         Target::Seat(v) if keys.just_pressed(KeyCode::KeyE) => {
             commands.entity(player_entity).insert(Driving { vehicle: v, starting: None });
@@ -348,12 +390,13 @@ fn use_item(
 fn update_prompt(
     interaction: Res<Interaction>,
     tuning: Res<PlayerTuning>,
-    player: Single<(&Inventory, Has<Driving>, Option<&UsingItem>), With<Player>>,
+    doors: Query<(&Door, &GlobalTransform)>,
+    player: Single<(&Inventory, Has<Driving>, &Transform, Option<&UsingItem>), With<Player>>,
     items: Query<&Item>,
     vehicles: Query<&Vehicle>,
     mut text: Single<&mut Text, With<PromptText>>,
 ) {
-    let (inv, driving, using) = *player;
+    let (inv, driving, _, using) = *player;
     let name = |e: Entity| items.get(e).map_or("?".to_string(), |i| i.name.clone());
     let mut lines = vec![format!(
         "Hands: {}   Pockets: [{}] ({}/{})",
@@ -390,6 +433,19 @@ fn update_prompt(
                 }
             }
             Some(Target::Seat(_)) => lines.push("[E] Get in (driver)".into()),
+            Some(Target::Door(d)) => {
+                if let Ok((door, gxf)) = doors.get(d) {
+                    let (press, hold) = door.can_interact(gxf, player.2.translation);
+                    let mut s = Vec::new();
+                    if press {
+                        s.push(if door.open { "[E] Close door" } else { "[E] Open door" });
+                    }
+                    if hold {
+                        s.push(if door.locked { "[Hold E] Unlock" } else { "[Hold E] Lock" });
+                    }
+                    lines.push(s.join("   "));
+                }
+            }
             None => {}
         }
         if inv.hand.is_some() {
