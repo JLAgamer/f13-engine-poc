@@ -250,6 +250,15 @@ fn move_player(
     let step = p.velocity * dt / CM;
     let not_player = |e: Entity| !parts.contains(e);
     let settings = MeshRayCastSettings::default().with_filter(&not_player);
+    let ground_at = |ray_cast: &mut MeshRayCast, p: Vec3| {
+        ray_cast.cast_ray(Ray3d::new(p + Vec3::Y * (MAX_STEP_HEIGHT_M + 1.0), Dir3::NEG_Y), &settings).first().map(|(_, h)| h.point.y)
+    };
+    // Started (or got pushed) slightly below the surface: stand on it instead of treating it as a wall.
+    if let Some(y) = ground_at(&mut ray_cast, xf.translation) {
+        if y > xf.translation.y {
+            xf.translation.y = y;
+        }
+    }
     let mut pos = xf.translation;
     if step.length_squared() > 0.0 {
         // Like Unreal's SlideAlongSurface: on a hit, drop the part of the move that goes into the surface.
@@ -272,10 +281,9 @@ fn move_player(
         }
         pos += Vec3::new(step.x, 0.0, step.y);
     }
-    let probe = pos + Vec3::Y * (MAX_STEP_HEIGHT_M + 1.0);
-    if let Some((_, hit)) = ray_cast.cast_ray(Ray3d::new(probe, Dir3::NEG_Y), &settings).first() {
-        if hit.point.y <= xf.translation.y + MAX_STEP_HEIGHT_M {
-            pos.y = hit.point.y;
+    if let Some(ground) = ground_at(&mut ray_cast, pos) {
+        if ground <= xf.translation.y + MAX_STEP_HEIGHT_M {
+            pos.y = ground;
         } else {
             pos = xf.translation; // too steep: stay put
             p.velocity = Vec2::ZERO;

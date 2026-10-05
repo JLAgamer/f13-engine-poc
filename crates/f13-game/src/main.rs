@@ -163,10 +163,12 @@ fn main() {
         app.insert_resource(ScreenshotPlan { path, frames_loaded: 0 }).add_systems(Update, take_screenshot);
     }
     app
-        .add_plugins(DefaultPlugins.set(AssetPlugin {
-            file_path: args.export.to_string_lossy().into_owned(),
-            ..default()
-        }))
+        .add_plugins(
+            DefaultPlugins
+                .set(AssetPlugin { file_path: args.export.to_string_lossy().into_owned(), ..default() })
+                // Unreal meshes carry up to 8 UV sets; Bevy warns once per extra set per mesh.
+                .set(bevy::log::LogPlugin { filter: "wgpu=error,naga=warn,bevy_gltf::loader=error".into(), ..default() }),
+        )
         .add_plugins(FreeCameraPlugin)
         .insert_resource(Level { layouts, grass: args.grass, foliage: args.foliage, aerial: args.aerial, fly: args.fly || args.aerial, scenes: vec![] })
         .insert_resource(materials)

@@ -86,7 +86,7 @@ pub struct EscapeZone {
 
 pub struct PropsPlugin {
     pub seed: u64,
-    /// Dev aid: start the counselor at the driver's door of the first car.
+    /// Dev aid: start the counselor at the driver's door of the 2-seat car.
     pub near_car: bool,
 }
 
@@ -100,7 +100,7 @@ impl Plugin for PropsPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Seed(self.seed)).add_systems(Startup, spawn_props).add_systems(Update, tag_vehicle_parts);
         if self.near_car {
-            app.insert_resource(NearCar).add_systems(Update, move_near_car);
+            app.insert_resource(NearCar).add_systems(Update, move_near_car.run_if(resource_exists::<NearCar>));
         }
     }
 }
@@ -111,7 +111,7 @@ fn move_near_car(
     mut player: Single<&mut Transform, With<crate::player::Player>>,
     mut camera: Single<&mut crate::player::PlayerCamera>,
 ) {
-    let Some((v, gxf)) = vehicles.iter().next() else { return };
+    let Some((v, gxf)) = vehicles.iter().find(|(v, _)| v.class.contains("2Seat")).or_else(|| vehicles.iter().next()) else { return };
     let seat = v.driver_seat;
     let out = Vec3::new(seat.x, 0.0, seat.z).normalize_or_zero();
     player.translation = gxf.transform_point(seat + out * 1.5);
@@ -119,6 +119,8 @@ fn move_near_car(
     // Look at the car.
     let to_car = gxf.translation() - player.translation;
     camera.yaw = (-to_car.x).atan2(-to_car.z);
+    let p = player.translation;
+    info!("--near-car: placed at ({:.1}, {:.1}, {:.1}) beside {}", p.x, p.y, p.z, v.class);
     commands.remove_resource::<NearCar>();
 }
 
