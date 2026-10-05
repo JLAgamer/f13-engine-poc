@@ -120,7 +120,10 @@ impl Plugin for PlayerPlugin {
         app.insert_resource(PlayerConfig { spawn: self.spawn, show_model: self.show_model, demo: self.demo, fear: self.fear, health: self.health })
             .init_resource::<Intent>()
             .add_systems(Startup, spawn_player)
-            .add_systems(FixedUpdate, (read_intent, update_counselor, move_player).chain())
+            // Input is read once per frame; one-shot actions stay latched until a fixed step uses them, so a frame
+            // that runs several fixed steps (low frame rate, --speed) doesn't repeat a key press.
+            .add_systems(RunFixedMainLoop, read_intent.in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop))
+            .add_systems(FixedUpdate, (update_counselor, move_player).chain())
             .add_systems(Update, (tag_player_parts, grab_cursor, aim_demo, follow_camera, update_hud).chain());
     }
 }
@@ -212,7 +215,9 @@ fn read_intent(
 ) {
     if config.demo {
         let was = intent.sprint_held;
-        *intent = Intent { movement: Vec2::Y, sprint_held: true, sprint_changed: !was, ..default() };
+        intent.movement = Vec2::Y;
+        intent.sprint_held = true;
+        intent.sprint_changed |= !was;
         return;
     }
     let mut movement = Vec2::ZERO;
@@ -221,15 +226,12 @@ fn read_intent(
             movement += v;
         }
     }
-    *intent = Intent {
-        movement,
-        sprint_held: keys.pressed(KeyCode::ShiftLeft),
-        sprint_changed: keys.just_pressed(KeyCode::ShiftLeft) || keys.just_released(KeyCode::ShiftLeft),
-        toggle_walk: keys.just_pressed(KeyCode::CapsLock),
-        toggle_crouch: keys.just_pressed(KeyCode::ControlLeft),
-        toggle_combat: keys.just_pressed(KeyCode::KeyC),
-        dodge: None,
-    };
+    intent.movement = movement;
+    intent.sprint_held = keys.pressed(KeyCode::ShiftLeft);
+    intent.sprint_changed |= keys.just_pressed(KeyCode::ShiftLeft) || keys.just_released(KeyCode::ShiftLeft);
+    intent.toggle_walk |= keys.just_pressed(KeyCode::CapsLock);
+    intent.toggle_crouch |= keys.just_pressed(KeyCode::ControlLeft);
+    intent.toggle_combat |= keys.just_pressed(KeyCode::KeyC);
     let now = time.elapsed_secs();
     for (i, (key, dir)) in [(KeyCode::KeyA, DodgeDirection::Left), (KeyCode::KeyD, DodgeDirection::Right), (KeyCode::KeyS, DodgeDirection::Back)].into_iter().enumerate() {
         if keys.just_pressed(key) {
@@ -246,7 +248,7 @@ fn read_intent(
 /// Applies sprint/run/crouch input, ticks stamina and rolls stumbles.
 #[allow(clippy::too_many_arguments)]
 fn update_counselor(
-    intent: Res<Intent>,
+    mut intent: ResMut<Intent>,
     config: Res<PlayerConfig>,
     time: Res<Time>,
     tuning: Res<PlayerTuning>,
@@ -256,6 +258,9 @@ fn update_counselor(
     mut demo_log: Local<u32>,
 ) {
     let now = time.elapsed_secs();
+    // Consume this frame's one-shot actions (see PlayerPlugin).
+    let once = Intent { movement: intent.movement, sprint_held: intent.sprint_held, ..default() };
+    let intent = std::mem::replace(&mut *intent, once);
     let p = &mut **player;
     if intent.toggle_walk {
         p.walk_toggle = !p.walk_toggle;

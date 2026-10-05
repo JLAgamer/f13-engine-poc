@@ -60,11 +60,13 @@ struct Bot {
     /// Where the current dodge started, and the stamina then.
     dodge_from: Option<(Vec3, f32)>,
     dodges_ok: usize,
+    /// The first tap of a double tap was pressed last frame.
+    second_tap: bool,
 }
 
 impl Default for Bot {
     fn default() -> Self {
-        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0 }
+        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false }
     }
 }
 
@@ -84,7 +86,7 @@ fn look_at(camera: &mut PlayerCamera, player: &Transform, target: Vec3) {
 fn run_bot(
     mut commands: Commands,
     mut bot: ResMut<Bot>,
-    time: Res<Time>,
+    (time, real): (Res<Time>, Res<Time<Real>>),
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     interaction: Res<crate::interact::Interaction>,
@@ -115,7 +117,8 @@ fn run_bot(
     let (ref mut pxf, p, inv, driving, using) = *player;
     match bot.step {
         Step::Start => {
-            if bot.timer < 3.0 {
+            // Let the map finish loading (in real time: frames hitch while assets stream in, whatever --speed).
+            if bot.timer < 3.0 || real.elapsed_secs() < 6.0 {
                 return;
             }
             if bot.goal == Goal::Dodge {
@@ -288,9 +291,13 @@ fn run_bot(
                     bot.dodge_from = Some((pxf.translation, p.counselor.stamina));
                     bot.timer = 0.0;
                     keys.press(key);
+                    bot.second_tap = true;
                 }
-                // second tap two frames later (released in between)
-                Some(_) if bot.timer > 0.0 && bot.timer < 0.05 && !p.counselor.dodging() => keys.press(key),
+                // second tap on the next frame (all keys are released in between), whatever the game speed
+                Some(_) if bot.second_tap => {
+                    keys.press(key);
+                    bot.second_tap = false;
+                }
                 Some((from, stamina)) if bot.timer > 1.2 => {
                     let moved = pxf.translation - from;
                     info!("bot: dodge {:?}: moved {:.2} m, stamina {:.1} -> {:.1}", ["back", "left", "right"][i], moved.with_y(0.0).length(), stamina, p.counselor.stamina);

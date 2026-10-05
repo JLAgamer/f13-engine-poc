@@ -76,6 +76,7 @@ can and the battery, get in the driver's seat (E), hold E to start with the keys
 a car escape zone; F gets out. `--near-car` starts you next to a car. `--bot-escape` plays the whole escape
 automatically (teleporting between goals) and exits when done; `--bot-heal` fetches and uses a first aid spray;
 `--bot-dodge` dodges in each direction and checks the distance and stamina.
+`--speed x` runs the game clock faster (bots included; 4 keeps every result the same and cuts a bot run to ~15 s).
 
 ## Tests
 ```

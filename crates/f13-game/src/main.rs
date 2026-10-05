@@ -1,7 +1,7 @@
 //! f13-game: currently a viewer for the MVP map (Crystal Lake, small) built from the player's own export.
 //!
 //!   cargo run -p f13-game --release -- --export <dir made by tools/f13-export> [--layout 1-4] [--seed n] [--near-car] [--bot-escape] [--bot-heal] [--bot-dodge] [--grass]
-//!       [--fly] [--model] [--demo] [--fear 0-100] [--health 1-100] [--tuning file] [--aerial] [--no-foliage] [--screenshot out.png]
+//!       [--fly] [--model] [--demo] [--fear 0-100] [--health 1-100] [--speed x] [--tuning file] [--aerial] [--no-foliage] [--screenshot out.png]
 //!   Default: play as Vanessa (see player.rs for controls). --fly: free camera instead.   (screenshot: wait for loading, save one frame, exit)
 
 mod bot;
@@ -39,6 +39,8 @@ struct Args {
     model: bool,
     demo: bool,
     fear: f32,
+    /// Game clock multiplier (testing: run bots faster than real time).
+    speed: f32,
     health: Option<f32>,
     tuning: Option<PathBuf>,
     foliage: bool,
@@ -59,6 +61,7 @@ fn parse_args() -> Args {
     let mut model = false;
     let mut demo = false;
     let mut fear = 0.0;
+    let mut speed = 1.0f32;
     let mut health = None;
     let mut tuning = None;
     let mut foliage = true;
@@ -78,6 +81,7 @@ fn parse_args() -> Args {
             "--fly" => fly = true,
             "--model" => model = true,
             "--demo" => demo = true,
+            "--speed" => speed = it.next().and_then(|v| v.parse().ok()).unwrap_or(1.0f32).clamp(0.1, 16.0),
             "--fear" => fear = it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0f32).clamp(0.0, 100.0),
             "--health" => health = it.next().and_then(|v| v.parse().ok()),
             "--tuning" => tuning = it.next().map(PathBuf::from),
@@ -93,7 +97,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, grass, aerial, fly, model, demo, fear, health, tuning, foliage, screenshot }
+    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, grass, aerial, fly, model, demo, fear, speed, health, tuning, foliage, screenshot }
 }
 
 #[derive(Resource)]
@@ -185,6 +189,15 @@ fn main() {
     let mut app = App::new();
     // Gameplay randomness (stumbles, ...), separate from the match layout so both repeat with --seed.
     app.insert_resource(Anims::load(&args.export));
+    if args.speed != 1.0 {
+        // Virtual time drives Update and FixedUpdate, so the whole simulation (and the bots) runs faster.
+        let speed = args.speed;
+        app.add_systems(Startup, move |mut time: ResMut<Time<Virtual>>| {
+            time.set_relative_speed(speed);
+            time.set_max_delta(std::time::Duration::from_secs_f32(0.25 * speed));
+            info!("game speed x{speed}");
+        });
+    }
     app.insert_resource(GameRng(f13_core::spawn::Rng::new(seed ^ 0x5eed_f13)));
     if !(args.fly || args.aerial) {
         let path = args.tuning.clone().unwrap_or_else(f13_data::default_path);
