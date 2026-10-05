@@ -23,6 +23,7 @@
 use crate::counselor::{Counselor, Situation, Stance};
 use crate::fear::Curve;
 use crate::stats::StatModifiedValue;
+use crate::Montage;
 
 const MIN_STUMBLE_SECONDS: f32 = 0.1;
 const MOVING_SPEED_SQ: f32 = 1e-4;
@@ -42,11 +43,11 @@ pub struct StumbleTuning {
     /// Added to the chance while wounded (percent).
     pub wounded_chance: f32,
     pub cooldown: f32,
-    /// Montage lengths (s) by gait.
-    pub sprint_length: f32,
-    pub run_length: f32,
-    pub walk_length: f32,
-    pub out_of_stamina_length: f32,
+    /// Montages by gait.
+    pub sprint: Montage,
+    pub run: Montage,
+    pub walk: Montage,
+    pub out_of_stamina: Montage,
 }
 
 impl Default for StumbleTuning {
@@ -60,10 +61,10 @@ impl Default for StumbleTuning {
             stat_mod: StatModifiedValue::constant(1.0),
             wounded_chance: 0.0,
             cooldown: 0.0,
-            sprint_length: 0.0,
-            run_length: 0.0,
-            walk_length: 0.0,
-            out_of_stamina_length: 0.0,
+            sprint: Montage::default(),
+            run: Montage::default(),
+            walk: Montage::default(),
+            out_of_stamina: Montage::default(),
         }
     }
 }
@@ -73,7 +74,7 @@ impl std::fmt::Debug for StumbleTuning {
         f.debug_struct("StumbleTuning")
             .field("wounded_chance", &self.wounded_chance)
             .field("cooldown", &self.cooldown)
-            .field("run_length", &self.run_length)
+            .field("run", &self.run)
             .finish_non_exhaustive()
     }
 }
@@ -87,6 +88,8 @@ pub struct StumbleState {
     pub last_stumble: f32,
     /// Seconds until the current stumble ends.
     pub time_left: f32,
+    /// The montage playing (its root motion moves the counselor).
+    pub montage: Montage,
 }
 
 impl StumbleTuning {
@@ -128,15 +131,15 @@ impl StumbleTuning {
         self.stat_mod.value(&c.stats, true) * chance
     }
 
-    fn length(&self, c: &Counselor, out_of_stamina: bool) -> f32 {
+    fn montage(&self, c: &Counselor, out_of_stamina: bool) -> &Montage {
         if out_of_stamina {
-            self.out_of_stamina_length
+            &self.out_of_stamina
         } else if c.sprinting {
-            self.sprint_length
+            &self.sprint
         } else if c.running {
-            self.run_length
+            &self.run
         } else {
-            self.walk_length
+            &self.walk
         }
     }
 }
@@ -164,12 +167,13 @@ impl Counselor {
             return false;
         }
         self.stumble.last_stumble = now;
-        let length = t.length(self, out_of_stamina);
-        if length <= 0.0 {
+        let montage = t.montage(self, out_of_stamina);
+        if montage.length <= 0.0 {
             return false;
         }
         self.stumbling = true;
-        self.stumble.time_left = length.max(MIN_STUMBLE_SECONDS);
+        self.stumble.time_left = montage.length.max(MIN_STUMBLE_SECONDS);
+        self.stumble.montage = montage.clone();
         true
     }
 
@@ -224,10 +228,10 @@ mod tests {
             fear_chance: Some(Arc::new(|fear01| fear01 * 100.0)),
             wounded_chance: 5.0,
             cooldown: 10.0,
-            sprint_length: 0.8,
-            run_length: 0.6,
-            walk_length: 0.4,
-            out_of_stamina_length: 1.0,
+            sprint: Montage { name: "sprint".into(), length: 0.8 },
+            run: Montage { name: "run".into(), length: 0.6 },
+            walk: Montage { name: "walk".into(), length: 0.4 },
+            out_of_stamina: Montage { name: "oos".into(), length: 1.0 },
             ..Default::default()
         }
     }

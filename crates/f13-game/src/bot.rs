@@ -4,6 +4,7 @@
 //! with the keys, then drive into a car escape zone. Logs every step; exits when it escapes (or gives up).
 //!
 //! `--bot-heal`: fetch a first aid spray and use it (start hurt with `--health`); exits when healed.
+//! `--bot-dodge`: enter combat stance and double-tap S, A, D; logs how far each dodge moved (needs open ground).
 
 use crate::interact::{Carried, Inventory, UsingItem, FIRST_AID};
 use crate::player::{Player, PlayerCamera};
@@ -18,6 +19,7 @@ use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 pub enum Goal {
     Escape,
     Heal,
+    Dodge,
 }
 
 pub struct BotPlugin(pub Goal);
@@ -41,6 +43,8 @@ enum Step {
     /// Fetch a first aid spray, then use it.
     FetchAid,
     Heal,
+    /// Dodge number `i` (0 back, 1 left, 2 right).
+    Dodge(usize),
     Done,
 }
 
@@ -53,11 +57,14 @@ struct Bot {
     total: f32,
     placed_car: bool,
     shot: bool,
+    /// Where the current dodge started, and the stamina then.
+    dodge_from: Option<(Vec3, f32)>,
+    dodges_ok: usize,
 }
 
 impl Default for Bot {
     fn default() -> Self {
-        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false }
+        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0 }
     }
 }
 
@@ -92,7 +99,7 @@ fn run_bot(
     let dt = time.delta_secs();
     bot.timer += dt;
     bot.total += dt;
-    for k in [KeyCode::KeyE, KeyCode::KeyW, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3] {
+    for k in [KeyCode::KeyE, KeyCode::KeyW, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::KeyC, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD] {
         keys.release(k);
     }
     if bot.total > 240.0 && bot.step != Step::Done {
@@ -104,6 +111,13 @@ fn run_bot(
     match bot.step {
         Step::Start => {
             if bot.timer < 3.0 {
+                return;
+            }
+            if bot.goal == Goal::Dodge {
+                info!("bot: combat stance");
+                keys.press(KeyCode::KeyC);
+                bot.step = Step::Dodge(0);
+                bot.timer = 0.0;
                 return;
             }
             if bot.goal == Goal::Heal {
@@ -249,11 +263,39 @@ fn run_bot(
                 bot.step = Step::Done;
             }
         }
+        Step::Dodge(i) => {
+            if i == 3 {
+                bot.step = Step::Done;
+                return;
+            }
+            let key = [KeyCode::KeyS, KeyCode::KeyA, KeyCode::KeyD][i];
+            match bot.dodge_from {
+                None if bot.timer > 0.5 => {
+                    bot.dodge_from = Some((pxf.translation, p.counselor.stamina));
+                    bot.timer = 0.0;
+                    keys.press(key);
+                }
+                // second tap two frames later (released in between)
+                Some(_) if bot.timer > 0.0 && bot.timer < 0.05 && !p.counselor.dodging() => keys.press(key),
+                Some((from, stamina)) if bot.timer > 1.2 => {
+                    let moved = pxf.translation - from;
+                    info!("bot: dodge {:?}: moved {:.2} m, stamina {:.1} -> {:.1}", ["back", "left", "right"][i], moved.with_y(0.0).length(), stamina, p.counselor.stamina);
+                    if moved.with_y(0.0).length() > 1.5 && p.counselor.stamina < stamina {
+                        bot.dodges_ok += 1;
+                    }
+                    bot.dodge_from = None;
+                    bot.step = Step::Dodge(i + 1);
+                    bot.timer = 0.0;
+                }
+                _ => {}
+            }
+        }
         Step::Done => {
             if bot.timer > 2.0 {
                 let ok = match bot.goal {
                     Goal::Escape => escaped.is_some(),
                     Goal::Heal => p.counselor.health >= 100.0,
+                    Goal::Dodge => bot.dodges_ok == 3,
                 };
                 exit.write(if ok { AppExit::Success } else { AppExit::error() });
             }

@@ -298,7 +298,11 @@ switch (rest[0])
         ExportLevel(Mvp.Map);
         foreach (var l in Mvp.Layouts) ExportLevel(l);
         WriteClasses();
+        AnimExporter.Write(provider, outDir, Mvp.Montages);
         break;
+    case "anims":
+        AnimExporter.Write(provider, outDir, Mvp.Montages);
+        return 0;
     default:
         Console.Error.WriteLine($"unknown command {rest[0]}");
         return 2;
@@ -370,6 +374,16 @@ static class Mvp
     ];
     // Classes the game spawns by reference from native code rather than from level data.
     public static readonly string[] Classes = ["CarKeys_C"];
+    // Montages whose length or root motion the rules use (anims.json).
+    const string Shared = "/Game/Characters/Counselors/Base/Shared";
+    public static readonly string[] Montages =
+    [
+        $"{Shared}/Combat/Dodge/AM_combat_stand_Dodge_Left",
+        $"{Shared}/Combat/Dodge/AM_combat_stand_Dodge_Right",
+        $"{Shared}/Combat/Dodge/AM_combat_stand_dodge_back",
+        $"{Shared}/Stumble/AM_normal_stand_run_stumble_short",
+        $"{Shared}/Stumble/AM_normal_stand_sprint_stumble_short",
+    ];
 }
 
 class MaterialInfo { public string File = "", Blend = ""; public bool TwoSided; }

@@ -21,6 +21,7 @@
 use crate::fear::Curve;
 use crate::stats::{StatModifiedValue, Stats};
 use crate::health::HealthTuning;
+use crate::dodge::DodgeTuning;
 use crate::stumble::{StumbleState, StumbleTuning};
 
 /// Character stance, in the original enum order.
@@ -82,6 +83,7 @@ pub struct CounselorTuning {
     pub wounded_threshold: f32,
     pub health: HealthTuning,
     pub stumble: StumbleTuning,
+    pub dodge: DodgeTuning,
 }
 
 impl std::fmt::Debug for CounselorTuning {
@@ -131,6 +133,8 @@ pub struct Counselor {
     pub running: bool,
     pub stumbling: bool,
     pub stumble: StumbleState,
+    /// Seconds left in the current dodge (0 = not dodging).
+    pub dodge_left: f32,
     pub stamina: f32,
     pub stamina_depleted: bool,
     pub stamina_locked: bool,
@@ -147,6 +151,7 @@ impl Counselor {
             running: false,
             stumbling: false,
             stumble: StumbleState::default(),
+            dodge_left: 0.0,
             stamina: STAMINA_CLAMP,
             stamina_depleted: false,
             stamina_locked: false,
@@ -348,6 +353,7 @@ pub(crate) mod tests {
             wounded_threshold: 50.0,
             health: Default::default(),
             stumble: Default::default(),
+            dodge: Default::default(),
         }
     }
 

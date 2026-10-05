@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
 use bevy::world_serialization::WorldAssetRoot;
 use f13_core::counselor::{Counselor, CounselorEvent, CounselorTuning, Situation, Stance};
+use f13_core::dodge::DodgeDirection;
 use f13_core::movement::{calc_velocity, input_acceleration, MovementSettings};
 use crate::vehicle::Driving;
 
@@ -40,12 +41,19 @@ pub struct Player {
     pub walk_toggle: bool,
     /// Fear 0..=100 (no fear events are pushed in the client yet).
     pub fear: f32,
+    /// A montage's root motion moving the counselor (dodge, stumble): local velocity (x right, y forward), cm/s.
+    pub root_motion: Option<(Vec2, f32)>,
 }
 
 impl Player {
     /// What the counselor rules need to know about this tick.
     pub fn situation(&self) -> Situation {
-        Situation { speed_sq: self.velocity.length_squared(), fear: self.fear, ..Default::default() }
+        Situation {
+            speed_sq: self.velocity.length_squared(),
+            fear: self.fear,
+            dodging: self.counselor.dodging(),
+            ..Default::default()
+        }
     }
 }
 
@@ -58,6 +66,9 @@ struct Intent {
     sprint_changed: bool,
     toggle_walk: bool,
     toggle_crouch: bool,
+    toggle_combat: bool,
+    /// Double-tapped A/D/S (a dodge in combat stance).
+    dodge: Option<DodgeDirection>,
 }
 
 /// Marks the player's own meshes so ground, wall and camera ray casts ignore them.
@@ -123,7 +134,7 @@ fn spawn_player(
     counselor.health = config.health.unwrap_or(tuning.counselor.health.max_health).clamp(1.0, tuning.counselor.health.max_health);
     counselor.update_wounded(counselor.health, true, &tuning.counselor);
     let mut player = commands.spawn((
-        Player { counselor, velocity: Vec2::ZERO, walk_toggle: false, fear: config.fear },
+        Player { counselor, velocity: Vec2::ZERO, walk_toggle: false, fear: config.fear, root_motion: None },
         Transform::from_translation(config.spawn),
         Visibility::default(),
     ));
@@ -186,7 +197,16 @@ fn grab_cursor(mut cursor: Single<&mut CursorOptions>, mouse: Res<ButtonInput<Mo
     }
 }
 
-fn read_intent(keys: Res<ButtonInput<KeyCode>>, config: Res<PlayerConfig>, mut intent: ResMut<Intent>) {
+/// The engine's `DoubleClickTime` (the game's DefaultInput.ini).
+const DOUBLE_TAP_SECONDS: f32 = 0.2;
+
+fn read_intent(
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time<Real>>,
+    config: Res<PlayerConfig>,
+    mut intent: ResMut<Intent>,
+    mut last_tap: Local<[f32; 3]>,
+) {
     if config.demo {
         let was = intent.sprint_held;
         *intent = Intent { movement: Vec2::Y, sprint_held: true, sprint_changed: !was, ..default() };
@@ -204,7 +224,20 @@ fn read_intent(keys: Res<ButtonInput<KeyCode>>, config: Res<PlayerConfig>, mut i
         sprint_changed: keys.just_pressed(KeyCode::ShiftLeft) || keys.just_released(KeyCode::ShiftLeft),
         toggle_walk: keys.just_pressed(KeyCode::CapsLock),
         toggle_crouch: keys.just_pressed(KeyCode::ControlLeft),
+        toggle_combat: keys.just_pressed(KeyCode::KeyC),
+        dodge: None,
     };
+    let now = time.elapsed_secs();
+    for (i, (key, dir)) in [(KeyCode::KeyA, DodgeDirection::Left), (KeyCode::KeyD, DodgeDirection::Right), (KeyCode::KeyS, DodgeDirection::Back)].into_iter().enumerate() {
+        if keys.just_pressed(key) {
+            if now - last_tap[i] <= DOUBLE_TAP_SECONDS {
+                intent.dodge = Some(dir);
+                last_tap[i] = f32::MIN;
+            } else {
+                last_tap[i] = now;
+            }
+        }
+    }
 }
 
 /// Applies sprint/run/crouch input, ticks stamina and rolls stumbles.
@@ -214,6 +247,7 @@ fn update_counselor(
     config: Res<PlayerConfig>,
     time: Res<Time>,
     tuning: Res<PlayerTuning>,
+    anims: Res<crate::Anims>,
     mut rng: ResMut<crate::GameRng>,
     mut player: Single<&mut Player>,
     mut demo_log: Local<u32>,
@@ -227,14 +261,35 @@ fn update_counselor(
     if intent.toggle_crouch {
         c.stance = if c.stance == Stance::Crouching { Stance::Standing } else { Stance::Crouching };
     }
+    if intent.toggle_combat {
+        c.stance = if c.stance == Stance::Combat { Stance::Standing } else { Stance::Combat };
+        c.set_sprinting(false);
+        info!("combat stance {}", c.stance == Stance::Combat);
+    }
     if intent.sprint_changed {
         c.set_sprint_input(intent.sprint_held);
     }
     if !intent.sprint_held {
         c.set_running(!p.walk_toggle);
     }
-    let situation = p.situation();
+    let dt = time.delta_secs();
     let t = &tuning.counselor;
+    let root_motion = |name: &str, length: f32| anims.0.get(name).map(|v| (*v, length));
+    p.counselor.tick_dodge(dt);
+    if let Some((_, left)) = &mut p.root_motion {
+        *left -= dt;
+        if *left <= 0.0 {
+            p.root_motion = None;
+        }
+    }
+    if let Some(dir) = intent.dodge.filter(|_| p.counselor.stance == Stance::Combat && p.counselor.alive()) {
+        let situation = p.situation();
+        if let Some(m) = p.counselor.try_dodge(dir, &situation, false, &t.dodge) {
+            info!("dodged {dir:?} (stamina {:.1})", p.counselor.stamina);
+            p.root_motion = root_motion(&m.name, m.length);
+        }
+    }
+    let situation = p.situation();
     let mut events = Vec::new();
     p.counselor.tick_stamina(time.delta_secs(), &situation, t, &mut events);
     for e in events {
@@ -243,14 +298,18 @@ fn update_counselor(
                 info!("out of stamina");
                 if forced_stumble && p.counselor.start_stumble(now, true, &t.stumble) {
                     info!("stumbled (out of stamina)");
+                    let m = &p.counselor.stumble.montage;
+                    p.root_motion = root_motion(&m.name, m.length);
                 }
             }
             CounselorEvent::StaminaRecovered => info!("stamina recovered"),
         }
     }
     let roll = || f13_core::stumble::roll_from_unit(rng.0.frand());
-    if p.counselor.tick_stumble(time.delta_secs(), now, &situation, t.stamina_max, &t.stumble, roll) {
+    if p.counselor.tick_stumble(dt, now, &situation, t.stamina_max, &t.stumble, roll) {
         info!("stumbled (chance {:.0}%)", t.stumble.chance(&p.counselor, p.fear, t.stamina_max));
+        let m = &p.counselor.stumble.montage;
+        p.root_motion = root_motion(&m.name, m.length);
     }
     if config.demo && time.elapsed_secs() as u32 > *demo_log {
         *demo_log = time.elapsed_secs() as u32;
@@ -279,12 +338,20 @@ fn move_player(
     let busy = !p.counselor.alive() || using.is_some();
     let wish = if busy { Vec2::ZERO } else { forward * intent.movement.y + right * intent.movement.x };
 
-    let situation = p.situation();
-    let max_speed = p.counselor.max_speed(&situation, &tuning.counselor);
-    let accel = input_acceleration(wish.to_array(), &tuning.movement);
-    let mut v = p.velocity.to_array();
-    calc_velocity(&mut v, accel, max_speed, dt, &tuning.movement);
-    p.velocity = Vec2::from_array(v);
+    let (facing, _, _) = xf.rotation.to_euler(EulerRot::YXZ);
+    if let Some((local, _)) = p.root_motion {
+        // The montage moves the counselor (relative to where they face), whatever the input.
+        let fwd = Vec2::new(facing.sin(), facing.cos());
+        let rt = Vec2::new(-fwd.y, fwd.x);
+        p.velocity = fwd * local.y + rt * local.x;
+    } else {
+        let situation = p.situation();
+        let max_speed = p.counselor.max_speed(&situation, &tuning.counselor);
+        let accel = input_acceleration(wish.to_array(), &tuning.movement);
+        let mut v = p.velocity.to_array();
+        calc_velocity(&mut v, accel, max_speed, dt, &tuning.movement);
+        p.velocity = Vec2::from_array(v);
+    }
 
     // Move, stopping at walls and following the ground.
     let step = p.velocity * dt / CM;
@@ -331,9 +398,10 @@ fn move_player(
     }
     xf.translation = pos;
 
-    // Orient to movement (the model faces +Z).
-    if p.velocity.length_squared() > 1.0 {
-        let target = p.velocity.x.atan2(p.velocity.y);
+    // Orient to movement (the model faces +Z); in combat stance face where the camera looks. Not during root motion.
+    let combat = p.counselor.stance == Stance::Combat;
+    if p.root_motion.is_none() && (combat || p.velocity.length_squared() > 1.0) {
+        let target = if combat { forward.x.atan2(forward.y) } else { p.velocity.x.atan2(p.velocity.y) };
         let (current, _, _) = xf.rotation.to_euler(EulerRot::YXZ);
         let delta = (target - current + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
         let max = TURN_RATE_DEG.to_radians() * dt;
@@ -438,7 +506,13 @@ fn update_hud(player: Single<&Player>, tuning: Res<PlayerTuning>, mut hud: Singl
         player.fear,
         c.stance,
         gait,
-        if c.stumbling { " STUMBLING" } else { "" },
+        if c.stumbling {
+            " STUMBLING"
+        } else if c.dodging() {
+            " DODGING"
+        } else {
+            ""
+        },
         player.velocity.length(),
         c.max_speed(&situation, &tuning.counselor),
     );

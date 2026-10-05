@@ -19,7 +19,8 @@ Mechanics: counselor side
 - [x] Stamina, walk/run/sprint/crouch speeds, sprint rules, wounded state (f13-core::counselor)
 - [x] Unreal walking movement: acceleration, friction, braking (f13-core::movement)
 - [x] Stumbles: random (fear and stamina curves, wounds, stats, cooldown) and on running out of stamina (f13-core::stumble)
-- [ ] Dodge, swimming
+- [x] Combat stance and dodge: double-tap, stamina cost, root motion (f13-core::dodge, anims.json)
+- [ ] Swimming
 - [ ] Fear events pushed in the client (darkness, indoors, wounded, water, Jason near...)
 - [ ] Real collision (capsule vs map); now ray casts only
 - [x] Inventory: large item (hands) and small items (pockets, 3); pickup, drop (use: per item, later)

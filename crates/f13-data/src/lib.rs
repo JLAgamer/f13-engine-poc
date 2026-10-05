@@ -12,6 +12,7 @@ use f13_core::health::HealthTuning;
 use f13_core::killer_abilities::KillerTuning;
 use f13_core::movement::MovementSettings;
 use f13_core::stats::{StatModifiedValue, Stats, STAT_COUNT};
+use f13_core::dodge::DodgeTuning;
 use f13_core::stumble::StumbleTuning;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -20,7 +21,6 @@ use std::sync::Arc;
 
 #[derive(Deserialize)]
 struct File {
-    format: u32,
     killer: KillerSection,
     fear: FearSection,
     counselor: CounselorSection,
@@ -90,6 +90,7 @@ struct CounselorJson {
     jason_near_max_range: f32,
     health: HealthJson,
     stumble: StumbleJson,
+    dodge: DodgeJson,
 }
 
 #[derive(Deserialize)]
@@ -101,10 +102,30 @@ struct StumbleJson {
     stat_mod: StatJson,
     wounded_chance: f32,
     cooldown: f32,
-    sprint_length: f32,
-    run_length: f32,
-    walk_length: f32,
-    out_of_stamina_length: f32,
+    sprint: MontageJson,
+    run: MontageJson,
+    walk: MontageJson,
+    out_of_stamina: MontageJson,
+}
+
+#[derive(Deserialize)]
+struct DodgeJson {
+    stamina_cost: StatJson,
+    left: MontageJson,
+    right: MontageJson,
+    back: MontageJson,
+}
+
+#[derive(Deserialize)]
+struct MontageJson {
+    name: Option<String>,
+    length: f32,
+}
+
+impl MontageJson {
+    fn montage(self) -> f13_core::Montage {
+        f13_core::Montage { name: self.name.unwrap_or_default(), length: self.length }
+    }
 }
 
 #[derive(Deserialize)]
@@ -216,17 +237,23 @@ pub fn default_path() -> PathBuf {
 }
 
 /// tuning.json format this build reads; older files must be re-extracted.
-pub const FORMAT: u32 = 4;
+pub const FORMAT: u32 = 5;
 
 pub fn load(path: &Path) -> Result<Tuning, LoadError> {
     parse(&std::fs::read_to_string(path).map_err(LoadError::Io)?)
 }
 
 pub fn parse(text: &str) -> Result<Tuning, LoadError> {
-    let f: File = serde_json::from_str(text).map_err(LoadError::Json)?;
-    if f.format != FORMAT {
-        return Err(LoadError::Format(f.format));
+    // Check the format first so an old file says "re-extract" instead of naming a missing field.
+    #[derive(Deserialize)]
+    struct Header {
+        format: u32,
     }
+    let header: Header = serde_json::from_str(text).map_err(LoadError::Json)?;
+    if header.format != FORMAT {
+        return Err(LoadError::Format(header.format));
+    }
+    let f: File = serde_json::from_str(text).map_err(LoadError::Json)?;
     let curves: BTreeMap<String, RichCurve> = f
         .fear
         .curves
@@ -286,10 +313,17 @@ pub fn parse(text: &str) -> Result<Tuning, LoadError> {
         stat_mod: smv(st.stat_mod),
         wounded_chance: st.wounded_chance,
         cooldown: st.cooldown,
-        sprint_length: st.sprint_length,
-        run_length: st.run_length,
-        walk_length: st.walk_length,
-        out_of_stamina_length: st.out_of_stamina_length,
+        sprint: st.sprint.montage(),
+        run: st.run.montage(),
+        walk: st.walk.montage(),
+        out_of_stamina: st.out_of_stamina.montage(),
+    };
+    let dg = c.dodge;
+    let dodge = DodgeTuning {
+        stamina_cost: smv(dg.stamina_cost),
+        left: dg.left.montage(),
+        right: dg.right.montage(),
+        back: dg.back.montage(),
     };
     let counselor = CounselorTuning {
         max_walk_speed: c.max_walk_speed,
@@ -321,6 +355,7 @@ pub fn parse(text: &str) -> Result<Tuning, LoadError> {
         wounded_threshold: c.wounded_threshold,
         health: HealthTuning { max_health: c.health.max_health, blocking_damage_mod: smv(c.health.blocking_damage_mod) },
         stumble,
+        dodge,
     };
     let characters = f.counselor.characters.into_iter().map(|(k, v)| (k, v.stats)).collect();
     let j = f.killer.jason_base;
@@ -350,7 +385,7 @@ mod tests {
 
     // Synthetic values (not the game's): exercises the schema only.
     const SAMPLE: &str = r#"{
-      "format": 4,
+      "format": 5,
       "items": {"first_aid": {"health_restored": 100, "use_length": 2}},
       "counselor": {"Base_Counselor": {"max_walk_speed": 1, "max_walk_speed_crouched": 1, "max_slow_run_speed": 1,
           "max_run_speed": 1, "max_sprint_speed": 1, "max_combat_speed": 1, "max_swim_speed": 1, "max_acceleration": 1,
@@ -366,8 +401,10 @@ mod tests {
           "health": {"max_health": 100, "blocking_damage_mod": {"base": 0.2, "modifiers": [0,0,0,0,0,0,0]}},
           "stumble": {"fear_frequency_curve": null, "stamina_frequency_curve": "C", "fear_chance_curve": "C",
               "stamina_chance_curve": null, "stat_mod": {"base": 1, "modifiers": [0,0,0,0,0,0,0]},
-              "wounded_chance": 3, "cooldown": 15, "sprint_length": 1, "run_length": 1, "walk_length": 1,
-              "out_of_stamina_length": 1}},
+              "wounded_chance": 3, "cooldown": 15, "sprint": {"name": "S", "length": 1}, "run": {"name": "R", "length": 1},
+              "walk": {"name": null, "length": 0}, "out_of_stamina": {"name": "R", "length": 1}},
+          "dodge": {"stamina_cost": {"base": 20, "modifiers": [0,0,0,0,0,0,0]}, "left": {"name": "L", "length": 0.5},
+              "right": {"name": "R", "length": 0.5}, "back": {"name": "B", "length": 0.5}}},
         "characters": {"Test": {"stats": [1,2,3,4,5,6,7]}}},
       "killer": {"Jason_Base": {"unlock_time": [1,2,3,4], "recharge_time": [5,6,7,8],
                  "raged_recharge_modifier": 2.0, "rage_unlock_time": 10.0}, "stalk_active_time": 3.0},
@@ -404,7 +441,8 @@ mod tests {
         assert!(t.jason.rage_unlock_time > 0.0);
         assert!(t.characters.contains_key("Vanessa"));
         assert!(t.counselor.max_sprint_speed > t.counselor.max_run_speed);
-        assert!(t.counselor.stumble.run_length > 0.0 && t.counselor.stumble.cooldown > 0.0);
+        assert!(t.counselor.stumble.run.length > 0.0 && t.counselor.stumble.cooldown > 0.0);
+        assert!(t.counselor.dodge.back.length > 0.0 && t.counselor.dodge.stamina_cost.base > 0.0);
         assert!(t.counselor.health.max_health > t.counselor.wounded_threshold);
         assert!(t.first_aid.health_restored > 0.0 && t.first_aid.use_length > 0.0);
     }

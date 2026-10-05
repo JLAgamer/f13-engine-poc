@@ -42,6 +42,7 @@ EXE_CONSTANTS = {
     "stumble_cooldown": (0x1403A0D19, bytes.fromhex("c787cc190000")),
     "stumble_stat_mod_base": (0x1403A145A, bytes.fromhex("c78798190000")),
     "blocking_damage_mod_base": (0x1403A1446, bytes.fromhex("c78728180000")),
+    "dodge_stamina_cost_base": (0x1403A13EC, bytes.fromhex("c787d8160000")),
     # character constructor (`this` in rsi)
     "max_health": (0x1402DC545, bytes.fromhex("c786540e0000")),
     # first aid constructor
@@ -179,8 +180,16 @@ def counselor_section(conv, consts):
             curves[cname] = curve_keys(conv.load(path))
         return cname
 
-    def montage(name):
-        return montage_length(conv, obj_path(base, d[(name, 0)]["Value"])) if (name, 0) in d and d[(name, 0)]["Value"] else 0.0
+    def montage(name, asset=None, props_=None):
+        """Montage property -> {"name", "length"} (name keys root motion in the export's anims.json)."""
+        asset, p = asset or base, props_ or d
+        if (name, 0) not in p or not p[(name, 0)]["Value"]:
+            return {"name": None, "length": 0.0}
+        path = obj_path(asset, p[(name, 0)]["Value"])
+        return {"name": path.rsplit("/", 1)[-1], "length": montage_length(conv, path)}
+
+    anim_bp = conv.load("Characters/Counselors/Base/Base_Counselor_AnimBP")
+    anim = props(export_named(anim_bp, lambda n: n.startswith("Default__")))
 
     fear_curve = curve("StaminaFearRefillModifier")
     grabbed = {"base": consts["grabbed_refill_base"], "modifiers": [0.0] * 7}
@@ -229,10 +238,16 @@ def counselor_section(conv, consts):
             "stat_mod": smv("StumbleStatMod", consts["stumble_stat_mod_base"]),
             "wounded_chance": f("StumbleWoundedChance", consts["stumble_wounded_chance"]),
             "cooldown": f("StumbleCooldown", consts["stumble_cooldown"]),
-            "sprint_length": montage("SprintStumbleAnim"),
-            "run_length": montage("RunStumbleAnim"),
-            "walk_length": montage("WalkStumbleAnim"),
-            "out_of_stamina_length": montage("OutOfStaminaStumbleAnim"),
+            "sprint": montage("SprintStumbleAnim"),
+            "run": montage("RunStumbleAnim"),
+            "walk": montage("WalkStumbleAnim"),
+            "out_of_stamina": montage("OutOfStaminaStumbleAnim"),
+        },
+        "dodge": {
+            "stamina_cost": smv("DodgeStaminaCost", consts["dodge_stamina_cost_base"]),
+            "left": montage("DodgeLeftMontage", anim_bp, anim),
+            "right": montage("DodgeRightMontage", anim_bp, anim),
+            "back": montage("DodgeBackMontage", anim_bp, anim),
         },
     }
     # Playable counselors in the MVP: stats from each character Blueprint
@@ -331,7 +346,7 @@ def main():
         curves.update(counselor_curves)
         items = items_section(conv, consts)
         out = {
-            "format": 4,
+            "format": 5,
             "counselor": {"Base_Counselor": counselor, "characters": characters},
             "items": items,
             "killer": {"Jason_Base": killer, "stalk_active_time": consts["stalk_active_time"]},

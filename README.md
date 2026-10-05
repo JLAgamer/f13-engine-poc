@@ -43,6 +43,8 @@ dotnet run --project tools/f13-export -- --game "<path to F13Game>" --out "<expo
 - `levels/<map>.json`: every mesh placement (including foliage instances), landscape and gameplay actor, in Unreal
   space. `f13_data::level` loads it and converts transforms to Bevy space.
 - `materials.json`: material name, exported file, effective blend mode and two-sidedness.
+- `anims.json`: length and root motion of the montages the rules use (dodges, stumbles); dodges and stumbles move
+  the counselor by it, as the game's root motion does.
 - `classes.json`: Blueprint classes the match can spawn (cabinets, items, cars, doors...): parents, defaults and
   components in actor space. Level files also carry each gameplay actor's properties and components.
 - Keep the export directory outside this repository.
@@ -57,7 +59,8 @@ cargo run -p f13-game --release -- --export "<export dir>" --layout 1
 ```
 
 By default you play Vanessa (a placeholder capsule; `--model` shows her mesh, which has no outfit or animation
-yet): WASD move (running by default), Shift sprint, Caps Lock toggle walk, Ctrl crouch, click to capture the mouse,
+yet): WASD move (running by default), Shift sprint, Caps Lock toggle walk, Ctrl crouch, C combat stance (double-tap
+A/D/S to dodge), click to capture the mouse,
 Esc to release. The HUD shows health, stamina, fear and speed. `--demo` sprints in a straight line and logs stamina every second.
 Counselors stumble as in the game (by fear, stamina and wounds); fear events aren't pushed yet, so `--fear 0-100` sets
 a fixed fear level for testing. Health is the game's (wounded at 50, dead at 0); nothing deals damage yet, so
@@ -69,7 +72,8 @@ are). E picks up (preferring what the camera looks at), searches drawers and ins
 item, 1-3 use the small item in that pocket (first aid heals after its 2 s animation). Escape by car: install the gas
 can and the battery, get in the driver's seat (E), hold E to start with the keys in your pockets, drive (WASD) into
 a car escape zone; F gets out. `--near-car` starts you next to a car. `--bot-escape` plays the whole escape
-automatically (teleporting between goals) and exits when done; `--bot-heal` fetches and uses a first aid spray.
+automatically (teleporting between goals) and exits when done; `--bot-heal` fetches and uses a first aid spray;
+`--bot-dodge` dodges in each direction and checks the distance and stamina.
 
 ## Tests
 ```
