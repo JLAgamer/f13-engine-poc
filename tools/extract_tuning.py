@@ -38,6 +38,9 @@ EXE_CONSTANTS = {
     "grabbed_refill_base": (0x1403A13B0, bytes.fromhex("c78770130000")),
     "grabbed_refill_strength": (0x1403A13BA, bytes.fromhex("c78774130000")),
     "grabbed_refill_composure": (0x1403A13C4, bytes.fromhex("c78788130000")),
+    "stumble_wounded_chance": (0x1403A0D08, bytes.fromhex("c787c8190000")),
+    "stumble_cooldown": (0x1403A0D19, bytes.fromhex("c787cc190000")),
+    "stumble_stat_mod_base": (0x1403A145A, bytes.fromhex("c78798190000")),
 }
 EXE_FLAGS = {  # name: (virtual address, instruction bytes without the 1-byte immediate)
     "force_stumble_on_stamina_depletion": (0x1403A0D23, bytes.fromhex("c687d0190000")),
@@ -121,6 +124,22 @@ def obj_name(asset, idx):
     return None
 
 
+def obj_path(asset, idx):
+    """Content-relative package path (no extension) of an imported object, e.g. 'Blueprints/StatsCurves/X'."""
+    imp = asset["Imports"][-idx - 1]
+    while imp["OuterIndex"] != 0:
+        imp = asset["Imports"][-imp["OuterIndex"] - 1]
+    return imp["ObjectName"].replace("/Game/", "", 1)
+
+
+def montage_length(conv, rel):
+    """Play length of an AnimMontage at rate 1 (what PlayAnimMontage returns)."""
+    asset = conv.load(rel)
+    p = props(export_named(asset, lambda n: not n.startswith("Default__")))
+    rate = num(p[("RateScale", 0)]["Value"]) if ("RateScale", 0) in p else 1.0
+    return num(p[("SequenceLength", 0)]["Value"]) / rate
+
+
 def stat_value(node, base=0.0):
     """StatModifiedValue struct node -> {"base", "modifiers"[7]} (unset fields are 0)."""
     mods = [0.0] * 7
@@ -140,10 +159,25 @@ def counselor_section(conv, consts):
     def f(name, fallback):
         return num(d[(name, 0)]["Value"]) if (name, 0) in d else fallback
 
-    def smv(name):
-        return stat_value(d[(name, 0)]) if (name, 0) in d else {"base": 0.0, "modifiers": [0.0] * 7}
+    def smv(name, base=0.0):  # base: the C++ constructor's BaseValue, kept when the Blueprint doesn't override it
+        return stat_value(d[(name, 0)], base) if (name, 0) in d else {"base": base, "modifiers": [0.0] * 7}
 
-    fear_curve = obj_name(base, d[("StaminaFearRefillModifier", 0)]["Value"])
+    curves = {}
+
+    def curve(name):
+        """Curve property -> curve name (its keys go into `curves`), or None when unset."""
+        if (name, 0) not in d or not d[(name, 0)]["Value"]:
+            return None
+        path = obj_path(base, d[(name, 0)]["Value"])
+        cname = path.rsplit("/", 1)[-1]
+        if cname not in curves:
+            curves[cname] = curve_keys(conv.load(path))
+        return cname
+
+    def montage(name):
+        return montage_length(conv, obj_path(base, d[(name, 0)]["Value"])) if (name, 0) in d and d[(name, 0)]["Value"] else 0.0
+
+    fear_curve = curve("StaminaFearRefillModifier")
     grabbed = {"base": consts["grabbed_refill_base"], "modifiers": [0.0] * 7}
     grabbed["modifiers"][0] = consts["grabbed_refill_strength"]
     grabbed["modifiers"][5] = consts["grabbed_refill_composure"]
@@ -178,15 +212,27 @@ def counselor_section(conv, consts):
         "wounded_threshold": f("WoundedThreshold", 0.0),
         "jason_near_min_range": f("JasonNearMinRange", 0.0),
         "jason_near_max_range": f("JasonNearMaxRange", 0.0),
+        "stumble": {
+            "fear_frequency_curve": curve("StumbleFearFrequecy"),  # (sic) the property's name in the game
+            "stamina_frequency_curve": curve("StumbleStaminaFrequency"),
+            "fear_chance_curve": curve("StumbleFearChance"),
+            "stamina_chance_curve": curve("StumbleStaminaChance"),
+            "stat_mod": smv("StumbleStatMod", consts["stumble_stat_mod_base"]),
+            "wounded_chance": f("StumbleWoundedChance", consts["stumble_wounded_chance"]),
+            "cooldown": f("StumbleCooldown", consts["stumble_cooldown"]),
+            "sprint_length": montage("SprintStumbleAnim"),
+            "run_length": montage("RunStumbleAnim"),
+            "walk_length": montage("WalkStumbleAnim"),
+            "out_of_stamina_length": montage("OutOfStaminaStumbleAnim"),
+        },
     }
-    curve = curve_keys(conv.load(f"Characters/Counselors/Base/{fear_curve}"))
     # Playable counselors in the MVP: stats from each character Blueprint
     characters = {}
     for key, rel in {"Vanessa": "Characters/Counselors/Athlete/Athlete_Counselor"}.items():
         a = conv.load(rel)
         p = props(export_named(a, lambda n: n.startswith("Default__")))
         characters[key] = {"stats": [int(num(p[("Stats", i)]["Value"])) for i in range(7)]}
-    return tuning, characters, (fear_curve, curve)
+    return tuning, characters, curves
 
 
 def curve_keys(asset):
@@ -217,7 +263,7 @@ def main():
         sys.exit(f'"{a.game}" is a stock install: its content is still packed in Content/Paks/*.pak.\n'
                  "Extract the main pak to loose files under SummerCamp/Content first (the usual modding setup)."
                  if packed else f'"{a.game}" has no extracted game content under SummerCamp/Content.')
-    exe =os.path.join(a.game, "SummerCamp", "Binaries", "Win64", "SummerCamp.exe")
+    exe = os.path.join(a.game, "SummerCamp", "Binaries", "Win64", "SummerCamp.exe")
     consts = read_exe_constants(exe)
     conv = Converter(content, a.uassetgui)
     try:
@@ -261,10 +307,10 @@ def main():
                 base_value = num(x["Value"])
             elif x["Name"] == "StatModifiers":
                 mods[x.get("ArrayIndex", 0)] = num(x["Value"])
-        counselor, characters, (curve_name, curve) = counselor_section(conv, consts)
-        curves[curve_name] = curve
+        counselor, characters, counselor_curves = counselor_section(conv, consts)
+        curves.update(counselor_curves)
         out = {
-            "format": 2,
+            "format": 3,
             "counselor": {"Base_Counselor": counselor, "characters": characters},
             "killer": {"Jason_Base": killer, "stalk_active_time": consts["stalk_active_time"]},
             "fear": {

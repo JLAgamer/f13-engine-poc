@@ -28,6 +28,7 @@ python tools/extract_tuning.py --game "<path to F13Game>" --uassetgui "<path to 
 ```
 
 This writes `~/.f13-rs/tuning.json` (`%USERPROFILE%\.f13-rs\tuning.json` on Windows), which `f13_data::load(&f13_data::default_path())` reads.
+Re-run the extractor when a new build reports a different tuning format.
 It needs the main pak extracted to loose files, and it checks the game executable's build before reading
 any constant from it.
 
@@ -57,7 +58,9 @@ cargo run -p f13-game --release -- --export "<export dir>" --layout 1
 
 By default you play Vanessa (a placeholder capsule; `--model` shows her mesh, which has no outfit or animation
 yet): WASD move (running by default), Shift sprint, Caps Lock toggle walk, Ctrl crouch, click to capture the mouse,
-Esc to release. The HUD shows stamina and speed. `--demo` sprints in a straight line and logs stamina every second.
+Esc to release. The HUD shows stamina, fear and speed. `--demo` sprints in a straight line and logs stamina every second.
+Counselors stumble as in the game (by fear, stamina and wounds); fear events aren't pushed yet, so `--fear 0-100` sets
+a fixed fear level for testing.
 `--fly` gives a free camera instead. Add `--grass` for grass and flowers.
 
 Items, cabinets and cars spawn as in the game (`--seed n` repeats a match; the log lists where the cars and parts

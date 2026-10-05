@@ -8,3 +8,4 @@ pub mod killer_abilities;
 pub mod movement;
 pub mod spawn;
 pub mod stats;
+pub mod stumble;

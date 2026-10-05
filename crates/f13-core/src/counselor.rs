@@ -20,6 +20,7 @@
 
 use crate::fear::Curve;
 use crate::stats::{StatModifiedValue, Stats};
+use crate::stumble::{StumbleState, StumbleTuning};
 
 /// Character stance, in the original enum order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -75,6 +76,7 @@ pub struct CounselorTuning {
     pub force_stumble_on_stamina_depletion: bool,
     // Health
     pub wounded_threshold: f32,
+    pub stumble: StumbleTuning,
 }
 
 impl std::fmt::Debug for CounselorTuning {
@@ -104,11 +106,14 @@ pub struct Situation {
     pub in_hiding: bool,
     pub grabbed: bool,
     pub dodging: bool,
+    /// Holding the drop button for a small or large item.
+    pub dropping_item: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CounselorEvent {
-    /// Ran out of stamina while sprinting; `forced` = the counselor should play the out-of-stamina stumble.
+    /// Ran out of stamina while sprinting. `forced_stumble`: the caller should call
+    /// [`Counselor::start_stumble`] with `out_of_stamina` (the original does it in the same tick).
     StaminaDepleted { forced_stumble: bool },
     StaminaRecovered,
 }
@@ -120,6 +125,7 @@ pub struct Counselor {
     pub sprinting: bool,
     pub running: bool,
     pub stumbling: bool,
+    pub stumble: StumbleState,
     pub stamina: f32,
     pub stamina_depleted: bool,
     pub stamina_locked: bool,
@@ -134,6 +140,7 @@ impl Counselor {
             sprinting: false,
             running: false,
             stumbling: false,
+            stumble: StumbleState::default(),
             stamina: STAMINA_CLAMP,
             stamina_depleted: false,
             stamina_locked: false,
@@ -332,6 +339,7 @@ mod tests {
             stamina_fear_curve: None,
             force_stumble_on_stamina_depletion: true,
             wounded_threshold: 50.0,
+            stumble: Default::default(),
         }
     }
 

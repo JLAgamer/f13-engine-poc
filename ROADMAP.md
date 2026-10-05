@@ -18,7 +18,9 @@ Mechanics: counselor side
 - [x] Fear (events, caps, delays, throttled updates)
 - [x] Stamina, walk/run/sprint/crouch speeds, sprint rules, wounded state (f13-core::counselor)
 - [x] Unreal walking movement: acceleration, friction, braking (f13-core::movement)
-- [ ] Stumbles (random, by fear and stamina curves), dodge, swimming, hiding
+- [x] Stumbles: random (fear and stamina curves, wounds, stats, cooldown) and on running out of stamina (f13-core::stumble)
+- [ ] Dodge, swimming
+- [ ] Fear events pushed in the client (darkness, indoors, wounded, water, Jason near...)
 - [ ] Real collision (capsule vs map); now ray casts only
 - [x] Inventory: large item (hands) and small items (pockets, 3); pickup, drop (use: per item, later)
 - [x] Repairs: car battery and gas, keys at the ignition (from the driver's seat)

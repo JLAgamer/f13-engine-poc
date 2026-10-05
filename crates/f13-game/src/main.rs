@@ -1,7 +1,7 @@
 //! f13-game: currently a viewer for the MVP map (Crystal Lake, small) built from the player's own export.
 //!
 //!   cargo run -p f13-game --release -- --export <dir made by tools/f13-export> [--layout 1-4] [--seed n] [--near-car] [--bot-escape] [--grass]
-//!       [--fly] [--model] [--demo] [--tuning file] [--aerial] [--no-foliage] [--screenshot out.png]
+//!       [--fly] [--model] [--demo] [--fear 0-100] [--tuning file] [--aerial] [--no-foliage] [--screenshot out.png]
 //!   Default: play as Vanessa (see player.rs for controls). --fly: free camera instead.   (screenshot: wait for loading, save one frame, exit)
 
 mod bot;
@@ -36,6 +36,7 @@ struct Args {
     fly: bool,
     model: bool,
     demo: bool,
+    fear: f32,
     tuning: Option<PathBuf>,
     foliage: bool,
     screenshot: Option<PathBuf>,
@@ -52,6 +53,7 @@ fn parse_args() -> Args {
     let mut fly = false;
     let mut model = false;
     let mut demo = false;
+    let mut fear = 0.0;
     let mut tuning = None;
     let mut foliage = true;
     let mut screenshot = None;
@@ -68,6 +70,7 @@ fn parse_args() -> Args {
             "--fly" => fly = true,
             "--model" => model = true,
             "--demo" => demo = true,
+            "--fear" => fear = it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0f32).clamp(0.0, 100.0),
             "--tuning" => tuning = it.next().map(PathBuf::from),
             "--no-foliage" => foliage = false,
             "--screenshot" => screenshot = it.next().map(PathBuf::from),
@@ -81,7 +84,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, grass, aerial, fly, model, demo, tuning, foliage, screenshot }
+    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, grass, aerial, fly, model, demo, fear, tuning, foliage, screenshot }
 }
 
 #[derive(Resource)]
@@ -121,6 +124,10 @@ struct MaterialIndex {
     built: HashMap<String, Handle<StandardMaterial>>,
 }
 
+/// Random numbers for gameplay rolls.
+#[derive(Resource)]
+pub(crate) struct GameRng(pub f13_core::spawn::Rng);
+
 fn main() {
     let args = parse_args();
     let load = |name: &str| {
@@ -141,7 +148,12 @@ fn main() {
     let materials = MaterialIndex { root: args.export.clone(), entries, ..default() };
     let spawn = counselor_start(&layouts);
 
+    let seed = args.seed.unwrap_or_else(|| {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+    });
     let mut app = App::new();
+    // Gameplay randomness (stumbles, ...), separate from the match layout so both repeat with --seed.
+    app.insert_resource(GameRng(f13_core::spawn::Rng::new(seed ^ 0x5eed_f13)));
     if !(args.fly || args.aerial) {
         let path = args.tuning.clone().unwrap_or_else(f13_data::default_path);
         let tuning = f13_data::load(&path).unwrap_or_else(|e| {
@@ -150,15 +162,12 @@ fn main() {
         });
         let stats = *tuning.characters.get("Vanessa").expect("Vanessa missing from tuning.json");
         app.insert_resource(player::PlayerTuning { counselor: tuning.counselor, movement: tuning.counselor_movement, stats })
-            .add_plugins(player::PlayerPlugin { spawn, show_model: args.model, demo: args.demo })
+            .add_plugins(player::PlayerPlugin { spawn, show_model: args.model, demo: args.demo, fear: args.fear })
             .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin));
         if args.bot_escape {
             app.add_plugins(bot::BotPlugin);
         }
     }
-    let seed = args.seed.unwrap_or_else(|| {
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
-    });
     if let Some(path) = args.screenshot.clone() {
         app.insert_resource(ScreenshotPlan { path, frames_loaded: 0 }).add_systems(Update, take_screenshot);
     }

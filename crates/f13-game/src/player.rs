@@ -37,6 +37,15 @@ pub struct Player {
     /// Horizontal velocity in Bevy's XZ plane, in cm/s (Unreal units).
     pub velocity: Vec2,
     pub walk_toggle: bool,
+    /// Fear 0..=100 (no fear events are pushed in the client yet).
+    pub fear: f32,
+}
+
+impl Player {
+    /// What the counselor rules need to know about this tick.
+    pub fn situation(&self) -> Situation {
+        Situation { speed_sq: self.velocity.length_squared(), fear: self.fear, ..Default::default() }
+    }
 }
 
 /// What the player wants this tick, from the keyboard or the demo script.
@@ -69,6 +78,8 @@ pub struct PlayerPlugin {
     pub show_model: bool,
     /// Scripted run: hold forward and sprint, logging stamina every second.
     pub demo: bool,
+    /// Fixed fear level (testing: fear events aren't pushed in the client yet).
+    pub fear: f32,
 }
 
 #[derive(Resource)]
@@ -76,11 +87,12 @@ struct PlayerConfig {
     spawn: Vec3,
     show_model: bool,
     demo: bool,
+    fear: f32,
 }
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(PlayerConfig { spawn: self.spawn, show_model: self.show_model, demo: self.demo })
+        app.insert_resource(PlayerConfig { spawn: self.spawn, show_model: self.show_model, demo: self.demo, fear: self.fear })
             .init_resource::<Intent>()
             .add_systems(Startup, spawn_player)
             .add_systems(FixedUpdate, (read_intent, update_counselor, move_player).chain())
@@ -97,7 +109,7 @@ fn spawn_player(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let mut player = commands.spawn((
-        Player { counselor: Counselor::new(tuning.stats), velocity: Vec2::ZERO, walk_toggle: false },
+        Player { counselor: Counselor::new(tuning.stats), velocity: Vec2::ZERO, walk_toggle: false, fear: config.fear },
         Transform::from_translation(config.spawn),
         Visibility::default(),
     ));
@@ -181,15 +193,18 @@ fn read_intent(keys: Res<ButtonInput<KeyCode>>, config: Res<PlayerConfig>, mut i
     };
 }
 
-/// Applies sprint/run/crouch input and ticks stamina.
+/// Applies sprint/run/crouch input, ticks stamina and rolls stumbles.
+#[allow(clippy::too_many_arguments)]
 fn update_counselor(
     intent: Res<Intent>,
     config: Res<PlayerConfig>,
     time: Res<Time>,
     tuning: Res<PlayerTuning>,
+    mut rng: ResMut<crate::GameRng>,
     mut player: Single<&mut Player>,
     mut demo_log: Local<u32>,
 ) {
+    let now = time.elapsed_secs();
     let p = &mut **player;
     if intent.toggle_walk {
         p.walk_toggle = !p.walk_toggle;
@@ -204,14 +219,24 @@ fn update_counselor(
     if !intent.sprint_held {
         c.set_running(!p.walk_toggle);
     }
-    let situation = Situation { speed_sq: p.velocity.length_squared(), ..Default::default() };
+    let situation = p.situation();
+    let t = &tuning.counselor;
     let mut events = Vec::new();
-    p.counselor.tick_stamina(time.delta_secs(), &situation, &tuning.counselor, &mut events);
+    p.counselor.tick_stamina(time.delta_secs(), &situation, t, &mut events);
     for e in events {
         match e {
-            CounselorEvent::StaminaDepleted { forced_stumble } => info!("out of stamina (stumble: {forced_stumble})"),
+            CounselorEvent::StaminaDepleted { forced_stumble } => {
+                info!("out of stamina");
+                if forced_stumble && p.counselor.start_stumble(now, true, &t.stumble) {
+                    info!("stumbled (out of stamina)");
+                }
+            }
             CounselorEvent::StaminaRecovered => info!("stamina recovered"),
         }
+    }
+    let roll = || f13_core::stumble::roll_from_unit(rng.0.frand());
+    if p.counselor.tick_stumble(time.delta_secs(), now, &situation, t.stamina_max, &t.stumble, roll) {
+        info!("stumbled (chance {:.0}%)", t.stumble.chance(&p.counselor, p.fear, t.stamina_max));
     }
     if config.demo && time.elapsed_secs() as u32 > *demo_log {
         *demo_log = time.elapsed_secs() as u32;
@@ -239,7 +264,7 @@ fn move_player(
     let right = Vec2::new(cos, -sin);
     let wish = forward * intent.movement.y + right * intent.movement.x;
 
-    let situation = Situation { speed_sq: p.velocity.length_squared(), ..Default::default() };
+    let situation = p.situation();
     let max_speed = p.counselor.max_speed(&situation, &tuning.counselor);
     let accel = input_acceleration(wish.to_array(), &tuning.movement);
     let mut v = p.velocity.to_array();
@@ -302,19 +327,27 @@ fn move_player(
 }
 
 /// Demo: once the map has loaded, turn the camera toward the longest clear line so the run isn't a tree hug.
+/// Aims again whenever the run is blocked (props stream in after the first aim).
 fn aim_demo(
     config: Res<PlayerConfig>,
     time: Res<Time>,
-    player: Single<&Transform, With<Player>>,
+    player: Single<(&Transform, &Player)>,
     mut camera: Single<&mut PlayerCamera>,
     mut ray_cast: MeshRayCast,
     parts: Query<(), With<PlayerPart>>,
-    mut done: Local<bool>,
+    mut last_aim: Local<Option<f32>>,
 ) {
-    if !config.demo || *done || time.elapsed_secs() < 0.5 {
+    let now = time.elapsed_secs();
+    let (player, p) = *player;
+    let blocked = p.velocity.length_squared() < 50.0 * 50.0;
+    let due = match *last_aim {
+        None => now >= 0.5,
+        Some(t) => blocked && now - t >= 1.0,
+    };
+    if !config.demo || !due {
         return;
     }
-    *done = true;
+    *last_aim = Some(now);
     let not_player = |e: Entity| !parts.contains(e);
     let settings = MeshRayCastSettings::default().with_filter(&not_player);
     let origin = player.translation + Vec3::Y * 1.0;
@@ -373,13 +406,15 @@ fn update_hud(player: Single<&Player>, tuning: Res<PlayerTuning>, mut hud: Singl
     } else {
         "walking"
     };
-    let situation = Situation { speed_sq: player.velocity.length_squared(), ..Default::default() };
+    let situation = player.situation();
     hud.0 = format!(
-        "Vanessa  stamina {:5.1}{}\n{:?} {}  speed {:4.0} / {:4.0} cm/s",
+        "Vanessa  stamina {:5.1}{}  fear {:3.0}\n{:?} {}{}  speed {:4.0} / {:4.0} cm/s",
         c.stamina,
         if c.stamina_depleted { " (depleted)" } else { "" },
+        player.fear,
         c.stance,
         gait,
+        if c.stumbling { " STUMBLING" } else { "" },
         player.velocity.length(),
         c.max_speed(&situation, &tuning.counselor),
     );
