@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["crates/f13-core", "crates/f13-data", "crates/f13-bevy", "crates/f13-game"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"

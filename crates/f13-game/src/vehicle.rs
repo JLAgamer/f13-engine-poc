@@ -1,0 +1,228 @@
+//! Driving a repaired car and escaping through a car escape zone.
+//!
+//! PLACEHOLDER handling model: the game drives its cars with PhysX vehicle simulation (torque curve, two forward
+//! gears, front-wheel drive, per-wheel setups in `SCWheeledVehicleMovementComponent`). Until that is ported this is
+//! a simple kinematic car whose numbers below are guesses, not game data. Starting is a plain hold of
+//! [`START_SECONDS`] for the same reason (the game derives it from `BaseRestartTime`/`RestartTimeMod`).
+//!
+//! Only the driver can use the ignition (`SCDriveableVehicle::CanInteractWithStartVehicle` checks `Driver`); it
+//! needs the ignition part (keys), which then stays in the car.
+//!
+//! Controls in the driver's seat: hold E to start, W/S throttle and reverse, A/D steer, F get out (when nearly
+//! stopped).
+
+use crate::interact::{take_part, Inventory};
+use crate::player::{Player, PlayerPart};
+use crate::props::Item;
+use crate::props::{EscapeZone, Vehicle, VehiclePart};
+use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings};
+use bevy::prelude::*;
+
+const MAX_FORWARD_CM_S: f32 = 1800.0;
+const MAX_REVERSE_CM_S: f32 = 600.0;
+const ACCEL_CM_S2: f32 = 700.0;
+const BRAKE_CM_S2: f32 = 2000.0;
+const COAST_CM_S2: f32 = 300.0;
+const WHEELBASE_CM: f32 = 250.0;
+const MAX_STEER_DEG: f32 = 30.0;
+pub const START_SECONDS: f32 = 2.0;
+/// Half the car's length (front bumper distance from the root), metres.
+const HALF_LENGTH_M: f32 = 2.4;
+
+/// The player is in a vehicle's driver seat.
+#[derive(Component)]
+pub struct Driving {
+    pub vehicle: Entity,
+    /// Seconds spent starting the engine.
+    pub starting: f32,
+}
+
+/// The counselor has escaped; the match is over for them.
+#[derive(Resource)]
+pub struct Escaped {
+    pub how: String,
+}
+
+pub struct VehiclePlugin;
+
+impl Plugin for VehiclePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Update, (drive, follow_vehicle, exit_vehicle, check_escape, show_escape).chain());
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn drive(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+    escaped: Option<Res<Escaped>>,
+    mut player: Single<(&mut Driving, &mut Inventory), With<Player>>,
+    items: Query<&Item>,
+    mut vehicles: Query<(&mut Vehicle, &mut Transform)>,
+    mut ray_cast: MeshRayCast,
+    vehicle_parts: Query<&VehiclePart>,
+    player_parts: Query<(), With<PlayerPart>>,
+) {
+    let dt = time.delta_secs();
+    let (ref mut player, ref mut inv) = *player;
+    let Ok((mut v, mut xf)) = vehicles.get_mut(player.vehicle) else { return };
+    if !v.started {
+        let has_keys = inv.hand.iter().chain(inv.pockets.iter()).any(|&e| items.get(e).is_ok_and(|i| v.ignition.contains(&i.class)));
+        if escaped.is_some() || !has_keys || !keys.pressed(KeyCode::KeyE) {
+            player.starting = 0.0;
+            return;
+        }
+        player.starting += dt;
+        if player.starting >= START_SECONDS {
+            if let Some(k) = take_part(inv, &items, &v.ignition) {
+                commands.entity(k).despawn();
+            }
+            v.started = true;
+            info!("{} started", v.class);
+        }
+        return;
+    }
+    let (mut throttle, mut steer) = (0.0f32, 0.0f32);
+    if escaped.is_none() {
+        if keys.pressed(KeyCode::KeyW) {
+            throttle += 1.0;
+        }
+        if keys.pressed(KeyCode::KeyS) {
+            throttle -= 1.0;
+        }
+        if keys.pressed(KeyCode::KeyD) {
+            steer += 1.0;
+        }
+        if keys.pressed(KeyCode::KeyA) {
+            steer -= 1.0;
+        }
+    }
+    // Speed: accelerate toward the input direction, brake when opposing it, coast otherwise.
+    let s = v.speed;
+    let a = if throttle == 0.0 {
+        -s.signum() * COAST_CM_S2.min(s.abs() / dt)
+    } else if s * throttle < 0.0 {
+        throttle * BRAKE_CM_S2
+    } else {
+        throttle * ACCEL_CM_S2
+    };
+    v.speed = (s + a * dt).clamp(-MAX_REVERSE_CM_S, MAX_FORWARD_CM_S);
+    v.steer += (steer - v.steer) * (dt * 6.0).min(1.0);
+
+    let me = player.vehicle;
+    let filter = |e: Entity| vehicle_parts.get(e).map_or(true, |p| p.0 != me) && !player_parts.contains(e);
+    let settings = MeshRayCastSettings::default().with_filter(&filter);
+
+    // Turn like a bicycle model, then move along the car's forward axis (its Unreal +X).
+    let yaw_rate = v.speed / WHEELBASE_CM * (v.steer * MAX_STEER_DEG.to_radians()).tan();
+    let (yaw, _, _) = xf.rotation.to_euler(EulerRot::YXZ);
+    let yaw = yaw - yaw_rate * dt;
+    let forward = Quat::from_rotation_y(yaw) * Vec3::X;
+    let step = forward * v.speed * dt / 100.0;
+
+    // Stop at obstacles (anything that isn't ground-like) in front of or behind the car.
+    if step.length_squared() > 0.0 {
+        let dir = Dir3::new(step).unwrap();
+        let origin = xf.translation + Vec3::Y * 0.7 + forward * HALF_LENGTH_M * v.speed.signum();
+        if let Some((_, hit)) = ray_cast.cast_ray(Ray3d::new(origin, dir), &settings).first() {
+            if hit.distance < step.length() + 0.1 && hit.normal.y < 0.7 {
+                v.speed = 0.0;
+                return;
+            }
+        }
+    }
+    let mut pos = xf.translation + step;
+
+    // Follow the ground under the front and rear axles.
+    let ground = |ray_cast: &mut MeshRayCast, p: Vec3| {
+        ray_cast.cast_ray(Ray3d::new(p + Vec3::Y * 2.0, Dir3::NEG_Y), &settings).first().map(|(_, h)| h.point.y)
+    };
+    let half_wb = WHEELBASE_CM / 200.0;
+    let front = ground(&mut ray_cast, pos + forward * half_wb);
+    let rear = ground(&mut ray_cast, pos - forward * half_wb);
+    let mut pitch = 0.0;
+    match (front, rear) {
+        (Some(f), Some(r)) => {
+            pos.y = (f + r) * 0.5;
+            pitch = ((f - r) / (2.0 * half_wb)).atan();
+        }
+        (Some(y), None) | (None, Some(y)) => pos.y = y,
+        _ => {}
+    }
+    xf.translation = pos;
+    // Pitch about the car's right axis (Bevy +Z before yaw).
+    xf.rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_z(pitch);
+}
+
+/// Keeps the (hidden) counselor at the car so the camera follows it.
+fn follow_vehicle(mut player: Single<(&Driving, &mut Transform), With<Player>>, vehicles: Query<&Transform, (With<Vehicle>, Without<Player>)>) {
+    let (d, ref mut xf) = *player;
+    if let Ok(v) = vehicles.get(d.vehicle) {
+        xf.translation = v.translation;
+    }
+}
+
+fn exit_vehicle(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    escaped: Option<Res<Escaped>>,
+    mut player: Single<(Entity, &Driving, &mut Transform, &mut Visibility), With<Player>>,
+    vehicles: Query<(&Vehicle, &GlobalTransform)>,
+) {
+    if escaped.is_some() || !keys.just_pressed(KeyCode::KeyF) {
+        return;
+    }
+    let (entity, d, ref mut xf, ref mut vis) = *player;
+    let Ok((v, gxf)) = vehicles.get(d.vehicle) else { return };
+    if v.speed.abs() > 100.0 {
+        return;
+    }
+    // Out through the driver's door: a metre further out from the seat.
+    let seat = v.driver_seat;
+    let outward = Vec3::new(seat.x, 0.0, seat.z).normalize_or_zero();
+    let mut at = gxf.transform_point(seat + outward * 1.0);
+    at.y = gxf.translation().y;
+    xf.translation = at;
+    **vis = Visibility::Inherited;
+    commands.entity(entity).remove::<Driving>();
+}
+
+fn check_escape(
+    mut commands: Commands,
+    escaped: Option<Res<Escaped>>,
+    player: Single<&Driving, With<Player>>,
+    vehicles: Query<(&Vehicle, &GlobalTransform)>,
+    zones: Query<(&EscapeZone, &GlobalTransform, &Name)>,
+) {
+    if escaped.is_some() {
+        return;
+    }
+    let Ok((v, vxf)) = vehicles.get(player.vehicle) else { return };
+    if !v.started {
+        return;
+    }
+    for (zone, zxf, name) in &zones {
+        if zone.car && vxf.translation().distance(zxf.translation()) <= zone.radius_m {
+            info!("escaped by car through {name}");
+            commands.insert_resource(Escaped { how: format!("by car ({})", v.class.trim_end_matches("_C")) });
+            return;
+        }
+    }
+}
+
+#[derive(Component)]
+struct EscapeBanner;
+
+fn show_escape(mut commands: Commands, escaped: Option<Res<Escaped>>, banner: Query<(), With<EscapeBanner>>) {
+    let Some(e) = escaped else { return };
+    if !banner.is_empty() {
+        return;
+    }
+    commands.spawn((
+        Text::new(format!("YOU ESCAPED {}", e.how.to_uppercase())),
+        TextFont { font_size: FontSize::Px(40.0), ..default() },
+        Node { position_type: PositionType::Absolute, top: Val::Percent(40.0), left: Val::Percent(30.0), ..default() },
+        EscapeBanner,
+    ));
+}
