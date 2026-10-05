@@ -4,6 +4,7 @@
 pub mod counselor;
 pub mod curve;
 pub mod fear;
+pub mod health;
 pub mod killer_abilities;
 pub mod movement;
 pub mod spawn;

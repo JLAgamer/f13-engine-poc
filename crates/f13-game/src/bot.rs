@@ -2,20 +2,29 @@
 //! interaction systems (it presses the same keys a player would). Without navigation it teleports between goals:
 //! find the keys and each part the car needs (searching cabinets on the way), install the parts, get in, start it
 //! with the keys, then drive into a car escape zone. Logs every step; exits when it escapes (or gives up).
+//!
+//! `--bot-heal`: fetch a first aid spray and use it (start hurt with `--health`); exits when healed.
 
-use crate::interact::{Carried, Inventory};
+use crate::interact::{Carried, Inventory, UsingItem, FIRST_AID};
 use crate::player::{Player, PlayerCamera};
+
 use crate::props::{Cabinet, EscapeZone, InCabinet, Item, Vehicle};
 use crate::vehicle::{Driving, Escaped};
 use bevy::input::InputSystems;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 
-pub struct BotPlugin;
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Goal {
+    Escape,
+    Heal,
+}
+
+pub struct BotPlugin(pub Goal);
 
 impl Plugin for BotPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Bot>().add_systems(PreUpdate, run_bot.after(InputSystems));
+        app.insert_resource(Bot { goal: self.0, ..default() }).add_systems(PreUpdate, run_bot.after(InputSystems));
     }
 }
 
@@ -29,11 +38,15 @@ enum Step {
     Install(usize),
     GetIn,
     Drive,
+    /// Fetch a first aid spray, then use it.
+    FetchAid,
+    Heal,
     Done,
 }
 
 #[derive(Resource)]
 struct Bot {
+    goal: Goal,
     step: Step,
     vehicle: Option<Entity>,
     timer: f32,
@@ -44,12 +57,20 @@ struct Bot {
 
 impl Default for Bot {
     fn default() -> Self {
-        Self { step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false }
+        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false }
     }
 }
 
 fn place(player: &mut Transform, at: Vec3) {
     player.translation = at;
+}
+
+/// Points the camera from the counselor's chest at `target` (interaction prefers what the camera looks at).
+fn look_at(camera: &mut PlayerCamera, player: &Transform, target: Vec3) {
+    if let Some(d) = (target - (player.translation + Vec3::Y)).try_normalize() {
+        camera.yaw = (-d.x).atan2(-d.z);
+        camera.pitch = d.y.asin();
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -58,7 +79,7 @@ fn run_bot(
     mut bot: ResMut<Bot>,
     time: Res<Time>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
-    mut player: Single<(&mut Transform, Option<&Inventory>, Has<Driving>), With<Player>>,
+    mut player: Single<(&mut Transform, &Player, Option<&Inventory>, Has<Driving>, Has<UsingItem>)>,
     mut camera: Single<&mut PlayerCamera>,
     items: Query<(Entity, &Item, &GlobalTransform, Option<&InCabinet>), Without<Carried>>,
     carried: Query<&Item, With<Carried>>,
@@ -71,7 +92,7 @@ fn run_bot(
     let dt = time.delta_secs();
     bot.timer += dt;
     bot.total += dt;
-    for k in [KeyCode::KeyE, KeyCode::KeyW] {
+    for k in [KeyCode::KeyE, KeyCode::KeyW, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3] {
         keys.release(k);
     }
     if bot.total > 240.0 && bot.step != Step::Done {
@@ -79,10 +100,16 @@ fn run_bot(
         exit.write(AppExit::error());
         return;
     }
-    let (ref mut pxf, inv, driving) = *player;
+    let (ref mut pxf, p, inv, driving, using) = *player;
     match bot.step {
         Step::Start => {
             if bot.timer < 3.0 {
+                return;
+            }
+            if bot.goal == Goal::Heal {
+                info!("bot: health {:.0}, going for first aid", p.counselor.health);
+                bot.step = Step::FetchAid;
+                bot.timer = 0.0;
                 return;
             }
             let Some((e, v, _, _)) = vehicles.iter().find(|(_, v, _, _)| v.class.contains("2Seat")).or_else(|| vehicles.iter().next()) else { return };
@@ -107,32 +134,38 @@ fn run_bot(
                 bot.timer = 0.0;
                 return;
             }
-            // Nearest matching part to the car.
-            let Some((e, item, ixf, in_cab)) = items
-                .iter()
-                .filter(|(_, it, _, _)| parts.contains(&it.class))
-                .min_by(|a, b| a.2.translation().distance(vxf.translation()).total_cmp(&b.2.translation().distance(vxf.translation())))
-            else {
-                error!("bot: no {:?} anywhere", parts);
+            let near = vxf.translation();
+            let parts = parts.clone();
+            if !go_fetch(&mut bot, &mut camera, &parts, near, pxf, &items, &cabinets, &mut keys) {
                 bot.step = Step::Done;
+            }
+        }
+        Step::FetchAid => {
+            let Some(inv) = inv else { return };
+            if inv.pockets.iter().any(|&e| carried.get(e).is_ok_and(|it| it.class == FIRST_AID)) {
+                info!("bot: have first aid");
+                bot.step = Step::Heal;
+                bot.timer = 0.0;
                 return;
-            };
-            let closed_cabinet = in_cab.and_then(|c| cabinets.get(c.0).ok()).filter(|(c, _)| !c.open);
-            if let Some((cab, cxf)) = closed_cabinet {
-                // Stand at the cabinet's interact point (feet a metre below it) and search it.
-                place(pxf, cxf.transform_point(cab.interact) - Vec3::Y * 1.0);
-                if bot.timer > 0.3 {
-                    info!("bot: searching cabinet for {}", item.name);
-                    keys.press(KeyCode::KeyE);
+            }
+            let near = pxf.translation;
+            if !go_fetch(&mut bot, &mut camera, &[FIRST_AID.to_string()], near, pxf, &items, &cabinets, &mut keys) {
+                bot.step = Step::Done;
+            }
+        }
+        Step::Heal => {
+            let Some(inv) = inv else { return };
+            if !using && bot.timer > 0.3 {
+                if p.counselor.health >= 100.0 {
+                    info!("bot: healed to {:.0} after {:.1}s", p.counselor.health, bot.total);
+                    bot.step = Step::Done;
                     bot.timer = 0.0;
+                    return;
                 }
-            } else {
-                place(pxf, ixf.translation());
-                if bot.timer > 0.3 {
-                    info!("bot: picking up {} ({e:?})", item.name);
-                    keys.press(KeyCode::KeyE);
-                    bot.timer = 0.0;
-                }
+                let Some(slot) = inv.pockets.iter().position(|&e| carried.get(e).is_ok_and(|it| it.class == FIRST_AID)) else { return };
+                info!("bot: using first aid (pocket {})", slot + 1);
+                keys.press([KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3][slot]);
+                bot.timer = 0.0;
             }
         }
         Step::Install(i) => {
@@ -218,8 +251,68 @@ fn run_bot(
         }
         Step::Done => {
             if bot.timer > 2.0 {
-                exit.write(if escaped.is_some() { AppExit::Success } else { AppExit::error() });
+                let ok = match bot.goal {
+                    Goal::Escape => escaped.is_some(),
+                    Goal::Heal => p.counselor.health >= 100.0,
+                };
+                exit.write(if ok { AppExit::Success } else { AppExit::error() });
             }
         }
     }
+}
+
+/// Moves to the nearest item of `classes` to `near` (searching its cabinet first) and presses E.
+/// Returns false when there is none.
+#[allow(clippy::too_many_arguments)]
+fn go_fetch(
+    bot: &mut Bot,
+    camera: &mut PlayerCamera,
+    classes: &[String],
+    near: Vec3,
+    pxf: &mut Transform,
+    items: &Query<(Entity, &Item, &GlobalTransform, Option<&InCabinet>), Without<Carried>>,
+    cabinets: &Query<(&Cabinet, &GlobalTransform)>,
+    keys: &mut ButtonInput<KeyCode>,
+) -> bool {
+    let Some((e, item, ixf, in_cab)) = items
+        .iter()
+        .filter(|(_, it, _, _)| classes.contains(&it.class))
+        .min_by(|a, b| a.2.translation().distance(near).total_cmp(&b.2.translation().distance(near)))
+    else {
+        error!("bot: no {:?} anywhere", classes);
+        return false;
+    };
+    let cabinet = in_cab.and_then(|c| cabinets.get(c.0).ok());
+    let closed_cabinet = cabinet.filter(|(c, _)| !c.open);
+    if let Some((cab, cxf)) = closed_cabinet {
+        // Stand at the cabinet's interact point (feet a metre below it) and search it.
+        let at = cxf.transform_point(cab.interact);
+        place(pxf, at - Vec3::Y * 1.0);
+        look_at(camera, pxf, at);
+        if bot.timer > 0.3 {
+            info!("bot: searching cabinet for {}", item.name);
+            keys.press(KeyCode::KeyE);
+            bot.timer = 0.0;
+        }
+    } else {
+        let at = ixf.translation();
+        // In an opened cabinet: stand where it was searched from. Loose: 0.7 m short of it, coming from where we are.
+        let stand = match cabinet {
+            Some((cab, cxf)) => cxf.transform_point(cab.interact) - Vec3::Y * 1.0,
+            None => {
+                let back = (pxf.translation - at).with_y(0.0).try_normalize().unwrap_or(Vec3::X);
+                at + back * 0.7
+            }
+        };
+        if pxf.translation.distance(stand) > 0.05 {
+            place(pxf, stand);
+        }
+        look_at(camera, pxf, at);
+        if bot.timer > 0.3 {
+            info!("bot: picking up {} ({e:?}) at ({:.1}, {:.1}, {:.1}), standing {:.2} m away", item.name, at.x, at.y, at.z, pxf.translation.distance(at));
+            keys.press(KeyCode::KeyE);
+            bot.timer = 0.0;
+        }
+    }
+    true
 }

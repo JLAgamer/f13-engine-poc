@@ -1,7 +1,7 @@
 //! f13-game: currently a viewer for the MVP map (Crystal Lake, small) built from the player's own export.
 //!
-//!   cargo run -p f13-game --release -- --export <dir made by tools/f13-export> [--layout 1-4] [--seed n] [--near-car] [--bot-escape] [--grass]
-//!       [--fly] [--model] [--demo] [--fear 0-100] [--tuning file] [--aerial] [--no-foliage] [--screenshot out.png]
+//!   cargo run -p f13-game --release -- --export <dir made by tools/f13-export> [--layout 1-4] [--seed n] [--near-car] [--bot-escape] [--bot-heal] [--grass]
+//!       [--fly] [--model] [--demo] [--fear 0-100] [--health 1-100] [--tuning file] [--aerial] [--no-foliage] [--screenshot out.png]
 //!   Default: play as Vanessa (see player.rs for controls). --fly: free camera instead.   (screenshot: wait for loading, save one frame, exit)
 
 mod bot;
@@ -31,12 +31,14 @@ struct Args {
     seed: Option<u64>,
     near_car: bool,
     bot_escape: bool,
+    bot_heal: bool,
     grass: bool,
     aerial: bool,
     fly: bool,
     model: bool,
     demo: bool,
     fear: f32,
+    health: Option<f32>,
     tuning: Option<PathBuf>,
     foliage: bool,
     screenshot: Option<PathBuf>,
@@ -48,12 +50,14 @@ fn parse_args() -> Args {
     let mut seed = None;
     let mut near_car = false;
     let mut bot_escape = false;
+    let mut bot_heal = false;
     let mut grass = false;
     let mut aerial = false;
     let mut fly = false;
     let mut model = false;
     let mut demo = false;
     let mut fear = 0.0;
+    let mut health = None;
     let mut tuning = None;
     let mut foliage = true;
     let mut screenshot = None;
@@ -65,12 +69,14 @@ fn parse_args() -> Args {
             "--seed" => seed = it.next().and_then(|v| v.parse().ok()),
             "--near-car" => near_car = true,
             "--bot-escape" => bot_escape = true,
+            "--bot-heal" => bot_heal = true,
             "--grass" => grass = true,
             "--aerial" => aerial = true,
             "--fly" => fly = true,
             "--model" => model = true,
             "--demo" => demo = true,
             "--fear" => fear = it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0f32).clamp(0.0, 100.0),
+            "--health" => health = it.next().and_then(|v| v.parse().ok()),
             "--tuning" => tuning = it.next().map(PathBuf::from),
             "--no-foliage" => foliage = false,
             "--screenshot" => screenshot = it.next().map(PathBuf::from),
@@ -84,7 +90,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, grass, aerial, fly, model, demo, fear, tuning, foliage, screenshot }
+    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, grass, aerial, fly, model, demo, fear, health, tuning, foliage, screenshot }
 }
 
 #[derive(Resource)]
@@ -161,11 +167,18 @@ fn main() {
             std::process::exit(1);
         });
         let stats = *tuning.characters.get("Vanessa").expect("Vanessa missing from tuning.json");
-        app.insert_resource(player::PlayerTuning { counselor: tuning.counselor, movement: tuning.counselor_movement, stats })
-            .add_plugins(player::PlayerPlugin { spawn, show_model: args.model, demo: args.demo, fear: args.fear })
+        app.insert_resource(player::PlayerTuning {
+            counselor: tuning.counselor,
+            movement: tuning.counselor_movement,
+            stats,
+            first_aid: tuning.first_aid,
+        })
+            .add_plugins(player::PlayerPlugin { spawn, show_model: args.model, demo: args.demo, fear: args.fear, health: args.health })
             .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin));
         if args.bot_escape {
-            app.add_plugins(bot::BotPlugin);
+            app.add_plugins(bot::BotPlugin(bot::Goal::Escape));
+        } else if args.bot_heal {
+            app.add_plugins(bot::BotPlugin(bot::Goal::Heal));
         }
     }
     if let Some(path) = args.screenshot.clone() {

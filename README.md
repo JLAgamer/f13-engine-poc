@@ -58,16 +58,18 @@ cargo run -p f13-game --release -- --export "<export dir>" --layout 1
 
 By default you play Vanessa (a placeholder capsule; `--model` shows her mesh, which has no outfit or animation
 yet): WASD move (running by default), Shift sprint, Caps Lock toggle walk, Ctrl crouch, click to capture the mouse,
-Esc to release. The HUD shows stamina, fear and speed. `--demo` sprints in a straight line and logs stamina every second.
+Esc to release. The HUD shows health, stamina, fear and speed. `--demo` sprints in a straight line and logs stamina every second.
 Counselors stumble as in the game (by fear, stamina and wounds); fear events aren't pushed yet, so `--fear 0-100` sets
-a fixed fear level for testing.
+a fixed fear level for testing. Health is the game's (wounded at 50, dead at 0); nothing deals damage yet, so
+`--health 1-100` starts you hurt.
 `--fly` gives a free camera instead. Add `--grass` for grass and flowers.
 
 Items, cabinets and cars spawn as in the game (`--seed n` repeats a match; the log lists where the cars and parts
-are). E picks up, searches drawers and installs parts (hold), G drops the held item. Escape by car: install the gas
+are). E picks up (preferring what the camera looks at), searches drawers and installs parts (hold), G drops the held
+item, 1-3 use the small item in that pocket (first aid heals after its 2 s animation). Escape by car: install the gas
 can and the battery, get in the driver's seat (E), hold E to start with the keys in your pockets, drive (WASD) into
 a car escape zone; F gets out. `--near-car` starts you next to a car. `--bot-escape` plays the whole escape
-automatically (teleporting between goals) and exits when done.
+automatically (teleporting between goals) and exits when done; `--bot-heal` fetches and uses a first aid spray.
 
 ## Tests
 ```

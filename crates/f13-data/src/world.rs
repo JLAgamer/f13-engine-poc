@@ -92,6 +92,11 @@ impl MatchWorld {
 
     /// Builds the match. `settings` usually comes from [`spawn_settings`]; the seed makes it reproducible.
     pub fn build(layouts: &[LevelLayout], classes: &ClassDb, settings: &SpawnSettings, seed: u64) -> MatchWorld {
+        /// World transform of component `name` of a placed `class` actor whose root is at `actor`.
+        fn class_component_world(classes: &ClassDb, class: &str, name: &str, actor: &Xform) -> Option<Xform> {
+            let c = classes.get(class)?.components.iter().find(|c| c.name == name)?;
+            Some(c.local?.then(actor))
+        }
         let mut w = MatchWorld::default();
         let mut rng = Rng::new(seed);
         // Level actors and their spawners.
@@ -107,7 +112,9 @@ impl MatchWorld {
                     w.spawners.push(MatchSpawner {
                         owner,
                         component: c.name.clone(),
-                        world: c.world.unwrap_or(t),
+                        // Components from the actor's Blueprint carry no transform in the level file: place them
+                        // from the class description (actor space) instead of at the actor's origin.
+                        world: c.world.or_else(|| class_component_world(classes, &a.class, &c.name, &t)).unwrap_or(t),
                         actor_list: c.actor_list(),
                         spawn_on_initialize: c.spawn_on_initialize(),
                         spawned: None,
@@ -259,6 +266,13 @@ mod export_tests {
                     count(SpawnKind::LargeItem),
                     count(SpawnKind::SmallItem),
                 );
+                // Items land at their own spawners, not stacked at a building's origin.
+                let mut stacks = std::collections::HashMap::new();
+                for a in w.actors.iter().filter(|a| matches!(a.kind, Some(SpawnKind::LargeItem | SpawnKind::SmallItem))) {
+                    *stacks.entry(a.transform.t.map(|v| v.round() as i64)).or_insert(0) += 1;
+                }
+                let worst = stacks.iter().max_by_key(|(_, n)| **n).map(|(p, n)| (*p, *n)).unwrap();
+                assert!(worst.1 <= 3, "SL{layout} seed {seed}: {} items at {:?}", worst.1, worst.0);
                 assert!(count(SpawnKind::Vehicle) >= 1);
                 let parts = classes_of(SpawnKind::RepairPart);
                 for p in ["BP_CarBattery_C", "CarGasCan_C", "CarKeys_C"] {

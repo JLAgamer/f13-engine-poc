@@ -29,6 +29,7 @@ pub struct PlayerTuning {
     pub counselor: CounselorTuning,
     pub movement: MovementSettings,
     pub stats: f13_core::stats::Stats,
+    pub first_aid: f13_data::FirstAid,
 }
 
 #[derive(Component)]
@@ -69,6 +70,13 @@ pub struct PlayerCamera {
     pub pitch: f32,
 }
 
+impl PlayerCamera {
+    /// The direction the camera looks.
+    pub fn look(&self) -> Vec3 {
+        Quat::from_euler(EulerRot::YXZ, self.yaw, self.pitch, 0.0) * Vec3::NEG_Z
+    }
+}
+
 #[derive(Component)]
 struct Hud;
 
@@ -80,6 +88,8 @@ pub struct PlayerPlugin {
     pub demo: bool,
     /// Fixed fear level (testing: fear events aren't pushed in the client yet).
     pub fear: f32,
+    /// Starting health (testing: nothing deals damage in the client yet).
+    pub health: Option<f32>,
 }
 
 #[derive(Resource)]
@@ -88,11 +98,12 @@ struct PlayerConfig {
     show_model: bool,
     demo: bool,
     fear: f32,
+    health: Option<f32>,
 }
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(PlayerConfig { spawn: self.spawn, show_model: self.show_model, demo: self.demo, fear: self.fear })
+        app.insert_resource(PlayerConfig { spawn: self.spawn, show_model: self.show_model, demo: self.demo, fear: self.fear, health: self.health })
             .init_resource::<Intent>()
             .add_systems(Startup, spawn_player)
             .add_systems(FixedUpdate, (read_intent, update_counselor, move_player).chain())
@@ -108,8 +119,11 @@ fn spawn_player(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    let mut counselor = Counselor::new(tuning.stats);
+    counselor.health = config.health.unwrap_or(tuning.counselor.health.max_health).clamp(1.0, tuning.counselor.health.max_health);
+    counselor.update_wounded(counselor.health, true, &tuning.counselor);
     let mut player = commands.spawn((
-        Player { counselor: Counselor::new(tuning.stats), velocity: Vec2::ZERO, walk_toggle: false, fear: config.fear },
+        Player { counselor, velocity: Vec2::ZERO, walk_toggle: false, fear: config.fear },
         Transform::from_translation(config.spawn),
         Visibility::default(),
     ));
@@ -253,16 +267,17 @@ fn move_player(
     time: Res<Time>,
     tuning: Res<PlayerTuning>,
     camera: Single<&PlayerCamera>,
-    mut player: Single<(&mut Player, &mut Transform), Without<Driving>>,
+    mut player: Single<(&mut Player, &mut Transform, Option<&crate::interact::UsingItem>), Without<Driving>>,
     mut ray_cast: MeshRayCast,
     parts: Query<(), With<PlayerPart>>,
 ) {
     let dt = time.delta_secs();
-    let (ref mut p, ref mut xf) = *player;
+    let (ref mut p, ref mut xf, using) = *player;
     let (sin, cos) = camera.yaw.sin_cos();
     let forward = Vec2::new(-sin, -cos);
     let right = Vec2::new(cos, -sin);
-    let wish = forward * intent.movement.y + right * intent.movement.x;
+    let busy = !p.counselor.alive() || using.is_some();
+    let wish = if busy { Vec2::ZERO } else { forward * intent.movement.y + right * intent.movement.x };
 
     let situation = p.situation();
     let max_speed = p.counselor.max_speed(&situation, &tuning.counselor);
@@ -407,8 +422,17 @@ fn update_hud(player: Single<&Player>, tuning: Res<PlayerTuning>, mut hud: Singl
         "walking"
     };
     let situation = player.situation();
+    let state = if !c.alive() {
+        " (DEAD)"
+    } else if c.wounded {
+        " (wounded)"
+    } else {
+        ""
+    };
     hud.0 = format!(
-        "Vanessa  stamina {:5.1}{}  fear {:3.0}\n{:?} {}{}  speed {:4.0} / {:4.0} cm/s",
+        "Vanessa  health {:3.0}{}  stamina {:5.1}{}  fear {:3.0}\n{:?} {}{}  speed {:4.0} / {:4.0} cm/s",
+        c.health,
+        state,
         c.stamina,
         if c.stamina_depleted { " (depleted)" } else { "" },
         player.fear,

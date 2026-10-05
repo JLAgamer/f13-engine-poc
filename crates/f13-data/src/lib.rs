@@ -8,6 +8,7 @@ pub mod world;
 use f13_core::counselor::CounselorTuning;
 use f13_core::curve::{Interp, Key, RichCurve};
 use f13_core::fear::FearEventData;
+use f13_core::health::HealthTuning;
 use f13_core::killer_abilities::KillerTuning;
 use f13_core::movement::MovementSettings;
 use f13_core::stats::{StatModifiedValue, Stats, STAT_COUNT};
@@ -23,6 +24,24 @@ struct File {
     killer: KillerSection,
     fear: FearSection,
     counselor: CounselorSection,
+    items: ItemsSection,
+}
+
+#[derive(Deserialize)]
+struct ItemsSection {
+    first_aid: FirstAidJson,
+}
+
+#[derive(Deserialize)]
+struct FirstAidJson {
+    health_restored: f32,
+    use_length: f32,
+}
+
+#[derive(Deserialize)]
+struct HealthJson {
+    max_health: f32,
+    blocking_damage_mod: StatJson,
 }
 
 #[derive(Deserialize)]
@@ -69,6 +88,7 @@ struct CounselorJson {
     wounded_threshold: f32,
     jason_near_min_range: f32,
     jason_near_max_range: f32,
+    health: HealthJson,
     stumble: StumbleJson,
 }
 
@@ -137,6 +157,13 @@ struct KeyJson {
     leave_tangent: f32,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct FirstAid {
+    pub health_restored: f32,
+    /// Seconds the use animation takes; the heal lands when it ends.
+    pub use_length: f32,
+}
+
 /// Everything the gameplay rules need, ready to use.
 #[derive(Debug, Clone)]
 pub struct Tuning {
@@ -150,6 +177,7 @@ pub struct Tuning {
     pub counselor_movement: MovementSettings,
     /// "Jason near" fear event distance range (min, max), in cm.
     pub jason_near_range: (f32, f32),
+    pub first_aid: FirstAid,
     /// Playable counselors by name (e.g. "Vanessa") -> stats.
     pub characters: BTreeMap<String, Stats>,
 }
@@ -188,7 +216,7 @@ pub fn default_path() -> PathBuf {
 }
 
 /// tuning.json format this build reads; older files must be re-extracted.
-pub const FORMAT: u32 = 3;
+pub const FORMAT: u32 = 4;
 
 pub fn load(path: &Path) -> Result<Tuning, LoadError> {
     parse(&std::fs::read_to_string(path).map_err(LoadError::Io)?)
@@ -291,6 +319,7 @@ pub fn parse(text: &str) -> Result<Tuning, LoadError> {
         stamina_fear_curve: curve_fn(&c.stamina_fear_curve)?,
         force_stumble_on_stamina_depletion: c.force_stumble_on_stamina_depletion,
         wounded_threshold: c.wounded_threshold,
+        health: HealthTuning { max_health: c.health.max_health, blocking_damage_mod: smv(c.health.blocking_damage_mod) },
         stumble,
     };
     let characters = f.counselor.characters.into_iter().map(|(k, v)| (k, v.stats)).collect();
@@ -310,6 +339,7 @@ pub fn parse(text: &str) -> Result<Tuning, LoadError> {
         counselor,
         counselor_movement: MovementSettings { max_acceleration: c.max_acceleration, ..Default::default() },
         jason_near_range: (c.jason_near_min_range, c.jason_near_max_range),
+        first_aid: FirstAid { health_restored: f.items.first_aid.health_restored, use_length: f.items.first_aid.use_length },
         characters,
     })
 }
@@ -320,7 +350,8 @@ mod tests {
 
     // Synthetic values (not the game's): exercises the schema only.
     const SAMPLE: &str = r#"{
-      "format": 3,
+      "format": 4,
+      "items": {"first_aid": {"health_restored": 100, "use_length": 2}},
       "counselor": {"Base_Counselor": {"max_walk_speed": 1, "max_walk_speed_crouched": 1, "max_slow_run_speed": 1,
           "max_run_speed": 1, "max_sprint_speed": 1, "max_combat_speed": 1, "max_swim_speed": 1, "max_acceleration": 1,
           "dodging_speed_mod": 1, "stumbling_speed_mod": 1, "water_speed_mod": 1,
@@ -332,6 +363,7 @@ mod tests {
           "grabbed_stamina_refill": {"base": 1, "modifiers": [0,0,0,0,0,0,0]}, "stamina_fear_curve": "C",
           "force_stumble_on_stamina_depletion": true, "wounded_threshold": 10,
           "jason_near_min_range": 1, "jason_near_max_range": 2,
+          "health": {"max_health": 100, "blocking_damage_mod": {"base": 0.2, "modifiers": [0,0,0,0,0,0,0]}},
           "stumble": {"fear_frequency_curve": null, "stamina_frequency_curve": "C", "fear_chance_curve": "C",
               "stamina_chance_curve": null, "stat_mod": {"base": 1, "modifiers": [0,0,0,0,0,0,0]},
               "wounded_chance": 3, "cooldown": 15, "sprint_length": 1, "run_length": 1, "walk_length": 1,
@@ -373,5 +405,7 @@ mod tests {
         assert!(t.characters.contains_key("Vanessa"));
         assert!(t.counselor.max_sprint_speed > t.counselor.max_run_speed);
         assert!(t.counselor.stumble.run_length > 0.0 && t.counselor.stumble.cooldown > 0.0);
+        assert!(t.counselor.health.max_health > t.counselor.wounded_threshold);
+        assert!(t.first_aid.health_restored > 0.0 && t.first_aid.use_length > 0.0);
     }
 }

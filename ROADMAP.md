@@ -30,7 +30,7 @@ Mechanics: counselor side
 - [x] Cabinets (drawers): search, items inside
 - [ ] Doors and windows: open, lock, barricade, window dive
 - [ ] Hiding: closets, beds
-- [ ] Health, wounds, limping, death
+- [x] Health, wounded, death, blocking damage, first aid (f13-core::health); limp animation later
 - [ ] Weapons and combat: hit, stun, block
 - [ ] Grab escape (wiggle), pocket knife
 

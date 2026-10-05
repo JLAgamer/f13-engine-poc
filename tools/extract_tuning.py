@@ -41,6 +41,11 @@ EXE_CONSTANTS = {
     "stumble_wounded_chance": (0x1403A0D08, bytes.fromhex("c787c8190000")),
     "stumble_cooldown": (0x1403A0D19, bytes.fromhex("c787cc190000")),
     "stumble_stat_mod_base": (0x1403A145A, bytes.fromhex("c78798190000")),
+    "blocking_damage_mod_base": (0x1403A1446, bytes.fromhex("c78728180000")),
+    # character constructor (`this` in rsi)
+    "max_health": (0x1402DC545, bytes.fromhex("c786540e0000")),
+    # first aid constructor
+    "first_aid_health_restored": (0x14036944D, bytes.fromhex("c787b0050000")),
 }
 EXE_FLAGS = {  # name: (virtual address, instruction bytes without the 1-byte immediate)
     "force_stumble_on_stamina_depletion": (0x1403A0D23, bytes.fromhex("c687d0190000")),
@@ -212,6 +217,10 @@ def counselor_section(conv, consts):
         "wounded_threshold": f("WoundedThreshold", 0.0),
         "jason_near_min_range": f("JasonNearMinRange", 0.0),
         "jason_near_max_range": f("JasonNearMaxRange", 0.0),
+        "health": {
+            "max_health": consts["max_health"],
+            "blocking_damage_mod": smv("BlockingDamageMod", consts["blocking_damage_mod_base"]),
+        },
         "stumble": {
             "fear_frequency_curve": curve("StumbleFearFrequecy"),  # (sic) the property's name in the game
             "stamina_frequency_curve": curve("StumbleStaminaFrequency"),
@@ -233,6 +242,17 @@ def counselor_section(conv, consts):
         p = props(export_named(a, lambda n: n.startswith("Default__")))
         characters[key] = {"stats": [int(num(p[("Stats", i)]["Value"])) for i in range(7)]}
     return tuning, characters, curves
+
+
+def items_section(conv, consts):
+    """Item values the counselor rules need (first aid for now)."""
+    rel = "Blueprints/Items/Small/BP_FirstAid"
+    asset = conv.load(rel)
+    d = props(export_named(asset, lambda n: n.startswith("Default__")))
+    use = d[("UseMontages", 0)]["Value"][0]["Value"]
+    heal = num(d[("HealthRestoredPerUse", 0)]["Value"]) if ("HealthRestoredPerUse", 0) in d \
+        else consts["first_aid_health_restored"]
+    return {"first_aid": {"health_restored": heal, "use_length": montage_length(conv, obj_path(asset, use))}}
 
 
 def curve_keys(asset):
@@ -309,9 +329,11 @@ def main():
                 mods[x.get("ArrayIndex", 0)] = num(x["Value"])
         counselor, characters, counselor_curves = counselor_section(conv, consts)
         curves.update(counselor_curves)
+        items = items_section(conv, consts)
         out = {
-            "format": 3,
+            "format": 4,
             "counselor": {"Base_Counselor": counselor, "characters": characters},
+            "items": items,
             "killer": {"Jason_Base": killer, "stalk_active_time": consts["stalk_active_time"]},
             "fear": {
                 "update_fear_delay": consts["update_fear_delay"],

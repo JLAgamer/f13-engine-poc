@@ -20,6 +20,7 @@
 
 use crate::fear::Curve;
 use crate::stats::{StatModifiedValue, Stats};
+use crate::health::HealthTuning;
 use crate::stumble::{StumbleState, StumbleTuning};
 
 /// Character stance, in the original enum order.
@@ -37,6 +38,9 @@ pub enum Stance {
     Grabbed = 7,
     Trapped = 8,
 }
+
+/// Health at spawn (the character constructor's `Health` and `MaxHealth`).
+pub const START_HEALTH: f32 = 100.0;
 
 /// Stamina is clamped to this (a constant in the original, independent of `stamina_max`).
 pub const STAMINA_CLAMP: f32 = 100.0;
@@ -76,6 +80,7 @@ pub struct CounselorTuning {
     pub force_stumble_on_stamina_depletion: bool,
     // Health
     pub wounded_threshold: f32,
+    pub health: HealthTuning,
     pub stumble: StumbleTuning,
 }
 
@@ -130,6 +135,7 @@ pub struct Counselor {
     pub stamina_depleted: bool,
     pub stamina_locked: bool,
     pub wounded: bool,
+    pub health: f32,
 }
 
 impl Counselor {
@@ -145,6 +151,7 @@ impl Counselor {
             stamina_depleted: false,
             stamina_locked: false,
             wounded: false,
+            health: START_HEALTH,
         }
     }
 
@@ -305,12 +312,12 @@ pub fn jason_near_amount(distance_2d: f32, min_range: f32, max_range: f32) -> Op
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::stats::{Stat, STAT_COUNT};
 
     // Synthetic tuning (not the game's values): round numbers that make the arithmetic easy to check.
-    fn tuning() -> CounselorTuning {
+    pub(crate) fn tuning() -> CounselorTuning {
         CounselorTuning {
             max_walk_speed: 100.0,
             max_walk_speed_crouched: 80.0,
@@ -339,6 +346,7 @@ mod tests {
             stamina_fear_curve: None,
             force_stumble_on_stamina_depletion: true,
             wounded_threshold: 50.0,
+            health: Default::default(),
             stumble: Default::default(),
         }
     }

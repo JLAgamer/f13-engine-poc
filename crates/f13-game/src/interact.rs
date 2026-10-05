@@ -2,11 +2,12 @@
 //! pockets), opening cabinets, installing car parts and getting into the driver's seat (usable once the parts
 //! installed from outside are in; the keys are used at the ignition from inside, see vehicle.rs).
 //!
-//! Controls: E interact (hold for repairs), G drop the held item.
+//! Controls: E interact (hold for repairs), G drop the held item, 1-3 use the small item in that pocket
+//! (first aid: heals when its use animation ends; the counselor can't move meanwhile).
 //! Placeholders until the matching game code is ported: opening a cabinet is instant, a repair is a plain hold of
 //! [`REPAIR_SECONDS`] instead of the pip minigame.
 
-use crate::player::Player;
+use crate::player::{Player, PlayerCamera, PlayerTuning};
 use crate::props::{Cabinet, Drawer, InCabinet, Item, Vehicle};
 use crate::vehicle::Driving;
 use bevy::prelude::*;
@@ -24,6 +25,16 @@ const CHEST_M: f32 = 1.0;
 pub struct Inventory {
     pub hand: Option<Entity>,
     pub pockets: Vec<Entity>,
+}
+
+/// Class of the first aid spray.
+pub const FIRST_AID: &str = "BP_FirstAid_C";
+
+/// The counselor is using a pocket item (playing its use animation).
+#[derive(Component)]
+pub struct UsingItem {
+    pub item: Entity,
+    pub left: f32,
 }
 
 /// An item someone is holding or carrying in a pocket.
@@ -64,7 +75,7 @@ impl Plugin for InteractPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Interaction>()
             .add_systems(Startup, spawn_prompt)
-            .add_systems(Update, (add_inventory, choose_target, act, drop_item, update_prompt).chain());
+            .add_systems(Update, (add_inventory, choose_target, act, drop_item, use_item, update_prompt).chain());
     }
 }
 
@@ -87,9 +98,12 @@ fn has_part(inv: &Inventory, carried: &Query<&Item, With<Carried>>, parts: &[Str
     inv.hand.iter().chain(inv.pockets.iter()).filter_map(|&e| carried.get(e).ok()).any(|i| parts.contains(&i.class))
 }
 
-/// Picks the closest thing the counselor can interact with right now.
+/// Picks what the counselor interacts with: in reach, preferring what the camera looks at, then what's close
+/// (score = distance x (1 + 2 x view angle / pi)). PLACEHOLDER weighting: the game's interactable manager
+/// also ranks by view, but its exact formula isn't ported.
 fn choose_target(
     player: Single<(&Transform, &Inventory), (With<Player>, Without<Driving>)>,
+    camera: Single<&PlayerCamera>,
     items: Query<(Entity, &Item, &GlobalTransform, Option<&InCabinet>), Without<Carried>>,
     carried: Query<&Item, With<Carried>>,
     cabinets: Query<(Entity, &Cabinet, &GlobalTransform)>,
@@ -98,11 +112,17 @@ fn choose_target(
 ) {
     let (xf, inv) = *player;
     let chest = xf.translation + Vec3::Y * CHEST_M;
+    let look = camera.look();
     let mut best: Option<(f32, Target)> = None;
     let mut consider = |point: Vec3, reach_cm: f32, t: Target| {
         let d = point.distance(chest) * 100.0;
-        if d <= reach_cm + CAPSULE_RADIUS_CM && best.is_none_or(|(bd, _)| d < bd) {
-            best = Some((d, t));
+        if d > reach_cm + CAPSULE_RADIUS_CM {
+            return;
+        }
+        let angle = (point - chest).try_normalize().map_or(0.0, |dir| dir.angle_between(look));
+        let score = d * (1.0 + 2.0 * angle / std::f32::consts::PI);
+        if best.is_none_or(|(bs, _)| score < bs) {
+            best = Some((score, t));
         }
     };
     for (e, item, gxf, in_cab) in &items {
@@ -235,14 +255,48 @@ fn drop_item(
     }
 }
 
+/// 1-3: use the small item in that pocket. Only first aid has a use so far.
+fn use_item(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+    tuning: Res<PlayerTuning>,
+    mut player: Single<(Entity, &mut Player, &mut Inventory, Option<&mut UsingItem>), Without<Driving>>,
+    items: Query<&Item>,
+) {
+    let (entity, ref mut p, ref mut inv, ref mut using) = *player;
+    if let Some(u) = using {
+        u.left -= time.delta_secs();
+        if u.left > 0.0 {
+            return;
+        }
+        let healed = p.counselor.heal(tuning.first_aid.health_restored, &tuning.counselor);
+        info!("used first aid: +{healed:.0} health");
+        inv.pockets.retain(|&e| e != u.item);
+        commands.entity(u.item).despawn();
+        commands.entity(entity).remove::<UsingItem>();
+        return;
+    }
+    let slot = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3].iter().position(|&k| keys.just_pressed(k));
+    let Some(&item) = slot.and_then(|i| inv.pockets.get(i)) else { return };
+    if !p.counselor.alive() || items.get(item).map_or(true, |i| i.class != FIRST_AID) {
+        return;
+    }
+    if p.counselor.health >= tuning.counselor.health.max_health {
+        info!("already at full health");
+        return;
+    }
+    commands.entity(entity).insert(UsingItem { item, left: tuning.first_aid.use_length });
+}
+
 fn update_prompt(
     interaction: Res<Interaction>,
-    player: Single<(&Inventory, Has<Driving>), With<Player>>,
+    player: Single<(&Inventory, Has<Driving>, Option<&UsingItem>), With<Player>>,
     items: Query<&Item>,
     vehicles: Query<&Vehicle>,
     mut text: Single<&mut Text, With<PromptText>>,
 ) {
-    let (inv, driving) = *player;
+    let (inv, driving, using) = *player;
     let name = |e: Entity| items.get(e).map_or("?".to_string(), |i| i.name.clone());
     let mut lines = vec![format!(
         "Hands: {}   Pockets: [{}] ({}/{})",
@@ -256,7 +310,9 @@ fn update_prompt(
         parts.push(format!("Ignition {}", if v.started { "running" } else { "--" }));
         lines.push(format!("{}: {}", v.class.trim_end_matches("_C"), parts.join(", ")));
     }
-    if driving {
+    if let Some(u) = using {
+        lines.push(format!("Using {}... {:.1}s", name(u.item), u.left.max(0.0)));
+    } else if driving {
         lines.push("[Hold E] Start (needs keys)   [W/S/A/D] Drive   [F] Get out".into());
     } else {
         match interaction.target {
@@ -276,6 +332,9 @@ fn update_prompt(
         }
         if inv.hand.is_some() {
             lines.push("[G] Drop".into());
+        }
+        if let Some(i) = inv.pockets.iter().position(|&e| items.get(e).is_ok_and(|it| it.class == FIRST_AID)) {
+            lines.push(format!("[{}] Use first aid", i + 1));
         }
     }
     text.0 = lines.join("\n");
