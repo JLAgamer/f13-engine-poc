@@ -4,18 +4,18 @@
 //!
 //! Controls: E interact (hold for repairs), G drop the held item, 1-3 use the small item in that pocket
 //! (first aid: heals when its use animation ends; the counselor can't move meanwhile).
-//! Placeholders until the matching game code is ported: opening a cabinet is instant, a repair is a plain hold of
-//! [`REPAIR_SECONDS`] instead of the pip minigame.
+//! Repairs are the game's hold timer and pip minigame (f13-core::minigame): hold E; when the needle is in a pip,
+//! press its key (right mouse = key 0, left mouse = key 1, the game's MG_InteractSkill1/2). Letting go cancels.
+//! PLACEHOLDER: opening a cabinet is instant.
 
 use crate::player::{Player, PlayerCamera, PlayerTuning};
 use crate::props::{Cabinet, Drawer, InCabinet, Item, Vehicle};
 use crate::vehicle::Driving;
 use bevy::prelude::*;
+use f13_core::minigame::{HoldInteraction, MinigameEvent};
 
 /// Counselor `MaxSmallItems` default (constructor).
 pub const MAX_SMALL_ITEMS: usize = 3;
-/// Placeholder for the repair minigame.
-pub const REPAIR_SECONDS: f32 = 3.0;
 /// Interaction ranges are measured from the counselor's capsule surface, roughly.
 const CAPSULE_RADIUS_CM: f32 = 34.0;
 /// Interaction distance is measured from about chest height.
@@ -61,9 +61,17 @@ enum Target {
 }
 
 #[derive(Resource, Default)]
-struct Interaction {
+pub struct Interaction {
     target: Option<Target>,
-    held: f32,
+    /// The hold interaction (repair) in progress.
+    pub hold: Option<HoldInteraction>,
+}
+
+impl Interaction {
+    /// The counselor is busy with a started hold interaction (can't walk).
+    pub fn busy(&self) -> bool {
+        self.hold.as_ref().is_some_and(|h| h.started)
+    }
 }
 
 #[derive(Component)]
@@ -110,6 +118,9 @@ fn choose_target(
     vehicles: Query<(Entity, &Vehicle, &GlobalTransform)>,
     mut interaction: ResMut<Interaction>,
 ) {
+    if interaction.busy() {
+        return; // keep the target while repairing
+    }
     let (xf, inv) = *player;
     let chest = xf.translation + Vec3::Y * CHEST_M;
     let look = camera.look();
@@ -151,7 +162,7 @@ fn choose_target(
     }
     let target = best.map(|(_, t)| t);
     if target != interaction.target {
-        interaction.held = 0.0;
+        interaction.hold = None;
     }
     interaction.target = target;
 }
@@ -162,7 +173,10 @@ fn act(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     mut interaction: ResMut<Interaction>,
-    mut player: Single<(Entity, &Transform, &mut Inventory), (With<Player>, Without<Driving>)>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    tuning: Res<PlayerTuning>,
+    mut rng: ResMut<crate::GameRng>,
+    mut player: Single<(Entity, &Transform, &mut Inventory, &Player), Without<Driving>>,
     items: Query<&Item>,
     mut cabinets: Query<&mut Cabinet>,
     mut drawers: Query<(&Drawer, &mut Transform), Without<Player>>,
@@ -170,7 +184,7 @@ fn act(
     mut visibility: Query<&mut Visibility>,
 ) {
     let Some(target) = interaction.target else { return };
-    let (player_entity, player_xf, ref mut inv) = *player;
+    let (player_entity, player_xf, ref mut inv, p) = *player;
     match target {
         Target::Item(e) if keys.just_pressed(KeyCode::KeyE) => {
             let Ok(item) = items.get(e) else { return };
@@ -202,24 +216,44 @@ fn act(
         }
         Target::Repair(v, i) => {
             if !keys.pressed(KeyCode::KeyE) {
-                interaction.held = 0.0;
-                return;
-            }
-            interaction.held += time.delta_secs();
-            if interaction.held < REPAIR_SECONDS {
+                if interaction.hold.take().is_some_and(|h| h.started) {
+                    info!("repair cancelled");
+                }
                 return;
             }
             let Ok(mut vehicle) = vehicles.get_mut(v) else { return };
+            let r = &vehicle.repairs[i];
+            let hold = interaction.hold.get_or_insert_with(|| HoldInteraction::new(r.hold_time.unwrap_or(tuning.repair_hold_time), r.has_pips));
+            let mut events = Vec::new();
+            for (button, key) in [(MouseButton::Right, 0), (MouseButton::Left, 1)] {
+                if mouse.just_pressed(button) {
+                    hold.press(key, &tuning.minigame, &mut events);
+                }
+            }
+            hold.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
+            let mut completed = false;
+            for e in events {
+                match e {
+                    MinigameEvent::Started => info!("repair started: {} pips, {:.1}s at x{:.2}", hold.pips.len(), hold.hold_time, tuning.minigame.speed_mod.value(&p.counselor.stats, false)),
+                    MinigameEvent::Hit => info!("pip hit (bonus x{:.1})", hold.bonus),
+                    MinigameEvent::Missed => info!("pip missed"),
+                    MinigameEvent::NotifyKiller => warn!("repair failed noisily: Jason would be notified"),
+                    MinigameEvent::Completed => completed = true,
+                }
+            }
+            if !completed {
+                return;
+            }
             let parts = vehicle.repairs[i].parts.clone();
             let Some(used) = take_part(inv, &items, &parts) else { return };
             commands.entity(used).despawn();
             vehicle.repairs[i].done = true;
             info!("{}: {} installed", vehicle.class, vehicle.repairs[i].name);
-            interaction.held = 0.0;
+            interaction.hold = None;
             interaction.target = None;
         }
         Target::Seat(v) if keys.just_pressed(KeyCode::KeyE) => {
-            commands.entity(player_entity).insert(Driving { vehicle: v, starting: 0.0 });
+            commands.entity(player_entity).insert(Driving { vehicle: v, starting: None });
             info!("got in the driver's seat");
             if let Ok(mut vis) = visibility.get_mut(player_entity) {
                 *vis = Visibility::Hidden;
@@ -228,6 +262,28 @@ fn act(
         }
         _ => {}
     }
+}
+
+/// The minigame dial as text: `=` done, `R`/`L` pips by key (lower case once hit), `|` the needle.
+fn dial(h: &HoldInteraction, t: &f13_core::minigame::MinigameTuning) -> String {
+    const CELLS: usize = 72; // 5 degrees each
+    let needle = ((h.progress(t) * CELLS as f32) as usize).min(CELLS - 1);
+    (0..CELLS)
+        .map(|c| {
+            let deg = c as f32 * 5.0 + 2.5;
+            let pip = h.pips.iter().find(|p| deg >= p.position && deg <= p.position + p.width);
+            if c == needle {
+                '|'
+            } else if let Some(p) = pip {
+                let ch = if p.key == 0 { 'R' } else { 'L' };
+                if p.state == f13_core::minigame::PipState::Hit { ch.to_ascii_lowercase() } else { ch }
+            } else if c < needle {
+                '='
+            } else {
+                '.'
+            }
+        })
+        .collect()
 }
 
 /// Puts an item back in the world at the counselor's feet.
@@ -291,6 +347,7 @@ fn use_item(
 
 fn update_prompt(
     interaction: Res<Interaction>,
+    tuning: Res<PlayerTuning>,
     player: Single<(&Inventory, Has<Driving>, Option<&UsingItem>), With<Player>>,
     items: Query<&Item>,
     vehicles: Query<&Vehicle>,
@@ -323,8 +380,13 @@ fn update_prompt(
             Some(Target::Cabinet(_)) => lines.push("[E] Search".into()),
             Some(Target::Repair(v, i)) => {
                 if let Ok(v) = vehicles.get(v) {
-                    let pct = (interaction.held / REPAIR_SECONDS * 100.0).min(100.0);
-                    lines.push(format!("[Hold E] Repair: {} ({pct:.0}%)", v.repairs[i].name));
+                    match &interaction.hold {
+                        Some(h) if h.started => {
+                            lines.push(format!("Repairing {}: {:.0}%  (RMB/LMB when the needle | is in a pip)", v.repairs[i].name, h.progress(&tuning.minigame) * 100.0));
+                            lines.push(dial(h, &tuning.minigame));
+                        }
+                        _ => lines.push(format!("[Hold E] Repair: {}", v.repairs[i].name)),
+                    }
                 }
             }
             Some(Target::Seat(_)) => lines.push("[E] Get in (driver)".into()),

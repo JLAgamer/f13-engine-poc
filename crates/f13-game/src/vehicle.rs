@@ -2,8 +2,11 @@
 //!
 //! PLACEHOLDER handling model: the game drives its cars with PhysX vehicle simulation (torque curve, two forward
 //! gears, front-wheel drive, per-wheel setups in `SCWheeledVehicleMovementComponent`). Until that is ported this is
-//! a simple kinematic car whose numbers below are guesses, not game data. Starting is a plain hold of
-//! [`START_SECONDS`] for the same reason (the game derives it from `BaseRestartTime`/`RestartTimeMod`).
+//! a simple kinematic car whose numbers below are guesses, not game data.
+//!
+//! Starting is the game's: when a counselor drives, the starter's hold time becomes
+//! `random[MinRestartTime, MaxRestartTime] * RestartTimeMod(stats, inverted)`, held like any interaction (after
+//! `MinInteractHoldTime`, no pips).
 //!
 //! Only the driver can use the ignition (`SCDriveableVehicle::CanInteractWithStartVehicle` checks `Driver`); it
 //! needs the ignition part (keys), which then stays in the car.
@@ -12,6 +15,8 @@
 //! stopped).
 
 use crate::interact::{take_part, Inventory};
+use crate::player::PlayerTuning;
+use f13_core::minigame::{HoldInteraction, MinigameEvent};
 use crate::player::{Player, PlayerPart};
 use crate::props::Item;
 use crate::props::{EscapeZone, Vehicle, VehiclePart};
@@ -25,7 +30,6 @@ const BRAKE_CM_S2: f32 = 2000.0;
 const COAST_CM_S2: f32 = 300.0;
 const WHEELBASE_CM: f32 = 250.0;
 const MAX_STEER_DEG: f32 = 30.0;
-pub const START_SECONDS: f32 = 2.0;
 /// Half the car's length (front bumper distance from the root), metres.
 const HALF_LENGTH_M: f32 = 2.4;
 
@@ -33,8 +37,8 @@ const HALF_LENGTH_M: f32 = 2.4;
 #[derive(Component)]
 pub struct Driving {
     pub vehicle: Entity,
-    /// Seconds spent starting the engine.
-    pub starting: f32,
+    /// Holding the ignition (the starter interaction).
+    pub starting: Option<HoldInteraction>,
 }
 
 /// The counselor has escaped; the match is over for them.
@@ -57,7 +61,9 @@ fn drive(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     escaped: Option<Res<Escaped>>,
-    mut player: Single<(&mut Driving, &mut Inventory), With<Player>>,
+    tuning: Res<PlayerTuning>,
+    mut rng: ResMut<crate::GameRng>,
+    mut player: Single<(&mut Driving, &mut Inventory, &Player)>,
     items: Query<&Item>,
     mut vehicles: Query<(&mut Vehicle, &mut Transform)>,
     mut ray_cast: MeshRayCast,
@@ -65,21 +71,27 @@ fn drive(
     player_parts: Query<(), With<PlayerPart>>,
 ) {
     let dt = time.delta_secs();
-    let (ref mut player, ref mut inv) = *player;
+    let (ref mut player, ref mut inv, p) = *player;
     let Ok((mut v, mut xf)) = vehicles.get_mut(player.vehicle) else { return };
     if !v.started {
         let has_keys = inv.hand.iter().chain(inv.pockets.iter()).any(|&e| items.get(e).is_ok_and(|i| v.ignition.contains(&i.class)));
         if escaped.is_some() || !has_keys || !keys.pressed(KeyCode::KeyE) {
-            player.starting = 0.0;
+            player.starting = None;
             return;
         }
-        player.starting += dt;
-        if player.starting >= START_SECONDS {
+        let s = &tuning.vehicle_start;
+        let hold = player.starting.get_or_insert_with(|| {
+            let base = rng.0.frand() * (s.max_restart_time - s.min_restart_time) + s.min_restart_time;
+            HoldInteraction::new(base * s.restart_time_mod.value(&p.counselor.stats, true), false)
+        });
+        let mut events = Vec::new();
+        hold.tick(dt, &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
+        if events.contains(&MinigameEvent::Completed) {
             if let Some(k) = take_part(inv, &items, &v.ignition) {
                 commands.entity(k).despawn();
             }
             v.started = true;
-            info!("{} started", v.class);
+            info!("{} started after holding {:.1}s", v.class, hold.timer);
         }
         return;
     }

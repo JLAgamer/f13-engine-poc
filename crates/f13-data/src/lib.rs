@@ -13,6 +13,7 @@ use f13_core::killer_abilities::KillerTuning;
 use f13_core::movement::MovementSettings;
 use f13_core::stats::{StatModifiedValue, Stats, STAT_COUNT};
 use f13_core::dodge::DodgeTuning;
+use f13_core::minigame::MinigameTuning;
 use f13_core::stumble::StumbleTuning;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -25,6 +26,14 @@ struct File {
     fear: FearSection,
     counselor: CounselorSection,
     items: ItemsSection,
+    vehicle: VehicleJson,
+}
+
+#[derive(Deserialize)]
+struct VehicleJson {
+    min_restart_time: f32,
+    max_restart_time: f32,
+    restart_time_mod: StatJson,
 }
 
 #[derive(Deserialize)]
@@ -91,6 +100,23 @@ struct CounselorJson {
     health: HealthJson,
     stumble: StumbleJson,
     dodge: DodgeJson,
+    minigame: MinigameJson,
+}
+
+#[derive(Deserialize)]
+struct MinigameJson {
+    min_hold_time: f32,
+    repair_hold_time: f32,
+    allowable_fails: f32,
+    max_pip_count: i32,
+    min_pip_count: i32,
+    max_pip_width: f32,
+    min_pip_width: f32,
+    max_pip_count_mod: StatJson,
+    min_pip_count_mod: StatJson,
+    max_pip_width_mod: StatJson,
+    min_pip_width_mod: StatJson,
+    speed_mod: StatJson,
 }
 
 #[derive(Deserialize)]
@@ -178,6 +204,14 @@ struct KeyJson {
     leave_tangent: f32,
 }
 
+/// Engine start (restart) time of the car: `random[min, max] * restart_time_mod(stats, inverted)` seconds of holding.
+#[derive(Debug, Clone)]
+pub struct VehicleStart {
+    pub min_restart_time: f32,
+    pub max_restart_time: f32,
+    pub restart_time_mod: StatModifiedValue,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct FirstAid {
     pub health_restored: f32,
@@ -199,6 +233,10 @@ pub struct Tuning {
     /// "Jason near" fear event distance range (min, max), in cm.
     pub jason_near_range: (f32, f32),
     pub first_aid: FirstAid,
+    pub vehicle_start: VehicleStart,
+    pub minigame: MinigameTuning,
+    /// `SCRepairComponent` default hold time (s); a repair point may override it.
+    pub repair_hold_time: f32,
     /// Playable counselors by name (e.g. "Vanessa") -> stats.
     pub characters: BTreeMap<String, Stats>,
 }
@@ -237,7 +275,7 @@ pub fn default_path() -> PathBuf {
 }
 
 /// tuning.json format this build reads; older files must be re-extracted.
-pub const FORMAT: u32 = 5;
+pub const FORMAT: u32 = 7;
 
 pub fn load(path: &Path) -> Result<Tuning, LoadError> {
     parse(&std::fs::read_to_string(path).map_err(LoadError::Io)?)
@@ -318,6 +356,21 @@ pub fn parse(text: &str) -> Result<Tuning, LoadError> {
         walk: st.walk.montage(),
         out_of_stamina: st.out_of_stamina.montage(),
     };
+    let mg = c.minigame;
+    let repair_hold_time = mg.repair_hold_time;
+    let minigame = MinigameTuning {
+        min_hold_time: mg.min_hold_time,
+        max_pip_count: mg.max_pip_count,
+        min_pip_count: mg.min_pip_count,
+        max_pip_width: mg.max_pip_width,
+        min_pip_width: mg.min_pip_width,
+        max_pip_count_mod: smv(mg.max_pip_count_mod),
+        min_pip_count_mod: smv(mg.min_pip_count_mod),
+        max_pip_width_mod: smv(mg.max_pip_width_mod),
+        min_pip_width_mod: smv(mg.min_pip_width_mod),
+        speed_mod: smv(mg.speed_mod),
+        allowable_fails: mg.allowable_fails,
+    };
     let dg = c.dodge;
     let dodge = DodgeTuning {
         stamina_cost: smv(dg.stamina_cost),
@@ -374,6 +427,13 @@ pub fn parse(text: &str) -> Result<Tuning, LoadError> {
         counselor,
         counselor_movement: MovementSettings { max_acceleration: c.max_acceleration, ..Default::default() },
         jason_near_range: (c.jason_near_min_range, c.jason_near_max_range),
+        minigame,
+        repair_hold_time,
+        vehicle_start: VehicleStart {
+            min_restart_time: f.vehicle.min_restart_time,
+            max_restart_time: f.vehicle.max_restart_time,
+            restart_time_mod: smv(f.vehicle.restart_time_mod),
+        },
         first_aid: FirstAid { health_restored: f.items.first_aid.health_restored, use_length: f.items.first_aid.use_length },
         characters,
     })
@@ -385,8 +445,9 @@ mod tests {
 
     // Synthetic values (not the game's): exercises the schema only.
     const SAMPLE: &str = r#"{
-      "format": 5,
+      "format": 7,
       "items": {"first_aid": {"health_restored": 100, "use_length": 2}},
+      "vehicle": {"min_restart_time": 5, "max_restart_time": 5, "restart_time_mod": {"base": 1, "modifiers": [0,0,0,0,0,0,0]}},
       "counselor": {"Base_Counselor": {"max_walk_speed": 1, "max_walk_speed_crouched": 1, "max_slow_run_speed": 1,
           "max_run_speed": 1, "max_sprint_speed": 1, "max_combat_speed": 1, "max_swim_speed": 1, "max_acceleration": 1,
           "dodging_speed_mod": 1, "stumbling_speed_mod": 1, "water_speed_mod": 1,
@@ -404,7 +465,12 @@ mod tests {
               "wounded_chance": 3, "cooldown": 15, "sprint": {"name": "S", "length": 1}, "run": {"name": "R", "length": 1},
               "walk": {"name": null, "length": 0}, "out_of_stamina": {"name": "R", "length": 1}},
           "dodge": {"stamina_cost": {"base": 20, "modifiers": [0,0,0,0,0,0,0]}, "left": {"name": "L", "length": 0.5},
-              "right": {"name": "R", "length": 0.5}, "back": {"name": "B", "length": 0.5}}},
+              "right": {"name": "R", "length": 0.5}, "back": {"name": "B", "length": 0.5}},
+          "minigame": {"min_hold_time": 0.2, "repair_hold_time": 15, "allowable_fails": 3, "max_pip_count": 10,
+              "min_pip_count": 5, "max_pip_width": 30, "min_pip_width": 15,
+              "max_pip_count_mod": {"base": 1, "modifiers": [0,0,0,0,0,0,0]}, "min_pip_count_mod": {"base": 1, "modifiers": [0,0,0,0,0,0,0]},
+              "max_pip_width_mod": {"base": 20, "modifiers": [0,0,0,0,0,0,0]}, "min_pip_width_mod": {"base": 10, "modifiers": [0,0,0,0,0,0,0]},
+              "speed_mod": {"base": 1.5, "modifiers": [0,0,0,0,0,0,0]}}},
         "characters": {"Test": {"stats": [1,2,3,4,5,6,7]}}},
       "killer": {"Jason_Base": {"unlock_time": [1,2,3,4], "recharge_time": [5,6,7,8],
                  "raged_recharge_modifier": 2.0, "rage_unlock_time": 10.0}, "stalk_active_time": 3.0},
@@ -443,6 +509,7 @@ mod tests {
         assert!(t.counselor.max_sprint_speed > t.counselor.max_run_speed);
         assert!(t.counselor.stumble.run.length > 0.0 && t.counselor.stumble.cooldown > 0.0);
         assert!(t.counselor.dodge.back.length > 0.0 && t.counselor.dodge.stamina_cost.base > 0.0);
+        assert!(t.repair_hold_time > 0.0 && t.minigame.max_pip_count >= t.minigame.min_pip_count);
         assert!(t.counselor.health.max_health > t.counselor.wounded_threshold);
         assert!(t.first_aid.health_restored > 0.0 && t.first_aid.use_length > 0.0);
     }

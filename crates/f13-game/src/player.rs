@@ -31,6 +31,9 @@ pub struct PlayerTuning {
     pub movement: MovementSettings,
     pub stats: f13_core::stats::Stats,
     pub first_aid: f13_data::FirstAid,
+    pub minigame: f13_core::minigame::MinigameTuning,
+    pub repair_hold_time: f32,
+    pub vehicle_start: f13_data::VehicleStart,
 }
 
 #[derive(Component)]
@@ -327,6 +330,7 @@ fn move_player(
     tuning: Res<PlayerTuning>,
     camera: Single<&PlayerCamera>,
     mut player: Single<(&mut Player, &mut Transform, Option<&crate::interact::UsingItem>), Without<Driving>>,
+    interaction: Option<Res<crate::interact::Interaction>>,
     mut ray_cast: MeshRayCast,
     parts: Query<(), With<PlayerPart>>,
 ) {
@@ -335,7 +339,8 @@ fn move_player(
     let (sin, cos) = camera.yaw.sin_cos();
     let forward = Vec2::new(-sin, -cos);
     let right = Vec2::new(cos, -sin);
-    let busy = !p.counselor.alive() || using.is_some();
+    let repairing = interaction.as_ref().is_some_and(|i| i.busy());
+    let busy = !p.counselor.alive() || using.is_some() || repairing;
     let wish = if busy { Vec2::ZERO } else { forward * intent.movement.y + right * intent.movement.x };
 
     let (facing, _, _) = xf.rotation.to_euler(EulerRot::YXZ);

@@ -198,6 +198,9 @@ fn main() {
             movement: tuning.counselor_movement,
             stats,
             first_aid: tuning.first_aid,
+            minigame: tuning.minigame.clone(),
+            repair_hold_time: tuning.repair_hold_time,
+            vehicle_start: tuning.vehicle_start.clone(),
         })
             .add_plugins(player::PlayerPlugin { spawn, show_model: args.model, demo: args.demo, fear: args.fear, health: args.health })
             .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin));

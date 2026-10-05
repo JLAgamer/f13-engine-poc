@@ -86,6 +86,9 @@ fn run_bot(
     mut bot: ResMut<Bot>,
     time: Res<Time>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
+    mut mouse: ResMut<ButtonInput<MouseButton>>,
+    interaction: Res<crate::interact::Interaction>,
+    tuning: Res<crate::player::PlayerTuning>,
     mut player: Single<(&mut Transform, &Player, Option<&Inventory>, Has<Driving>, Has<UsingItem>)>,
     mut camera: Single<&mut PlayerCamera>,
     items: Query<(Entity, &Item, &GlobalTransform, Option<&InCabinet>), Without<Carried>>,
@@ -99,6 +102,8 @@ fn run_bot(
     let dt = time.delta_secs();
     bot.timer += dt;
     bot.total += dt;
+    mouse.release(MouseButton::Left);
+    mouse.release(MouseButton::Right);
     for k in [KeyCode::KeyE, KeyCode::KeyW, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::KeyC, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD] {
         keys.release(k);
     }
@@ -193,10 +198,19 @@ fn run_bot(
             let at = vxf.transform_point(v.repairs[i].at);
             let out = (at - vxf.translation()).with_y(0.0).normalize_or_zero();
             place(pxf, at + out * 0.5 - Vec3::Y * 0.8);
+            look_at(&mut camera, pxf, at);
             if bot.timer > 0.3 {
                 keys.press(KeyCode::KeyE);
             }
-            if bot.timer > 10.0 {
+            // Play the pips: press each one's key when the needle is in its middle.
+            if let Some(h) = interaction.hold.as_ref().filter(|h| h.started) {
+                if let Some(p) = h.current.map(|c| h.pips[c]) {
+                    if h.progress(&tuning.minigame) >= (p.position + p.width / 2.0) / 360.0 {
+                        mouse.press(if p.key == 0 { MouseButton::Right } else { MouseButton::Left });
+                    }
+                }
+            }
+            if bot.timer > 60.0 {
                 error!("bot: install {} not progressing", v.repairs[i].name);
                 bot.step = Step::Done;
             }

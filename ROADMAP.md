@@ -25,7 +25,8 @@ Mechanics: counselor side
 - [ ] Real collision (capsule vs map); now ray casts only
 - [x] Inventory: large item (hands) and small items (pockets, 3); pickup, drop (use: per item, later)
 - [x] Repairs: car battery and gas, keys at the ignition (from the driver's seat)
-- [ ] Repair minigame (pips) instead of a plain hold; real start time (`BaseRestartTime`)
+- [x] Repair minigame (hold timer, pips, hit bonus, miss rollback, killer notify) and the real engine start time
+  (f13-core::minigame)
 - [x] Car: enter/exit, start, escape volume
 - [ ] Car handling from the game's vehicle setup (now a placeholder kinematic car)
 - [x] Cabinets (drawers): search, items inside

@@ -68,9 +68,11 @@ a fixed fear level for testing. Health is the game's (wounded at 50, dead at 0);
 `--fly` gives a free camera instead. Add `--grass` for grass and flowers.
 
 Items, cabinets and cars spawn as in the game (`--seed n` repeats a match; the log lists where the cars and parts
-are). E picks up (preferring what the camera looks at), searches drawers and installs parts (hold), G drops the held
-item, 1-3 use the small item in that pocket (first aid heals after its 2 s animation). Escape by car: install the gas
-can and the battery, get in the driver's seat (E), hold E to start with the keys in your pockets, drive (WASD) into
+are). E picks up (preferring what the camera looks at), searches drawers and installs parts, G drops the held
+item, 1-3 use the small item in that pocket (first aid heals after its 2 s animation). Repairs are the game's skill check: hold E
+and, when the needle reaches a pip on the dial in the HUD, press its mouse button (R = right, L = left); hits speed
+the repair up, misses roll it back. Escape by car: install the gas
+can and the battery, get in the driver's seat (E), hold E to start with the keys in your pockets (about 5 s), drive (WASD) into
 a car escape zone; F gets out. `--near-car` starts you next to a car. `--bot-escape` plays the whole escape
 automatically (teleporting between goals) and exits when done; `--bot-heal` fetches and uses a first aid spray;
 `--bot-dodge` dodges in each direction and checks the distance and stamina.

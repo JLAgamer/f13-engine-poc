@@ -48,6 +48,10 @@ pub struct RepairPoint {
     pub at: Vec3,
     pub reach: f32,
     pub done: bool,
+    /// `HoldTimeLimit` when the Blueprint sets one (otherwise the repair component default).
+    pub hold_time: Option<f32>,
+    /// The interactable has pips (the skill-check minigame).
+    pub has_pips: bool,
 }
 
 #[derive(Component, Debug)]
@@ -209,6 +213,8 @@ fn spawn_props(mut commands: Commands, assets: Res<AssetServer>, level: Res<crat
                     at: local(c).translation,
                     reach: reach(c, 150.0),
                     done: false,
+                    hold_time: c.props["HoldTimeLimit"].as_f64().map(|v| v as f32),
+                    has_pips: c.props["Pips"].as_array().is_some_and(|p| !p.is_empty()),
                 })
                 .collect();
             let seat = info.components.iter().find(|c| c.name == "DriverSeat");

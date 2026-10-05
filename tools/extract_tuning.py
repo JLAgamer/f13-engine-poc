@@ -43,10 +43,25 @@ EXE_CONSTANTS = {
     "stumble_stat_mod_base": (0x1403A145A, bytes.fromhex("c78798190000")),
     "blocking_damage_mod_base": (0x1403A1446, bytes.fromhex("c78728180000")),
     "dodge_stamina_cost_base": (0x1403A13EC, bytes.fromhex("c787d8160000")),
+    "min_interact_hold_time": (0x1402DC507, bytes.fromhex("c786000e0000")),
+    # interact components
+    "repair_hold_time": (0x14032E84B, bytes.fromhex("c787b8020000")),
+    "allowable_fails_before_killer_notify": (0x14032E357, bytes.fromhex("c78300040000")),
+    # SCDriveableVehicle constructor
+    "min_restart_time": (0x140417688, bytes.fromhex("c78788040000")),
+    "max_restart_time": (0x140417692, bytes.fromhex("c7878c040000")),
+    "restart_time_mod_base": (0x140417F43, bytes.fromhex("c78790040000")),
+    # minigame widget constructor
+    "max_pip_width": (0x14041A8B8, bytes.fromhex("c78340040000")),
+    "min_pip_width": (0x14041A8C2, bytes.fromhex("c78344040000")),
     # character constructor (`this` in rsi)
     "max_health": (0x1402DC545, bytes.fromhex("c786540e0000")),
     # first aid constructor
     "first_aid_health_restored": (0x14036944D, bytes.fromhex("c787b0050000")),
+}
+EXE_INTS = {  # name: (virtual address, instruction bytes without the imm32)
+    "max_pip_count": (0x14041A8A4, bytes.fromhex("c78338040000")),
+    "min_pip_count": (0x14041A8AE, bytes.fromhex("c7833c040000")),
 }
 EXE_FLAGS = {  # name: (virtual address, instruction bytes without the 1-byte immediate)
     "force_stumble_on_stamina_depletion": (0x1403A0D23, bytes.fromhex("c687d0190000")),
@@ -81,6 +96,11 @@ def read_exe_constants(exe):
         if data[o:o + len(expect)] != expect:
             sys.exit(f"{name}: unexpected instruction at {va:#x}; this game build is not supported yet")
         out[name] = struct.unpack_from("<f", data, o + len(expect))[0]
+    for name, (va, expect) in EXE_INTS.items():
+        o = file_off(va)
+        if data[o:o + len(expect)] != expect:
+            sys.exit(f"{name}: unexpected instruction at {va:#x}; this game build is not supported yet")
+        out[name] = struct.unpack_from("<i", data, o + len(expect))[0]
     for name, (va, expect) in EXE_FLAGS.items():
         o = file_off(va)
         if data[o:o + len(expect)] != expect:
@@ -243,6 +263,7 @@ def counselor_section(conv, consts):
             "walk": montage("WalkStumbleAnim"),
             "out_of_stamina": montage("OutOfStaminaStumbleAnim"),
         },
+        "minigame": minigame_section(conv, consts, smv),
         "dodge": {
             "stamina_cost": smv("DodgeStaminaCost", consts["dodge_stamina_cost_base"]),
             "left": montage("DodgeLeftMontage", anim_bp, anim),
@@ -257,6 +278,44 @@ def counselor_section(conv, consts):
         p = props(export_named(a, lambda n: n.startswith("Default__")))
         characters[key] = {"stats": [int(num(p[("Stats", i)]["Value"])) for i in range(7)]}
     return tuning, characters, curves
+
+
+def minigame_section(conv, consts, counselor_smv):
+    """Hold-to-interact timing and the repair pips (SCInteractMinigame_Widget plus constructor defaults)."""
+    w = conv.load("UI/Interact/SCInteractMinigame_Widget")
+    d = props(export_named(w, lambda n: n.startswith("Default__")))
+
+    def smv(name):
+        return stat_value(d[(name, 0)], 0.0) if (name, 0) in d else {"base": 0.0, "modifiers": [0.0] * 7}
+
+    def val(name, fallback, cast=float):
+        return cast(num(d[(name, 0)]["Value"])) if (name, 0) in d else fallback
+
+    return {
+        "min_hold_time": consts["min_interact_hold_time"],
+        "repair_hold_time": consts["repair_hold_time"],
+        "allowable_fails": consts["allowable_fails_before_killer_notify"],
+        "max_pip_count": val("MaxPipCount", consts["max_pip_count"], int),
+        "min_pip_count": val("MinPipCount", consts["min_pip_count"], int),
+        "max_pip_width": val("MaxPipWidth", consts["max_pip_width"]),
+        "min_pip_width": val("MinPipWidth", consts["min_pip_width"]),
+        "max_pip_count_mod": smv("MaxPipCountMod"),
+        "min_pip_count_mod": smv("MinPipCountMod"),
+        "max_pip_width_mod": smv("MaxPipWidthMod"),
+        "min_pip_width_mod": smv("MinPipWidthMod"),
+        "speed_mod": counselor_smv("MinigameSpeedMod", 1.0),
+    }
+
+
+def vehicle_section(conv, consts):
+    """Engine start time of the MVP car (the starter's hold time is set from these when a counselor drives)."""
+    car = conv.load("Blueprints/Vehicles/DriveableVehicles/Cars/Chevette/Chevette_2Seat_Bp")
+    d = props(export_named(car, lambda n: n.startswith("Default__")))
+    f = lambda name, fb: num(d[(name, 0)]["Value"]) if (name, 0) in d else fb
+    mod = stat_value(d[("RestartTimeMod", 0)], consts["restart_time_mod_base"]) if ("RestartTimeMod", 0) in d \
+        else {"base": consts["restart_time_mod_base"], "modifiers": [0.0] * 7}
+    return {"min_restart_time": f("MinRestartTime", consts["min_restart_time"]),
+            "max_restart_time": f("MaxRestartTime", consts["max_restart_time"]), "restart_time_mod": mod}
 
 
 def items_section(conv, consts):
@@ -345,10 +404,12 @@ def main():
         counselor, characters, counselor_curves = counselor_section(conv, consts)
         curves.update(counselor_curves)
         items = items_section(conv, consts)
+        vehicle = vehicle_section(conv, consts)
         out = {
-            "format": 5,
+            "format": 7,
             "counselor": {"Base_Counselor": counselor, "characters": characters},
             "items": items,
+            "vehicle": vehicle,
             "killer": {"Jason_Base": killer, "stalk_active_time": consts["stalk_active_time"]},
             "fear": {
                 "update_fear_delay": consts["update_fear_delay"],
