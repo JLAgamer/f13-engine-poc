@@ -9,6 +9,6 @@ description = "The f13-rs game client (currently a level viewer for the MVP map)
 f13-core = { path = "../f13-core" }
 f13-data = { path = "../f13-data" }
 f13-bevy = { path = "../f13-bevy" }
-bevy = { version = "0.19", features = ["free_camera"] }
+bevy = { version = "0.19", features = ["free_camera", "dds"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

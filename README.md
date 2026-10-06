@@ -46,6 +46,9 @@ dotnet run --project tools/f13-export -- --game "<path to F13Game>" --out "<expo
   every parameter it ends up with (instance overrides, then the master's defaults), and for landscape materials the
   layer table. The game draws cabins, terrain and water with shaders ported from the game's own (re-export after
   pulling if your export predates this). `tools/f13-export ... materials` rewrites just this file.
+- `*.dds` next to each texture PNG: the game's own block-compressed texture data with its mip chain (BC1/BC3/BC5),
+  which the game loads in preference to the PNG (a quarter of the GPU memory, no shimmer at a distance).
+  `tools/f13-export ... dds` writes just these.
 - `anims.json`: length and root motion of the montages the rules use (dodges, stumbles); dodges and stumbles move
   the counselor by it, as the game's root motion does.
 - `classes.json`: Blueprint classes the match can spawn (cabinets, items, cars, doors...): parents, defaults and

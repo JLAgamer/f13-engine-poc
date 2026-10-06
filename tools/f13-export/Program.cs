@@ -296,6 +296,9 @@ switch (rest[0])
     case "anims":
         AnimExporter.Write(provider, outDir, Mvp.Montages);
         return 0;
+    case "dds":
+        DdsExporter.WriteAll(provider, outDir);
+        return 0;
     default:
         Console.Error.WriteLine($"unknown command {rest[0]}");
         return 2;
@@ -307,6 +310,7 @@ var failed = results.Where(r => !r.Success).ToList();
 Console.WriteLine($"done: {results.Count - failed.Count} ok, {failed.Count} failed");
 foreach (var f in failed.Take(20)) Console.WriteLine($"  failed {f.ObjectPath}");
 WriteMaterialIndex();
+DdsExporter.WriteAll(provider, outDir);
 return 0;
 
 // materials.json: name -> exported JSON file, effective blend mode and two-sidedness. Material instances usually

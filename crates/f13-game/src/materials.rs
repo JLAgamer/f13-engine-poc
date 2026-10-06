@@ -347,20 +347,44 @@ struct Loader<'a> {
 
 impl Loader<'_> {
     /// Loads an exported texture (export-relative path without extension), or None if the export lacks it.
+    /// Loads an exported texture (export-relative path without extension), or None if the export lacks it. Prefers
+    /// the DDS copy (the game's compressed data with mips, sRGB as the game flags it) over the PNG.
     fn load(&self, path: &str, kind: Tex) -> Option<Handle<Image>> {
-        let file = format!("{path}.png");
-        if !self.root.join(&file).exists() {
-            return None;
-        }
+        let dds = format!("{path}.dds");
+        let (file, srgb) = match dds_srgb(&self.root.join(&dds)) {
+            Some(srgb) => (dds, srgb),
+            None => {
+                let png = format!("{path}.png");
+                if !self.root.join(&png).exists() {
+                    return None;
+                }
+                (png, kind == Tex::Color)
+            }
+        };
         Some(self.assets.load_builder().with_settings(move |s: &mut ImageLoaderSettings| {
-            s.is_srgb = kind == Tex::Color;
+            s.is_srgb = srgb;
             s.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
                 address_mode_u: bevy::image::ImageAddressMode::Repeat,
                 address_mode_v: bevy::image::ImageAddressMode::Repeat,
+                anisotropy_clamp: 8,
                 ..ImageSamplerDescriptor::linear()
             });
         }).load(file))
     }
+}
+
+/// Whether an exported DDS holds sRGB data (its DX10 header's DXGI format), or None if there is no readable DDS.
+/// Bevy's DDS loader takes sRGB from the load settings, not the file.
+fn dds_srgb(path: &Path) -> Option<bool> {
+    use std::io::Read;
+    let mut header = [0u8; 132];
+    std::fs::File::open(path).ok()?.read_exact(&mut header).ok()?;
+    if &header[0..4] != b"DDS " || &header[84..88] != b"DX10" {
+        return None;
+    }
+    let dxgi = u32::from_le_bytes(header[128..132].try_into().ok()?);
+    // BC1/BC2/BC3/BC7/BGRA8 sRGB variants.
+    Some(matches!(dxgi, 72 | 75 | 78 | 99 | 91))
 }
 
 /// Swaps the placeholder glTF materials for ones built from the export.
