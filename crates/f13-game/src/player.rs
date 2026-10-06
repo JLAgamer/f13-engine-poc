@@ -490,7 +490,15 @@ fn follow_camera(
     xf.look_at(target, Vec3::Y);
 }
 
-fn update_hud(player: Single<&Player>, tuning: Res<PlayerTuning>, mut hud: Single<&mut Text, With<Hud>>) {
+fn update_hud(
+    player: Single<&Player>,
+    tuning: Res<PlayerTuning>,
+    diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
+    mut hud: Single<&mut Text, With<Hud>>,
+) {
+    use bevy::diagnostic::FrameTimeDiagnosticsPlugin as Ftd;
+    let fps = diagnostics.get(&Ftd::FPS).and_then(|d| d.smoothed()).unwrap_or(0.0);
+    let frame_ms = diagnostics.get(&Ftd::FRAME_TIME).and_then(|d| d.smoothed()).unwrap_or(0.0);
     let c = &player.counselor;
     let gait = if c.sprinting {
         "sprinting"
@@ -508,12 +516,14 @@ fn update_hud(player: Single<&Player>, tuning: Res<PlayerTuning>, mut hud: Singl
         ""
     };
     hud.0 = format!(
-        "Vanessa  health {:3.0}{}  stamina {:5.1}{}  fear {:3.0}\n{:?} {}{}  speed {:4.0} / {:4.0} cm/s",
+        "Vanessa  health {:3.0}{}  stamina {:5.1}{}  fear {:3.0}  |  {:3.0} fps ({:4.1} ms)\n{:?} {}{}  speed {:4.0} / {:4.0} cm/s",
         c.health,
         state,
         c.stamina,
         if c.stamina_depleted { " (depleted)" } else { "" },
         player.fear,
+        fps,
+        frame_ms,
         c.stance,
         gait,
         if c.stumbling {

@@ -7,6 +7,7 @@
 mod bot;
 mod doors;
 mod interact;
+mod materials;
 mod player;
 mod props;
 mod windows;
@@ -14,15 +15,13 @@ mod vehicle;
 
 use bevy::asset::AssetPlugin;
 use bevy::camera_controller::free_camera::{FreeCamera, FreeCameraPlugin};
-use bevy::gltf::GltfMaterialName;
-use bevy::image::{ImageLoaderSettings, ImageSampler};
 use bevy::light::GlobalAmbientLight;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::world_serialization::WorldAssetRoot;
 use f13_data::level::{LevelLayout, Xform};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const MAP: &str = "CrystalLake_Small";
 const LAYOUTS: u32 = 4;
@@ -125,23 +124,6 @@ struct ScreenshotPlan {
     frames_loaded: u32,
 }
 
-/// One entry of the exporter's `materials.json`.
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct MaterialInfo {
-    file: String,
-    blend: String,
-    two_sided: bool,
-}
-
-/// Material name (as written into the glTF) -> exported material info.
-#[derive(Resource, Default)]
-struct MaterialIndex {
-    root: PathBuf,
-    entries: HashMap<String, MaterialInfo>,
-    built: HashMap<String, Handle<StandardMaterial>>,
-}
-
 /// Montage root motion from the export's anims.json: name -> displacement per second in the character's
 /// local frame (x = right, y = forward), cm/s.
 #[derive(Resource, Default)]
@@ -178,14 +160,6 @@ fn main() {
         })
     };
     let layouts = vec![load(MAP), load(&format!("CLsm_Design_SL{}", args.layout))];
-    let entries = std::fs::read_to_string(args.export.join("materials.json"))
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_else(|| {
-            warn!("no materials.json in the export; meshes will be untextured");
-            HashMap::new()
-        });
-    let materials = MaterialIndex { root: args.export.clone(), entries, ..default() };
     let spawn = counselor_start(&layouts);
 
     let seed = args.seed.unwrap_or_else(|| {
@@ -242,14 +216,13 @@ fn main() {
                 // Unreal meshes carry up to 8 UV sets; Bevy warns once per extra set per mesh.
                 .set(bevy::log::LogPlugin { filter: "wgpu=error,naga=warn,bevy_gltf::loader=error".into(), ..default() }),
         )
-        .add_plugins(FreeCameraPlugin)
+        .add_plugins((FreeCameraPlugin, bevy::diagnostic::FrameTimeDiagnosticsPlugin::default()))
         .insert_resource(Level { layouts, grass: args.grass, foliage: args.foliage, aerial: args.aerial, fly: args.fly || args.aerial, scenes: vec![] })
-        .insert_resource(materials)
+        .add_plugins(materials::MaterialsPlugin { export: args.export.clone() })
         .insert_resource(ExportRoot(args.export.clone()))
         .add_plugins(props::PropsPlugin { seed, near_car: args.near_car && !(args.fly || args.aerial) })
         .insert_resource(GlobalAmbientLight { brightness: 400.0, ..default() })
         .add_systems(Startup, spawn_level)
-        .add_systems(Update, (apply_materials, strip_vertex_colors))
         .run();
 }
 
@@ -288,8 +261,12 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
                 .or_insert_with(|| assets.load(GltfAssetLabel::Scene(0).from_asset(p.file.clone())))
                 .clone();
             let xforms = p.instances.iter().flatten().chain(p.transform.iter());
+            let overrides = materials::MaterialOverrides::new(&p.material_map);
             for x in xforms {
-                commands.spawn((WorldAssetRoot(scene.clone()), to_transform(x)));
+                let mut e = commands.spawn((WorldAssetRoot(scene.clone()), to_transform(x)));
+                if let Some(o) = &overrides {
+                    e.insert(o.clone());
+                }
                 spawned += 1;
             }
         }
@@ -329,71 +306,6 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
     ));
 }
 
-/// Unreal vertex colours are material data (masks, wind weights), not colour; Bevy would multiply the base colour
-/// and alpha by them, turning many meshes black or invisible. Drop them as meshes load.
-fn strip_vertex_colors(mut events: MessageReader<AssetEvent<Mesh>>, mut meshes: ResMut<Assets<Mesh>>) {
-    for e in events.read() {
-        if let AssetEvent::Added { id } = e {
-            if let Some(mut mesh) = meshes.get_mut(*id) {
-                if mesh.contains_attribute(Mesh::ATTRIBUTE_COLOR) {
-                    mesh.remove_attribute(Mesh::ATTRIBUTE_COLOR);
-                }
-            }
-        }
-    }
-}
-
-/// Swaps the placeholder glTF materials for ones built from the exported material JSON (diffuse + normal).
-fn apply_materials(
-    mut commands: Commands,
-    added: Query<(Entity, &GltfMaterialName), Added<GltfMaterialName>>,
-    mut index: ResMut<MaterialIndex>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    assets: Res<AssetServer>,
-) {
-    for (entity, name) in &added {
-        let handle = if let Some(h) = index.built.get(&name.0) {
-            h.clone()
-        } else {
-            let Some(info) = index.entries.get(&name.0) else { continue };
-            let h = materials.add(build_material(&index.root, info, &assets));
-            index.built.insert(name.0.clone(), h.clone());
-            h
-        };
-        commands.entity(entity).insert(MeshMaterial3d(handle));
-    }
-}
-
-fn build_material(root: &Path, info: &MaterialInfo, assets: &AssetServer) -> StandardMaterial {
-    let mut m = StandardMaterial { perceptual_roughness: 0.8, ..default() };
-    match info.blend.as_str() {
-        "BLEND_Masked" => m.alpha_mode = AlphaMode::Mask(0.33),
-        "BLEND_Translucent" => m.alpha_mode = AlphaMode::Blend,
-        "BLEND_Additive" => m.alpha_mode = AlphaMode::Add,
-        _ => {}
-    }
-    if info.two_sided {
-        m.double_sided = true;
-        m.cull_mode = None;
-    }
-    let Ok(text) = std::fs::read_to_string(root.join(&info.file)) else { return m };
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else { return m };
-    let tex = |key: &str| {
-        json["Textures"][key]["ObjectPath"].as_str().map(|p| format!("{}.png", p.rsplit_once('.').map_or(p, |(a, _)| a)))
-    };
-    if let Some(p) = tex("PM_Diffuse") {
-        m.base_color_texture = Some(
-            assets.load_builder().with_settings(|s: &mut ImageLoaderSettings| s.sampler = ImageSampler::linear()).load(p),
-        );
-    }
-    if let Some(p) = tex("PM_Normals") {
-        m.normal_map_texture =
-            Some(assets.load_builder().with_settings(|s: &mut ImageLoaderSettings| s.is_srgb = false).load(p));
-        m.flip_normal_map_y = true; // Unreal normal maps are DirectX-style (green down)
-    }
-    m
-}
-
 /// Waits until every mesh scene (and its dependencies) has loaded, lets materials settle, saves a frame, exits.
 fn take_screenshot(
     mut commands: Commands,
@@ -401,18 +313,19 @@ fn take_screenshot(
     level: Res<Level>,
     assets: Res<AssetServer>,
     materials: Res<Assets<StandardMaterial>>,
+    ported: materials::PortedMaterials,
     mut exit: MessageWriter<AppExit>,
 ) {
     if level.scenes.is_empty() || !level.scenes.iter().all(|h| assets.is_loaded_with_dependencies(h.id())) {
         return;
     }
     // Meshes whose material textures are still loading are not drawn at all, so wait for every texture too.
-    let textures_pending = materials.iter().any(|(_, m)| {
-        [&m.base_color_texture, &m.normal_map_texture]
-            .into_iter()
-            .flatten()
-            .any(|t| !assets.is_loaded_with_dependencies(t.id()) && !matches!(assets.get_load_state(t.id()), Some(bevy::asset::LoadState::Failed(_))))
-    });
+    // Images made in memory (fallbacks, landscape weights) have no load state: they are ready.
+    let pending = |t: &Handle<Image>| {
+        matches!(assets.get_load_state(t.id()), Some(bevy::asset::LoadState::Loading | bevy::asset::LoadState::NotLoaded))
+    };
+    let textures_pending = materials.iter().any(|(_, m)| [&m.base_color_texture, &m.normal_map_texture].into_iter().flatten().any(pending))
+        || ported.images().any(pending);
     if textures_pending {
         plan.frames_loaded = 0;
         return;

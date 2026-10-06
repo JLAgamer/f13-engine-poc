@@ -61,7 +61,12 @@ Host CLI (`f13-host`)
 Presentation
 - [x] Map, characters and car exported to glTF (`tools/f13-export`)
 - [x] Map loaded in Bevy with its cabin layouts (`f13-game`)
-- [ ] Materials: cabins, terrain layers, water, SpeedTree pine leaves
+- [x] Materials: cabins (Master_Blend_01 two-set vertex-alpha blend) and terrain layers (height-blended weight
+      maps), ported from the game's compiled shaders; per-placement material overrides; glass; invisible blockers
+      hidden (f13-game materials.rs, shaders/)
+- [ ] Materials, remaining: water (first pass only: colour, gloss, panning ripples; no depth fade, foam or
+      reflections), POM parallax, tinted blends (curtains, tarps), SpeedTree leaves, texture mipmaps (distant
+      foliage and terrain shimmer), prop RMA maps
 - [x] Car, furniture, doors (frames and leaves), windows, barricades and items placed in the scene
 - [ ] Barricade plank: check its placement (not visible across the door in a screenshot)
 - [ ] Counselor model: Vanessa's outfit, hair and face attached to the head bone (now a capsule; her mesh is the bare

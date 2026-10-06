@@ -182,10 +182,16 @@ fn spawn_props(mut commands: Commands, assets: Res<AssetServer>, level: Res<crat
             if let (Some((p, pt)), Some("Pivot")) = (pivot, c.parent.as_deref()) {
                 let rel = Transform::from_matrix(pt.to_matrix().inverse() * local(c).to_matrix());
                 leaf_center = rel.translation;
-                commands.spawn((WorldAssetRoot(scene(mesh)), rel, ChildOf(p)));
+                let leaf = commands.spawn((WorldAssetRoot(scene(mesh)), rel, ChildOf(p))).id();
+                if let Some(o) = crate::materials::MaterialOverrides::new(&c.material_map) {
+                    commands.entity(leaf).insert(o);
+                }
                 continue;
             }
             let child = commands.spawn((WorldAssetRoot(scene(mesh)), local(c), ChildOf(root))).id();
+            if let Some(o) = crate::materials::MaterialOverrides::new(&c.material_map) {
+                commands.entity(child).insert(o);
+            }
             parts.insert(c.name.as_str(), child);
             if c.name == "AnimatedMesh" {
                 commands.entity(child).insert(Drawer { closed: local(c) });

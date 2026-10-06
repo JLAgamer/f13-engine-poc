@@ -42,7 +42,10 @@ dotnet run --project tools/f13-export -- --game "<path to F13Game>" --out "<expo
 
 - `levels/<map>.json`: every mesh placement (including foliage instances), landscape and gameplay actor, in Unreal
   space. `f13_data::level` loads it and converts transforms to Bevy space.
-- `materials.json`: material name, exported file, effective blend mode and two-sidedness.
+- `materials.json`: per material: exported file, effective blend mode and two-sidedness, its master material and
+  every parameter it ends up with (instance overrides, then the master's defaults), and for landscape materials the
+  layer table. The game draws cabins, terrain and water with shaders ported from the game's own (re-export after
+  pulling if your export predates this). `tools/f13-export ... materials` rewrites just this file.
 - `anims.json`: length and root motion of the montages the rules use (dodges, stumbles); dodges and stumbles move
   the counselor by it, as the game's root motion does.
 - `classes.json`: Blueprint classes the match can spawn (cabinets, items, cars, doors...): parents, defaults and

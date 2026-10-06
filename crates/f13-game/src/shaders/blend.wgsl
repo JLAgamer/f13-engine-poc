@@ -1,0 +1,101 @@
+// Master_Blend_01 (cabins, barns, docks...): two texture sets A and B, blended per pixel by the painted vertex alpha,
+// a greyscale blend map and B's height (ColorMap B alpha). Ported from the game's compiled SM5 base pass shader:
+//   t = saturate((2 * vertex_alpha - (1 - B.a + blend_map)) / sharpness)     (sharpness 0: a hard step)
+// Normals add a detail normal (own tiling, scaled by Detail Strength); RMAS = roughness (clamped to [min, max] per
+// set), metallic, AO, specular (A only). Everything else is lerp(A, B, t).
+#import bevy_pbr::{
+    pbr_fragment::pbr_input_from_standard_material,
+    pbr_functions::{alpha_discard, calculate_tbn_mikktspace, apply_pbr_lighting, main_pass_post_lighting_processing},
+    pbr_types::STANDARD_MATERIAL_FLAGS_DOUBLE_SIDED_BIT,
+    forward_io::{VertexOutput, FragmentOutput},
+}
+
+struct BlendParams {
+    // TilingRate A, Detail Tiling A, TilingRate B, Detail Tiling B
+    tiling: vec4<f32>,
+    // Blend TilingRate, Blend Sharpness
+    blend: vec4<f32>,
+    // Roughness Min A, Max A, Min B, Max B
+    roughness: vec4<f32>,
+    detail_strength_a: vec4<f32>,
+    detail_strength_b: vec4<f32>,
+}
+
+@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> params: BlendParams;
+@group(#{MATERIAL_BIND_GROUP}) @binding(101) var color_a: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(102) var tex_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(103) var color_b: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(104) var normal_a: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(105) var normal_b: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(106) var detail_a: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(107) var detail_b: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(108) var rmas_a: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(109) var rmas_b: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(110) var blend_map: texture_2d<f32>;
+
+// Unreal normal maps are two-channel (BC5): z is rebuilt from x and y.
+fn unpack_normal(t: vec4<f32>) -> vec3<f32> {
+    let xy = t.rg * 2.0 - 1.0;
+    return vec3(xy, sqrt(max(1.0 - dot(xy, xy), 0.0)));
+}
+
+@fragment
+fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
+    var pbr_input = pbr_input_from_standard_material(in, is_front);
+
+#ifdef VERTEX_UVS_A
+    let uv = in.uv;
+#else
+    let uv = vec2(0.0);
+#endif
+#ifdef VERTEX_COLORS
+    let vertex_alpha = in.color.a;
+#else
+    let vertex_alpha = 1.0;
+#endif
+
+    let uv_a = uv * params.tiling.x;
+    let uv_b = uv * params.tiling.z;
+    let ca = textureSample(color_a, tex_sampler, uv_a);
+    let cb = textureSample(color_b, tex_sampler, uv_b);
+    let blend = textureSample(blend_map, tex_sampler, uv * params.blend.x).r;
+
+    let x = 2.0 * vertex_alpha - (1.0 - cb.a + blend);
+    var t = select(0.0, 1.0, x > 0.0);
+    if params.blend.y > 0.0 {
+        t = saturate(x / params.blend.y);
+    }
+
+    let ra = textureSample(rmas_a, tex_sampler, uv_a);
+    let rb = textureSample(rmas_b, tex_sampler, uv_b);
+    let rough_a = clamp(ra.r, params.roughness.x, params.roughness.y);
+    let rough_b = clamp(rb.r, params.roughness.z, params.roughness.w);
+
+    pbr_input.material.base_color = vec4(saturate(mix(ca.rgb, cb.rgb, t)), 1.0);
+    pbr_input.material.perceptual_roughness = saturate(mix(rough_a, rough_b, t));
+    pbr_input.material.metallic = saturate(mix(ra.g, rb.g, t));
+    pbr_input.diffuse_occlusion = vec3(saturate(mix(ra.b, rb.b, t)));
+    // Unreal F0 = 0.08 * specular; Bevy F0 = 0.16 * reflectance^2.
+    pbr_input.material.reflectance = vec3(sqrt(0.5 * saturate(ra.a)));
+
+#ifdef VERTEX_TANGENTS
+    let na = unpack_normal(textureSample(normal_a, tex_sampler, uv_a))
+        + unpack_normal(textureSample(detail_a, tex_sampler, uv * params.tiling.y)) * params.detail_strength_a.xyz;
+    let nb = unpack_normal(textureSample(normal_b, tex_sampler, uv_b))
+        + unpack_normal(textureSample(detail_b, tex_sampler, uv * params.tiling.w)) * params.detail_strength_b.xyz;
+    var nt = normalize(mix(na, nb, t));
+    nt.y = -nt.y; // DirectX-style (green down)
+    let double_sided = (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_DOUBLE_SIDED_BIT) != 0u;
+    if double_sided && !is_front {
+        nt = -nt;
+    }
+    let tbn = calculate_tbn_mikktspace(pbr_input.world_normal, in.world_tangent);
+    pbr_input.N = normalize(nt.x * tbn[0] + nt.y * tbn[1] + nt.z * tbn[2]);
+#endif
+
+    pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
+    var out: FragmentOutput;
+    out.color = apply_pbr_lighting(pbr_input);
+    out.color = main_pass_post_lighting_processing(pbr_input, out.color);
+    return out;
+}

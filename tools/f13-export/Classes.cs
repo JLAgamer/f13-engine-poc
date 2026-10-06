@@ -193,6 +193,8 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
                 var mesh = Load(t.GetOrDefault<FPackageIndex?>("StaticMesh")) as UStaticMesh;
                 if (mesh != null) { queueMesh(mesh); j["Mesh"] = meshFile(mesh); }
                 j["Materials"] = new JArray(t.GetOrDefault<FPackageIndex[]>("OverrideMaterials", []).Select(m => m?.ResolvedObject?.GetPathName()));
+                if (mesh != null && MeshMaterials.OverrideMap(mesh, t.GetOrDefault<FPackageIndex[]>("OverrideMaterials", []), queueMesh) is { } map)
+                    j["MaterialMap"] = JObject.FromObject(map);
                 j["Hidden"] = t.GetOrDefault("bHiddenInGame", false) || !t.GetOrDefault("bVisible", true);
                 return j;
             }

@@ -27,6 +27,9 @@ pub struct Placement {
     pub hidden: bool,
     #[serde(default)]
     pub materials: Vec<Option<String>>,
+    /// Material overrides: the mesh's own slot material name -> the material used instead.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub material_map: std::collections::HashMap<String, String>,
     pub transform: Option<Xform>,
     pub instances: Option<Vec<Xform>>,
 }
@@ -60,6 +63,9 @@ pub struct ComponentInfo {
     pub mesh: Option<String>,
     #[serde(default)]
     pub hidden: bool,
+    /// Material overrides: the mesh's own slot material name -> the material used instead.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub material_map: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub local: Option<Xform>,
     #[serde(default)]
@@ -228,4 +234,9 @@ mod tests {
         assert_eq!(g.translation, [1.0, 3.0, 2.0]);
         assert_eq!(g.scale, [1.0, 3.0, 2.0]);
     }
+}
+
+/// `null` (what the exporter writes for "none") as an empty map.
+fn null_as_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<std::collections::HashMap<String, String>, D::Error> {
+    Ok(Option::deserialize(d)?.unwrap_or_default())
 }

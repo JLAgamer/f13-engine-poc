@@ -19,6 +19,9 @@ using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Versions;
 using CUE4Parse.UE4.Assets;
 using CUE4Parse.UE4.Assets.Readers;
+using CUE4Parse.UE4.Assets.Objects;
+
+using CUE4Parse.UE4.Assets.Exports.Material;
 using CUE4Parse_Conversion;
 using CUE4Parse_Conversion.Exporters;
 using CUE4Parse_Conversion.Options;
@@ -66,20 +69,9 @@ classes = new ClassExporter(provider, Queue, o => o is UStaticMesh sm ? OutPath(
 
 void Queue(UObject obj)
 {
-    if (obj is not (UStaticMesh or USkeletalMesh) || !queued.Add(obj.GetPathName())) return;
-    if (obj is UStaticMesh sm) RestoreStaticMaterials(sm);
+    if (obj is not (UStaticMesh or USkeletalMesh or UMaterialInterface) || !queued.Add(obj.GetPathName())) return;
+    if (obj is UStaticMesh sm) MeshMaterials.RestoreStaticMaterials(sm);
     session.Add(obj);
-}
-
-// Some F13 meshes (mostly foliage) carry extra native data before StaticMaterials, so CUE4Parse loses the material
-// list after the render data has already loaded fine. The same list is also a tagged property; use that.
-static void RestoreStaticMaterials(UStaticMesh sm)
-{
-    if (sm.StaticMaterials.Length > 0) return;
-    var fromTags = sm.GetOrDefault("StaticMaterials", Array.Empty<FStaticMaterial>());
-    if (fromTags.Length == 0) return;
-    typeof(UStaticMesh).GetProperty(nameof(UStaticMesh.StaticMaterials))!.SetValue(sm, fromTags);
-    typeof(UStaticMesh).GetProperty(nameof(UStaticMesh.Materials))!.SetValue(sm, fromTags.Select(m => m.MaterialInterface).ToArray());
 }
 
 void ExportAsset(string path)
@@ -170,6 +162,7 @@ void ExportLevel(string mapPath)
                 Hidden = smc.GetOrDefault("bHiddenInGame", false) || !smc.GetOrDefault("bVisible", true),
                 Materials = smc.GetOrDefault<FPackageIndex[]>("OverrideMaterials", [])
                     .Select(m => m?.ResolvedObject?.GetPathName()).ToArray(),
+                MaterialMap = MeshMaterials.OverrideMap(mesh, smc.GetOrDefault<FPackageIndex[]>("OverrideMaterials", []), Queue),
             };
             var world_ = smc.GetAbsoluteTransform();
             if (smc is F13InstancedMeshComponent ism)
@@ -330,7 +323,7 @@ void WriteMaterialIndex()
         var rel = Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/');
         var pkg = rel[..^".json".Length];
         UObject? mat;
-        try { mat = provider.LoadPackage(pkg).GetExports().FirstOrDefault(e => e.Name == Path.GetFileNameWithoutExtension(file)); }
+        try { mat = provider.LoadPackage(pkg).GetExports().FirstOrDefault(e => e.Name.Equals(Path.GetFileNameWithoutExtension(file), StringComparison.OrdinalIgnoreCase)); }
         catch { continue; }
         if (mat == null || !mat.ExportType.Contains("Material")) continue;
         string? blend = null;
@@ -347,11 +340,106 @@ void WriteMaterialIndex()
             }
         }
         blend = string.IsNullOrEmpty(blend) || blend == "None" ? "BLEND_Opaque" : blend.Split(':').Last();
-        index[mat.Name] = new MaterialInfo { File = rel, Blend = blend, TwoSided = twoSided ?? false };
+        var info = new MaterialInfo { File = rel, Blend = blend, TwoSided = twoSided ?? false };
+        ResolveParameters(mat, info);
+        index[mat.Name] = info;
     }
     var path = Path.Combine(root, "materials.json");
     File.WriteAllText(path, JsonSerializer.Serialize(index, new JsonSerializerOptions { IncludeFields = true }));
     Console.WriteLine($"{path}: {index.Count} materials, {index.Values.Count(m => m.Blend != "BLEND_Opaque")} not opaque");
+    foreach (var g in index.Values.GroupBy(m => m.Master).OrderByDescending(g => g.Count()).Take(15))
+        Console.WriteLine($"  {g.Count(),4} {g.Key}");
+}
+
+// The material's master (root UMaterial) and every parameter it ends up with: the nearest instance override wins,
+// then the master's parameter defaults. Cooked masters keep their parameter expressions (not the graph wiring), so
+// the defaults are still there. Textures are export-relative paths without an extension.
+static void ResolveParameters(UObject mat, MaterialInfo info)
+{
+    static string? TexPath(FPackageIndex? i) => i?.ResolvedObject?.GetPathName() is { } p ? p.Split('.')[0].TrimStart('/') : null;
+    static string Key(FStructFallback s) =>
+        s.GetOrDefault<FName>("ParameterName").Text is { Length: > 0 } n && n != "None" ? n
+            : s.GetOrDefault<FStructFallback?>("ParameterInfo")?.GetOrDefault<FName>("Name").Text ?? "";
+    for (var m = mat; m != null; m = m.GetOrDefault<FPackageIndex?>("Parent")?.Load())
+    {
+        if (m.ExportType == "Material")
+        {
+            info.Master = m.Name;
+            foreach (var e in m.GetOrDefault<FPackageIndex[]>("Expressions", []).Select(x => x.Load()).OfType<UObject>())
+            {
+                var name = e.GetOrDefault<FName>("ParameterName").Text;
+                if (string.IsNullOrEmpty(name) || name == "None") continue;
+                switch (e.ExportType)
+                {
+                    case "MaterialExpressionScalarParameter":
+                        info.Scalars.TryAdd(name, e.GetOrDefault("DefaultValue", 0f));
+                        break;
+                    case "MaterialExpressionVectorParameter":
+                        var c = e.GetOrDefault("DefaultValue", new FLinearColor(0, 0, 0, 0));
+                        info.Vectors.TryAdd(name, [c.R, c.G, c.B, c.A]);
+                        break;
+                    case "MaterialExpressionStaticSwitchParameter":
+                        info.Switches.TryAdd(name, e.GetOrDefault("DefaultValue", false));
+                        break;
+                    case var t when t.StartsWith("MaterialExpressionTextureSampleParameter") || t == "MaterialExpressionTextureObjectParameter":
+                        if (TexPath(e.GetOrDefault<FPackageIndex?>("Texture")) is { } tp) info.Textures.TryAdd(name, tp);
+                        break;
+                }
+            }
+            info.Landscape = LandscapeLayers(m);
+            break;
+        }
+        foreach (var s in m.GetOrDefault<FStructFallback[]>("ScalarParameterValues", []))
+            info.Scalars.TryAdd(Key(s), s.GetOrDefault("ParameterValue", 0f));
+        foreach (var s in m.GetOrDefault<FStructFallback[]>("VectorParameterValues", []))
+        {
+            var c = s.GetOrDefault("ParameterValue", new FLinearColor(0, 0, 0, 0));
+            info.Vectors.TryAdd(Key(s), [c.R, c.G, c.B, c.A]);
+        }
+        foreach (var s in m.GetOrDefault<FStructFallback[]>("TextureParameterValues", []))
+            if (TexPath(s.GetOrDefault<FPackageIndex?>("ParameterValue")) is { } tp) info.Textures.TryAdd(Key(s), tp);
+        // Static switches live in the instance's StaticParameters (native data CUE4Parse does not expose by name).
+    }
+}
+
+// A landscape material's layers. Cooking strips most of the graph, but the LandscapeLayerBlend and TextureSample
+// expressions survive with their inputs named: the blend feeding BaseColor gives each layer's diffuse (alpha =
+// height), the one feeding Normal its normal map, and any other texture a layer samples is its RMA map.
+static LandscapeMaterial? LandscapeLayers(UObject master)
+{
+    var exprs = master.GetOrDefault<FPackageIndex[]>("Expressions", []).Select(x => x.Load()).OfType<UObject>()
+        .ToDictionary(e => e.Name, StringComparer.OrdinalIgnoreCase);
+    var blends = exprs.Values.Where(e => e.ExportType == "MaterialExpressionLandscapeLayerBlend").ToList();
+    if (blends.Count == 0) return null;
+    static string? Input(FExpressionInput? i) => i?.ExpressionName.Text is { Length: > 0 } n && n != "None" ? n : null;
+    string? Texture(string? expr) => expr != null && exprs.TryGetValue(expr, out var e) && e.ExportType == "MaterialExpressionTextureSample"
+        ? e.GetOrDefault<FPackageIndex?>("Texture")?.ResolvedObject?.GetPathName().Split('.')[0].TrimStart('/') : null;
+    var baseColor = Input(master.GetOrDefault<FExpressionInput?>("BaseColor"));
+    var normal = Input(master.GetOrDefault<FExpressionInput?>("Normal"));
+    var result = new LandscapeMaterial
+    {
+        MappingScale = exprs.Values.FirstOrDefault(e => e.ExportType == "MaterialExpressionLandscapeLayerCoords")?.GetOrDefault("MappingScale", 1f) ?? 1f,
+    };
+    var byName = new Dictionary<string, LandscapeLayer>();
+    foreach (var b in blends)
+    {
+        foreach (var l in b.GetOrDefault<FStructFallback[]>("Layers", []))
+        {
+            var name = l.GetOrDefault<FName>("LayerName").Text;
+            if (!byName.TryGetValue(name, out var layer))
+            {
+                layer = new LandscapeLayer { Name = name };
+                byName[name] = layer;
+                result.Layers.Add(layer);
+            }
+            var tex = Texture(Input(l.GetOrDefault<FExpressionInput?>("LayerInput")));
+            if (tex == null) continue;
+            if (b.Name == baseColor) layer.Diffuse = tex;
+            else if (b.Name == normal) layer.Normal = tex;
+            else layer.Rma ??= tex;
+        }
+    }
+    return result;
 }
 
 static class Mvp
@@ -386,13 +474,57 @@ static class Mvp
     ];
 }
 
-class MaterialInfo { public string File = "", Blend = ""; public bool TwoSided; }
+static class MeshMaterials
+{
+    // Some F13 meshes (mostly foliage) carry extra native data before StaticMaterials, so CUE4Parse loses the material
+    // list after the render data has already loaded fine. The same list is also a tagged property; use that.
+    public static void RestoreStaticMaterials(UStaticMesh sm)
+    {
+        if (sm.StaticMaterials.Length > 0) return;
+        var fromTags = sm.GetOrDefault("StaticMaterials", Array.Empty<FStaticMaterial>());
+        if (fromTags.Length == 0) return;
+        typeof(UStaticMesh).GetProperty(nameof(UStaticMesh.StaticMaterials))!.SetValue(sm, fromTags);
+        typeof(UStaticMesh).GetProperty(nameof(UStaticMesh.Materials))!.SetValue(sm, fromTags.Select(m => m.MaterialInterface).ToArray());
+    }
+
+    // Material overrides by the name of the slot material they replace (the glTF names its materials after the mesh's
+    // own), queueing each override for export. Null when nothing is overridden.
+    public static Dictionary<string, string>? OverrideMap(UStaticMesh mesh, FPackageIndex[] overrides, Action<UObject> queue)
+    {
+        RestoreStaticMaterials(mesh);
+        Dictionary<string, string>? map = null;
+        for (var i = 0; i < overrides.Length && i < mesh.StaticMaterials.Length; i++)
+        {
+            if (overrides[i]?.Load() is not UMaterialInterface m) continue;
+            var slot = mesh.StaticMaterials[i].MaterialInterface?.Name;
+            if (slot == null || slot == m.Name) continue;
+            queue(m);
+            (map ??= new())[slot] = m.Name;
+        }
+        return map;
+    }
+}
+
+class MaterialInfo
+{
+    public string File = "", Blend = "", Master = "";
+    public bool TwoSided;
+    public SortedDictionary<string, float> Scalars = new();
+    public SortedDictionary<string, float[]> Vectors = new();
+    public SortedDictionary<string, bool> Switches = new();
+    public SortedDictionary<string, string> Textures = new();
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public LandscapeMaterial? Landscape;
+}
+class LandscapeMaterial { public float MappingScale = 1; public List<LandscapeLayer> Layers = []; }
+class LandscapeLayer { public string Name = ""; public string? Diffuse, Normal, Rma; }
 class Xform { public float[] T = []; public float[] R = []; public float[] S = []; }
 class Placement
 {
     public string Level = "", Component = "", Mesh = "", File = "";
     public bool Hidden;
     public string?[] Materials = [];
+    public Dictionary<string, string>? MaterialMap;
     public Xform? Transform;
     public List<Xform>? Instances;
 }
