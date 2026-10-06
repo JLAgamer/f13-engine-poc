@@ -142,6 +142,32 @@ const FX_STEPS: &[FxStep] = &[
     FxStep { what: "climb back in over the broken glass", fx: Fx::Window, outside: None, hold: false, sprint: false, walk: None, expect: |s| s.inside },
 ];
 
+const CAPSULE: f13_core::collision::Capsule =
+    f13_core::collision::Capsule { radius: crate::player::CAPSULE_RADIUS_M, half_height: crate::player::CAPSULE_HALF_HEIGHT_M };
+
+/// Where to stand to reach `point` (an interact point) within `reach_m` of the chest: the nearest floor spot, on rings
+/// around it, where the counselor's capsule fits (the collision would push her out of furniture and walls).
+fn stand_spot(world: &(impl f13_core::collision::TriSource + ?Sized), point: Vec3, reach_m: f32) -> Option<Vec3> {
+    for ring in 0..=10 {
+        let r = ring as f32 * 0.15;
+        let n = if ring == 0 { 1 } else { 16 };
+        for k in 0..n {
+            let a = k as f32 * std::f32::consts::TAU / n as f32;
+            let (x, z) = (point.x + a.cos() * r, point.z + a.sin() * r);
+            let Some((y, normal)) = f13_core::collision::surface_below(world, x, z, point.y + 0.3, point.y - 2.5) else { continue };
+            let feet = Vec3::new(x, y, z);
+            let chest = feet + Vec3::Y * crate::interact::CHEST_M;
+            if normal.y >= crate::player::WALK.walkable_normal_y
+                && chest.distance(point) <= reach_m
+                && f13_core::nav::capsule_fits(world, feet, &CAPSULE, &crate::player::WALK)
+            {
+                return Some(feet);
+            }
+        }
+    }
+    None
+}
+
 fn place(player: &mut Transform, at: Vec3) {
     player.translation = at;
 }
@@ -161,8 +187,7 @@ fn run_bot(
     (time, real): (Res<Time>, Res<Time<Real>>),
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
-    interaction: Res<crate::interact::Interaction>,
-    tuning: Res<crate::player::PlayerTuning>,
+    (interaction, tuning): (Res<crate::interact::Interaction>, Res<crate::player::PlayerTuning>),
     mut player: Single<(&mut Transform, &Player, Option<&Inventory>, Has<Driving>, Has<UsingItem>)>,
     mut camera: Single<&mut PlayerCamera>,
     items: Query<(Entity, &Item, &GlobalTransform, Option<&InCabinet>), Without<Carried>>,
@@ -178,7 +203,9 @@ fn run_bot(
     ),
     escaped: Option<Res<Escaped>>,
     mut exit: MessageWriter<AppExit>,
+    (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
 ) {
+    let world = collision.with(&dynamic);
     let dt = time.delta_secs();
     bot.timer += dt;
     bot.total += dt;
@@ -268,7 +295,7 @@ fn run_bot(
             }
             let near = vxf.translation();
             let parts = parts.clone();
-            if !go_fetch(&mut bot, &mut camera, &parts, near, pxf, &items, &cabinets, &mut keys) {
+            if !go_fetch(&world, &mut bot, &mut camera, &parts, near, pxf, &items, &cabinets, &mut keys) {
                 bot.step = Step::Done;
             }
         }
@@ -281,7 +308,7 @@ fn run_bot(
                 return;
             }
             let near = pxf.translation;
-            if !go_fetch(&mut bot, &mut camera, &[FIRST_AID.to_string()], near, pxf, &items, &cabinets, &mut keys) {
+            if !go_fetch(&world, &mut bot, &mut camera, &[FIRST_AID.to_string()], near, pxf, &items, &cabinets, &mut keys) {
                 bot.step = Step::Done;
             }
         }
@@ -579,6 +606,7 @@ fn run_bot(
 /// Returns false when there is none.
 #[allow(clippy::too_many_arguments)]
 fn go_fetch(
+    world: &(impl f13_core::collision::TriSource + ?Sized),
     bot: &mut Bot,
     camera: &mut PlayerCamera,
     classes: &[String],
@@ -601,7 +629,10 @@ fn go_fetch(
     if let Some((cab, cxf)) = closed_cabinet {
         // Stand at the cabinet's interact point (feet a metre below it) and search it.
         let at = cxf.transform_point(cab.interact);
-        place(pxf, at - Vec3::Y * 1.0);
+        let stand = stand_spot(world, at, cab.reach / 100.0).unwrap_or(at - Vec3::Y * 1.0);
+        if pxf.translation.distance(stand) > 0.05 {
+            place(pxf, stand);
+        }
         look_at(camera, pxf, at);
         if bot.timer > 0.3 {
             info!("bot: searching cabinet for {}", item.name);
@@ -612,10 +643,18 @@ fn go_fetch(
         let at = ixf.translation();
         // In an opened cabinet: stand where it was searched from. Loose: 0.7 m short of it, coming from where we are.
         let stand = match cabinet {
-            Some((cab, cxf)) => cxf.transform_point(cab.interact) - Vec3::Y * 1.0,
+            Some((cab, cxf)) => {
+                let point = cxf.transform_point(cab.interact);
+                stand_spot(world, point, cab.reach / 100.0).unwrap_or(point - Vec3::Y * 1.0)
+            }
             None => {
                 let back = (pxf.translation - at).with_y(0.0).try_normalize().unwrap_or(Vec3::X);
-                at + back * 0.7
+                let short = at + back * 0.7;
+                if f13_core::nav::capsule_fits(world, short, &CAPSULE, &crate::player::WALK) {
+                    short
+                } else {
+                    stand_spot(world, at, item.reach / 100.0).unwrap_or(short)
+                }
             }
         };
         if pxf.translation.distance(stand) > 0.05 {

@@ -19,13 +19,13 @@ const CM: f32 = 100.0;
 const TURN_RATE_DEG: f32 = 440.0;
 const MAX_STEP_HEIGHT_M: f32 = 0.45;
 /// Gravity (Unreal's -980 cm/s²) and the walkable floor angle (Unreal's default 44.765°).
-const WALK: f13_core::collision::WalkSettings =
+pub(crate) const WALK: f13_core::collision::WalkSettings =
     f13_core::collision::WalkSettings { max_step: MAX_STEP_HEIGHT_M, walkable_normal_y: 0.71, gravity: 9.8 };
 /// How far above a spawn point the floor is looked for (a spawn point is the capsule's centre, under a metre up).
 const SPAWN_PROBE_M: f32 = 1.5;
-const CAPSULE_RADIUS_M: f32 = 0.34;
+pub(crate) const CAPSULE_RADIUS_M: f32 = 0.34;
 /// Base_Counselor's CollisionCylinder: half height 82 cm, radius left at ACharacter's 34 cm.
-const CAPSULE_HALF_HEIGHT_M: f32 = 0.82;
+pub(crate) const CAPSULE_HALF_HEIGHT_M: f32 = 0.82;
 const CAMERA_DISTANCE_M: f32 = 3.0;
 const CAR_CAMERA_DISTANCE_M: f32 = 7.0;
 const CAMERA_HEIGHT_M: f32 = 1.6;

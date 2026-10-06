@@ -21,7 +21,7 @@ pub const MAX_SMALL_ITEMS: usize = 3;
 /// Interaction ranges are measured from the counselor's capsule surface, roughly.
 const CAPSULE_RADIUS_CM: f32 = 34.0;
 /// Interaction distance is measured from about chest height.
-const CHEST_M: f32 = 1.0;
+pub(crate) const CHEST_M: f32 = 1.0;
 
 #[derive(Component, Default, Debug)]
 pub struct Inventory {
