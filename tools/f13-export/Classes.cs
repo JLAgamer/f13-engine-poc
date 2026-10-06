@@ -196,6 +196,7 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
                 if (mesh != null && MeshMaterials.OverrideMap(mesh, t.GetOrDefault<FPackageIndex[]>("OverrideMaterials", []), queueMesh) is { } map)
                     j["MaterialMap"] = JObject.FromObject(map);
                 j["Hidden"] = t.GetOrDefault("bHiddenInGame", false) || !t.GetOrDefault("bVisible", true);
+                j["BlocksPawn"] = Collision.BlocksPawn(t);
                 return j;
             }
             case USkeletalMeshComponent:
@@ -217,6 +218,10 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
         if (type.Contains("SphereComponent")) props["SphereRadius"] ??= 32f;
         if (type.Contains("BoxComponent")) props["BoxExtent"] ??= new JObject { ["X"] = 32f, ["Y"] = 32f, ["Z"] = 32f };
         if (type.Contains("CapsuleComponent")) { props["CapsuleRadius"] ??= 22f; props["CapsuleHalfHeight"] ??= 44f; }
+        // Shapes that block counselors, as convex point sets in component space (cm). Shapes keeping their native
+        // constructor's profile (not in the export) are taken as non-blocking (triggers, volumes).
+        if (Collision.ShapeComponent(t, FVector.OneVector) is { } hull && Collision.BlocksPawn(t, "OverlapAllDynamic"))
+            j["Hull"] = new JArray(hull);
         foreach (var cls in t.GetOrDefault<FPackageIndex[]>("ActorList", [])) Add(cls);
         Add(t.GetOrDefault<FPackageIndex?>("ChildActorClass"));
         foreach (var cls in t.GetOrDefault<FPackageIndex[]>("RequiredPartClasses", [])) Add(cls);

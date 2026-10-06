@@ -6,3 +6,4 @@ license.workspace = true
 description = "Engine-independent gameplay rules for a Friday the 13th: The Game reimplementation"
 
 [dependencies]
+glam = "0.32"

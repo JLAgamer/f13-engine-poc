@@ -32,6 +32,13 @@ pub struct Placement {
     pub material_map: std::collections::HashMap<String, String>,
     pub transform: Option<Xform>,
     pub instances: Option<Vec<Xform>>,
+    /// Blocks counselors (its collision profile); its shapes are in collision.json. Exports before collision: true.
+    #[serde(default = "yes")]
+    pub blocks_pawn: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -47,6 +54,9 @@ pub struct ActorInfo {
     /// Its non-mesh components (spawners, volumes, ...) with world transforms.
     #[serde(default, deserialize_with = "null_as_default")]
     pub components: Vec<ComponentInfo>,
+    /// BlockingVolumes: convex hulls as world-space point sets (Unreal cm, flat x, y, z).
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub hulls: Vec<Vec<f32>>,
 }
 
 /// A component of a placed actor (`world` set) or of a class (`local`: actor space, relative to the root).
@@ -77,6 +87,12 @@ pub struct ComponentInfo {
     pub root_relative: Option<Xform>,
     #[serde(default)]
     pub props: serde_json::Value,
+    /// Static mesh components: blocks counselors (default for exports without the flag).
+    #[serde(default = "yes")]
+    pub blocks_pawn: bool,
+    /// Box, sphere and capsule components that block counselors: a convex point set in component space (Unreal cm).
+    #[serde(default)]
+    pub hull: Option<Vec<f32>>,
 }
 
 impl ComponentInfo {

@@ -1,8 +1,8 @@
 //! A playable counselor (Vanessa) driven by the f13-core movement and stamina rules.
 //!
 //! Placeholder controls: WASD move (running by default), Shift sprint, Caps Lock toggle walk, Ctrl crouch,
-//! mouse look (click to capture, Esc to release); E interact and G drop (interact.rs), F leave a car (vehicle.rs). Ground height and walls come from ray casts against the map
-//! meshes; there is no physics engine yet.
+//! mouse look (click to capture, Esc to release); E interact and G drop (interact.rs), F leave a car (vehicle.rs). The capsule moves through the game's own
+//! collision (collision.rs, f13-core::collision).
 
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings};
@@ -18,8 +18,14 @@ const CM: f32 = 100.0;
 /// Character turn rate (the counselor Blueprint's RotationRate yaw), degrees per second.
 const TURN_RATE_DEG: f32 = 440.0;
 const MAX_STEP_HEIGHT_M: f32 = 0.45;
+/// Gravity (Unreal's -980 cm/s²) and the walkable floor angle (Unreal's default 44.765°).
+const WALK: f13_core::collision::WalkSettings =
+    f13_core::collision::WalkSettings { max_step: MAX_STEP_HEIGHT_M, walkable_normal_y: 0.71, gravity: 9.8 };
+/// How far above a spawn point the floor is looked for (a spawn point is the capsule's centre, under a metre up).
+const SPAWN_PROBE_M: f32 = 1.5;
 const CAPSULE_RADIUS_M: f32 = 0.34;
-const CAPSULE_HALF_HEIGHT_M: f32 = 0.88;
+/// Base_Counselor's CollisionCylinder: half height 82 cm, radius left at ACharacter's 34 cm.
+const CAPSULE_HALF_HEIGHT_M: f32 = 0.82;
 const CAMERA_DISTANCE_M: f32 = 3.0;
 const CAR_CAMERA_DISTANCE_M: f32 = 7.0;
 const CAMERA_HEIGHT_M: f32 = 1.6;
@@ -47,7 +53,15 @@ pub struct Player {
     pub root_motion: Option<(Vec2, f32)>,
     /// The montage the rules started (dodge, stumble), for the animation.
     pub montage: Option<String>,
+    /// Vertical speed (m/s, falling) and whether the last move ended on a walkable floor.
+    pub vel_y: f32,
+    pub grounded: bool,
 }
+
+/// Placed (spawned or teleported) but not yet put on the floor: the next move finds the floor under this point, or,
+/// if there's none (under the map), the surface above it.
+#[derive(Component)]
+pub struct Unsettled;
 
 impl Player {
     /// What the counselor rules need to know about this tick.
@@ -75,7 +89,7 @@ struct Intent {
     dodge: Option<DodgeDirection>,
 }
 
-/// Marks the player's own meshes so ground, wall and camera ray casts ignore them.
+/// Marks the player's own meshes so camera and interaction ray casts ignore them.
 #[derive(Component)]
 pub struct PlayerPart;
 
@@ -145,9 +159,10 @@ fn spawn_player(
     counselor.health = config.health.unwrap_or(tuning.counselor.health.max_health).clamp(1.0, tuning.counselor.health.max_health);
     counselor.update_wounded(counselor.health, true, &tuning.counselor);
     let player = commands.spawn((
-        Player { counselor, velocity: Vec2::ZERO, walk_toggle: false, fear: config.fear, root_motion: None, montage: None },
+        Player { counselor, velocity: Vec2::ZERO, walk_toggle: false, fear: config.fear, root_motion: None, montage: None, vel_y: 0.0, grounded: false },
         Transform::from_translation(config.spawn),
         Visibility::default(),
+        Unsettled,
     ));
     let player = player.id();
     match character.as_deref().filter(|_| !config.capsule) {
@@ -341,13 +356,14 @@ fn move_player(
     time: Res<Time>,
     tuning: Res<PlayerTuning>,
     camera: Single<&PlayerCamera>,
-    mut player: Single<(&mut Player, &mut Transform, Option<&crate::interact::UsingItem>), Without<Driving>>,
+    mut player: Single<(Entity, &mut Player, &mut Transform, Option<&crate::interact::UsingItem>, Option<&Unsettled>), Without<Driving>>,
     interaction: Option<Res<crate::interact::Interaction>>,
-    mut ray_cast: MeshRayCast,
-    parts: Query<(), With<PlayerPart>>,
+    collision: Res<crate::collision::WorldCollision>,
+    dynamic: Res<crate::collision::DynamicColliders>,
+    mut commands: Commands,
 ) {
     let dt = time.delta_secs();
-    let (ref mut p, ref mut xf, using) = *player;
+    let (entity, ref mut p, ref mut xf, using, settle) = *player;
     let (sin, cos) = camera.yaw.sin_cos();
     let forward = Vec2::new(-sin, -cos);
     let right = Vec2::new(cos, -sin);
@@ -370,47 +386,35 @@ fn move_player(
         p.velocity = Vec2::from_array(v);
     }
 
-    // Move, stopping at walls and following the ground.
-    let step = p.velocity * dt / CM;
-    let not_player = |e: Entity| !parts.contains(e);
-    let settings = MeshRayCastSettings::default().with_filter(&not_player);
-    let ground_at = |ray_cast: &mut MeshRayCast, p: Vec3| {
-        ray_cast.cast_ray(Ray3d::new(p + Vec3::Y * (MAX_STEP_HEIGHT_M + 1.0), Dir3::NEG_Y), &settings).first().map(|(_, h)| h.point.y)
-    };
-    // Started (or got pushed) slightly below the surface: stand on it instead of treating it as a wall.
-    if let Some(y) = ground_at(&mut ray_cast, xf.translation) {
-        if y > xf.translation.y {
-            xf.translation.y = y;
-        }
-    }
-    let mut pos = xf.translation;
-    if step.length_squared() > 0.0 {
-        // Like Unreal's SlideAlongSurface: on a hit, drop the part of the move that goes into the surface.
-        let mut step = step;
-        for _ in 0..2 {
-            let Ok(dir) = Dir3::new(Vec3::new(step.x, 0.0, step.y)) else { break };
-            let hit = ray_cast
-                .cast_ray(Ray3d::new(pos + Vec3::Y * 1.0, dir), &settings)
-                .first()
-                .filter(|(_, hit)| hit.distance < step.length() + CAPSULE_RADIUS_M)
-                .map(|(_, hit)| Vec2::new(hit.normal.x, hit.normal.z).normalize_or_zero());
-            let Some(n) = hit else { break };
-            step -= n * step.dot(n).min(0.0);
-            let into = p.velocity.dot(n).min(0.0);
-            p.velocity -= n * into;
-            if n == Vec2::ZERO {
-                step = Vec2::ZERO;
-                p.velocity = Vec2::ZERO;
+    // Move the capsule through the world's collision (walls, steps, slopes, falling).
+    let world = collision.with(&dynamic);
+    if settle.is_some() {
+        if let Some(at) = f13_core::collision::spawn_floor(&world, xf.translation, SPAWN_PROBE_M, &WALK) {
+            if at.distance(xf.translation) > 0.01 {
+                info!("placed on the floor at {at} (was {})", xf.translation);
             }
+            xf.translation = at;
         }
-        pos += Vec3::new(step.x, 0.0, step.y);
+        p.vel_y = 0.0;
+        p.grounded = true;
+        commands.entity(entity).remove::<Unsettled>();
     }
-    if let Some(ground) = ground_at(&mut ray_cast, pos) {
-        if ground <= xf.translation.y + MAX_STEP_HEIGHT_M {
-            pos.y = ground;
-        } else {
-            pos = xf.translation; // too steep: stay put
-            p.velocity = Vec2::ZERO;
+    let cap = f13_core::collision::Capsule { radius: CAPSULE_RADIUS_M, half_height: CAPSULE_HALF_HEIGHT_M };
+    let mut pos = xf.translation;
+    let (grounded, delta) = (p.grounded, p.velocity * dt / CM);
+    let r = f13_core::collision::move_capsule(&world, &mut pos, &mut p.vel_y, grounded, delta, dt, &cap, &WALK);
+    p.grounded = r.grounded;
+    // Like Unreal's SlideAlongSurface: drop the velocity going into the walls hit.
+    if let Some(n) = r.wall_normal.try_normalize() {
+        let into = p.velocity.dot(n).min(0.0);
+        p.velocity -= n * into;
+    }
+    // Fell out of the world (no surface under the feet at all): back onto the surface above.
+    if !r.grounded && f13_core::collision::surface_below(&world, pos.x, pos.z, pos.y + MAX_STEP_HEIGHT_M, pos.y - 100.0).is_none() {
+        if let Some(at) = f13_core::collision::spawn_floor(&world, pos, SPAWN_PROBE_M, &WALK) {
+            warn!("fell out of the map at {pos}; back to {at}");
+            pos = at;
+            p.vel_y = 0.0;
         }
     }
     xf.translation = pos;

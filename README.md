@@ -53,6 +53,9 @@ dotnet run --project tools/f13-export -- --game "<path to F13Game>" --out "<expo
   body, default outfit with its default materials, face on the head bone, hair on the face, skin masks), the shared
   skeleton's bones with their retargeting modes, and her animations sampled per frame. `tools/f13-export ... counselor`
   writes just these.
+- `collision.json`: each static mesh's simple collision (convex point sets); level placements and class components
+  say whether they block counselors (their collision profile, read from the game's DefaultEngine.ini), and
+  BlockingVolumes carry their hulls. `tools/f13-export ... collision` writes just these (and the level files).
 - `anims.json`: length and root motion of the montages the rules use (dodges, stumbles); dodges and stumbles move
   the counselor by it, as the game's root motion does.
 - `classes.json`: Blueprint classes the match can spawn (cabinets, items, cars, doors...): parents, defaults and

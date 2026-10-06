@@ -142,7 +142,14 @@ fn local(c: &f13_data::level::ComponentInfo) -> Transform {
 }
 
 /// Builds the match world and spawns its runtime actors.
-fn spawn_props(mut commands: Commands, assets: Res<AssetServer>, level: Res<crate::Level>, seed: Res<Seed>, export: Res<crate::ExportRoot>) {
+fn spawn_props(
+    mut commands: Commands,
+    assets: Res<AssetServer>,
+    level: Res<crate::Level>,
+    seed: Res<Seed>,
+    export: Res<crate::ExportRoot>,
+    collision: Option<Res<crate::collision::WorldCollision>>,
+) {
     let classes = match ClassDb::load(&export.0.join("classes.json")) {
         Ok(c) => c,
         Err(e) => {
@@ -192,10 +199,46 @@ fn spawn_props(mut commands: Commands, assets: Res<AssetServer>, level: Res<crat
             if let Some(o) = crate::materials::MaterialOverrides::new(&c.material_map) {
                 commands.entity(child).insert(o);
             }
+            if let Some(col) = collision.as_ref().filter(|_| c.blocks_pawn && c.kind == "StaticMeshComponent").and_then(|w| w.mesh_collider(mesh)) {
+                commands.entity(child).insert(col);
+            }
             parts.insert(c.name.as_str(), child);
             if c.name == "AnimatedMesh" {
                 commands.entity(child).insert(Drawer { closed: local(c) });
                 drawer = Some(child);
+            }
+        }
+
+        // Blocking shapes (a door's DoorCollision box, a car's body box): on the pivot when they hang off it.
+        for c in info.components.iter().filter(|c| c.hull.is_some()) {
+            let tris = crate::collision::hull_from_unreal(c.hull.as_deref().unwrap_or_default());
+            if tris.is_empty() {
+                continue;
+            }
+            let collider = crate::collision::Collider(std::sync::Arc::new(tris));
+            let on_pivot = pivot.filter(|_| {
+                let mut at = c.parent.as_deref();
+                let mut depth = 0;
+                while let Some(name) = at {
+                    if name == "Pivot" {
+                        return true;
+                    }
+                    at = info.components.iter().find(|x| x.name == name).and_then(|x| x.parent.as_deref());
+                    depth += 1;
+                    if depth > 16 {
+                        break;
+                    }
+                }
+                false
+            });
+            match on_pivot {
+                Some((p, pt)) => {
+                    let rel = Transform::from_matrix(pt.to_matrix().inverse() * local(c).to_matrix());
+                    commands.spawn((rel, Visibility::default(), collider, ChildOf(p)));
+                }
+                None => {
+                    commands.spawn((local(c), Visibility::default(), collider, ChildOf(root)));
+                }
             }
         }
 

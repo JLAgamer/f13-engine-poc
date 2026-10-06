@@ -59,6 +59,9 @@ var provider = new DefaultFileProvider(new DirectoryInfo(Path.Combine(game, "Sum
 provider.Initialize();
 provider.Mount();
 Console.WriteLine($"{provider.Files.Count} files");
+Collision.LoadProfiles(game);
+// Simple collision of every exported static mesh, by glTF path (collision.json).
+var meshCollision = new SortedDictionary<string, Collision.MeshShapes>(StringComparer.OrdinalIgnoreCase);
 
 var session = new ExportSession();
 ClassExporter classes = null!;
@@ -71,7 +74,11 @@ classes = new ClassExporter(provider, Queue, o => o is UStaticMesh sm ? OutPath(
 void Queue(UObject obj)
 {
     if (obj is not (UStaticMesh or USkeletalMesh or UMaterialInterface or UTexture) || !queued.Add(obj.GetPathName())) return;
-    if (obj is UStaticMesh sm) MeshMaterials.RestoreStaticMaterials(sm);
+    if (obj is UStaticMesh sm)
+    {
+        MeshMaterials.RestoreStaticMaterials(sm);
+        if (Collision.Shapes(sm) is { } shapes) meshCollision[OutPath(sm)] = shapes;
+    }
     session.Add(obj);
 }
 
@@ -140,6 +147,19 @@ void ExportLevel(string mapPath)
                 }
                 if (actor.ExportType == "SCWorldSettings") AddWorldSettingsClasses(info.Props);
             }
+            if (actor.ExportType == "BlockingVolume")
+            {
+                // Its brush's convex hulls, in world space.
+                var brush = root;
+                var bs = brush?.GetOrDefault<FPackageIndex?>("BrushBodySetup")?.Load() as CUE4Parse.UE4.Objects.PhysicsEngine.UBodySetup;
+                if (brush != null && bs?.AggGeom != null && Collision.BlocksPawn(brush, "BlockAll"))
+                {
+                    var w = brush.GetAbsoluteTransform();
+                    info.Hulls = bs.AggGeom.ConvexElems.Where(c => c.VertexData is { Length: >= 4 })
+                        .Select(c => c.VertexData.SelectMany(v => { var p = w.TransformPosition(c.Transform.TransformPosition(v)); return new[] { p.X, p.Y, p.Z }; }).ToArray())
+                        .ToList();
+                }
+            }
             if (actor is ALandscapeProxy proxy)
             {
                 var lx = new LandscapeMeshExporter(proxy);
@@ -164,6 +184,7 @@ void ExportLevel(string mapPath)
                 Materials = smc.GetOrDefault<FPackageIndex[]>("OverrideMaterials", [])
                     .Select(m => m?.ResolvedObject?.GetPathName()).ToArray(),
                 MaterialMap = MeshMaterials.OverrideMap(mesh, smc.GetOrDefault<FPackageIndex[]>("OverrideMaterials", []), Queue),
+                BlocksPawn = Collision.BlocksPawn(smc),
             };
             var world_ = smc.GetAbsoluteTransform();
             if (smc is F13InstancedMeshComponent ism)
@@ -201,6 +222,15 @@ void AddClassByName(string name)
     if (file == null) { Console.WriteLine($"  no package for class {name}"); return; }
     try { classes.Add(provider.LoadPackage(file).GetExports().FirstOrDefault(e => e.Name == name)); }
     catch (Exception ex) { Console.WriteLine($"  class {name}: {ex.Message}"); }
+}
+
+// collision.json (see Collision.cs).
+void WriteCollision()
+{
+    var path = Path.Combine(outDir!, "collision.json");
+    File.WriteAllText(path, Newtonsoft.Json.JsonConvert.SerializeObject(meshCollision));
+    Console.WriteLine($"{path}: {meshCollision.Count} meshes with collision; profiles used: "
+        + string.Join(", ", Collision.Used.Select(kv => $"{kv.Key} {kv.Value}")));
 }
 
 void WriteClasses()
@@ -303,7 +333,14 @@ switch (rest[0])
         WriteClasses();
         AnimExporter.Write(provider, outDir, Mvp.Montages);
         new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims);
+        WriteCollision();
         break;
+    case "collision": // levels (for collision flags), classes and collision.json; no meshes or textures
+        ExportLevel(Mvp.Map);
+        foreach (var l in Mvp.Layouts) ExportLevel(l);
+        WriteClasses();
+        WriteCollision();
+        return 0;
     case "counselor": // the MVP counselor's parts and animations (and the meshes they need)
         new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims);
         break;
@@ -575,6 +612,8 @@ class Placement
     public Dictionary<string, string>? MaterialMap;
     public Xform? Transform;
     public List<Xform>? Instances;
+    /// Blocks counselors (its collision profile or custom responses); its shapes are in collision.json.
+    public bool BlocksPawn = true;
 }
 class ActorInfo
 {
@@ -582,6 +621,8 @@ class ActorInfo
     public Xform? Transform;
     public Newtonsoft.Json.Linq.JObject? Props;
     public List<Newtonsoft.Json.Linq.JObject>? Components;
+    /// BlockingVolumes: their convex hulls as world-space point sets (cm).
+    public List<float[]>? Hulls;
 }
 class LandscapeInfo { public string Level = "", Actor = "", File = ""; }
 class LevelLayout

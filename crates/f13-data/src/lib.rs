@@ -2,6 +2,7 @@
 
 pub mod character;
 pub mod classes;
+pub mod collision;
 pub mod level;
 mod native_classes;
 pub mod world;

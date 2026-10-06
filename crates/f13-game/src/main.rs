@@ -8,6 +8,7 @@
 
 mod bot;
 mod character;
+mod collision;
 mod doors;
 mod interact;
 mod materials;
@@ -222,7 +223,7 @@ fn main() {
             vehicle_start: tuning.vehicle_start.clone(),
         })
             .add_plugins(player::PlayerPlugin { spawn, capsule: args.capsule, camera: args.camera, demo: args.demo, fear: args.fear, health: args.health })
-            .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }));
+            .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }, collision::CollisionPlugin));
         if args.bot_escape {
             app.add_plugins(bot::BotPlugin(bot::Goal::Escape));
         } else if args.bot_heal {

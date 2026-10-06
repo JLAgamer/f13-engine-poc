@@ -2515,6 +2515,9 @@ dependencies = [
 [[package]]
 name = "f13-core"
 version = "0.1.0"
+dependencies = [
+ "glam",
+]
 
 [[package]]
 name = "f13-data"

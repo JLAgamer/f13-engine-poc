@@ -22,7 +22,10 @@ Mechanics: counselor side
 - [x] Combat stance and dodge: double-tap, stamina cost, root motion (f13-core::dodge, anims.json)
 - [ ] Swimming
 - [ ] Fear events pushed in the client (darkness, indoors, wounded, water, Jason near...)
-- [ ] Real collision (capsule vs map); now ray casts only
+- [x] Collision: the counselor's capsule (34 x 82 cm) against the game's simple collision (convex hulls, boxes,
+  spheres, capsules of every mesh whose profile blocks pawns, BlockingVolumes, terrain), doors, windows and cars
+  moving with their actors; steps (45 cm), walkable slopes (44.8°), falling; spawns put on the floor, and a
+  character that ends up under the map is put back on top (f13-core::collision, f13-game collision.rs)
 - [x] Inventory: large item (hands) and small items (pockets, 3); pickup, drop; use: first aid (other items with combat)
 - [x] Repairs: car battery and gas, keys at the ignition (from the driver's seat)
 - [x] Repair minigame (hold timer, pips, hit bonus, miss rollback, killer notify) and the real engine start time
