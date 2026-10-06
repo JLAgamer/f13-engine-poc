@@ -489,8 +489,13 @@ fn follow_camera(
     mut ray_cast: MeshRayCast,
     parts: Query<(), With<PlayerPart>>,
     vehicle_parts: Query<(), With<crate::props::VehiclePart>>,
+    ragdolls: Query<&crate::ragdoll::Ragdolled>,
+    jason_parts: Query<(), With<crate::jason::JasonPart>>,
 ) {
     let (player, driving) = *player;
+    // Dead: the camera follows the body.
+    let body = ragdolls.iter().find_map(|r| r.center());
+    let player = &Transform::from_translation(body.map_or(player.translation, |c| c - Vec3::Y * 0.9));
     if let Some((eye, target)) = config.camera {
         let (_, ref mut xf) = *camera;
         xf.translation = player.translation + eye;
@@ -506,7 +511,8 @@ fn follow_camera(
     let rot = Quat::from_euler(EulerRot::YXZ, cam.yaw, cam.pitch, 0.0);
     let target = player.translation + Vec3::Y * CAMERA_HEIGHT_M;
     let back = rot * Vec3::Z;
-    let not_player = |e: Entity| !parts.contains(e) && !(driving && vehicle_parts.contains(e));
+    // Characters don't pull the camera in, only the world.
+    let not_player = |e: Entity| !parts.contains(e) && !jason_parts.contains(e) && !(driving && vehicle_parts.contains(e));
     let settings = MeshRayCastSettings::default().with_filter(&not_player);
     let distance = ray_cast
         .cast_ray(Ray3d::new(target, Dir3::new(back).unwrap()), &settings)

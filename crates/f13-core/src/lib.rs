@@ -11,6 +11,7 @@ pub mod killer_abilities;
 pub mod minigame;
 pub mod movement;
 pub mod nav;
+pub mod ragdoll;
 pub mod spawn;
 pub mod stats;
 pub mod stumble;

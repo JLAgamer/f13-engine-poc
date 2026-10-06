@@ -587,6 +587,7 @@ fn update_jason(
                     p.counselor.take_damage(Hit { amount: health, blocked_with_weapon: false }, &ptuning.counselor);
                     info!("Vanessa: killed by Jason (Pickaxe Throat Hack)");
                     j.state = JasonState::Done;
+                    commands.entity(je).remove::<PlayAction>();
                 } else {
                     j.state = JasonState::Killing { t: at };
                 }

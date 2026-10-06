@@ -588,7 +588,17 @@ fn run_bot(
             }
         }
         Step::Done => {
-            if bot.timer > 2.0 {
+            // After a death, let the ragdoll settle and photograph it from above.
+            if bot.goal == Goal::Jason && !p.counselor.alive() {
+                camera.pitch = -0.75;
+            }
+            if bot.goal == Goal::Jason && !p.counselor.alive() && !bot.jason_shots.contains(&"dead") && bot.timer > 3.0 {
+                bot.jason_shots.push("dead");
+                let path = std::env::temp_dir().join("f13-bot-jason-dead.png");
+                info!("bot: screenshot {}", path.display());
+                commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+            }
+            if bot.timer > if bot.goal == Goal::Jason { 4.0 } else { 2.0 } {
                 let ok = match bot.goal {
                     Goal::Escape => escaped.is_some(),
                     Goal::Heal => p.counselor.health >= 100.0,

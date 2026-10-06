@@ -77,6 +77,28 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         public SortedDictionary<string, Part> Sockets = new();
         /// Gameplay values (killers): Blueprint overrides, else the C++ constructor's defaults.
         public SortedDictionary<string, float>? Values;
+        /// The body mesh's physics asset (the ragdoll): one body per simulated bone, and the joints between them.
+        public List<RagdollBody>? Ragdoll;
+        public List<RagdollJoint>? Joints;
+    }
+
+    /// A physics asset body: its bone's capsules ("Sphyl": Radius, Length between the sphere centres, along the
+    /// element's Z), spheres or boxes (Radius is half the smallest extent), relative to the bone, in cm.
+    public class RagdollBody
+    {
+        public string Bone = "", Shape = "";
+        public float Radius, Length;
+        public Xform? Transform;
+    }
+
+    /// A physics constraint: Bone1 (the child) moves relative to Bone2 within the swing cone and twist limit
+    /// (degrees; 0 locked, 180 free). The limits are measured between the joint's frames: Pri1/Sec1 (X and Y axes)
+    /// in Bone1's space, Pri2/Sec2 in Bone2's (Unreal bone space). Swing1 turns X toward Y, Swing2 toward Z.
+    public class RagdollJoint
+    {
+        public string Bone1 = "", Bone2 = "";
+        public float Swing1, Swing2, Twist;
+        public float[] Pri1 = [1, 0, 0], Sec1 = [0, 1, 0], Pri2 = [1, 0, 0], Sec2 = [0, 1, 0];
     }
 
     static Xform Xf(FVector t, FRotator r) => new()
@@ -158,6 +180,7 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             info.Bones.Add(new Bone { Name = bones[i].Name.Text, Parent = bones[i].ParentIndex, Retarget = skeleton.BoneTree[i].ToString() });
 
         AddSockets(info, body, skeleton);
+        AddRagdoll(info, body);
         WriteAnimations(info, skeleton, animations, "anims", keepRoot);
         Save(info, "counselors");
     }
@@ -175,6 +198,67 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
                 a.Windows = windows;
                 info.Animations[seq.Name] = a;
             }
+        }
+    }
+
+    /// The body mesh's PhysicsAsset: bodies (the largest shape of each) and constraints.
+    static void AddRagdoll(Info info, USkeletalMesh body)
+    {
+        if (body.GetOrDefault<FPackageIndex>("PhysicsAsset")?.Load() is not { } asset) return;
+        info.Ragdoll = new();
+        info.Joints = new();
+        foreach (var setup in asset.GetOrDefault<FPackageIndex[]>("SkeletalBodySetups", []).Select(b => b.Load()))
+        {
+            if (setup == null) continue;
+            var geom = setup.GetOrDefault<FStructFallback>("AggGeom");
+            var bone = setup.GetOrDefault<FName>("BoneName").Text;
+            RagdollBody? best = null;
+            void Consider(RagdollBody b) { if (best == null || b.Radius + b.Length / 2 > best.Radius + best.Length / 2) best = b; }
+            foreach (var e in geom?.GetOrDefault<FStructFallback[]>("SphylElems", []) ?? [])
+                Consider(new RagdollBody { Bone = bone, Shape = "Sphyl", Radius = e.GetOrDefault<float>("Radius"), Length = e.GetOrDefault<float>("Length"),
+                    Transform = Xf(e.GetOrDefault<FVector>("Center"), e.GetOrDefault<FRotator>("Rotation")) });
+            foreach (var e in geom?.GetOrDefault<FStructFallback[]>("SphereElems", []) ?? [])
+                Consider(new RagdollBody { Bone = bone, Shape = "Sphere", Radius = e.GetOrDefault<float>("Radius"),
+                    Transform = Xf(e.GetOrDefault<FVector>("Center"), new FRotator()) });
+            foreach (var e in geom?.GetOrDefault<FStructFallback[]>("BoxElems", []) ?? [])
+            {
+                float x = e.GetOrDefault<float>("X"), y = e.GetOrDefault<float>("Y"), z = e.GetOrDefault<float>("Z");
+                Consider(new RagdollBody { Bone = bone, Shape = "Box", Radius = Math.Min(x, Math.Min(y, z)) / 2, Length = Math.Max(x, Math.Max(y, z)) - Math.Min(x, Math.Min(y, z)),
+                    Transform = Xf(e.GetOrDefault<FVector>("Center"), e.GetOrDefault<FRotator>("Rotation")) });
+            }
+            if (best != null) info.Ragdoll.Add(best);
+        }
+        static float Limit(FStructFallback? limit, string motion, string degrees)
+        {
+            // FConeConstraint/FTwistConstraint defaults: 45 degrees, ACM_Free.
+            var m = limit?.GetOrDefault<FName>(motion).Text ?? "";
+            if (m == "None" || m == "") m = limit?.GetOrDefault<string>(motion) ?? "ACM_Free";
+            if (m.EndsWith("Locked")) return 0;
+            if (m.EndsWith("Limited")) return limit?.GetOrDefault(degrees, 45f) ?? 45f;
+            return 180;
+        }
+        // FConstraintInstance's axes default to X and Y.
+        static float[] Axis(FStructFallback inst, string name, float[] fallback) =>
+            inst.TryGetValue(out FVector v, name) ? [v.X, v.Y, v.Z] : fallback;
+        foreach (var c in asset.GetOrDefault<FPackageIndex[]>("ConstraintSetup", []).Select(c => c.Load()))
+        {
+            var inst = c?.GetOrDefault<FStructFallback>("DefaultInstance");
+            if (inst == null) continue;
+            var profile = inst.GetOrDefault<FStructFallback>("ProfileInstance");
+            var cone = profile?.GetOrDefault<FStructFallback>("ConeLimit");
+            var twist = profile?.GetOrDefault<FStructFallback>("TwistLimit");
+            info.Joints.Add(new RagdollJoint
+            {
+                Bone1 = inst.GetOrDefault<FName>("ConstraintBone1").Text,
+                Bone2 = inst.GetOrDefault<FName>("ConstraintBone2").Text,
+                Swing1 = Limit(cone, "Swing1Motion", "Swing1LimitDegrees"),
+                Swing2 = Limit(cone, "Swing2Motion", "Swing2LimitDegrees"),
+                Twist = Limit(twist, "TwistMotion", "TwistLimitDegrees"),
+                Pri1 = Axis(inst, "PriAxis1", [1, 0, 0]),
+                Sec1 = Axis(inst, "SecAxis1", [0, 1, 0]),
+                Pri2 = Axis(inst, "PriAxis2", [1, 0, 0]),
+                Sec2 = Axis(inst, "SecAxis2", [0, 1, 0]),
+            });
         }
     }
 

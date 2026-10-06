@@ -73,7 +73,7 @@ pub struct CharacterPlugin {
 }
 
 #[derive(Resource)]
-struct ForcedPose(String, f32);
+pub(crate) struct ForcedPose(String, f32);
 
 /// Vanessa's and Jason's Blueprints, as the exporter names their files.
 const COUNSELOR: &str = "Athlete_Counselor";
@@ -334,14 +334,14 @@ fn assemble(
 
 /// Picks the target weight of each animation from the counselor's state, eases the weights toward them, and poses
 /// the AnimationPlayer (every clip is positioned by hand: speed 0, seek time set here).
-fn animate(
+pub(crate) fn animate(
     time: Res<Time>,
     character: Option<Res<CounselorCharacter>>,
     killer: Option<Res<KillerCharacter>>,
     tuning: Res<PlayerTuning>,
     forced: Option<Res<ForcedPose>>,
     players: Query<(&Player, &Transform, Option<&crate::interact::UsingItem>, Option<&PlayAction>)>,
-    mut rigs: Query<(&ChildOf, &mut Rig, &mut AnimationPlayer)>,
+    mut rigs: Query<(&ChildOf, &mut Rig, &mut AnimationPlayer), Without<crate::ragdoll::Ragdolled>>,
 ) {
     let Some(character) = character else { return };
     let dt = time.delta_secs();

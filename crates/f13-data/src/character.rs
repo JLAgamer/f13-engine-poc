@@ -30,6 +30,55 @@ pub struct CharacterInfo {
     /// Gameplay values (killers: speeds, attack and grab ranges, weapon damage), by Unreal property name.
     #[serde(default, deserialize_with = "crate::level::null_as_empty")]
     pub values: HashMap<String, f32>,
+    /// The body mesh's physics asset: a body per simulated bone and the joints between them (counselors).
+    #[serde(default, deserialize_with = "crate::level::null_as_empty")]
+    pub ragdoll: Vec<RagdollBody>,
+    #[serde(default, deserialize_with = "crate::level::null_as_empty")]
+    pub joints: Vec<RagdollJoint>,
+}
+
+/// A physics asset body: its bone's largest shape ("Sphyl" capsule: radius, length between the sphere centres along
+/// the shape's Z; "Sphere"; "Box": radius is half its smallest extent), relative to the bone, in cm.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct RagdollBody {
+    pub bone: String,
+    pub shape: String,
+    pub radius: f32,
+    #[serde(default)]
+    pub length: f32,
+    #[serde(default)]
+    pub transform: Option<Xform>,
+}
+
+/// A physics constraint: `bone1` (the child) swings relative to `bone2` within the limits (degrees; 0 locked,
+/// 180 free), measured between the joint's frames.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct RagdollJoint {
+    pub bone1: String,
+    pub bone2: String,
+    pub swing1: f32,
+    pub swing2: f32,
+    pub twist: f32,
+    /// The joint's frames (X and Y axes, Unreal bone space): on `bone1`, and on `bone2`. Swing1 turns X toward Y,
+    /// Swing2 toward Z.
+    #[serde(default = "x_axis")]
+    pub pri1: [f32; 3],
+    #[serde(default = "y_axis")]
+    pub sec1: [f32; 3],
+    #[serde(default = "x_axis")]
+    pub pri2: [f32; 3],
+    #[serde(default = "y_axis")]
+    pub sec2: [f32; 3],
+}
+
+fn x_axis() -> [f32; 3] {
+    [1.0, 0.0, 0.0]
+}
+
+fn y_axis() -> [f32; 3] {
+    [0.0, 1.0, 0.0]
 }
 
 fn default_radius() -> f32 {

@@ -277,6 +277,10 @@ static Xform Xf(FTransform t) => new()
 
 switch (rest[0])
 {
+    case "find": // find <substring>...: package paths containing every substring
+        foreach (var f in provider.Files.Keys.Where(k => rest.Skip(1).All(q => k.Contains(q, StringComparison.OrdinalIgnoreCase))).Order())
+            Console.WriteLine(f);
+        return 0;
     case "assets":
         foreach (var a in rest.Skip(1)) ExportAsset(a);
         break;
@@ -567,6 +571,18 @@ static class Mvp
         $"{Female}/Grab/f_normal_grab_enter",
         $"{Female}/Grab/f_normal_grab_idle",
         $"{Female}/Grab/f_normal_grab_struggle",
+        // Items: weapon swings (each weapon's female NeutralAttack and ForwardAttack), throwing a firecracker, firing
+        // the flare gun and the shotgun, placing a bear trap, breaking a grab (struggle, pocket knife).
+        $"{Female}/Combat/Swings/AM_F_combat_stand_1h_attack_light",
+        $"{Female}/Combat/Swings/AM_F_combat_stand_1h_attack_heavy",
+        $"{Female}/Combat/Swings/AM_F_combat_stand_2h_axe_attack_light",
+        $"{Female}/Combat/Swings/AM_F_combat_stand_2h_axe_attack_heavy",
+        $"{Shared}/Interaction/Items/AM_normal_stand_use_firecracker",
+        $"{Shared}/Interaction/Items/AM_normal_stand_use_flare",
+        "/Game/Characters/Counselors/Base/Male/Animation/Hunter/AM_combat_stand_rifle_fire_01",
+        $"{Shared}/Interaction/Trap/AM_normal_stand_trap_place",
+        $"{Shared}/Grab/AM_Grab_Break",
+        $"{Shared}/Grab/AM_normal_grab_pocketknife_break",
         CounselorKill,
         .. Montages,
     ];
@@ -575,6 +591,7 @@ static class Mvp
     const string CounselorKill = $"{Shared}/Cinematic/AM_cinematic_pickaxe_throathack";
     const string JasonAnim = "/Game/Characters/Killers/Jason/Base/Animation";
     const string JasonKill = $"{JasonAnim}/Cinematic/AM_cinematic_pickaxe_throathack";
+    const string JasonStun = $"{JasonAnim}/Deaths_HitReacts_Stuns";
     public static readonly string[] PairedKills = [CounselorKill, JasonKill];
     public const string Killer = "/Game/Characters/Killers/Jason/J2/Jason_SackHead";
     // Jason_AnimBP's BS_Jason_Normal_Move (SpeedState 0 idle, 1 walk, 2 fast walk, 3 run), the pickaxe's combat idle,
@@ -593,6 +610,17 @@ static class Mvp
         $"{JasonAnim}/Grab/normal_grab_enter_1",
         $"{JasonAnim}/Grab/normal_grab_idle",
         $"{JasonAnim}/Grab/normal_grab_miss",
+        $"{JasonAnim}/Grab/AM_Jason_normal_grab_break",
+        // Stuns (BaseWeaponStun_C / FlareWeaponStun_C, FirecrackerKillerStun_C, the pocket knife, bear traps) and
+        // hit reactions.
+        $"{JasonStun}/Stun/AM_combat_Falling_stun",
+        $"{JasonStun}/Stun/AM_combat_stand_stun_left_01",
+        $"{JasonStun}/Stun/AM_combat_stand_stun_right_01",
+        $"{JasonStun}/Stun/AM_combat_stand_stunned_firecracker",
+        $"{JasonStun}/Stun/AM_normal_stand_pocketKnife_Stun",
+        $"{JasonStun}/HitReaction/AM_combat_stand_hit_reaction_front",
+        $"{JasonStun}/HitReaction/AM_combat_stand_hit_reaction_back",
+        $"{JasonAnim}/Interaction/Beartrap/AM_Jason_BearTrap_LF",
         JasonKill,
     ];
 }
