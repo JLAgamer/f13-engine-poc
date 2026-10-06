@@ -87,9 +87,18 @@ a fixed fear level for testing. Health is the game's (wounded at 50, dead at 0);
 Jason (Part 2) starts at the layout's killer start and hunts you: he walks or runs (his own speeds), opens doors in
 his way and breaks down locked or barricaded ones (three pickaxe hits), swings his pickaxe (20 damage, one swing
 per 1.3 s, hitting during the swing's attack window) and grabs you; a grab ends in the pickaxe's Throat Hack kill.
-He's a computer player for now (he always knows where you are; you can't struggle free yet). `--no-jason` leaves him
-out, `--jason-delay s` gives you a head start, and `--bot-jason` stands still and waits to be killed (screenshots of
-the swing, grab and kill go to the temp folder). The counselor bots below leave him out.
+He's a computer player that only knows what he perceives: what he sees (100 m, the counselor's visibility distance),
+the sound pings your noise puts on his screen (the game's formula: sprinting is heard far off, walking at average
+Stealth isn't, standing still is silent) and Sense (unlocked 46 s in; it reaches further with your fear and late in
+the match, and finds hiders only once he's enraged). Out of sight, he goes where he last saw, heard or sensed you and
+searches the hiding spots around there. He finds his way on a navmesh built at load time from the map's collision
+with the game's own settings, like the game's runtime navmesh (`--nav-debug` draws it around you).
+`--no-jason` leaves him out, `--jason-delay s` gives you a head start, and `--bot-jason` waits to be killed
+(screenshots of the swing, grab and kill go to the temp folder). The counselor bots below leave him out.
+Hiding: E at a wardrobe, outhouse, bed or tent hides you (the game's enter, idle and exit animations; the view is
+the spot's hiding camera, turned with the mouse), E again leaves. If Jason watched you get in, or lost you nearby, he
+searches it: an empty spot breaks, an occupied one ends in its hiding spot kill. `--bot-hide` hides out of his sight
+and comes out after 60 s; `--bot-hide-seen` hides where he sees and passes when he finds her.
 `--fly` gives a free camera instead. Add `--grass` for grass and flowers.
 
 Items, cabinets and cars spawn as in the game (`--seed n` repeats a match; the log lists where the cars and parts

@@ -72,6 +72,7 @@ const GRAB_ODDS: f32 = 0.5;
 /// Paths: re-planned this often (s), with this many cells explored at most.
 const REPLAN_SECONDS: f32 = 0.5;
 const PATH_BUDGET: usize = 4000;
+const NAVMESH_BUDGET: usize = 20000;
 /// A closed door this close (m) in the direction Jason walks is opened (or broken).
 const DOOR_REACH_M: f32 = 1.4;
 /// Within this range (m) of a goal he can't get closer to for this long (s), he counts as there.
@@ -198,6 +199,8 @@ pub struct Jason {
     /// The hiding spot he's going to search, the ones he searched, the last clue he followed up (its time), and the
     /// place he's wandering to (with when he picked it).
     target_spot: Option<Entity>,
+    /// The side of the target spot he's going to (picked once, nearest to him then).
+    target_side: Option<usize>,
     searched: Vec<Entity>,
     clue_done: f32,
     wander: Option<(Vec3, f32)>,
@@ -334,6 +337,7 @@ fn spawn_jason(
                 unstick: None,
                 stun_immune: 0.0,
                 target_spot: None,
+                target_side: None,
                 searched: Vec::new(),
                 clue_done: f32::MIN,
                 wander: None,
@@ -385,8 +389,9 @@ fn turn_toward(xf: &mut Transform, dir: Vec2, rate_deg: f32, dt: f32) {
     xf.rotation = Quat::from_rotation_y(current + delta.clamp(-max, max));
 }
 
-/// Where Jason wants to go next (unit vector, XZ) on his way to `to`.
-fn steer(j: &mut Jason, nav: &mut NavGrid, world: &(impl f13_core::collision::TriSource + ?Sized), from: Vec3, to: Vec3, dt: f32) -> Vec2 {
+/// Where Jason wants to go next (unit vector, XZ) on his way to `to`: along the navmesh (navigation.rs) once it's
+/// built, else the collision grid.
+fn steer(j: &mut Jason, nav: &mut NavGrid, navmesh: Option<&f13_core::navmesh::NavMesh>, world: &(impl f13_core::collision::TriSource + ?Sized), from: Vec3, to: Vec3, dt: f32) -> Vec2 {
     if let Some((dir, left)) = &mut j.unstick {
         *left -= dt;
         let d = *dir;
@@ -398,7 +403,10 @@ fn steer(j: &mut Jason, nav: &mut NavGrid, world: &(impl f13_core::collision::Tr
     j.replan -= dt;
     if j.replan <= 0.0 || j.path.is_empty() {
         j.replan = REPLAN_SECONDS;
-        j.path = nav.find_path(world, from, to, PATH_BUDGET).0;
+        j.path = match navmesh {
+            Some(m) => m.find_path(from, to, NAVMESH_BUDGET).unwrap_or_default(),
+            None => nav.find_path(world, from, to, PATH_BUDGET).0,
+        };
     }
     while j.path.first().is_some_and(|p| Vec2::new(p.x - from.x, p.z - from.z).length() < 0.35) {
         j.path.remove(0);
@@ -495,12 +503,25 @@ pub(crate) fn update_jason(
     mut barricades: Query<&mut crate::windows::Barricade>,
     (mut spots, cabinets): (Query<(Entity, &mut crate::hiding::HidingSpot, &GlobalTransform)>, Query<&GlobalTransform, With<crate::props::Cabinet>>),
     mut rigs: Query<(&mut Rig, &ChildOf, &Transform), (Without<Jason>, Without<Player>)>,
-    globals: Query<&GlobalTransform>,
+    (globals, navmesh, leaves, parents): (
+        Query<&GlobalTransform>,
+        Option<Res<crate::navigation::Navmesh>>,
+        Query<(Entity, &ChildOf), With<crate::navigation::NotOnNavmesh>>,
+        Query<&ChildOf>,
+    ),
 ) {
+    let navmesh = navmesh.as_deref().map(|n| &*n.0);
     let (Some(t), Some(mut nav), Some(killer)) = (tuning, nav, killer) else { return };
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
-    let world = collision.with(&dynamic);
+    // The leaves of open (or broken) doors don't stop him: the navmesh leaves doorways open, as UE's does.
+    let open_leaves: Vec<Entity> = leaves
+        .iter()
+        .filter(|(_, pivot)| parents.get(pivot.parent()).ok().and_then(|root| doors.get(root.parent()).ok()).is_some_and(|(_, d, _)| d.open || d.broken))
+        .map(|(e, _)| e)
+        .collect();
+    let (grid, lists) = collision.without(&dynamic, |e| open_leaves.contains(&e));
+    let world = (grid, lists.as_slice());
     let Ok((pe, mut p, mut pxf, driving, mut hiding)) = players.single_mut() else { return };
     for (je, mut j, mut xf, hit, know) in &mut jasons {
         j.stun_immune = (j.stun_immune - dt).max(0.0);
@@ -554,13 +575,16 @@ pub(crate) fn update_jason(
                 let mut goal = to;
                 if !sees {
                     if let Some(s) = know.and_then(|k| k.hiding_spot).filter(|s| !j.searched.contains(s)) {
+                        if j.target_spot != Some(s) {
+                            j.target_side = None;
+                        }
                         j.target_spot = Some(s);
                     }
                     let clue = know.and_then(|k| k.last_known).filter(|c| c.1 > j.clue_done);
                     if let Some(s) = j.target_spot {
                         match spots.get_mut(s) {
                             Ok((_, mut spot, g)) if !spot.destroyed || spot.occupant.is_some() => {
-                                let side = spot.nearest_side(g, xf.translation);
+                                let side = *j.target_side.get_or_insert_with(|| spot.nearest_side(g, xf.translation));
                                 let at = crate::hiding::HidingSpot::world(g, &spot.sides[side].search);
                                 goal = at.translation;
                                 // Close to the special move's spot: it puts him on it (the game moves him there too).
@@ -610,6 +634,7 @@ pub(crate) fn update_jason(
                             j.stall = 0.0;
                             // Nothing here: the hiding spots around it, nearest first.
                             j.clue_done = when;
+                            j.target_side = None;
                             j.target_spot = spots
                                 .iter()
                                 .filter(|(e, s, g)| !s.destroyed && !j.searched.contains(e) && g.translation().distance(at) < SEARCH_RADIUS_M)
@@ -649,7 +674,7 @@ pub(crate) fn update_jason(
                     j.next_log = now + 5.0;
                     let what = if sees { "her" } else if j.target_spot.is_some() { "a hiding spot" } else if j.wander.is_some() && goal == j.wander.unwrap().0 { "wandering" } else { "a clue" };
                     let door = doors.iter().map(|(_, d, g)| (g.translation().distance(xf.translation), d.open, d.locked, g.translation())).min_by(|a, b| a.0.total_cmp(&b.0));
-                    info!("Jason: going for {what}, {gdist:.1} m to go (at {:.1},{:.1},{:.1} -> {:.1},{:.1},{:.1}; path {:?}); nearest door {door:?}", xf.translation.x, xf.translation.y, xf.translation.z, goal.x, goal.y, goal.z, j.path);
+                    debug!("Jason: going for {what}, {gdist:.1} m to go (at {:.1},{:.1},{:.1} -> {:.1},{:.1},{:.1}; path {:?}); nearest door {door:?}", xf.translation.x, xf.translation.y, xf.translation.z, goal.x, goal.y, goal.z, j.path);
                 }
                 if sees && !driving && j.cooldown <= 0.0 {
                     // Going for a grab, he swings instead when she's inside the grab's minimum distance (else he'd
@@ -670,7 +695,7 @@ pub(crate) fn update_jason(
                     }
                 }
                 // Close in: straight at the goal when near, else along a path.
-                let mut wish = if gdist < 1.5 { gflat.normalize_or_zero() } else { steer(&mut j, &mut nav.0, &world, xf.translation, goal, dt) };
+                let mut wish = if gdist < 1.5 { gflat.normalize_or_zero() } else { steer(&mut j, &mut nav.0, navmesh, &world, xf.translation, goal, dt) };
                 if sees && dist < t.attack_range_m * 0.7 {
                     wish = Vec2::ZERO; // close enough for anything; don't walk into her
                 }
@@ -700,6 +725,7 @@ pub(crate) fn update_jason(
                 // Up close, square up to her (he only turns toward where he walks otherwise).
                 let face = (sees && dist < t.grab_max_m * 1.5).then_some(flat);
                 walk(&mut j, &mut xf, wish, speed, face, dt, &t, &world);
+                trace!("Jason: at {:.2} wish {wish:.2} vel {:.0} grounded {} vy {:.2} path0 {:?}", xf.translation, j.velocity, j.grounded, j.vel_y, j.path.first());
                 // Not getting anywhere: try another way for a moment.
                 j.progress.1 += dt;
                 if j.progress.1 >= 1.0 {
@@ -711,6 +737,14 @@ pub(crate) fn update_jason(
                     }
                     j.last_gdist = gdist;
                     if moved < 0.2 && wish != Vec2::ZERO && gdist > 1.5 {
+                        // What's in the way (diagnostic).
+                        let probe = xf.translation + Vec3::new(wish.x, 0.0, wish.y) * 0.5;
+                        let mut hits = Vec::new();
+                        f13_core::collision::TriSource::for_each_in(&world, probe - Vec3::new(0.3, 0.0, 0.3), probe + Vec3::new(0.3, 2.0, 0.3), &mut |t| {
+                            hits.push((t.min(), t.max(), t.n));
+                        });
+                        hits.sort_by(|a, b| b.1.y.total_cmp(&a.1.y));
+                        debug!("Jason: stuck at {:.2} heading {wish:.2}; {} triangles ahead, highest {:?}; navmesh here {:?}", xf.translation, hits.len(), hits.first(), navmesh.and_then(|m| m.nearest(xf.translation, 0.5)).map(|n| n.1));
                         let a = rng.0.frand() * std::f32::consts::TAU;
                         j.unstick = Some((Vec2::new(a.cos(), a.sin()), 0.6));
                         j.path.clear();

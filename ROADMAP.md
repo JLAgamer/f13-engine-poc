@@ -38,7 +38,8 @@ Mechanics: counselor side
   placeholder for the special-move montages)
 - [x] Barricades (replace the lock, only on a closed door) and windows: open, close, vault, dive (breaks the glass,
   DiveDamage); windows.rs. Vault/dive are instant moves for now; barricade mesh placement unverified
-- [ ] Hiding: closets, beds
+- [x] Hiding: wardrobes, outhouses, beds, tents (hiding.rs: enter/idle/exit montages, hiding camera; Jason's search
+  and hiding spot kills). Door swing is a placeholder; outhouse door and tent flaps don't animate
 - [x] Health, wounded, death, blocking damage, first aid (f13-core::health); limp animation later
 - [x] Items against Jason (items.rs): weapon swings (stun chance, wear, breaking), flare gun, shotgun, firecrackers,
   bear traps, the map; stun times and animations from the game (swing reach/angle, throw speed and gun fire timing
@@ -53,9 +54,13 @@ Mechanics: Jason side
   opening doors and breaking locked or barricaded ones (BaseDoorHealth vs weapon damage), pickaxe swings (damage,
   AttackDelay, reach/angle, hits in the AttackTraceNotify window), grabs (min/max distance, angle) and the pickaxe's
   grab kill (Throat Hack, both sides' paired animation)
-- [ ] Jason AI, remaining: perception (he always knows where the counselor is), heavy attacks, the grabbed
-  counselor on his grab socket, kill cameras; playing as Jason
-- [ ] Shift, Morph, Sense, Stalk
+- [x] Jason's perception (senses.rs, f13-core::perception): sight, the game's noise blips, Sense; he investigates
+  clues and searches nearby hiding spots
+- [x] Navmesh built at load time from the collision with the game's Recast settings (f13-core::recast/navmesh); the
+  cooked navmesh is exported (navmesh-<agent>.json) as a reference
+- [ ] Jason AI, remaining: heavy attacks, the grabbed counselor on his grab socket, kill cameras; playing as Jason;
+  holding breath while hiding
+- [ ] Shift, Morph, Stalk (Sense done)
 - [ ] More kills, throwing knives
 - [ ] Breaking walls, generators; traps
 - [ ] Car interactions: stopping and grabbing out of the car

@@ -5,6 +5,7 @@
 //!       [--pose <animation>@<seconds>]  (hold the counselor (and Jason) in one exported animation, for screenshots)
 //!       [--no-jason] [--jason-delay s] [--bot-jason]  (Jason hunts the counselor unless left out; counselor bots leave him out)
 //!       [--give Class,Class...] [--bot-fight]  (start with these items (testing); a bot that uses them on Jason)
+//!       [--nav-debug]  (draw the navmesh around the counselor)
 //!       [--bot-hide] [--bot-hide-seen]  (hide out of Jason's sight and come out; hide where he sees: he kills her)
 //!       [--camera x,y,z,tx,ty,tz]  (--fly start: eye and look-at point; playing: both relative to the counselor's feet)
 //!   Default: play as Vanessa (see player.rs for controls). --fly: free camera instead.   (screenshot: wait for loading, save one frame, exit)
@@ -18,6 +19,7 @@ mod hiding;
 mod items;
 mod jason;
 mod materials;
+mod navigation;
 mod mipmaps;
 mod player;
 mod props;
@@ -51,6 +53,7 @@ struct Args {
     bot_jason: bool,
     bot_fight: bool,
     bot_hide: bool,
+    nav_debug: bool,
     bot_hide_seen: bool,
     give: Vec<String>,
     /// Leave Jason out (the counselor-only bots always do).
@@ -87,6 +90,7 @@ fn parse_args() -> Args {
     let mut bot_jason = false;
     let mut bot_fight = false;
     let mut bot_hide = false;
+    let mut nav_debug = false;
     let mut bot_hide_seen = false;
     let mut give = Vec::new();
     let mut no_jason = false;
@@ -119,6 +123,7 @@ fn parse_args() -> Args {
             "--bot-jason" => bot_jason = true,
             "--bot-fight" => bot_fight = true,
             "--bot-hide" => bot_hide = true,
+            "--nav-debug" => nav_debug = true,
             "--bot-hide-seen" => bot_hide_seen = true,
             "--give" => give = it.next().map(|v| v.split(',').map(String::from).collect()).unwrap_or_default(),
             "--no-jason" => no_jason = true,
@@ -156,7 +161,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_fight, bot_hide, bot_hide_seen, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera }
+    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_fight, bot_hide, bot_hide_seen, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera }
 }
 
 #[derive(Resource)]
@@ -255,7 +260,7 @@ fn main() {
         })
             .insert_resource(senses::KillerAbilityTuning(tuning.jason.clone()))
             .add_plugins(player::PlayerPlugin { spawn, capsule: args.capsule, camera: args.camera, demo: args.demo, fear: args.fear, health: args.health })
-            .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }, collision::CollisionPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin));
+            .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }, collision::CollisionPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin, navigation::NavigationPlugin { debug: args.nav_debug }));
         if args.bot_escape {
             app.add_plugins(bot::BotPlugin(bot::Goal::Escape));
         } else if args.bot_heal {

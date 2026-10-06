@@ -197,6 +197,11 @@ impl TriGrid {
         self.tris.len()
     }
 
+    /// The bounds of every triangle.
+    pub fn bounds(&self) -> (Vec3, Vec3) {
+        self.tris.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), t| (lo.min(t.min()), hi.max(t.max())))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.tris.is_empty()
     }
@@ -230,15 +235,12 @@ impl TriSource for TriGrid {
         };
         let (x0, x1, z0, z1) = (self.key(min.x), self.key(max.x), self.key(min.z), self.key(max.z));
         let single = x0 == x1 && z0 == z1;
-        let mut seen: Vec<u32> = Vec::new();
+        let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
         for x in x0..=x1 {
             for z in z0..=z1 {
                 for &id in self.cells.get(&(x, z)).into_iter().flatten() {
-                    if !single {
-                        if seen.contains(&id) {
-                            continue;
-                        }
-                        seen.push(id);
+                    if !single && !seen.insert(id) {
+                        continue;
                     }
                     let t = &self.tris[id as usize];
                     if overlaps(t) {
@@ -257,7 +259,7 @@ impl TriSource for TriGrid {
 }
 
 /// A list of triangles checked by bounds only (few, moving: doors, cars).
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct TriList {
     pub tris: Vec<Tri>,
     pub min: Vec3,
@@ -279,6 +281,12 @@ impl TriSource for TriList {
         for t in &self.tris {
             f(t);
         }
+    }
+}
+
+impl<T: TriSource + ?Sized> TriSource for &T {
+    fn for_each_in(&self, min: Vec3, max: Vec3, f: &mut dyn FnMut(&Tri)) {
+        (**self).for_each_in(min, max, f);
     }
 }
 

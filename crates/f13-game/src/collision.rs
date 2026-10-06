@@ -20,7 +20,7 @@ impl Plugin for CollisionPlugin {
 /// Static blocking triangles (Bevy space, metres).
 #[derive(Resource)]
 pub struct WorldCollision {
-    pub grid: TriGrid,
+    pub grid: std::sync::Arc<TriGrid>,
     /// Simple collision per mesh glTF path (lowercase), for class components.
     shapes: HashMap<String, MeshShapes>,
 }
@@ -36,6 +36,11 @@ impl WorldCollision {
     pub fn with<'a>(&'a self, dynamic: &'a DynamicColliders) -> (&'a TriGrid, &'a [TriList]) {
         (&self.grid, dynamic.lists.as_slice())
     }
+
+    /// The static grid and the moving colliders except those `skip` names.
+    pub fn without<'a>(&'a self, dynamic: &'a DynamicColliders, skip: impl Fn(Entity) -> bool) -> (&'a TriGrid, Vec<&'a TriList>) {
+        (&self.grid, dynamic.iter().filter(|(e, _)| !skip(*e)).map(|(_, l)| l).collect())
+    }
 }
 
 /// Blocking triangles in the entity's own space; active while the entity is visible.
@@ -47,6 +52,13 @@ pub struct Collider(pub std::sync::Arc<Vec<Tri>>);
 pub struct DynamicColliders {
     lists: Vec<TriList>,
     entities: Vec<Entity>,
+}
+
+impl DynamicColliders {
+    /// Each active collider's entity and world-space triangles.
+    pub fn iter(&self) -> impl Iterator<Item = (Entity, &TriList)> {
+        self.entities.iter().copied().zip(self.lists.iter())
+    }
 }
 
 fn transform_tris(tris: &[Tri], m: &bevy::math::Affine3A) -> Vec<Tri> {
@@ -156,7 +168,7 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
         grid.len(),
         started.elapsed().as_secs_f32()
     );
-    commands.insert_resource(WorldCollision { grid, shapes });
+    commands.insert_resource(WorldCollision { grid: std::sync::Arc::new(grid), shapes });
 }
 
 /// Rebuilds the world-space triangles of moved, shown or hidden colliders.

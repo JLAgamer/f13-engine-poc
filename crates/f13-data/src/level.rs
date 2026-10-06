@@ -57,6 +57,9 @@ pub struct ActorInfo {
     /// BlockingVolumes: convex hulls as world-space point sets (Unreal cm, flat x, y, z).
     #[serde(default, deserialize_with = "null_as_default")]
     pub hulls: Vec<Vec<f32>>,
+    /// NavMeshBoundsVolumes: the box their brush covers (Unreal cm: min x, y, z, max x, y, z).
+    #[serde(default)]
+    pub bounds: Option<[f32; 6]>,
 }
 
 /// A component of a placed actor (`world` set) or of a class (`local`: actor space, relative to the root).

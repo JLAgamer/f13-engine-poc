@@ -336,8 +336,9 @@ fn spawn_props(
             }
             match on_pivot {
                 Some((p, pt)) => {
+                    // A door leaf: doorways stay open on the navmesh (Jason opens or breaks the door on his way).
                     let rel = Transform::from_matrix(pt.to_matrix().inverse() * local(c).to_matrix());
-                    commands.spawn((rel, Visibility::default(), collider, ChildOf(p)));
+                    commands.spawn((rel, Visibility::default(), collider, crate::navigation::NotOnNavmesh, ChildOf(p)));
                 }
                 None => {
                     commands.spawn((local(c), Visibility::default(), collider, ChildOf(root)));

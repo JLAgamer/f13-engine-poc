@@ -160,6 +160,17 @@ void ExportLevel(string mapPath)
                         .ToList();
                 }
             }
+            if (actor.ExportType == "NavMeshBoundsVolume")
+            {
+                var bs = root?.GetOrDefault<FPackageIndex?>("BrushBodySetup")?.Load() as CUE4Parse.UE4.Objects.PhysicsEngine.UBodySetup;
+                if (root != null && bs?.AggGeom != null)
+                {
+                    var w = root.GetAbsoluteTransform();
+                    var pts = bs.AggGeom.ConvexElems.SelectMany(c => c.VertexData.Select(v => w.TransformPosition(c.Transform.TransformPosition(v)))).ToList();
+                    if (pts.Count > 0)
+                        info.Bounds = [pts.Min(p => p.X), pts.Min(p => p.Y), pts.Min(p => p.Z), pts.Max(p => p.X), pts.Max(p => p.Y), pts.Max(p => p.Z)];
+                }
+            }
             if (actor is ALandscapeProxy proxy)
             {
                 var lx = new LandscapeMeshExporter(proxy);
@@ -281,6 +292,19 @@ switch (rest[0])
         foreach (var f in provider.Files.Keys.Where(k => rest.Skip(1).All(q => k.Contains(q, StringComparison.OrdinalIgnoreCase))).Order())
             Console.WriteLine(f);
         return 0;
+    case "navmesh": // the level's cooked navmeshes (navmesh-<agent>.json)
+        NavMeshExporter.Write(provider, outDir, Mvp.Map);
+        return 0;
+    case "rawexport": // rawexport <package> <export name> <out file>: an export's serialized bytes (reverse engineering)
+    {
+        var pkg = (CUE4Parse.UE4.Assets.Package)provider.LoadPackage(ToFile(rest[1]));
+        var files = provider.SavePackage(ToFile(rest[1]));
+        var bytes = files.OrderBy(f => f.Key.EndsWith(".uexp")).SelectMany(f => f.Value).ToArray();
+        var e = pkg.ExportMap.First(x => x.ObjectName.Text == rest[2]);
+        File.WriteAllBytes(rest[3], bytes.AsSpan((int)e.SerialOffset, (int)e.SerialSize).ToArray());
+        Console.WriteLine($"{rest[2]}: {e.SerialSize} bytes at {e.SerialOffset}; names {pkg.NameMap.Length}, None = {Array.FindIndex(pkg.NameMap, n => n.Name == "None")}");
+        return 0;
+    }
     case "assets":
         foreach (var a in rest.Skip(1)) ExportAsset(a);
         break;
@@ -335,6 +359,7 @@ switch (rest[0])
         ExportLevel(Mvp.Map);
         foreach (var l in Mvp.Layouts) ExportLevel(l);
         WriteClasses();
+        NavMeshExporter.Write(provider, outDir, Mvp.Map);
         AnimExporter.Write(provider, outDir, Mvp.Montages);
         new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims, Mvp.KeepRoot);
         new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, Mvp.KillerAnims, Mvp.KeepRoot);
@@ -728,6 +753,8 @@ class ActorInfo
     public List<Newtonsoft.Json.Linq.JObject>? Components;
     /// BlockingVolumes: their convex hulls as world-space point sets (cm).
     public List<float[]>? Hulls;
+    /// NavMeshBoundsVolumes: the world-space box their brush covers (cm: min x, y, z, max x, y, z).
+    public float[]? Bounds;
 }
 class LandscapeInfo { public string Level = "", Actor = "", File = ""; }
 class LevelLayout
