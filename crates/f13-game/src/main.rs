@@ -2,6 +2,7 @@
 //!
 //!   cargo run -p f13-game --release -- --export <dir made by tools/f13-export> [--layout 1-4] [--seed n] [--near-car] [--bot-escape] [--bot-heal] [--bot-dodge] [--bot-door] [--grass]
 //!       [--fly] [--model] [--demo] [--fear 0-100] [--health 1-100] [--speed x] [--tuning file] [--aerial] [--no-foliage] [--screenshot out.png]
+//!       [--camera x,y,z,tx,ty,tz]  (--fly start: eye and look-at point)
 //!   Default: play as Vanessa (see player.rs for controls). --fly: free camera instead.   (screenshot: wait for loading, save one frame, exit)
 
 mod bot;
@@ -48,6 +49,8 @@ struct Args {
     tuning: Option<PathBuf>,
     foliage: bool,
     screenshot: Option<PathBuf>,
+    /// --fly start: eye position and a point to look at (Bevy space, metres).
+    camera: Option<(Vec3, Vec3)>,
 }
 
 fn parse_args() -> Args {
@@ -70,6 +73,7 @@ fn parse_args() -> Args {
     let mut tuning = None;
     let mut foliage = true;
     let mut screenshot = None;
+    let mut camera = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -92,6 +96,12 @@ fn parse_args() -> Args {
             "--tuning" => tuning = it.next().map(PathBuf::from),
             "--no-foliage" => foliage = false,
             "--screenshot" => screenshot = it.next().map(PathBuf::from),
+            "--camera" => {
+                let v: Vec<f32> = it.next().unwrap_or_default().split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                if v.len() == 6 {
+                    camera = Some((Vec3::new(v[0], v[1], v[2]), Vec3::new(v[3], v[4], v[5])));
+                }
+            }
             other => {
                 eprintln!("unknown argument {other}");
                 std::process::exit(2);
@@ -102,7 +112,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, grass, aerial, fly, model, demo, fear, speed, health, tuning, foliage, screenshot }
+    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, grass, aerial, fly, model, demo, fear, speed, health, tuning, foliage, screenshot, camera }
 }
 
 #[derive(Resource)]
@@ -112,6 +122,7 @@ pub(crate) struct Level {
     foliage: bool,
     aerial: bool,
     fly: bool,
+    camera: Option<(Vec3, Vec3)>,
     scenes: Vec<UntypedHandle>,
 }
 
@@ -218,7 +229,7 @@ fn main() {
                 .set(bevy::log::LogPlugin { filter: "wgpu=error,naga=warn,bevy_gltf::loader=error".into(), ..default() }),
         )
         .add_plugins((FreeCameraPlugin, bevy::diagnostic::FrameTimeDiagnosticsPlugin::default()))
-        .insert_resource(Level { layouts, grass: args.grass, foliage: args.foliage, aerial: args.aerial, fly: args.fly || args.aerial, scenes: vec![] })
+        .insert_resource(Level { layouts, grass: args.grass, foliage: args.foliage, aerial: args.aerial, fly: args.fly || args.aerial, camera: args.camera, scenes: vec![] })
         .add_plugins((materials::MaterialsPlugin { export: args.export.clone() }, mipmaps::MipmapsPlugin))
         .insert_resource(ExportRoot(args.export.clone()))
         .add_plugins(props::PropsPlugin { seed, near_car: args.near_car && !(args.fly || args.aerial) })
@@ -295,7 +306,9 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
     }
     // Start the camera at the first counselor spawn point.
     let start = counselor_start(&level.layouts);
-    let camera = if level.aerial {
+    let camera = if let Some((eye, target)) = level.camera {
+        Transform::from_translation(eye).looking_at(target, Vec3::Y)
+    } else if level.aerial {
         Transform::from_translation(start + Vec3::new(-120.0, 120.0, -120.0)).looking_at(start, Vec3::Y)
     } else {
         Transform::from_translation(start + Vec3::Y * 2.0).looking_to(Vec3::X, Vec3::Y)

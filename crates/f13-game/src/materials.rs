@@ -1,6 +1,7 @@
 //! Materials from the exporter's `materials.json`. Most become a StandardMaterial (diffuse + normal); two masters get
 //! shaders ported from the game's compiled ones (see F13-decomp MODLOG, "Materials"):
-//! - `Master_Blend_01` (cabin walls, roofs, floors...): two texture sets blended by painted vertex alpha
+//! - `Master_Blend_01` (cabin walls, roofs, floors...), `Master_Tint_Blend_01` and the curtains: texture sets blended
+//!   by painted vertex alpha
 //!   ([`BlendMaterial`], shaders/blend.wgsl);
 //! - landscape materials (layers in `materials.json`): height-blended layers from the painted weight maps
 //!   ([`TerrainMaterial`], shaders/terrain.wgsl);
@@ -21,8 +22,6 @@ pub(crate) type BlendMaterial = ExtendedMaterial<StandardMaterial, BlendExt>;
 pub(crate) type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainExt>;
 pub(crate) type WaterMaterial = ExtendedMaterial<StandardMaterial, WaterExt>;
 
-/// Masters drawn with the blend shader (the POM variant adds parallax, not ported: drawn flat).
-const BLEND_MASTERS: [&str; 2] = ["Master_Blend_01", "Master_Blend_01_POM"];
 const TERRAIN_LAYERS: usize = 6;
 const WATER_MASTER: &str = "M_Lake_Ripples";
 
@@ -193,6 +192,12 @@ struct BlendParams {
     roughness: Vec4,
     detail_strength_a: Vec4,
     detail_strength_b: Vec4,
+    tint_a: Vec4,
+    tint_b: Vec4,
+    /// Desaturation A, B, Specular A, B (tint and curtain modes).
+    tint: Vec4,
+    /// Curtains: the colour where vertex alpha is 0.
+    dirt: Vec4,
 }
 
 impl MaterialExtension for BlendExt {
@@ -433,8 +438,9 @@ fn apply_materials(
                     Built::Hidden
                 } else if info.master.starts_with(WATER_MASTER) {
                     Built::Water(waters.add(water_material(info, &loader, &fallback)))
-                } else if BLEND_MASTERS.contains(&info.master.as_str()) {
-                    Built::Blend(blends.add(blend_material(info, &loader, &fallback)))
+                } else if let Some(kind) = blend_kind(&info.master) {
+                    // (The POM variant's parallax is not ported: drawn flat.)
+                    Built::Blend(blends.add(blend_material(info, kind, &loader, &fallback)))
                 } else {
                     Built::Standard(standard.add(standard_material(&index.root, info, &loader)))
                 };
@@ -507,10 +513,33 @@ fn glass_material(info: &MaterialInfo) -> StandardMaterial {
     }
 }
 
-fn blend_material(info: &MaterialInfo, loader: &Loader, fb: &Fallback) -> BlendMaterial {
-    let tex = |name: &str, kind: Tex, or: &Handle<Image>| {
-        info.textures.get(name).and_then(|p| loader.load(p, kind)).unwrap_or_else(|| or.clone())
+/// Which of the blend family a master is (shaders/blend.wgsl `mode`).
+#[derive(Clone, Copy, PartialEq)]
+enum BlendKind {
+    /// Master_Blend_01(_POM): blend by vertex alpha, blend map and B's height.
+    Blend = 0,
+    /// Master_Tint_Blend_01: no height term; each set tinted by its alpha and desaturated; specular parameters.
+    Tint = 1,
+    /// Master_Tint_Blend_Curtains_01: one set (B), tinted, faded from DirtColor by vertex alpha.
+    Curtains = 2,
+}
+
+fn blend_kind(master: &str) -> Option<BlendKind> {
+    match master {
+        "Master_Blend_01" | "Master_Blend_01_POM" => Some(BlendKind::Blend),
+        "Master_Tint_Blend_01" => Some(BlendKind::Tint),
+        "Master_Tint_Blend_Curtains_01" => Some(BlendKind::Curtains),
+        _ => None,
+    }
+}
+
+fn blend_material(info: &MaterialInfo, kind: BlendKind, loader: &Loader, fb: &Fallback) -> BlendMaterial {
+    let tex = |names: &[&str], t: Tex, or: &Handle<Image>| {
+        names.iter().find_map(|n| info.textures.get(*n).and_then(|p| loader.load(p, t))).unwrap_or_else(|| or.clone())
     };
+    let curtains = kind == BlendKind::Curtains;
+    let s = |name: &str, curtain_name: &str, default: f32| info.scalar(if curtains { curtain_name } else { name }, default);
+    let spec_b = s("Specular B", "Specular", 0.5);
     ExtendedMaterial {
         base: StandardMaterial { double_sided: info.two_sided, cull_mode: (!info.two_sided).then_some(bevy::render::render_resource::Face::Back), ..default() },
         extension: BlendExt {
@@ -518,28 +547,32 @@ fn blend_material(info: &MaterialInfo, loader: &Loader, fb: &Fallback) -> BlendM
                 tiling: Vec4::new(
                     info.scalar("TilingRate A", 1.0),
                     info.scalar("Detail Tiling A", 1.0),
-                    info.scalar("TilingRate B", 1.0),
+                    s("TilingRate B", "TilingRate", 1.0),
                     info.scalar("Detail Tiling B", 1.0),
                 ),
-                blend: Vec4::new(info.scalar("Blend TilingRate", 1.0), info.scalar("Blend Sharpness", 0.0), 0.0, 0.0),
+                blend: Vec4::new(info.scalar("Blend TilingRate", 1.0), info.scalar("Blend Sharpness", 0.0), kind as u32 as f32, 0.0),
                 roughness: Vec4::new(
                     info.scalar("Roughness Min A", 0.0),
                     info.scalar("Roughness Max A", 1.0),
-                    info.scalar("Roughness Min B", 0.0),
-                    info.scalar("Roughness Max B", 1.0),
+                    s("Roughness Min B", "Roughness Min", 0.0),
+                    s("Roughness Max B", "Roughness Max", 1.0),
                 ),
                 detail_strength_a: info.vector("Detail Strength A"),
-                detail_strength_b: info.vector("Detail Strength B"),
+                detail_strength_b: if curtains { info.vector("Detail Strength") } else { info.vector("Detail Strength B") },
+                tint_a: info.vector("Tint A"),
+                tint_b: info.vector("Tint b"),
+                tint: Vec4::new(info.scalar("Desaturation A", 0.0), info.scalar("Desaturation B", 0.0), info.scalar("Specular A", 0.5), spec_b),
+                dirt: info.vector("DirtColor"),
             },
-            color_a: tex("ColorMap A", Tex::Color, &fb.white),
-            color_b: tex("ColorMap B", Tex::Color, &fb.white),
-            normal_a: tex("Normal Map A", Tex::Data, &fb.normal),
-            normal_b: tex("Normal Map B", Tex::Data, &fb.normal),
-            detail_a: tex("Detail Normal A", Tex::Data, &fb.normal),
-            detail_b: tex("Detail Normal B", Tex::Data, &fb.normal),
-            rmas_a: tex("RMAS Map A", Tex::Data, &fb.rmas),
-            rmas_b: tex("RMAS Map B", Tex::Data, &fb.rmas),
-            blend_map: tex("Blend Map", Tex::Data, &fb.black),
+            color_a: tex(&["ColorMap A"], Tex::Color, &fb.white),
+            color_b: tex(&["ColorMap B"], Tex::Color, &fb.white),
+            normal_a: tex(&["Normal Map A"], Tex::Data, &fb.normal),
+            normal_b: tex(&["Normal Map B", "Normal Map"], Tex::Data, &fb.normal),
+            detail_a: tex(&["Detail Normal A"], Tex::Data, &fb.normal),
+            detail_b: tex(&["Detail Normal B", "Detail Normal"], Tex::Data, &fb.normal),
+            rmas_a: tex(&["RMAS Map A"], Tex::Data, &fb.rmas),
+            rmas_b: tex(&["RMAS Map B", "RSSSA Map"], Tex::Data, &fb.rmas),
+            blend_map: tex(&["Blend Map"], Tex::Data, &fb.black),
         },
     }
 }
