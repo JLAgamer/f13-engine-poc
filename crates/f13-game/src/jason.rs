@@ -41,6 +41,7 @@ use std::collections::HashMap;
 
 use crate::character::{KillerCharacter, Model, PlayAction, Rig};
 use crate::player::{Player, PlayerTuning};
+use crate::match_flow::Score;
 
 /// Unreal units (cm) per metre.
 const CM: f32 = 100.0;
@@ -292,6 +293,22 @@ impl Stun {
             Stun::Firecracker => 4.0,
             Stun::PocketKnife | Stun::GrabBreak => 6.0,
             Stun::BearTrap => 10.0,
+        }
+    }
+
+    /// The score event for stunning him this way:
+    /// - the item's own: Shotgun's StunScoreEventClass, BP_Flare_Projectile's FlareStunScoreEventClass,
+    ///   BP_Firecracker_Projectile's StunJasonScoreEventClass, BearTrap's TrapScoreEvent;
+    /// - else the counselor's StunJasonScoreEvent;
+    /// - breaking his grab is her EscapeJasonGrabScoreEvent.
+    pub fn score_event(self) -> &'static str {
+        match self {
+            Stun::Weapon { .. } => "StunJason",
+            Stun::Shotgun => "StunJasonShotgun",
+            Stun::Flare => "StunJasonFlare",
+            Stun::Firecracker => "FirecrackerJasonStun",
+            Stun::BearTrap => "Trapper",
+            Stun::PocketKnife | Stun::GrabBreak => "EscapeJasonGrab",
         }
     }
 
@@ -582,6 +599,10 @@ pub(crate) fn update_jason(
         // A counselor's item hit him.
         if let Some(h) = hit {
             commands.entity(je).remove::<HitJason>();
+            // Her weapon's damage (the item stuns below score their own).
+            if matches!(h.stun, None | Some(Stun::Weapon { .. })) {
+                commands.trigger(Score("DamageJason"));
+            }
             let can_stun = j.stun_immune <= 0.0
                 && matches!(
                     j.state,
@@ -598,6 +619,7 @@ pub(crate) fn update_jason(
             match h.stun {
                 Some(stun) if can_stun => {
                     info!("Jason: stunned ({stun:?}, {:.0}s)", stun.seconds());
+                    commands.trigger(Score(stun.score_event()));
                     if matches!(j.state, JasonState::Holding { .. }) {
                         release(&mut commands, pe, GRAB_BREAK, counselor_model.as_deref());
                     }
@@ -1036,6 +1058,7 @@ pub(crate) fn update_jason(
                 }
                 if struggle_progress(&p.counselor.stats, at, struggle.wiggles) >= 1.0 {
                     info!("Vanessa: struggled free after {at:.1}s ({} wiggles)", struggle.wiggles);
+                    commands.trigger(Score(Stun::GrabBreak.score_event()));
                     release(&mut commands, pe, GRAB_BREAK, counselor_model.as_deref());
                     j.state = JasonState::Stunned { t: 0.0, stun: Stun::GrabBreak };
                     commands.entity(je).insert(PlayAction(Stun::GrabBreak.anims().0.into()));

@@ -10,6 +10,7 @@
 //!       [--bot-locked-in] [--bot-barred-in] [--bot-raged-in]  (behind a locked / barricaded door: he breaks it down,
 //!       or raged bursts through it, and kills her)
 //!       [--camera x,y,z,tx,ty,tz]  (--fly start: eye and look-at point; playing: both relative to the counselor's feet)
+//!       [--round-time s]  (the match's length instead of the game's RoundTime)
 //!   Default: play as Vanessa (see player.rs for controls). --fly: free camera instead.   (screenshot: wait for loading, save one frame, exit)
 
 mod bot;
@@ -21,6 +22,7 @@ mod interact;
 mod hiding;
 mod items;
 mod jason;
+mod match_flow;
 mod materials;
 mod navigation;
 mod perf;
@@ -87,6 +89,8 @@ struct Args {
     pose: Option<(String, f32)>,
     /// --fly start: eye position and a point to look at (Bevy space, metres).
     camera: Option<(Vec3, Vec3)>,
+    /// --round-time: the match's length (s) instead of the game's.
+    round_time: Option<i32>,
 }
 
 fn parse_args() -> Args {
@@ -109,6 +113,7 @@ fn parse_args() -> Args {
     let mut give = Vec::new();
     let mut no_jason = false;
     let mut jason_delay = 0.0;
+    let mut round_time = None;
     let mut grass = false;
     let mut aerial = false;
     let mut fly = false;
@@ -158,6 +163,7 @@ fn parse_args() -> Args {
             "--fear" => fear = Some(it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0f32).clamp(0.0, 100.0)),
             "--health" => health = it.next().and_then(|v| v.parse().ok()),
             "--tuning" => tuning = it.next().map(PathBuf::from),
+            "--round-time" => round_time = it.next().and_then(|v| v.parse().ok()).map(|t: i32| t.max(1)),
             "--no-foliage" => foliage = false,
             "--screenshot" => screenshot = it.next().map(PathBuf::from),
             "--pose" => {
@@ -182,7 +188,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera }
+    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time }
 }
 
 #[derive(Resource)]
@@ -276,6 +282,12 @@ fn main() {
             events: tuning.fear_events.clone(),
             jason_near_range: tuning.jason_near_range,
         });
+        let mut rules = tuning.match_rules.clone();
+        if let Some(t) = args.round_time {
+            rules.round_time = t;
+        }
+        app.insert_resource(match_flow::MatchTuning { rules, events: tuning.score_events.clone() });
+        let bot = args.bot_escape || args.bot_heal || args.bot_dodge || args.bot_door || args.bot_jason || args.bot_fight || args.bot_hide || args.bot_hide_seen || args.bot_locked_in.is_some();
         app.insert_resource(player::PlayerTuning {
             counselor: tuning.counselor,
             movement: tuning.counselor_movement,
@@ -288,6 +300,7 @@ fn main() {
             .insert_resource(senses::KillerAbilityTuning(tuning.jason.clone()))
             .add_plugins(player::PlayerPlugin { spawn, capsule: args.capsule, camera: args.camera, demo: args.demo, fear: args.fear.unwrap_or(0.0), health: args.health })
             .add_plugins(fear_events::FearEventsPlugin { locked: args.fear })
+            .add_plugins(match_flow::MatchPlugin { leave: !bot })
             .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }, collision::CollisionPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin, navigation::NavigationPlugin { debug: args.nav_debug }));
         if args.bot_escape {
             app.add_plugins(bot::BotPlugin(bot::Goal::Escape));

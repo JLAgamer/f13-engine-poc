@@ -15,6 +15,7 @@ shipped. They are passed in at runtime, and a loader will read them from the pla
   - `movement`: Unreal 4.18 walking velocity (acceleration, friction, braking)
   - `curve`: float curves matching Unreal 4.18 `FRichCurve` evaluation
   - `spawn`: match-start spawning of vehicles, repair parts and items (the game mode's rules)
+  - `game_mode`: the match's states and one-second timer, when it ends, and the XP its score events award
   - `collision`: the capsule mover over the game's collision (walls, steps, slopes, falling)
   - `nav`: paths for computer-controlled characters over the same collision (grid A*)
 - `f13-data`: loads `tuning.json` into the core types, plus the exporter's level layouts and class descriptions,
@@ -109,6 +110,15 @@ and comes out after 60 s; `--bot-hide-seen` hides where he sees and passes when 
 its health (10 barricaded) and kills her; `--bot-raged-in` does it with him enraged (one burst).
 `--fly` gives a free camera instead. Add `--grass` for grass and flowers.
 
+The match runs as the game's offline mode does. The 20-minute timer (RoundTime) starts once you're in the world
+and shows at the top of the screen. The match ends when you die or escape (after its first 10 s), or when the time
+runs out. The end-of-match outro waits 10 s, then the results list the XP you scored and their total for 20 s,
+then the game closes. The game would go back to the lobby here.
+XP comes from the game's score events, where the game awards them: picking up weapons and car parts, repairs,
+first aid, barricading, firecrackers, traps, hitting and stunning Jason, breaking his grab, escaping, and the match's
+own (time bonus, unscathed, match complete, team escaped). Each one shows on the right as it's scored.
+`--round-time s` shortens the match for testing. The level intro and outro sequences aren't played.
+
 Items, cabinets and cars spawn as in the game (`--seed n` repeats a match; the log lists where the cars and parts
 are). E picks up (preferring what the camera looks at), searches drawers and installs parts, G drops the held
 item, 1-3 use the small item in that pocket. Doors: E opens/closes, hold E from inside a closed door to lock or
@@ -119,7 +129,7 @@ and, when the needle reaches a pip on the dial in the HUD, press its mouse butto
 the repair up, misses roll it back. Escape by car: install the gas
 can and the battery, get in the driver's seat (E), hold E to start with the keys in your pockets (about 5 s), drive (WASD) into
 a car escape zone; F gets out. `--near-car` starts you next to a car. `--bot-escape` plays the whole escape
-automatically (teleporting between goals) and exits when done; `--bot-heal` fetches and uses a first aid spray;
+automatically (teleporting between goals), waits for the match's results and exits; `--bot-heal` fetches and uses a first aid spray;
 `--bot-dodge` dodges in each direction and checks the distance and stamina; `--bot-door` runs 16 checks on a door, a
 barricaded door and a window.
 Against Jason: left mouse swings the weapon in your hands (W + left mouse: the heavy swing; each weapon's stun chance

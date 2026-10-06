@@ -297,6 +297,12 @@ switch (rest[0])
         foreach (var f in provider.Files.Keys.Where(k => rest.Skip(1).All(q => k.Contains(q, StringComparison.OrdinalIgnoreCase))).Order())
             Console.WriteLine(f);
         return 0;
+    case "cat": // cat <file path>: a packed file's bytes to stdout (config .ini files)
+    {
+        using var stdout = Console.OpenStandardOutput();
+        stdout.Write(provider.Files[rest[1]].Read());
+        return 0;
+    }
     case "navmesh": // the level's cooked navmeshes (navmesh-<agent>.json)
         NavMeshExporter.Write(provider, outDir, Mvp.Map);
         return 0;

@@ -73,7 +73,9 @@ Mechanics: Jason side
 - [ ] Car interactions: stopping and grabbing out of the car
 
 Match
-- [ ] Match flow: lobby, spawn, match timer, end (all dead or escaped), results
+- [x] Match flow (f13-core::game_mode, match_flow.rs): the game mode's states and timer, the end (dead or
+  escaped, or time out), outro wait, results with the score events' XP (awarded where the game does), leaving.
+  Not yet: lobby, level intro and outro sequences, police and Tommy Jarvis timers, badges, Jason dying
 - [x] Item and car spawning, as the game mode does it (f13-core::spawn, f13-data::world)
 - [ ] How the game chooses one of the four cabin layouts per match
 

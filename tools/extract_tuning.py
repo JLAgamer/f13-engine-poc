@@ -62,6 +62,9 @@ EXE_CONSTANTS = {
 EXE_INTS = {  # name: (virtual address, instruction bytes without the imm32)
     "max_pip_count": (0x14041A8A4, bytes.fromhex("c78338040000")),
     "min_pip_count": (0x14041A8AE, bytes.fromhex("c7833c040000")),
+    # SCGameMode constructor
+    "post_match_outro_wait_time": (0x14036BD35, bytes.fromhex("c787e4040000")),
+    "post_match_wait_time": (0x14036BD3F, bytes.fromhex("c787e8040000")),
 }
 EXE_FLAGS = {  # name: (virtual address, instruction bytes without the 1-byte immediate)
     "force_stumble_on_stamina_depletion": (0x1403A0D23, bytes.fromhex("c687d0190000")),
@@ -329,6 +332,50 @@ def items_section(conv, consts):
     return {"first_aid": {"health_restored": heal, "use_length": montage_length(conv, obj_path(asset, use))}}
 
 
+def ini_value(path, section, key):
+    """A key's value in one section of an Unreal .ini file, or None."""
+    current = None
+    for line in open(path, encoding="utf-8", errors="replace"):
+        line = line.strip()
+        if line.startswith("[") and line.endswith("]"):
+            current = line[1:-1]
+        elif current == section and line.split("=", 1)[0] == key:
+            return line.split("=", 1)[1]
+    return None
+
+
+def match_section(conv, consts, game):
+    """Match timing (the offline game mode's RoundTime from DefaultGame.ini, the game mode constructor's waits) and
+    every score event's XP."""
+    ini = os.path.join(game, "SummerCamp", "Config", "DefaultGame.ini")
+    round_time = ini_value(ini, "/Script/SummerCamp.SCGameMode_OfflineBots", "RoundTime") \
+        or ini_value(ini, "/Script/SummerCamp.SCGameMode_Hunt", "RoundTime")
+    if round_time is None:
+        sys.exit(f"{ini}: no RoundTime for the offline game mode")
+    events = {}
+    se_dir = os.path.join(conv.content, "Blueprints", "ScoreEvents")
+    for f in sorted(os.listdir(se_dir)):
+        if not f.endswith(".uasset"):
+            continue
+        name = f[:-7]
+        d = props(export_named(conv.load(f"Blueprints/ScoreEvents/{name}"), lambda n: n.startswith("Default__")))
+        val = lambda key, fb: d[(key, 0)]["Value"] if (key, 0) in d else fb
+        text = d.get(("EventDescription", 0), {})
+        events[name] = {
+            "experience": int(val("Experience", 0)),
+            "category": str(val("EventCategory", "EScoreEventCategory::None")).split("::")[-1],
+            "only_once": bool(val("bOnlyScoreOnce", False)),
+            "all_counselors": bool(val("bAllCounselors", False)),
+            "description": text.get("CultureInvariantString") or "",
+        }
+    return {
+        "round_time": int(round_time),
+        "post_match_outro_wait_time": consts["post_match_outro_wait_time"],
+        "post_match_wait_time": consts["post_match_wait_time"],
+        "score_events": events,
+    }
+
+
 def curve_keys(asset):
     e = asset["Exports"][0]
     rc = next(p for p in e["Data"] if p["Name"] == "FloatCurve")
@@ -405,8 +452,10 @@ def main():
         curves.update(counselor_curves)
         items = items_section(conv, consts)
         vehicle = vehicle_section(conv, consts)
+        match = match_section(conv, consts, a.game)
         out = {
-            "format": 7,
+            "format": 8,
+            "match": match,
             "counselor": {"Base_Counselor": counselor, "characters": characters},
             "items": items,
             "vehicle": vehicle,
@@ -422,7 +471,8 @@ def main():
         conv.close()
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     json.dump(out, open(a.out, "w"), indent=1)
-    print(f"wrote {a.out}: {len(fear_events)} fear events, {len(curves)} curves")
+    print(f"wrote {a.out}: {len(fear_events)} fear events, {len(curves)} curves, "
+          f"{len(match['score_events'])} score events")
 
 
 if __name__ == "__main__":

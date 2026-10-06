@@ -11,6 +11,7 @@
 use crate::player::{Player, PlayerCamera, PlayerTuning};
 use crate::doors::Door;
 use crate::windows::{Barricade, Window, WindowAction};
+use crate::match_flow::ClassScore;
 use crate::props::{Cabinet, Drawer, InCabinet, Item, Vehicle};
 use crate::vehicle::Driving;
 use bevy::prelude::*;
@@ -31,6 +32,8 @@ pub struct Inventory {
 
 /// Class of the first aid spray.
 pub const FIRST_AID: &str = "BP_FirstAid_C";
+/// The door barricade's class (its score event).
+const BARRICADE: &str = "Barricade_C";
 
 /// The counselor is using a pocket item (playing its use animation).
 #[derive(Component)]
@@ -233,6 +236,7 @@ fn act(
                 return;
             }
             info!("picked up {}", item.name);
+            commands.trigger(ClassScore::new(&item.class, "PickupScoreEvent"));
             commands.entity(e).insert(Carried).remove::<InCabinet>();
             if let Ok(mut v) = visibility.get_mut(e) {
                 *v = Visibility::Hidden;
@@ -283,6 +287,10 @@ fn act(
             commands.entity(used).despawn();
             vehicle.repairs[i].done = true;
             info!("{}: {} installed", vehicle.class, vehicle.repairs[i].name);
+            commands.trigger(ClassScore::new(&vehicle.class, "PartRepairedScoreEvent"));
+            if vehicle.repairs.iter().all(|r| r.done) {
+                commands.trigger(ClassScore::new(&vehicle.class, "VehicleRepairedScoreEvent"));
+            }
             interaction.hold = None;
             interaction.target = None;
         }
@@ -314,6 +322,9 @@ fn act(
                     // A barricade only moves while the door is shut (OnUsedBarricade).
                     Some(mut b) if !door.open => {
                         b.enabled = !b.enabled;
+                        if b.enabled {
+                            commands.trigger(ClassScore::new(BARRICADE, "BarricadeDoorScoreEvent"));
+                        }
                         if b.enabled { "barricaded" } else { "unbarricaded" }
                     }
                     Some(_) => "open (can't barricade)",
@@ -457,6 +468,7 @@ fn use_item(
         }
         let healed = p.counselor.heal(tuning.first_aid.health_restored, &tuning.counselor);
         info!("used first aid: +{healed:.0} health");
+        commands.trigger(ClassScore::new(FIRST_AID, "UseFirstAidScoreEvent"));
         inv.pockets.retain(|&e| e != u.item);
         commands.entity(u.item).despawn();
         commands.entity(entity).remove::<UsingItem>();

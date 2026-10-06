@@ -22,6 +22,7 @@ use crate::interact::{Carried, Inventory, UsingItem, FIRST_AID};
 use crate::player::{Player, PlayerCamera};
 
 use crate::props::{Cabinet, EscapeZone, InCabinet, Item, Vehicle};
+use crate::match_flow::MatchState;
 use crate::vehicle::{Driving, Escaped};
 use bevy::input::InputSystems;
 use bevy::prelude::*;
@@ -229,7 +230,12 @@ fn run_bot(
         Query<&mut crate::windows::Barricade>,
         Query<(&crate::jason::Jason, &Transform), (Without<Player>, Without<Vehicle>)>,
     ),
-    (escaped, spots, mut knowledge): (Option<Res<Escaped>>, Query<(Entity, &crate::hiding::HidingSpot, &GlobalTransform)>, Query<&mut crate::senses::Knowledge>),
+    (escaped, spots, mut knowledge, game): (
+        Option<Res<Escaped>>,
+        Query<(Entity, &crate::hiding::HidingSpot, &GlobalTransform)>,
+        Query<&mut crate::senses::Knowledge>,
+        Option<Res<crate::match_flow::GameMatch>>,
+    ),
     mut exit: MessageWriter<AppExit>,
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
 ) {
@@ -967,6 +973,20 @@ fn run_bot(
                 info!("bot: screenshot {}", path.display());
                 commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
             }
+            // The escape run goes on to the match's results.
+            let results = game.as_ref().is_none_or(|g| matches!(g.state.state, MatchState::WaitingPostMatch | MatchState::LeavingMap));
+            if bot.goal == Goal::Escape {
+                if !results {
+                    return;
+                }
+                if !bot.jason_shots.contains(&"results") {
+                    bot.jason_shots.push("results");
+                    bot.timer = 0.0;
+                    let path = std::env::temp_dir().join("f13-bot-results.png");
+                    info!("bot: screenshot {}", path.display());
+                    commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+                }
+            }
             if bot.timer > if bot.goal == Goal::Jason { 4.0 } else { 2.0 } {
                 let ok = match bot.goal {
                     Goal::Escape => escaped.is_some(),
@@ -998,7 +1018,35 @@ fn run_bot(
                 if !missing.is_empty() {
                     error!("bot: fear events never pushed: {missing:?}");
                 }
-                exit.write(if ok && missing.is_empty() { AppExit::Success } else { AppExit::error() });
+                // The score events the run must have scored (any one of a group).
+                let scored: &[&[&str]] = match bot.goal {
+                    Goal::Escape => &[
+                        &["PickupVehiclePart"],
+                        &["CarPartRepaired"],
+                        &["CarRepaired"],
+                        &["Escape"],
+                        &["Unscathed"],
+                        &["CounselorTimeBonus"],
+                        &["CompletedMatch"],
+                        &["TeamEscaped"],
+                    ],
+                    Goal::Heal => &[&["UseFirstAid"]],
+                    Goal::Door => &[&["BarricadeDoor"]],
+                    Goal::Fight => &[&["StunJason", "StunJasonShotgun", "StunJasonFlare", "FirecrackerJasonStun", "EscapeJasonGrab", "Trapper"]],
+                    // Her death ends the match.
+                    Goal::Jason | Goal::HideSeen | Goal::LockedIn { .. } => &[&["CompletedMatch"]],
+                    _ => &[],
+                };
+                let mut unscored = Vec::new();
+                if let Some(g) = &game {
+                    let awards: Vec<String> = g.score.awards.iter().map(|a| format!("{} {}", a.event, a.xp)).collect();
+                    info!("bot: scored {} XP: {}", g.score.total(), awards.join(", "));
+                    unscored = scored.iter().filter(|any| !any.iter().any(|e| g.score.has(e))).collect();
+                    if !unscored.is_empty() {
+                        error!("bot: never scored {unscored:?}");
+                    }
+                }
+                exit.write(if ok && missing.is_empty() && unscored.is_empty() { AppExit::Success } else { AppExit::error() });
             }
         }
     }

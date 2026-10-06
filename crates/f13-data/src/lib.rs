@@ -10,6 +10,7 @@ pub mod world;
 use f13_core::counselor::CounselorTuning;
 use f13_core::curve::{Interp, Key, RichCurve};
 use f13_core::fear::FearEventData;
+use f13_core::game_mode::{MatchRules, ScoreEvent};
 use f13_core::health::HealthTuning;
 use f13_core::killer_abilities::KillerTuning;
 use f13_core::movement::MovementSettings;
@@ -29,6 +30,25 @@ struct File {
     counselor: CounselorSection,
     items: ItemsSection,
     vehicle: VehicleJson,
+    #[serde(rename = "match")]
+    match_: MatchSection,
+}
+
+#[derive(Deserialize)]
+struct MatchSection {
+    round_time: i32,
+    post_match_outro_wait_time: i32,
+    post_match_wait_time: i32,
+    score_events: BTreeMap<String, ScoreEventJson>,
+}
+
+#[derive(Deserialize)]
+struct ScoreEventJson {
+    experience: i32,
+    category: String,
+    only_once: bool,
+    all_counselors: bool,
+    description: String,
 }
 
 #[derive(Deserialize)]
@@ -241,6 +261,9 @@ pub struct Tuning {
     pub repair_hold_time: f32,
     /// Playable counselors by name (e.g. "Vanessa") -> stats.
     pub characters: BTreeMap<String, Stats>,
+    pub match_rules: MatchRules,
+    /// Score events by class name without `_C` (e.g. "Escape").
+    pub score_events: BTreeMap<String, ScoreEvent>,
 }
 
 #[derive(Debug)]
@@ -280,7 +303,7 @@ pub fn default_path() -> PathBuf {
 }
 
 /// tuning.json format this build reads; older files must be re-extracted.
-pub const FORMAT: u32 = 7;
+pub const FORMAT: u32 = 8;
 
 pub fn load(path: &Path) -> Result<Tuning, LoadError> {
     parse(&std::fs::read_to_string(path).map_err(LoadError::Io)?)
@@ -441,6 +464,27 @@ pub fn parse(text: &str) -> Result<Tuning, LoadError> {
         },
         first_aid: FirstAid { health_restored: f.items.first_aid.health_restored, use_length: f.items.first_aid.use_length },
         characters,
+        match_rules: MatchRules {
+            round_time: f.match_.round_time,
+            pre_match_wait_time: 0,
+            post_match_outro_wait_time: f.match_.post_match_outro_wait_time,
+            post_match_wait_time: f.match_.post_match_wait_time,
+        },
+        score_events: f
+            .match_
+            .score_events
+            .into_iter()
+            .map(|(name, e)| {
+                let event = ScoreEvent {
+                    experience: e.experience,
+                    category: e.category,
+                    only_once: e.only_once,
+                    all_counselors: e.all_counselors,
+                    description: e.description,
+                };
+                (name, event)
+            })
+            .collect(),
     })
 }
 
@@ -450,7 +494,10 @@ mod tests {
 
     // Synthetic values (not the game's): exercises the schema only.
     const SAMPLE: &str = r#"{
-      "format": 7,
+      "format": 8,
+      "match": {"round_time": 60, "post_match_outro_wait_time": 1, "post_match_wait_time": 2,
+                "score_events": {"Win": {"experience": 5, "category": "Escaped", "only_once": true,
+                                         "all_counselors": false, "description": "Won +<exp>"}}},
       "items": {"first_aid": {"health_restored": 100, "use_length": 2}},
       "vehicle": {"min_restart_time": 5, "max_restart_time": 5, "restart_time_mod": {"base": 1, "modifiers": [0,0,0,0,0,0,0]}},
       "counselor": {"Base_Counselor": {"max_walk_speed": 1, "max_walk_speed_crouched": 1, "max_slow_run_speed": 1,
@@ -498,6 +545,8 @@ mod tests {
         assert_eq!((t.counselor.stamina_fear_curve.as_ref().unwrap())(1.0), 0.0);
         assert!(t.counselor.stumble.fear_frequency.is_none());
         assert_eq!((t.counselor.stumble.fear_chance.as_ref().unwrap())(0.5), 1.0);
+        assert_eq!(t.match_rules.round_time, 60);
+        assert_eq!(t.score_events["Win"].text(5), "Won +5");
     }
 
     /// Loads the real extracted file when present (skipped on machines without one).
@@ -517,5 +566,9 @@ mod tests {
         assert!(t.repair_hold_time > 0.0 && t.minigame.max_pip_count >= t.minigame.min_pip_count);
         assert!(t.counselor.health.max_health > t.counselor.wounded_threshold);
         assert!(t.first_aid.health_restored > 0.0 && t.first_aid.use_length > 0.0);
+        assert!(t.match_rules.round_time > 0 && t.match_rules.post_match_wait_time > 0);
+        for e in ["Escape", "CompletedMatch", "CounselorTimeBonus", "Unscathed", "TeamEscaped"] {
+            assert!(t.score_events[e].experience > 0, "{e}");
+        }
     }
 }

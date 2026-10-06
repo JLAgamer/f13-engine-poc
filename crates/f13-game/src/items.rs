@@ -23,6 +23,7 @@ use crate::interact::{Carried, Inventory};
 use crate::jason::{HitJason, Jason, Stun};
 use crate::player::{Player, PlayerCamera};
 use crate::props::{Item, ItemKind, WeaponStats};
+use crate::match_flow::{ClassScore, Score};
 
 const SWING_REACH_M: f32 = 1.8;
 const SWING_ANGLE_DEG: f32 = 60.0;
@@ -322,6 +323,9 @@ fn tick_action(
             Use::Fire { .. } => a.done = true,
             Use::Throw => {
                 a.done = true;
+                if let Ok(item) = items.get(a.item) {
+                    commands.trigger(ClassScore::new(&item.class, "UseScoreEvent"));
+                }
                 inv.pockets.retain(|&e| e != a.item);
                 commands.entity(a.item).despawn();
                 let (mesh, mat) = (assets.0.add(Cuboid::new(0.06, 0.06, 0.14)), assets.1.add(StandardMaterial { base_color: Color::srgb(0.7, 0.05, 0.05), ..default() }));
@@ -339,6 +343,9 @@ fn tick_action(
                     .remove::<(Carried, ChildOf, InHand, Item)>()
                     .insert((ArmedTrap, Transform::from_translation(Vec3::new(at.x, y, at.z)).with_rotation(xf.rotation), Visibility::Inherited));
                 info!("bear trap armed at ({:.1}, {:.1}, {:.1})", at.x, y, at.z);
+                if let Ok(item) = items.get(a.item) {
+                    commands.trigger(ClassScore::new(&item.class, "PlaceTrapScoreEvent"));
+                }
             }
         }
     }
@@ -410,6 +417,8 @@ fn fly(
                     if segment_hits_capsule(from, next, jxf.translation) {
                         f.hit = true;
                         info!("flare hit Jason");
+                        // BP_Flare_Projectile's FlareScoreEventClass.
+                        commands.trigger(Score("SpotJasonFlare"));
                         commands.entity(je).insert(HitJason { stun: Some(Stun::Flare), from });
                         f.vel *= 0.1;
                     }

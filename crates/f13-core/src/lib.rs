@@ -6,6 +6,7 @@ pub mod counselor;
 pub mod curve;
 pub mod dodge;
 pub mod fear;
+pub mod game_mode;
 pub mod health;
 pub mod killer_abilities;
 pub mod light;
