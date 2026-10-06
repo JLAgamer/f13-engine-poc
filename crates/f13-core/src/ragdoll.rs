@@ -4,17 +4,13 @@
 //!
 //! The game ragdolls dead counselors with PhysX rigid bodies and the physics asset's joint limits. Here each body's
 //! orientation follows its particles (the direction to the particle it points at, rolled by a left/right pair of
-//! particles where it has one), and a joint's swing limits are kept the way PhysX measures them: between the joint's
-//! frame on the child body and its frame on the parent, an elliptical cone (Swing1 toward the frame's Y, Swing2
-//! toward its Z). Out of the cone, the child's aim particle is turned back about the joint. Twist is not simulated.
+//! particles where it has one); a joint's swing limit becomes a distance range between the body and the particle it
+//! bends from (the bend allowed around the pose the ragdoll starts from). Twist is not simulated.
 //!
 //! Space: Y up, metres, seconds.
 
 use crate::collision::{Tri, TriSource};
 use glam::{Mat3, Quat, Vec3};
-
-/// How far past its limit a joint may rest when what hangs off it lies on the ground.
-const GROUND_HOLDS_RAD: f32 = 0.2;
 
 #[derive(Clone, Debug)]
 pub struct Particle {
@@ -63,21 +59,6 @@ pub struct Body {
     pub rotation0: Quat,
     pub aim0: Vec3,
     pub side0: Option<Vec3>,
-    /// The particles that turn with the body about its particle: its aim and everything hanging off it.
-    pub subtree: Vec<usize>,
-}
-
-/// A joint's swing limit: the child body's frame X axis (`x1`, in the child's local space) stays within an elliptical
-/// cone around the parent's frame X axis (`frame2`'s, in the parent's local space): `swing1` radians toward the frame's
-/// Y, `swing2` toward its Z. Pi or more: free.
-#[derive(Clone, Debug)]
-pub struct Cone {
-    pub child: usize,
-    pub parent: usize,
-    pub x1: Vec3,
-    pub frame2: Mat3,
-    pub swing1: f32,
-    pub swing2: f32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -85,7 +66,6 @@ pub struct Ragdoll {
     pub particles: Vec<Particle>,
     pub links: Vec<Link>,
     pub bodies: Vec<Body>,
-    pub cones: Vec<Cone>,
     still: f32,
     /// Came to rest: no longer simulated.
     pub asleep: bool,
@@ -125,66 +105,6 @@ impl Ragdoll {
         let pos = |i: usize| self.particles[i].pos;
         let side = b.sides.zip(b.side0).map(|((l, r), s0)| (s0, pos(r) - pos(l)));
         turn(b.aim0, pos(b.aim) - pos(b.particle), side) * b.rotation0
-    }
-
-    /// Each joint's swing now (degrees toward its frame's Y and Z), for logs.
-    pub fn swings(&self) -> Vec<(f32, f32)> {
-        self.cones
-            .iter()
-            .map(|c| {
-                let x1 = (self.rotation(&self.bodies[c.child]) * c.x1).normalize_or_zero();
-                let f2 = Mat3::from_quat(self.rotation(&self.bodies[c.parent])) * c.frame2;
-                let (cx, cy, cz) = (x1.dot(f2.x_axis), x1.dot(f2.y_axis), x1.dot(f2.z_axis));
-                (cy.atan2(cx).to_degrees(), cz.atan2(cx).to_degrees())
-            })
-            .collect()
-    }
-
-    /// Turns the child of each joint (with everything hanging off it) back into its swing cone. The correction moves
-    /// the particles without giving them speed: the bodies' roll (which hinges like the knee are measured in) isn't
-    /// simulated, so a hinge can disagree with its parent from one step to the next, and that must not pump energy in.
-    fn keep_cones(&mut self) {
-        for k in 0..self.cones.len() {
-            let c = &self.cones[k];
-            let (child, parent) = (&self.bodies[c.child], &self.bodies[c.parent]);
-            if child.aim == child.particle || (c.swing1 >= std::f32::consts::PI && c.swing2 >= std::f32::consts::PI) {
-                continue;
-            }
-            let x1 = self.rotation(child) * c.x1;
-            let f2 = Mat3::from_quat(self.rotation(parent)) * c.frame2;
-            let Some(clamped) = clamp_to_cone(x1, f2, c.swing1, c.swing2) else { continue };
-            // Resting on the ground a little past the limit: the ground holds it (turning it back would only slide
-            // the body along the ground, step after step).
-            let grounded = child.subtree.iter().any(|&i| self.particles[i].contact.is_some());
-            if grounded && x1.angle_between(clamped) < GROUND_HOLDS_RAD {
-                continue;
-            }
-            let fix = Quat::from_rotation_arc(x1.normalize(), clamped);
-            let j = self.particles[child.particle].pos;
-            for k in 0..self.bodies[c.child].subtree.len() {
-                let i = self.bodies[c.child].subtree[k];
-                let a = self.particles[i].pos;
-                let moved = j + fix * (a - j) - a;
-                self.particles[i].pos += moved;
-                self.particles[i].prev += moved;
-            }
-        }
-    }
-
-    /// Brings the starting pose within the constraints (a pose the animation took past a joint's limits) without
-    /// turning the correction into speed.
-    pub fn settle(&mut self, world: &(impl TriSource + ?Sized), iterations: usize) {
-        let velocity: Vec<Vec3> = self.particles.iter().map(|p| p.pos - p.prev).collect();
-        for _ in 0..iterations {
-            self.solve_links();
-            self.keep_cones();
-            for p in &mut self.particles {
-                push_out(world, &mut p.pos, p.radius);
-            }
-        }
-        for (p, v) in self.particles.iter_mut().zip(velocity) {
-            p.prev = p.pos - v;
-        }
     }
 
     fn solve_links(&mut self) {
@@ -227,7 +147,6 @@ impl Ragdoll {
         let mut contacts: Vec<Option<Vec3>> = vec![None; self.particles.len()];
         for _ in 0..s.iterations {
             self.solve_links();
-            self.keep_cones();
             for (p, c) in self.particles.iter_mut().zip(&mut contacts) {
                 if let Some(n) = push_out(world, &mut p.pos, p.radius) {
                     *c = Some(n);
@@ -274,24 +193,6 @@ pub fn turn(from: Vec3, to: Vec3, side: Option<(Vec3, Vec3)>) -> Quat {
         }
     }
     Quat::from_rotation_arc(from.normalize_or(Vec3::Y), to.normalize_or(Vec3::Y))
-}
-
-/// `x` (a direction) pulled back into the elliptical cone around `frame`'s X axis (`swing1` toward its Y, `swing2`
-/// toward its Z), or None when it's inside.
-fn clamp_to_cone(x: Vec3, frame: Mat3, swing1: f32, swing2: f32) -> Option<Vec3> {
-    let x = x.try_normalize()?;
-    let (ax, ay, az) = (frame.x_axis.normalize(), frame.y_axis.normalize(), frame.z_axis.normalize());
-    let (cx, cy, cz) = (x.dot(ax), x.dot(ay), x.dot(az));
-    let angle = cx.clamp(-1.0, 1.0).acos();
-    let off = (cy * cy + cz * cz).sqrt();
-    // A locked swing still gets some play (PhysX joints are soft too, and twist isn't simulated here).
-    let (l1, l2) = (swing1.max(10f32.to_radians()), swing2.max(10f32.to_radians()));
-    let (dy, dz) = if off > 1e-6 { (cy / off, cz / off) } else { (1.0, 0.0) };
-    let limit = 1.0 / ((dy / l1).powi(2) + (dz / l2).powi(2)).sqrt();
-    if angle <= limit || limit >= std::f32::consts::PI {
-        return None;
-    }
-    Some((ax * limit.cos() + (ay * dy + az * dz) * limit.sin()).normalize())
 }
 
 /// Pushes a sphere out of the triangles it overlaps (to their front side). The direction it was pushed, if it touched
@@ -398,19 +299,6 @@ mod tests {
         r.add(Vec3::new(0.0, 0.5, 0.0), 0.05, Vec3::new(0.0, -200.0, 0.0), 1.0 / 64.0);
         r.step(&world, 1.0 / 64.0, &RagdollSettings::default());
         assert!(r.particles[0].pos.y >= 0.04, "{:?}", r.particles[0].pos);
-    }
-
-    #[test]
-    fn a_cone_clamps_to_its_ellipse() {
-        let f = Mat3::IDENTITY;
-        // Inside: no change.
-        assert!(clamp_to_cone(Vec3::new(1.0, 0.1, 0.0), f, 0.5, 0.0).is_none());
-        // 90 degrees toward Y with a 45 degree Swing1: back to 45.
-        let c = clamp_to_cone(Vec3::Y, f, 45f32.to_radians(), 0.0).unwrap();
-        assert!((c.angle_between(Vec3::X).to_degrees() - 45.0).abs() < 0.1, "{c:?}");
-        // Toward Z with Swing2 locked: nearly straight.
-        let c = clamp_to_cone(Vec3::new(1.0, 0.0, 1.0), f, 45f32.to_radians(), 0.0).unwrap();
-        assert!(c.angle_between(Vec3::X).to_degrees() < 10.5, "{c:?}");
     }
 
     #[test]

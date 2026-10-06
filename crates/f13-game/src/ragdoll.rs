@@ -7,9 +7,8 @@
 
 use bevy::math::Affine3A;
 use bevy::prelude::*;
-use f13_core::ragdoll::{Body, Cone, Ragdoll, RagdollSettings};
+use f13_core::ragdoll::{Body, Link, Ragdoll, RagdollSettings};
 use f13_data::character::CharacterInfo;
-use f13_data::level::Xform;
 use std::collections::HashMap;
 
 use crate::character::{CounselorCharacter, Model, Rig};
@@ -65,27 +64,21 @@ fn start_ragdolls(
     mut rigs: Query<(Entity, &ChildOf, &Rig, &mut AnimationPlayer), Without<Ragdolled>>,
     transforms: Query<&Transform>,
     globals: Query<&GlobalTransform>,
-    collision: Res<crate::collision::WorldCollision>,
-    dynamic: Res<crate::collision::DynamicColliders>,
 ) {
     let Some(character) = character else { return };
     for (e, parent, rig, mut anim) in &mut rigs {
         if rig.model != Model::Counselor || rig.bones.is_empty() || players.get(parent.parent()).map_or(true, |p| p.counselor.alive()) {
             continue;
         }
-        let Some(mut r) = build(&character.info, rig, &transforms, &globals) else {
+        let Some(r) = build(&character.info, rig, &transforms, &globals) else {
             warn!("no ragdoll: the counselor export has no physics asset (re-export with tools/f13-export counselor)");
             let mut sim = Ragdoll::default();
             sim.asleep = true;
             commands.entity(e).insert(Ragdolled { sim, bones: Vec::new(), rest: HashMap::new(), age: 0.0 });
             continue;
         };
-        r.sim.settle(&collision.with(&dynamic), 20);
-        info!("ragdoll: {} bodies, {} links, {} joints", r.sim.bodies.len(), r.sim.links.len(), r.sim.cones.len());
+        info!("ragdoll: {} bodies, {} links", r.sim.bodies.len(), r.sim.links.len());
         debug!("ragdoll joints at the start: {}", r.angles());
-        for (c, (s1, s2)) in r.sim.cones.iter().zip(r.sim.swings()) {
-            debug!("ragdoll joint {}: swing {s1:.0} / {:.0}, {s2:.0} / {:.0}", r.bones[c.child].1, c.swing1.to_degrees(), c.swing2.to_degrees());
-        }
         anim.stop_all();
         commands.entity(e).insert(r);
     }
@@ -93,12 +86,6 @@ fn start_ragdolls(
 
 fn side_name(name: &str) -> Option<(&str, bool)> {
     name.strip_suffix("_l").map(|s| (s, false)).or_else(|| name.strip_suffix("_r").map(|s| (s, true)))
-}
-
-/// An Unreal bone-space direction in the glTF bone space the rig uses.
-fn ue_dir(v: [f32; 3]) -> Vec3 {
-    let x = Xform { t: [v[0] * 100.0, v[1] * 100.0, v[2] * 100.0], ..Xform::IDENTITY };
-    crate::to_transform(&x).translation.normalize_or(Vec3::X)
 }
 
 fn build(info: &CharacterInfo, rig: &Rig, transforms: &Query<&Transform>, globals: &Query<&GlobalTransform>) -> Option<Ragdolled> {
@@ -160,50 +147,45 @@ fn build(info: &CharacterInfo, rig: &Rig, transforms: &Query<&Transform>, global
             rotation0: xf.rotation,
             aim0: pos(aim) - pos(p),
             side0: sides.map(|(l, r)| pos(r) - pos(l)),
-            subtree: Vec::new(),
         };
         body_of.insert(b.bone.as_str(), sim.bodies.len());
         sim.bodies.push(body);
         bones.push((bone, b.bone.clone(), None, xf.scale));
     }
 
-    // What turns with each body: its aim (a tip) and every body below it, with their tips.
-    let tips: Vec<Option<usize>> = sim.bodies.iter().map(|b| (b.aim != b.particle && !sim.bodies.iter().any(|o| o.particle == b.aim)).then_some(b.aim)).collect();
-    for i in 0..sim.bodies.len() {
-        let mut subtree = Vec::new();
-        let mut stack = vec![info.ragdoll.iter().filter(|b| body_of.contains_key(b.bone.as_str())).nth(i).map(|b| b.bone.as_str()).unwrap_or_default()];
-        let mut first = true;
-        while let Some(bone) = stack.pop() {
-            let Some(&bi) = body_of.get(bone) else { continue };
-            if !first {
-                subtree.push(sim.bodies[bi].particle);
-            }
-            first = false;
-            subtree.extend(tips[bi]);
-            stack.extend(children(bone));
+    // Each body hangs off its parent and bends there by up to its joint's swing from the pose she died in.
+    let parent_of = |bone: &str| info.joints.iter().find(|j| j.bone1 == bone).map(|j| j.bone2.as_str()).filter(|p| particle.contains_key(p));
+    let swing_of = |bone: &str| info.joints.iter().find(|j| j.bone1 == bone).map_or(30.0, |j| j.swing1.max(j.swing2));
+    for (i, b) in info.ragdoll.iter().filter(|b| body_of.contains_key(b.bone.as_str())).enumerate() {
+        let Some(parent) = parent_of(&b.bone) else { continue };
+        let (p, aim) = (sim.bodies[i].particle, sim.bodies[i].aim);
+        bones[i].2 = body_of.get(parent).copied();
+        sim.rigid(particle[parent], p);
+        if aim != p {
+            sim.bend(particle[parent], p, aim, swing_of(&b.bone));
         }
-        sim.bodies[i].subtree = subtree;
+        // A left/right child (a thigh off the pelvis, an arm off the chest): its cone is also measured from the
+        // parent's own parent, or the parent's chain.
+        if side_name(&b.bone).is_some() && aim != p {
+            let reference = parent_of(parent).map(|g| particle[g]).or_else(|| body_of.get(parent).map(|&x| sim.bodies[x].aim));
+            if let Some(r) = reference.filter(|&r| r != p) {
+                sim.bend(r, p, aim, swing_of(&b.bone));
+            }
+        }
     }
-
-    // Joints: the child hangs off its parent, and swings within the joint's cone.
-    for j in &info.joints {
-        let (Some(&c), Some(&p)) = (body_of.get(j.bone1.as_str()), body_of.get(j.bone2.as_str())) else { continue };
-        bones[c].2 = Some(p);
-        sim.rigid(sim.bodies[p].particle, sim.bodies[c].particle);
-        let (pri2, sec2) = (ue_dir(j.pri2), ue_dir(j.sec2));
-        let z2 = pri2.cross(sec2).normalize_or(Vec3::Z);
-        sim.cones.push(Cone {
-            child: c,
-            parent: p,
-            x1: ue_dir(j.pri1),
-            frame2: Mat3::from_cols(pri2, z2.cross(pri2), z2),
-            swing1: j.swing1.to_radians(),
-            swing2: j.swing2.to_radians(),
-        });
-    }
-    // The hips and the shoulders hold their width.
-    for (l, r) in sim.bodies.iter().filter_map(|b| b.sides).collect::<Vec<_>>() {
+    // The torso holds its shape: left and right children rigid with each other (hips, shoulders), and the same sides
+    // of the hips and shoulders nearly so (no twisting through the spine: its joints lock twist).
+    let pairs: Vec<(usize, usize)> = sim.bodies.iter().filter_map(|b| b.sides).collect();
+    for &(l, r) in &pairs {
         sim.rigid(l, r);
+    }
+    for (i, &(l1, r1)) in pairs.iter().enumerate() {
+        for &(l2, r2) in &pairs[i + 1..] {
+            for (a, b) in [(l1, l2), (r1, r2), (l1, r2), (r1, l2)] {
+                let d = sim.particles[a].pos.distance(sim.particles[b].pos);
+                sim.links.push(Link { a, b, min: d * 0.92, max: d * 1.08 });
+            }
+        }
     }
 
     let rest = info
@@ -234,15 +216,6 @@ fn simulate(
         if (before * 2.0) as u32 != (r.age * 2.0) as u32 {
             let ground = r.center().and_then(|c| f13_core::collision::surface_below(&world, c.x, c.z, c.y + 1.0, c.y - 5.0)).map(|g| g.0);
             trace!("ragdoll t={:.1}: pelvis {:?} (ground {:?})", r.age, r.center(), ground);
-            let over: Vec<String> = r
-                .sim
-                .cones
-                .iter()
-                .zip(r.sim.swings())
-                .filter(|(c, (a, b))| a.abs() > c.swing1.to_degrees().max(10.0) + 3.0 || b.abs() > c.swing2.to_degrees().max(10.0) + 3.0)
-                .map(|(c, (a, b))| format!("{} {a:.0}/{:.0} {b:.0}/{:.0}", r.bones[c.child].1, c.swing1.to_degrees(), c.swing2.to_degrees()))
-                .collect();
-            trace!("ragdoll t={:.1}: over the limits: {}", r.age, over.join(", "));
         }
         if r.sim.asleep {
             let lowest = r.sim.particles.iter().map(|p| p.pos.y - p.radius).fold(f32::MAX, f32::min);
