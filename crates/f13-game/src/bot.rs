@@ -532,6 +532,13 @@ fn run_bot(
                 bot.timer = 0.0;
                 info!("bot: Jason {:?}, {:.1} m away; health {:.0}", j.state, jxf.translation.distance(pxf.translation), p.counselor.health);
             }
+            // Up close, watch from Jason's side (to check the grab and kill poses).
+            if jxf.translation.distance(pxf.translation) < 3.0 {
+                let (yaw, _, _) = jxf.rotation.to_euler(EulerRot::YXZ);
+                let right = Vec3::new(-yaw.cos(), 0.0, yaw.sin());
+                camera.yaw = (-right.x).atan2(-right.z);
+                camera.pitch = -0.15;
+            }
             // Screenshots of the hit, the grab and the kill, to check the paired poses.
             let shot = match j.state {
                 crate::jason::JasonState::Swinging { t, door: None, .. } if t > 0.35 => Some("swing"),
@@ -542,6 +549,7 @@ fn run_bot(
             };
             if let Some(s) = shot.filter(|s| !bot.jason_shots.contains(s)) {
                 bot.jason_shots.push(s);
+                info!("bot: Vanessa's feet {:.2} m above Jason's", pxf.translation.y - jxf.translation.y);
                 let path = std::env::temp_dir().join(format!("f13-bot-jason-{s}.png"));
                 info!("bot: screenshot {}", path.display());
                 commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));

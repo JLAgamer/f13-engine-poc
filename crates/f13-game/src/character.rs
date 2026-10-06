@@ -179,6 +179,10 @@ fn build_clip(data: &AnimData, length: f32, animated: &[&str]) -> AnimationClip 
     clip
 }
 
+/// Unreal actors face +X, characters here face +Z: the rig turns a quarter about Y on top of the mesh's own yaw, so
+/// the owner's transform times this is the Unreal actor's.
+pub const FACING: Quat = Quat::from_xyzw(0.0, -std::f32::consts::FRAC_1_SQRT_2, 0.0, std::f32::consts::FRAC_1_SQRT_2);
+
 /// The animated model under a character: holds the AnimationPlayer every bone is animated by.
 #[derive(Component)]
 pub struct Rig {
@@ -188,6 +192,8 @@ pub struct Rig {
     /// Parts hanging off a bone or another part, spawned once the body is in: (part index, entity holding its scene).
     attached: Vec<(usize, Entity)>,
     bones_tagged: bool,
+    /// The body's bones by name (filled once its scene is in).
+    pub bones: HashMap<String, Entity>,
     outfit_bound: Vec<Entity>,
     /// Current weight per animation.
     weights: HashMap<String, f32>,
@@ -214,8 +220,7 @@ pub fn spawn_model(commands: &mut Commands, assets: &AssetServer, character: &Ch
     // Unreal actors face +X, the player here faces +Z: a quarter turn about Y on top of the mesh's own yaw.
     let mut mesh = crate::to_transform(&info.mesh_transform);
     mesh.translation.y += info.capsule_half_height / 100.0;
-    let facing = Transform::from_rotation(Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2));
-    let rig_xf = facing * mesh;
+    let rig_xf = Transform::from_rotation(FACING) * mesh;
 
     let ready = |ev: On<WorldInstanceReady>, mut commands: Commands| {
         commands.entity(ev.entity).insert(SceneReady);
@@ -242,6 +247,7 @@ pub fn spawn_model(commands: &mut Commands, assets: &AssetServer, character: &Ch
         outfit,
         attached: Vec::new(),
         bones_tagged: false,
+        bones: HashMap::new(),
         outfit_bound: Vec::new(),
         weights: HashMap::new(),
         phase: 0.0,
@@ -283,6 +289,7 @@ fn assemble(
                 commands.entity(e).insert((AnimationTargetId::from_name(&Name::new(name.to_string())), AnimatedBy(rig_entity)));
             }
             rig.bones_tagged = true;
+            rig.bones = bones.iter().map(|(n, e)| (n.to_string(), *e)).collect();
             // Parts attached to a bone first, then parts attached to those parts.
             let mut pending: Vec<usize> = (0..info.parts.len()).filter(|&i| !info.parts[i].master_pose()).collect();
             while !pending.is_empty() {
@@ -415,6 +422,14 @@ fn animate(
 }
 
 impl Rig {
+    /// A socket's world transform (its bone as last posed, times the socket's offset).
+    pub fn socket(&self, info: &CharacterInfo, name: &str, globals: &Query<&GlobalTransform>) -> Option<Transform> {
+        let s = info.sockets.get(name)?;
+        let bone = globals.get(*self.bones.get(&s.attach)?).ok()?;
+        let offset = s.transform.as_ref().map(crate::to_transform).unwrap_or_default();
+        Some(bone.mul_transform(offset).compute_transform())
+    }
+
     /// Starts, continues or ends the full-body action.
     pub fn set_action(&mut self, action: Option<&str>, dt: f32) {
         match (&mut self.action, action) {

@@ -16,7 +16,7 @@
 //! PLACEHOLDERS (not from the game): the AI itself (the game's Jason is a player). He always knows where the
 //! counselor is, picks grab or swing with even odds, and holds a grabbed counselor [`HOLD_BEFORE_KILL`] seconds
 //! before killing her; she can't struggle free yet. Paths come from f13-core::nav over the collision (the game
-//! uses Recast). The grabbed counselor stands at arm's length facing him (his grab socket isn't used yet). No
+//! uses Recast). The grabbed counselor is placed as SCCounselorCharacter::UpdateGrabTransform does (see [`place_held`]). No
 //! Shift, Morph, Sense or Stalk; no character-to-character collision.
 
 use bevy::prelude::*;
@@ -52,7 +52,12 @@ const GRABBED_ENTER: &str = "f_normal_grab_enter";
 const GRABBED_IDLE: &str = "f_normal_grab_idle";
 const COUNSELOR_KILL: &str = "cinematic_pickaxe_throathack";
 
-/// How far in front of Jason a held counselor stands (placeholder for his grab socket).
+/// Sockets of SCCounselorCharacter::UpdateGrabTransform: Jason_Base's CharacterAttachmentSocket, SCKillerCharacter's
+/// hand socket (constructor), the counselor's neck socket (native FName).
+const GRAB_SOCKET: &str = "GrabSocket";
+const HAND_GRAB_SOCKET: &str = "handGrabSocket";
+const NECK_GRAB_SOCKET: &str = "NeckGrabSocket";
+/// Fallback when the sockets aren't posed yet: how far in front of Jason a held counselor stands.
 const GRAB_HOLD_M: f32 = 0.65;
 /// Seconds Jason holds a grabbed counselor before the kill (a player's choice in the game).
 const HOLD_BEFORE_KILL: f32 = 2.5;
@@ -321,10 +326,40 @@ fn hit_reaction(xf: &Transform, from: Vec3) -> &'static str {
     }
 }
 
-/// Feet position for the counselor so her mesh origin meets Jason's (paired animations share one origin).
-fn paired_feet(jason: &Transform, killer: &f13_data::character::CharacterInfo, counselor: &f13_data::character::CharacterInfo) -> Vec3 {
-    let mesh_y = |i: &f13_data::character::CharacterInfo| (i.capsule_half_height + crate::to_transform(&i.mesh_transform).translation.y * CM) / CM;
-    jason.translation + Vec3::Y * (mesh_y(killer) - mesh_y(counselor))
+/// Places the counselor Jason holds, as SCCounselorCharacter::UpdateGrabTransform: turned to his GrabSocket
+/// (yaw only here); during the grab her NeckGrabSocket is put on his handGrabSocket, during a kill her mesh origin on
+/// the GrabSocket. Both sockets follow his animation (GrabSocket sits on target_jnt). The poses are last frame's.
+/// False when the rigs aren't assembled yet.
+fn place_held(
+    owner: Entity,
+    pxf: &mut Transform,
+    killing: bool,
+    jason: &Rig,
+    counselor: (&Rig, &Transform),
+    killer: &f13_data::character::CharacterInfo,
+    victim: &f13_data::character::CharacterInfo,
+    globals: &Query<&GlobalTransform>,
+) -> bool {
+    let Some(grab) = jason.socket(killer, GRAB_SOCKET, globals) else { return false };
+    // The socket's actor-forward axis, flattened (Euler yaw flips when the socket pitches or rolls).
+    let fwd = (grab.rotation * crate::character::FACING.inverse()) * Vec3::Z;
+    let rotation = Quat::from_rotation_y(fwd.x.atan2(fwd.z));
+    if killing {
+        // Her mesh (the rig's origin) on the socket.
+        pxf.translation = grab.translation - rotation * counselor.1.translation;
+    } else {
+        let (Some(hand), Some(neck)) = (jason.socket(killer, HAND_GRAB_SOCKET, globals), counselor.0.socket(victim, NECK_GRAB_SOCKET, globals)) else {
+            return false;
+        };
+        // Her neck relative to her, from the same posed frame as the neck (several fixed steps can run per frame),
+        // turned with her, onto his hand.
+        let Ok(her) = globals.get(owner) else { return false };
+        let her = her.compute_transform();
+        let local = her.rotation.inverse() * (neck.translation - her.translation);
+        pxf.translation = hand.translation - rotation * local;
+    }
+    pxf.rotation = rotation;
+    true
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -343,6 +378,8 @@ fn update_jason(
     mut players: Query<(Entity, &mut Player, &mut Transform, Has<crate::vehicle::Driving>), Without<Jason>>,
     mut doors: Query<(Entity, &mut crate::doors::Door, &GlobalTransform)>,
     mut barricades: Query<&mut crate::windows::Barricade>,
+    rigs: Query<(&Rig, &ChildOf, &Transform), (Without<Jason>, Without<Player>)>,
+    globals: Query<&GlobalTransform>,
 ) {
     let (Some(t), Some(mut nav), Some(killer)) = (tuning, nav, killer) else { return };
     let dt = time.delta_secs();
@@ -512,11 +549,17 @@ fn update_jason(
             }
             JasonState::Holding { t: at } => {
                 let at = at + dt;
-                // Held at arm's length, facing him (the game attaches her to his hand).
-                let yaw = yaw_of(xf.rotation);
-                let fwd = Vec3::new(yaw.sin(), 0.0, yaw.cos());
-                pxf.translation = xf.translation + fwd * GRAB_HOLD_M;
-                pxf.rotation = Quat::from_rotation_y(yaw + std::f32::consts::PI);
+                let jrig = rigs.iter().find(|(_, c, _)| c.parent() == je);
+                let crig = rigs.iter().find(|(_, c, _)| c.parent() == pe);
+                let placed = match (jrig, crig, &counselor_model) {
+                    (Some((jr, _, _)), Some((cr, _, cxf)), Some(c)) => place_held(pe, &mut pxf, false, jr, (cr, cxf), &killer.info, &c.info, &globals),
+                    _ => false,
+                };
+                if !placed {
+                    let yaw = yaw_of(xf.rotation);
+                    pxf.translation = xf.translation + Vec3::new(yaw.sin(), 0.0, yaw.cos()) * GRAB_HOLD_M;
+                    pxf.rotation = Quat::from_rotation_y(yaw + std::f32::consts::PI);
+                }
                 if at >= killer.length(GRAB_ENTER).unwrap_or(0.3) {
                     commands.entity(je).insert(PlayAction(GRAB_IDLE.into()));
                 }
@@ -534,10 +577,11 @@ fn update_jason(
             }
             JasonState::Killing { t: at } => {
                 let at = at + dt;
-                if let Some(c) = &counselor_model {
-                    pxf.translation = paired_feet(&xf, &killer.info, &c.info);
+                let jrig = rigs.iter().find(|(_, c, _)| c.parent() == je);
+                let crig = rigs.iter().find(|(_, c, _)| c.parent() == pe);
+                if let (Some((jr, _, _)), Some((cr, _, cxf)), Some(c)) = (jrig, crig, &counselor_model) {
+                    place_held(pe, &mut pxf, true, jr, (cr, cxf), &killer.info, &c.info, &globals);
                 }
-                pxf.rotation = xf.rotation;
                 if at >= killer.length(KILL).unwrap_or(12.0) {
                     let health = p.counselor.health;
                     p.counselor.take_damage(Hit { amount: health, blocked_with_weapon: false }, &ptuning.counselor);

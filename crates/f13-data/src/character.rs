@@ -24,6 +24,9 @@ pub struct CharacterInfo {
     pub skin_masks: Vec<String>,
     pub bones: Vec<Bone>,
     pub animations: BTreeMap<String, AnimInfo>,
+    /// The skeleton's and mesh's sockets by name: `attach` is the bone, `transform` the offset from it.
+    #[serde(default)]
+    pub sockets: HashMap<String, Part>,
     /// Gameplay values (killers: speeds, attack and grab ranges, weapon damage), by Unreal property name.
     #[serde(default, deserialize_with = "crate::level::null_as_empty")]
     pub values: HashMap<String, f32>,

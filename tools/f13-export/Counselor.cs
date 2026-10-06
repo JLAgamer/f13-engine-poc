@@ -73,6 +73,8 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         public List<string> SkinMasks = new();
         public List<Bone> Bones = new();
         public SortedDictionary<string, AnimInfo> Animations = new(StringComparer.OrdinalIgnoreCase);
+        /// The skeleton's and mesh's sockets: name -> bone and offset (Unreal space).
+        public SortedDictionary<string, Part> Sockets = new();
         /// Gameplay values (killers): Blueprint overrides, else the C++ constructor's defaults.
         public SortedDictionary<string, float>? Values;
     }
@@ -155,6 +157,7 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         for (var i = 0; i < bones.Length; i++)
             info.Bones.Add(new Bone { Name = bones[i].Name.Text, Parent = bones[i].ParentIndex, Retarget = skeleton.BoneTree[i].ToString() });
 
+        AddSockets(info, body, skeleton);
         WriteAnimations(info, skeleton, animations, "anims", keepRoot);
         Save(info, "counselors");
     }
@@ -172,6 +175,21 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
                 a.Windows = windows;
                 info.Animations[seq.Name] = a;
             }
+        }
+    }
+
+    /// Every socket of the body mesh and its skeleton (the mesh's win), as Parts without a file.
+    static void AddSockets(Info info, USkeletalMesh body, USkeleton skeleton)
+    {
+        foreach (var s in skeleton.GetOrDefault<FPackageIndex[]>("Sockets", []).Concat(body.GetOrDefault<FPackageIndex[]>("Sockets", [])).Select(s => s.Load()))
+        {
+            if (s == null) continue;
+            info.Sockets[s.GetOrDefault<FName>("SocketName").Text] = new Part
+            {
+                Name = s.GetOrDefault<FName>("SocketName").Text,
+                Attach = s.GetOrDefault<FName>("BoneName").Text,
+                Transform = Xf(s.GetOrDefault<FVector>("RelativeLocation"), s.GetOrDefault<FRotator>("RelativeRotation")),
+            };
         }
     }
 
@@ -268,6 +286,7 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         var bones = skeleton.ReferenceSkeleton.FinalRefBoneInfo;
         for (var i = 0; i < bones.Length; i++)
             info.Bones.Add(new Bone { Name = bones[i].Name.Text, Parent = bones[i].ParentIndex, Retarget = skeleton.BoneTree[i].ToString() });
+        AddSockets(info, body, skeleton);
         WriteAnimations(info, skeleton, animations, "anims/jason", keepRoot);
         Save(info, "killers");
     }
