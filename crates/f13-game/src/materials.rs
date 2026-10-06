@@ -24,6 +24,7 @@ pub(crate) type BlendMaterial = ExtendedMaterial<StandardMaterial, BlendExt>;
 pub(crate) type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainExt>;
 pub(crate) type WaterMaterial = ExtendedMaterial<StandardMaterial, WaterExt>;
 pub(crate) type PropMaterial = ExtendedMaterial<StandardMaterial, PropExt>;
+pub(crate) type SkinMaterial = ExtendedMaterial<StandardMaterial, SkinMaskExt>;
 
 const TERRAIN_LAYERS: usize = 6;
 const WATER_MASTER: &str = "M_Lake_Ripples";
@@ -38,6 +39,7 @@ impl Plugin for MaterialsPlugin {
         embedded_asset!(app, "shaders/terrain.wgsl");
         embedded_asset!(app, "shaders/water.wgsl");
         embedded_asset!(app, "shaders/prop.wgsl");
+        embedded_asset!(app, "shaders/skin.wgsl");
         let entries = std::fs::read_to_string(self.export.join("materials.json"))
             .ok()
             .and_then(|t| match serde_json::from_str(&t) {
@@ -59,6 +61,7 @@ impl Plugin for MaterialsPlugin {
                 MaterialPlugin::<TerrainMaterial>::default(),
                 MaterialPlugin::<WaterMaterial>::default(),
                 MaterialPlugin::<PropMaterial>::default(),
+                MaterialPlugin::<SkinMaterial>::default(),
             ))
             .add_systems(Update, (apply_materials, strip_vertex_colors).chain());
     }
@@ -74,6 +77,11 @@ impl MaterialOverrides {
         (!map.is_empty()).then(|| Self(std::sync::Arc::new(map.iter().map(|(k, v)| (k.to_lowercase(), v.clone())).collect())))
     }
 }
+
+/// The skin masks of a counselor's body (export-relative texture paths), on the entity holding the body's scene: its
+/// skin materials are clipped under the clothes (shaders/skin.wgsl).
+#[derive(Component, Clone)]
+pub(crate) struct SkinMasks(pub(crate) Vec<String>);
 
 /// One entry of the exporter's `materials.json`.
 #[derive(serde::Deserialize)]
@@ -138,6 +146,8 @@ pub(crate) struct MaterialIndex {
     entries: HashMap<String, MaterialInfo>,
     /// Keyed by material name (plus the landscape file for terrain materials, whose weight maps are per landscape).
     built: HashMap<String, Built>,
+    /// Skin materials clipped by a body's masks, keyed like `built` plus "|skin".
+    skins: HashMap<String, Handle<SkinMaterial>>,
     fallback: Option<Fallback>,
 }
 
@@ -376,6 +386,38 @@ fn prop_params(info: &MaterialInfo, loader: &Loader) -> Option<(Handle<Image>, P
     Some((rss, PropParams { mults, extra: Vec4::new(info.scalar("RoughnessMin", 0.0), 0.0, 0.0, 0.0) }))
 }
 
+/// The two skin masks (see shaders/skin.wgsl).
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
+pub(crate) struct SkinMaskExt {
+    #[texture(100)]
+    #[sampler(101)]
+    mask_a: Handle<Image>,
+    #[texture(102)]
+    mask_b: Handle<Image>,
+}
+
+impl MaterialExtension for SkinMaskExt {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://f13_game/shaders/skin.wgsl".into()
+    }
+}
+
+impl MaterialIndex {
+    /// A skin material clipped by two exported masks (export-relative texture paths), on top of `base` (the skin's
+    /// own material as built from the export). None if a mask is missing from the export.
+    pub(crate) fn skin_material(&self, base: StandardMaterial, masks: &[String], assets: &AssetServer) -> Option<SkinMaterial> {
+        let loader = Loader { root: &self.root, assets };
+        let [a, b] = masks else { return None };
+        let mask_a = loader.load(a, Tex::Data)?;
+        let mask_b = loader.load(b, Tex::Data)?;
+        let mut base = base;
+        if !matches!(base.alpha_mode, AlphaMode::Mask(_)) {
+            base.alpha_mode = AlphaMode::Mask(0.3333);
+        }
+        Some(ExtendedMaterial { base, extension: SkinMaskExt { mask_a, mask_b } })
+    }
+}
+
 impl MaterialExtension for PropExt {
     fn fragment_shader() -> ShaderRef {
         "embedded://f13_game/shaders/prop.wgsl".into()
@@ -395,7 +437,6 @@ struct Loader<'a> {
 }
 
 impl Loader<'_> {
-    /// Loads an exported texture (export-relative path without extension), or None if the export lacks it.
     /// Loads an exported texture (export-relative path without extension), or None if the export lacks it. Prefers
     /// the DDS copy (the game's compressed data with mips, sRGB as the game flags it) over the PNG.
     fn load(&self, path: &str, kind: Tex) -> Option<Handle<Image>> {
@@ -443,6 +484,8 @@ fn apply_materials(
     parents: Query<&ChildOf>,
     roots: Query<&WorldAssetRoot>,
     overrides: Query<&MaterialOverrides>,
+    skin_masks: Query<&SkinMasks>,
+    mut skins: ResMut<Assets<SkinMaterial>>,
     mut index: ResMut<MaterialIndex>,
     (mut standard, mut blends, mut terrains, mut waters, mut images): (
         ResMut<Assets<StandardMaterial>>,
@@ -481,6 +524,9 @@ fn apply_materials(
                     Built::Standard(standard.add(glass_material(info)))
                 } else if info.blend != "BLEND_Opaque" && info.blend != "BLEND_Masked" && info.textures.is_empty() && !info.master.starts_with(WATER_MASTER) {
                     Built::Hidden
+                } else if info.master.starts_with("EyeMaster_") && info.textures.is_empty() {
+                    // The eyes' iris refraction and lower-lid film overlays (not ported; drawn plain they cover the eyes white).
+                    Built::Hidden
                 } else if info.master.starts_with(WATER_MASTER) {
                     Built::Water(waters.add(water_material(info, &loader, &fallback)))
                 } else if let Some(kind) = blend_kind(&info.master) {
@@ -491,11 +537,28 @@ fn apply_materials(
                 } else {
                     Built::Standard(standard.add(standard_material(&index.root, info, &loader)))
                 };
-                index.built.insert(key, b.clone());
+                index.built.insert(key.clone(), b.clone());
                 b
             }
         };
         let mut e = commands.entity(entity);
+        if let (Built::Standard(h), Some(masks)) = (&built, parents.iter_ancestors(entity).find_map(|a| skin_masks.get(a).ok())) {
+            let key = format!("{key}|skin");
+            let skin = match index.skins.get(&key) {
+                Some(s) => Some(s.clone()),
+                None => {
+                    let s = standard.get(h).cloned().and_then(|base| index.skin_material(base, &masks.0, &assets)).map(|m| skins.add(m));
+                    if let Some(s) = &s {
+                        index.skins.insert(key, s.clone());
+                    }
+                    s
+                }
+            };
+            if let Some(skin) = skin {
+                e.remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(skin));
+                continue;
+            }
+        }
         match built {
             Built::Standard(h) => {
                 e.insert(MeshMaterial3d(h));
@@ -543,8 +606,8 @@ fn standard_material(root: &Path, info: &MaterialInfo, loader: &Loader) -> Stand
             })
         })
     };
-    m.base_color_texture = tex(&["Diffuse", "BaseColor", "Diffuse/Opacity", "PM_Diffuse"]).and_then(|p| loader.load(&p, Tex::Color));
-    if let Some(n) = tex(&["Normal", "normalMap", "PM_Normals"]).and_then(|p| loader.load(&p, Tex::Data)) {
+    m.base_color_texture = tex(&["Diffuse", "BaseColor", "Diffuse/Opacity", "Skin Diffuse", "Clothing Diffuse", "EyeDiffuse", "PM_Diffuse"]).and_then(|p| loader.load(&p, Tex::Color));
+    if let Some(n) = tex(&["Normal", "normalMap", "Skin Normal", "Clothing Normal", "PM_Normals"]).and_then(|p| loader.load(&p, Tex::Data)) {
         m.normal_map_texture = Some(n);
         m.flip_normal_map_y = true; // Unreal normal maps are DirectX-style (green down)
     }

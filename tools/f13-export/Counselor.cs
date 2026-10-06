@@ -1,0 +1,216 @@
+// counselors/<name>.json: how a counselor Blueprint assembles its character (body, outfit, face, hair), the shared
+// skeleton's bones with their translation retargeting modes, and the animations f13-game plays on it.
+// anims/<sequence>.anim: one animation sequence sampled at its own frame rate (format below).
+//
+// The counselor's CharacterMesh0 is the bare base body; the default outfit (DefaultCounselorOutfit's ClothingMesh,
+// with the first material option of each clothing slot) follows it as a master-pose component. The face is a separate
+// skeleton (its own anim Blueprint drives the facial bones) and the hair hangs off the face.
+using CUE4Parse.FileProvider;
+using CUE4Parse.UE4.Assets.Exports;
+using CUE4Parse.UE4.Assets.Exports.Animation;
+using CUE4Parse.UE4.Assets.Exports.Material;
+using CUE4Parse.UE4.Assets.Exports.SkeletalMesh;
+using CUE4Parse.UE4.Objects.Core.Math;
+using CUE4Parse.UE4.Objects.UObject;
+using CUE4Parse.UE4.Objects.Engine;
+using CUE4Parse.UE4.Assets.Objects;
+using CUE4Parse.UE4.Assets.Exports.Texture;
+using CUE4Parse_Conversion.Animations;
+using CUE4Parse_Conversion.Meshes;
+
+class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObject> queue)
+{
+    public class Part
+    {
+        public string Name = "", File = "";
+        /// "MasterPose" (shares the body's bones by name) or a body bone the part's root is attached to.
+        public string Attach = "";
+        /// Relative transform to the attach point, in Unreal space (cm).
+        public Xform? Transform;
+        public Dictionary<string, string>? MaterialMap;
+    }
+
+    public class Bone
+    {
+        public string Name = "";
+        public int Parent;
+        /// The skeleton's translation retargeting mode: "Skeleton" takes the translation from the mesh's own bind
+        /// pose, "Animation" from the animation.
+        public string Retarget = "";
+    }
+
+    public class AnimInfo
+    {
+        public string File = "";
+        public float Length, Fps;
+        public int Frames;
+        public bool RootMotion;
+    }
+
+    public class Info
+    {
+        public string Name = "", Body = "";
+        /// CharacterMesh0 relative to the capsule (Unreal space).
+        public Xform? MeshTransform;
+        public float CapsuleHalfHeight;
+        public List<Part> Parts = new();
+        /// The skin masks the game's alpha mask compiler (MM_AlphaMaskCompiler_Skin) multiplies: the counselor's own
+        /// (AlphaMaskApplicationMaterial's FaceMask) and the outfit's SkinAlphaMask. The body's skin is clipped where
+        /// saturate(1 - a.r * b.r) falls below its mask threshold (under the clothes).
+        public List<string> SkinMasks = new();
+        public List<Bone> Bones = new();
+        public SortedDictionary<string, AnimInfo> Animations = new(StringComparer.OrdinalIgnoreCase);
+    }
+
+    static Xform Xf(FVector t, FRotator r) => new()
+    {
+        T = [t.X, t.Y, t.Z],
+        R = r.Quaternion() is var q ? [q.X, q.Y, q.Z, q.W] : [0, 0, 0, 1],
+        S = [1, 1, 1],
+    };
+
+    static T? Prop<T>(UObject o, string name) => o.GetOrDefault<T?>(name);
+
+    UObject Component(UObject cdo, string name) =>
+        cdo.GetOrDefault<FPackageIndex>(name)?.Load() ?? throw new Exception($"{cdo.Name} has no {name}");
+
+    /// Queues a texture for export; its path as materials.json writes texture paths (no extension).
+    string Texture(UTexture t)
+    {
+        queue(t);
+        return t.GetPathName().Split('.')[0].TrimStart('/');
+    }
+
+    static string MeshFile(USkeletalMesh m) => new CUE4Parse_Conversion.Exporters.SkinnedAssetExporter(m).SavePath + ".glb";
+
+    public void Export(string blueprint, IEnumerable<string> animations)
+    {
+        var cls = provider.LoadPackageObject<UBlueprintGeneratedClass>(blueprint + "." + blueprint.Split('/')[^1] + "_C");
+        var cdo = cls.ClassDefaultObject.Load()!;
+        var info = new Info { Name = blueprint.Split('/')[^1] };
+
+        var meshComp = Component(cdo, "Mesh");
+        var body = meshComp.GetOrDefault<FPackageIndex>("SkeletalMesh").Load<USkeletalMesh>()!;
+        queue(body);
+        info.Body = MeshFile(body);
+        info.MeshTransform = Xf(meshComp.GetOrDefault<FVector>("RelativeLocation"), meshComp.GetOrDefault<FRotator>("RelativeRotation"));
+        info.CapsuleHalfHeight = Component(cdo, "CapsuleComponent").GetOrDefault("CapsuleHalfHeight", 88f);
+
+        // Default outfit: its clothing mesh, each slot's first material option.
+        var outfitClass = cdo.GetOrDefault<FPackageIndex>("DefaultCounselorOutfit").Load<UBlueprintGeneratedClass>()!;
+        var outfit = outfitClass.ClassDefaultObject.Load()!;
+        var clothing = provider.LoadPackageObject<USkeletalMesh>(outfit.GetOrDefault<FSoftObjectPath>("ClothingMesh").AssetPathName.Text);
+        queue(clothing);
+        var map = new Dictionary<string, string>();
+        foreach (var slot in outfit.GetOrDefault<FStructFallback[]>("ClothingSlots", []))
+        {
+            // Cooked meshes have no slot names (SlotMaterialName can't match); SlotIndex is the material index.
+            var index = slot.GetOrDefault<int>("SlotIndex");
+            var option = slot.GetOrDefault<FPackageIndex[]>("MaterialOptions", []).FirstOrDefault()?.Load<UBlueprintGeneratedClass>();
+            var path = option?.ClassDefaultObject.Load()?.GetOrDefault<FSoftObjectPath>("MaterialInstance").AssetPathName.Text;
+            if (string.IsNullOrEmpty(path) || path == "None") continue;
+            var material = provider.LoadPackageObject<UMaterialInterface>(path);
+            queue(material);
+            if (index < clothing.SkeletalMaterials.Length && clothing.SkeletalMaterials[index].MaterialInterface?.Load() is UMaterialInterface own
+                && own.Name != material.Name)
+                map[own.Name] = material.Name;
+        }
+        info.Parts.Add(new Part { Name = "Outfit", File = MeshFile(clothing), Attach = "MasterPose", MaterialMap = map.Count > 0 ? map : null });
+        var compiler = cdo.GetOrDefault<FSoftObjectPath>("AlphaMaskApplicationMaterial").AssetPathName.Text;
+        if (!string.IsNullOrEmpty(compiler) && compiler != "None"
+            && provider.LoadPackageObject<UMaterialInstanceConstant>(compiler).TextureParameterValues.FirstOrDefault(p => p.Name == "FaceMask")?.ParameterValue.Load<UTexture>() is { } faceMask)
+            info.SkinMasks.Add(Texture(faceMask));
+        var mask = outfit.GetOrDefault<FSoftObjectPath>("SkinAlphaMask").AssetPathName.Text;
+        if (!string.IsNullOrEmpty(mask) && mask != "None")
+            info.SkinMasks.Add(Texture(provider.LoadPackageObject<UTexture>(mask)));
+
+        // The face hangs off the head (its body part component has no socket in the Blueprint; the skeleton's
+        // headSocket is the head bone with no offset), the hair off the face.
+        var face = Component(cdo, "FaceLimb");
+        var faceMesh = face.GetOrDefault<FPackageIndex>("SkeletalMesh").Load<USkeletalMesh>()!;
+        queue(faceMesh);
+        info.Parts.Add(new Part { Name = "Face", File = MeshFile(faceMesh), Attach = "head", Transform = Xf(face.GetOrDefault<FVector>("RelativeLocation"), face.GetOrDefault<FRotator>("RelativeRotation")) });
+        var hair = Component(cdo, "Hair");
+        var hairMesh = hair.GetOrDefault<FPackageIndex>("SkeletalMesh").Load<USkeletalMesh>()!;
+        queue(hairMesh);
+        info.Parts.Add(new Part { Name = "Hair", File = MeshFile(hairMesh), Attach = "Face", Transform = Xf(hair.GetOrDefault<FVector>("RelativeLocation"), hair.GetOrDefault<FRotator>("RelativeRotation")) });
+
+        var skeleton = body.Skeleton.Load<USkeleton>()!;
+        var bones = skeleton.ReferenceSkeleton.FinalRefBoneInfo;
+        for (var i = 0; i < bones.Length; i++)
+            info.Bones.Add(new Bone { Name = bones[i].Name.Text, Parent = bones[i].ParentIndex, Retarget = skeleton.BoneTree[i].ToString() });
+
+        Directory.CreateDirectory(Path.Combine(outDir, "anims"));
+        foreach (var path in animations)
+        foreach (var seq in Sequences(path))
+        {
+            if (info.Animations.ContainsKey(seq.Name)) continue;
+            info.Animations[seq.Name] = WriteSequence(seq, skeleton);
+        }
+
+        Directory.CreateDirectory(Path.Combine(outDir, "counselors"));
+        File.WriteAllText(Path.Combine(outDir, "counselors", info.Name + ".json"),
+            Newtonsoft.Json.JsonConvert.SerializeObject(info, Newtonsoft.Json.Formatting.Indented));
+        Console.WriteLine($"{info.Name}: {info.Parts.Count} parts, {info.Animations.Count} animations");
+    }
+
+    /// A sequence, or each sequence a montage plays.
+    IEnumerable<UAnimSequence> Sequences(string path)
+    {
+        var obj = provider.LoadPackageObject(path + "." + path.Split('/')[^1]);
+        if (obj is UAnimSequence s) { yield return s; yield break; }
+        if (obj is UAnimMontage m)
+            foreach (var slot in m.SlotAnimTracks ?? [])
+            foreach (var seg in slot.AnimTrack.AnimSegments ?? [])
+                if (seg.AnimReference.TryLoad(out UAnimSequence? seq) && seq != null) yield return seq;
+    }
+
+    // .anim, little-endian: "F13A", u32 version 1, f32 fps, u32 frames, u32 track count, then per track:
+    // u16 name length + UTF-8 bone name, u8 flags (1 rotation, 2 translation), frames x f32[4] rotation (Unreal
+    // x, y, z, w) if flagged, frames x f32[3] translation (Unreal cm) if flagged. Bone-local transforms. Translation is
+    // only written for the skeleton's "Animation" retargeting bones (the others keep the mesh's bind pose, as Unreal
+    // retargets them). Root motion and bForceRootLock sequences have the root locked at its reference pose (Unreal's
+    // default RootMotionRootLock::RefPose), since the game moves the character instead.
+    AnimInfo WriteSequence(UAnimSequence seq, USkeleton skeleton)
+    {
+        var set = seq.ConvertAnims();
+        var anim = set.Sequences[0];
+        var frames = Math.Max(anim.NumFrames, 1);
+        var fps = anim.FramesPerSecond > 0 ? anim.FramesPerSecond : 30f;
+        var rootMotion = seq.GetOrDefault<bool>("bEnableRootMotion");
+        // Root motion sequences, and in-place cycles authored moving forward (bForceRootLock: the locomotion cycles),
+        // keep the root at its reference pose.
+        var rootLock = rootMotion || seq.GetOrDefault<bool>("bForceRootLock");
+        var refPose = skeleton.ReferenceSkeleton.FinalRefBonePose;
+        var file = Path.Combine("anims", seq.Name + ".anim");
+        using var w = new BinaryWriter(File.Create(Path.Combine(outDir, file)));
+        w.Write("F13A"u8);
+        w.Write(1u);
+        w.Write(fps);
+        w.Write((uint)frames);
+        var tracks = Enumerable.Range(0, Math.Min(anim.Tracks.Count, skeleton.ReferenceSkeleton.FinalRefBoneInfo.Length))
+            .Where(i => anim.Tracks[i].HasKeys()).ToList();
+        w.Write((uint)tracks.Count);
+        foreach (var i in tracks)
+        {
+            var track = anim.Tracks[i];
+            var name = System.Text.Encoding.UTF8.GetBytes(skeleton.ReferenceSkeleton.FinalRefBoneInfo[i].Name.Text);
+            w.Write((ushort)name.Length);
+            w.Write(name);
+            var translate = skeleton.BoneTree[i] == EBoneTranslationRetargetingMode.Animation;
+            w.Write((byte)(translate ? 3 : 1));
+            var rot = new FQuat[frames];
+            var pos = new FVector[frames];
+            for (var f = 0; f < frames; f++)
+            {
+                FQuat q = FQuat.Identity; FVector p = FVector.ZeroVector, s = FVector.OneVector;
+                track.GetBoneTransform(f, frames, ref q, ref p, ref s);
+                if (rootLock && i == 0) { q = refPose[0].Rotation; p = refPose[0].Translation; }
+                rot[f] = q; pos[f] = p;
+            }
+            foreach (var q in rot) { w.Write(q.X); w.Write(q.Y); w.Write(q.Z); w.Write(q.W); }
+            if (translate) foreach (var p in pos) { w.Write(p.X); w.Write(p.Y); w.Write(p.Z); }
+        }
+        return new AnimInfo { File = file.Replace('\\', '/'), Length = (frames - 1) / fps, Fps = fps, Frames = frames, RootMotion = rootMotion };
+    }
+}

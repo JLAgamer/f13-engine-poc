@@ -8,7 +8,6 @@ use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings};
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
-use bevy::world_serialization::WorldAssetRoot;
 use f13_core::counselor::{Counselor, CounselorEvent, CounselorTuning, Situation, Stance};
 use f13_core::dodge::DodgeDirection;
 use f13_core::movement::{calc_velocity, input_acceleration, MovementSettings};
@@ -46,6 +45,8 @@ pub struct Player {
     pub fear: f32,
     /// A montage's root motion moving the counselor (dodge, stumble): local velocity (x right, y forward), cm/s.
     pub root_motion: Option<(Vec2, f32)>,
+    /// The montage the rules started (dodge, stumble), for the animation.
+    pub montage: Option<String>,
 }
 
 impl Player {
@@ -96,8 +97,10 @@ struct Hud;
 
 pub struct PlayerPlugin {
     pub spawn: Vec3,
-    /// Show the counselor's mesh (bind pose, no outfit yet) instead of a placeholder capsule.
-    pub show_model: bool,
+    /// A placeholder capsule instead of the counselor's model.
+    pub capsule: bool,
+    /// A fixed camera instead of the follow camera: eye and look-at point relative to the counselor's feet (testing).
+    pub camera: Option<(Vec3, Vec3)>,
     /// Scripted run: hold forward and sprint, logging stamina every second.
     pub demo: bool,
     /// Fixed fear level (testing: fear events aren't pushed in the client yet).
@@ -109,7 +112,8 @@ pub struct PlayerPlugin {
 #[derive(Resource)]
 struct PlayerConfig {
     spawn: Vec3,
-    show_model: bool,
+    capsule: bool,
+    camera: Option<(Vec3, Vec3)>,
     demo: bool,
     fear: f32,
     health: Option<f32>,
@@ -117,7 +121,7 @@ struct PlayerConfig {
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(PlayerConfig { spawn: self.spawn, show_model: self.show_model, demo: self.demo, fear: self.fear, health: self.health })
+        app.insert_resource(PlayerConfig { spawn: self.spawn, capsule: self.capsule, camera: self.camera, demo: self.demo, fear: self.fear, health: self.health })
             .init_resource::<Intent>()
             .add_systems(Startup, spawn_player)
             // Input is read once per frame; one-shot actions stay latched until a fixed step uses them, so a frame
@@ -135,32 +139,32 @@ fn spawn_player(
     tuning: Res<PlayerTuning>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    character: Option<Res<crate::character::CounselorCharacter>>,
 ) {
     let mut counselor = Counselor::new(tuning.stats);
     counselor.health = config.health.unwrap_or(tuning.counselor.health.max_health).clamp(1.0, tuning.counselor.health.max_health);
     counselor.update_wounded(counselor.health, true, &tuning.counselor);
-    let mut player = commands.spawn((
-        Player { counselor, velocity: Vec2::ZERO, walk_toggle: false, fear: config.fear, root_motion: None },
+    let player = commands.spawn((
+        Player { counselor, velocity: Vec2::ZERO, walk_toggle: false, fear: config.fear, root_motion: None, montage: None },
         Transform::from_translation(config.spawn),
         Visibility::default(),
     ));
-    if config.show_model {
-        let body = "SummerCamp/Content/Characters/Counselors/Athlete/Meshes/Body";
-        player.with_children(|p| {
-            for part in ["Athlete_Body", "Athlete_Face", "Athlete_Hair_SM"] {
-                let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(format!("{body}/{part}.glb")));
-                p.spawn((WorldAssetRoot(scene), PlayerPart));
-            }
-        });
-    } else {
-        let capsule = meshes.add(Capsule3d::new(CAPSULE_RADIUS_M, 2.0 * (CAPSULE_HALF_HEIGHT_M - CAPSULE_RADIUS_M)));
-        let material = materials.add(StandardMaterial { base_color: Color::srgb(0.75, 0.55, 0.35), ..default() });
-        player.with_child((
-            Mesh3d(capsule),
-            MeshMaterial3d(material),
-            Transform::from_xyz(0.0, CAPSULE_HALF_HEIGHT_M, 0.0),
-            PlayerPart,
-        ));
+    let player = player.id();
+    match character.as_deref().filter(|_| !config.capsule) {
+        Some(character) => {
+            crate::character::spawn_model(&mut commands, &assets, character, player);
+        }
+        None => {
+            let capsule = meshes.add(Capsule3d::new(CAPSULE_RADIUS_M, 2.0 * (CAPSULE_HALF_HEIGHT_M - CAPSULE_RADIUS_M)));
+            let material = materials.add(StandardMaterial { base_color: Color::srgb(0.75, 0.55, 0.35), ..default() });
+            commands.spawn((
+                Mesh3d(capsule),
+                MeshMaterial3d(material),
+                Transform::from_xyz(0.0, CAPSULE_HALF_HEIGHT_M, 0.0),
+                PlayerPart,
+                ChildOf(player),
+            ));
+        }
     }
     commands.spawn((
         Camera3d::default(),
@@ -295,6 +299,7 @@ fn update_counselor(
         if let Some(m) = p.counselor.try_dodge(dir, &situation, false, &t.dodge) {
             info!("dodged {dir:?} (stamina {:.1})", p.counselor.stamina);
             p.root_motion = root_motion(&m.name, m.length);
+            p.montage = Some(m.name.clone());
         }
     }
     let situation = p.situation();
@@ -308,6 +313,7 @@ fn update_counselor(
                     info!("stumbled (out of stamina)");
                     let m = &p.counselor.stumble.montage;
                     p.root_motion = root_motion(&m.name, m.length);
+                    p.montage = Some(m.name.clone());
                 }
             }
             CounselorEvent::StaminaRecovered => info!("stamina recovered"),
@@ -318,6 +324,7 @@ fn update_counselor(
         info!("stumbled (chance {:.0}%)", t.stumble.chance(&p.counselor, p.fear, t.stamina_max));
         let m = &p.counselor.stumble.montage;
         p.root_motion = root_motion(&m.name, m.length);
+        p.montage = Some(m.name.clone());
     }
     if config.demo && time.elapsed_secs() as u32 > *demo_log {
         *demo_log = time.elapsed_secs() as u32;
@@ -462,6 +469,7 @@ fn aim_demo(
 
 /// Third-person camera on a "spring arm": pulled in when the map is between the camera and the counselor.
 fn follow_camera(
+    config: Res<PlayerConfig>,
     motion: Res<AccumulatedMouseMotion>,
     cursor: Single<&CursorOptions>,
     player: Single<(&Transform, Has<Driving>), (With<Player>, Without<PlayerCamera>)>,
@@ -471,6 +479,12 @@ fn follow_camera(
     vehicle_parts: Query<(), With<crate::props::VehiclePart>>,
 ) {
     let (player, driving) = *player;
+    if let Some((eye, target)) = config.camera {
+        let (_, ref mut xf) = *camera;
+        xf.translation = player.translation + eye;
+        xf.look_at(player.translation + target, Vec3::Y);
+        return;
+    }
     let max_distance = if driving { CAR_CAMERA_DISTANCE_M } else { CAMERA_DISTANCE_M };
     let (ref mut cam, ref mut xf) = *camera;
     if cursor.grab_mode == CursorGrabMode::Locked {

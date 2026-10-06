@@ -237,6 +237,6 @@ mod tests {
 }
 
 /// `null` (what the exporter writes for "none") as an empty map.
-fn null_as_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<std::collections::HashMap<String, String>, D::Error> {
+pub(crate) fn null_as_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<std::collections::HashMap<String, String>, D::Error> {
     Ok(Option::deserialize(d)?.unwrap_or_default())
 }

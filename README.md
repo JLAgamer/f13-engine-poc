@@ -49,6 +49,10 @@ dotnet run --project tools/f13-export -- --game "<path to F13Game>" --out "<expo
 - `*.dds` next to each texture PNG: the game's own block-compressed texture data with its mip chain (BC1/BC3/BC5),
   which the game loads in preference to the PNG (a quarter of the GPU memory, no shimmer at a distance).
   `tools/f13-export ... dds` writes just these.
+- `counselors/<Blueprint>.json` and `anims/*.anim`: the counselor's character as the Blueprint assembles it (base
+  body, default outfit with its default materials, face on the head bone, hair on the face, skin masks), the shared
+  skeleton's bones with their retargeting modes, and her animations sampled per frame. `tools/f13-export ... counselor`
+  writes just these.
 - `anims.json`: length and root motion of the montages the rules use (dodges, stumbles); dodges and stumbles move
   the counselor by it, as the game's root motion does.
 - `classes.json`: Blueprint classes the match can spawn (cabinets, items, cars, doors...): parents, defaults and
@@ -64,8 +68,8 @@ View the map (Crystal Lake, small; `--layout` picks one of its four cabin layout
 cargo run -p f13-game --release -- --export "<export dir>" --layout 1
 ```
 
-By default you play Vanessa (a placeholder capsule; `--model` shows her mesh, which has no outfit or animation
-yet): WASD move (running by default), Shift sprint, Caps Lock toggle walk, Ctrl crouch, C combat stance (double-tap
+By default you play Vanessa, in her default outfit and animated (idle, walk/run/sprint, crouch, combat strafing,
+dodges, stumbles, first aid; `--capsule` for the old placeholder): WASD move (running by default), Shift sprint, Caps Lock toggle walk, Ctrl crouch, C combat stance (double-tap
 A/D/S to dodge), click to capture the mouse,
 Esc to release. The HUD shows health, stamina, fear and speed. `--demo` sprints in a straight line and logs stamina every second.
 Counselors stumble as in the game (by fear, stamina and wounds); fear events aren't pushed yet, so `--fear 0-100` sets
@@ -86,6 +90,8 @@ a car escape zone; F gets out. `--near-car` starts you next to a car. `--bot-esc
 automatically (teleporting between goals) and exits when done; `--bot-heal` fetches and uses a first aid spray;
 `--bot-dodge` dodges in each direction and checks the distance and stamina; `--bot-door` runs 16 checks on a door, a
 barricaded door and a window.
+For screenshots: `--screenshot out.png` (after loading; `--screenshot-after s` waits longer), `--camera
+x,y,z,tx,ty,tz` (eye and look-at, relative to her feet), `--pose <animation>@<seconds>` (holds her in one animation).
 `--speed x` runs the game clock faster (bots included; 4 keeps every result the same and cuts a bot run to ~15 s).
 
 ## Tests

@@ -1,5 +1,6 @@
 //! Loads `tuning.json` (made by `tools/extract_tuning.py` from the player's own install) into f13-core types.
 
+pub mod character;
 pub mod classes;
 pub mod level;
 mod native_classes;
@@ -247,6 +248,8 @@ pub enum LoadError {
     Json(serde_json::Error),
     Format(u32),
     MissingCurve(String),
+    /// An exported file that doesn't parse (e.g. an `.anim` from another exporter version).
+    Invalid(String),
 }
 
 impl std::fmt::Display for LoadError {
@@ -258,6 +261,7 @@ impl std::fmt::Display for LoadError {
                 write!(f, "tuning file has format {v}, this build needs {FORMAT}: run tools/extract_tuning.py again")
             }
             LoadError::MissingCurve(c) => write!(f, "fear event references missing curve {c}"),
+            LoadError::Invalid(what) => write!(f, "{what} (re-export it)"),
         }
     }
 }

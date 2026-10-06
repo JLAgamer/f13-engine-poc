@@ -22,6 +22,7 @@ using CUE4Parse.UE4.Assets.Readers;
 using CUE4Parse.UE4.Assets.Objects;
 
 using CUE4Parse.UE4.Assets.Exports.Material;
+using CUE4Parse.UE4.Assets.Exports.Texture;
 using CUE4Parse_Conversion;
 using CUE4Parse_Conversion.Exporters;
 using CUE4Parse_Conversion.Options;
@@ -69,7 +70,7 @@ classes = new ClassExporter(provider, Queue, o => o is UStaticMesh sm ? OutPath(
 
 void Queue(UObject obj)
 {
-    if (obj is not (UStaticMesh or USkeletalMesh or UMaterialInterface) || !queued.Add(obj.GetPathName())) return;
+    if (obj is not (UStaticMesh or USkeletalMesh or UMaterialInterface or UTexture) || !queued.Add(obj.GetPathName())) return;
     if (obj is UStaticMesh sm) MeshMaterials.RestoreStaticMaterials(sm);
     session.Add(obj);
 }
@@ -282,6 +283,15 @@ switch (rest[0])
             }
         }
         return 0;
+    case "debug-clr": // debug-clr <type name>: members of a CUE4Parse type
+        foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+        foreach (var t in asm.GetTypes().Where(t => t.Name == rest[1] || t.FullName == rest[1]))
+        {
+            Console.WriteLine(t.FullName);
+            foreach (var m in t.GetMembers(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.DeclaredOnly))
+                Console.WriteLine($"  {m.MemberType} {m}");
+        }
+        return 0;
     case "debug-ism":
         foreach (var e in provider.LoadPackage(ToFile(rest[1])).GetExports().OfType<F13InstancedMeshComponent>().Take(5))
             Console.WriteLine($"{e.ExportType} {e.Name} inst={e.Instances.Count} first={(e.Instances.Count > 0 ? e.Instances[0].TransformData.ToString() : "")}");
@@ -292,6 +302,10 @@ switch (rest[0])
         foreach (var l in Mvp.Layouts) ExportLevel(l);
         WriteClasses();
         AnimExporter.Write(provider, outDir, Mvp.Montages);
+        new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims);
+        break;
+    case "counselor": // the MVP counselor's parts and animations (and the meshes they need)
+        new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims);
         break;
     case "anims":
         AnimExporter.Write(provider, outDir, Mvp.Montages);
@@ -475,6 +489,36 @@ static class Mvp
         $"{Shared}/Combat/Dodge/AM_combat_stand_dodge_back",
         $"{Shared}/Stumble/AM_normal_stand_run_stumble_short",
         $"{Shared}/Stumble/AM_normal_stand_sprint_stumble_short",
+    ];
+    public const string Counselor = "/Game/Characters/Counselors/Athlete/Athlete_Counselor";
+    // Animations f13-game plays on the counselor: Athlete_AnimBP's female overrides of Base_Counselor_AnimBP's
+    // locomotion (BS_F_Normal_Move: idle, walk, run, sprint; BS_F_Combat strafing), crouch, wounded idle, and the
+    // montages the rules use.
+    const string Female = "/Game/Characters/Counselors/Base/Female/Animation";
+    public static readonly string[] CounselorAnims =
+    [
+        $"{Female}/F_normal_stand_idle_01",
+        $"{Female}/F_hurt_stand_idle_01",
+        $"{Female}/Locomotion/F_normal_stand_walk_forward",
+        $"{Female}/Locomotion/F_normal_stand_run_forward",
+        $"{Female}/Locomotion/F_normal_stand_sprint_forward",
+        $"{Female}/Locomotion/F_normal_stand_walk_back",
+        $"{Female}/Locomotion/F_normal_stand_walk_left",
+        $"{Female}/Locomotion/F_normal_stand_walk_right",
+        $"{Female}/Locomotion/F_normal_stand_walk_forward_45_left",
+        $"{Female}/Locomotion/F_normal_stand_walk_forward_45_right",
+        $"{Female}/Locomotion/F_normal_stand_walk_back_45_left",
+        $"{Female}/Locomotion/F_normal_stand_walk_back_45_right",
+        $"{Female}/Locomotion/Crouch/f_normal_crouch_idle_01",
+        $"{Female}/Locomotion/Crouch/f_normal_crouch_walk_forward",
+        $"{Female}/Combat/f_combat_stand_idle_1h",
+        $"{Female}/Combat/Dodge/f_combat_stand_dodge_left_01",
+        $"{Female}/Combat/Dodge/f_combat_stand_dodge_right_01",
+        $"{Female}/Combat/Dodge/f_combat_stand_dodge_back_01",
+        $"{Female}/Locomotion/Stumbles/f_normal_stand_run_stumble_short_01",
+        $"{Female}/Locomotion/Stumbles/f_normal_stand_sprint_stumble_short_01",
+        $"{Female}/Interaction/Items/f_normal_stand_use_firstaid_self",
+        .. Montages,
     ];
 }
 

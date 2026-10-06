@@ -1,11 +1,13 @@
 //! f13-game: currently a viewer for the MVP map (Crystal Lake, small) built from the player's own export.
 //!
 //!   cargo run -p f13-game --release -- --export <dir made by tools/f13-export> [--layout 1-4] [--seed n] [--near-car] [--bot-escape] [--bot-heal] [--bot-dodge] [--bot-door] [--grass]
-//!       [--fly] [--model] [--demo] [--fear 0-100] [--health 1-100] [--speed x] [--tuning file] [--aerial] [--no-foliage] [--screenshot out.png]
-//!       [--camera x,y,z,tx,ty,tz]  (--fly start: eye and look-at point)
+//!       [--fly] [--capsule] [--demo] [--fear 0-100] [--health 1-100] [--speed x] [--tuning file] [--aerial] [--no-foliage] [--screenshot out.png [--screenshot-after s]]
+//!       [--pose <animation>@<seconds>]  (hold the counselor in one exported animation, for screenshots)
+//!       [--camera x,y,z,tx,ty,tz]  (--fly start: eye and look-at point; playing: both relative to the counselor's feet)
 //!   Default: play as Vanessa (see player.rs for controls). --fly: free camera instead.   (screenshot: wait for loading, save one frame, exit)
 
 mod bot;
+mod character;
 mod doors;
 mod interact;
 mod materials;
@@ -40,7 +42,7 @@ struct Args {
     grass: bool,
     aerial: bool,
     fly: bool,
-    model: bool,
+    capsule: bool,
     demo: bool,
     fear: f32,
     /// Game clock multiplier (testing: run bots faster than real time).
@@ -49,6 +51,8 @@ struct Args {
     tuning: Option<PathBuf>,
     foliage: bool,
     screenshot: Option<PathBuf>,
+    screenshot_after: f32,
+    pose: Option<(String, f32)>,
     /// --fly start: eye position and a point to look at (Bevy space, metres).
     camera: Option<(Vec3, Vec3)>,
 }
@@ -65,7 +69,7 @@ fn parse_args() -> Args {
     let mut grass = false;
     let mut aerial = false;
     let mut fly = false;
-    let mut model = false;
+    let mut capsule = false;
     let mut demo = false;
     let mut fear = 0.0;
     let mut speed = 1.0f32;
@@ -73,6 +77,8 @@ fn parse_args() -> Args {
     let mut tuning = None;
     let mut foliage = true;
     let mut screenshot = None;
+    let mut screenshot_after = 0.0;
+    let mut pose = None;
     let mut camera = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -88,7 +94,7 @@ fn parse_args() -> Args {
             "--grass" => grass = true,
             "--aerial" => aerial = true,
             "--fly" => fly = true,
-            "--model" => model = true,
+            "--capsule" => capsule = true,
             "--demo" => demo = true,
             "--speed" => speed = it.next().and_then(|v| v.parse().ok()).unwrap_or(1.0f32).clamp(0.1, 16.0),
             "--fear" => fear = it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0f32).clamp(0.0, 100.0),
@@ -96,6 +102,12 @@ fn parse_args() -> Args {
             "--tuning" => tuning = it.next().map(PathBuf::from),
             "--no-foliage" => foliage = false,
             "--screenshot" => screenshot = it.next().map(PathBuf::from),
+            "--pose" => {
+                let v = it.next().unwrap_or_default();
+                let (name, at) = v.split_once('@').unwrap_or((v.as_str(), "0"));
+                pose = Some((name.to_string(), at.parse().unwrap_or(0.0)));
+            }
+            "--screenshot-after" => screenshot_after = it.next().and_then(|s| s.parse().ok()).unwrap_or(0.0),
             "--camera" => {
                 let v: Vec<f32> = it.next().unwrap_or_default().split(',').filter_map(|x| x.trim().parse().ok()).collect();
                 if v.len() == 6 {
@@ -112,7 +124,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, grass, aerial, fly, model, demo, fear, speed, health, tuning, foliage, screenshot, camera }
+    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera }
 }
 
 #[derive(Resource)]
@@ -134,6 +146,9 @@ pub(crate) struct ExportRoot(pub(crate) PathBuf);
 struct ScreenshotPlan {
     path: PathBuf,
     frames_loaded: u32,
+    /// Extra game seconds to wait once everything has loaded (--screenshot-after).
+    after: f32,
+    shot_at: Option<f32>,
 }
 
 /// Montage root motion from the export's anims.json: name -> displacement per second in the character's
@@ -206,8 +221,8 @@ fn main() {
             repair_hold_time: tuning.repair_hold_time,
             vehicle_start: tuning.vehicle_start.clone(),
         })
-            .add_plugins(player::PlayerPlugin { spawn, show_model: args.model, demo: args.demo, fear: args.fear, health: args.health })
-            .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin));
+            .add_plugins(player::PlayerPlugin { spawn, capsule: args.capsule, camera: args.camera, demo: args.demo, fear: args.fear, health: args.health })
+            .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }));
         if args.bot_escape {
             app.add_plugins(bot::BotPlugin(bot::Goal::Escape));
         } else if args.bot_heal {
@@ -219,7 +234,7 @@ fn main() {
         }
     }
     if let Some(path) = args.screenshot.clone() {
-        app.insert_resource(ScreenshotPlan { path, frames_loaded: 0 }).add_systems(Update, take_screenshot);
+        app.insert_resource(ScreenshotPlan { path, frames_loaded: 0, after: args.screenshot_after, shot_at: None }).add_systems(Update, take_screenshot);
     }
     app
         .add_plugins(
@@ -329,8 +344,23 @@ fn take_screenshot(
     materials: Res<Assets<StandardMaterial>>,
     ported: materials::PortedMaterials,
     mips: Res<mipmaps::Pending>,
+    time: Res<Time>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    if let Some(at) = plan.shot_at {
+        // Loaded: shoot once the extra wait is over, then give the capture a few frames before exiting.
+        let now = time.elapsed_secs();
+        if now >= at && plan.frames_loaded < 120 + 1 {
+            plan.frames_loaded = 121;
+            commands.spawn(Screenshot::primary_window()).observe(save_to_disk(plan.path.clone()));
+        } else if plan.frames_loaded > 120 {
+            plan.frames_loaded += 1;
+            if plan.frames_loaded == 160 {
+                exit.write(AppExit::Success);
+            }
+        }
+        return;
+    }
     if level.scenes.is_empty() || !level.scenes.iter().all(|h| assets.is_loaded_with_dependencies(h.id())) {
         return;
     }
@@ -348,8 +378,6 @@ fn take_screenshot(
     }
     plan.frames_loaded += 1;
     if plan.frames_loaded == 120 {
-        commands.spawn(Screenshot::primary_window()).observe(save_to_disk(plan.path.clone()));
-    } else if plan.frames_loaded == 160 {
-        exit.write(AppExit::Success);
+        plan.shot_at = Some(time.elapsed_secs() + plan.after);
     }
 }

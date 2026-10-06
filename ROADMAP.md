@@ -69,12 +69,17 @@ Presentation
       reflections), POM parallax, emissive/light materials, foliage subsurface, the Chevette's paint mask
 - [x] Car, furniture, doors (frames and leaves), windows, barricades and items placed in the scene
 - [ ] Barricade plank: check its placement (not visible across the door in a screenshot)
-- [ ] Counselor model: Vanessa's outfit, hair and face attached to the head bone (now a capsule; her mesh is the bare
-      base body)
+- [x] Counselor model: Vanessa's base body, default outfit (master pose), face on the head bone, hair on the face, skin
+      clipped under the clothes by the outfit's skin mask (f13-game character.rs, shaders/skin.wgsl)
+- [ ] Counselor model, remaining: facial animation and hair dynamics (their own anim Blueprints), the eyes' iris and
+      lid overlays, outfit choice
 - [ ] Jason model (Part 2)
 - [ ] Characters placed in the scene
-- [ ] Animations (placeholder until retargeting works): locomotion, limp when wounded, stumbles, dodges, first aid,
-      repairs, car enter/exit
+- [x] Animations: female sequences retargeted as Unreal does (rotations from the animation, translations only on the
+      skeleton's "Animation" bones), blended like Athlete_AnimBP's blendspaces: idle/walk/run/sprint, wounded idle,
+      crouch, combat strafing (8 directions), dodges, stumbles, first aid
+- [ ] Animations, remaining: start/stop transitions, turn in place, foot-marker sync (now normalised time), limp
+      movement, aim offsets, repairs, car enter/exit and sitting (she's hidden in the car), door/window montages
 - [ ] Special moves: door open/close/lock and window open/close/vault/dive montages (now a fixed 0.5 s, 90° door swing
       and instant vault/dive)
 - [ ] Repair minigame dial UI (now a text dial in the HUD)
