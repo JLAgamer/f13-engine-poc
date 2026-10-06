@@ -2,17 +2,19 @@
 //! sets `RuntimeGeneration=Dynamic`, so its navmesh covers the cabin layout and furniture of the match). A port of
 //! Recast's tiled pipeline with the game's settings (DefaultEngine.ini `[/Script/Engine.RecastNavMesh]` and the agent's
 //! NavDataConfig): rasterize the triangles into a voxel heightfield, filter it (low hanging obstacles, ledges, low
-//! ceilings), compact it, erode it by the agent radius, partition it into monotone regions (`RegionPartitioning`), trace
-//! and simplify the region contours, and triangulate them into convex polygons of up to six vertices.
+//! ceilings), compact it, erode it by the agent radius, partition it into monotone regions swept in chunks
+//! (`RegionPartitioning=ChunkyMonotone`) and merge the small ones (`MergeRegionSize`), trace and simplify the region
+//! contours, and triangulate them into convex polygons of up to six vertices.
 //!
-//! Not ported: region merging (`MergeRegionSize`; it only reduces the polygon count), detail meshes (heights come from
-//! the polygon vertices), border vertex removal (tile edges are matched by overlap, see navmesh.rs), area types.
+//! Not ported: detail meshes (heights come from the polygon vertices), border vertex removal (tile edges are matched by
+//! overlap, see navmesh.rs), area types.
 //!
 //! Space: Y up, metres (any unit works if the settings use it).
 
 use crate::collision::{Tri, TriSource};
 use glam::Vec3;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 /// The build settings, in world units.
 #[derive(Clone, Debug)]
@@ -31,6 +33,11 @@ pub struct NavConfig {
     pub max_simplification_error: f32,
     pub max_edge_len: i32,
     pub max_verts_per_poly: usize,
+    /// Regions smaller than this (cells) merge into a neighbour (from UE's `MergeRegionSize`; see navigation.rs).
+    pub merge_region_area: usize,
+    /// ChunkyMonotone partitioning: the tile is swept in this many chunks per side (UE's `RegionChunkSplits`; 1 is
+    /// plain monotone).
+    pub region_chunk_splits: i32,
 }
 
 impl NavConfig {
@@ -320,6 +327,16 @@ fn filter_low_ceilings(hf: &mut Heightfield, height: i32) {
     }
 }
 
+/// A run of spans along a row in the monotone partitioning: its region, and the region of the row before it touches
+/// (`NULL_NEI`: more than one) with how many spans.
+#[derive(Clone, Copy, Default)]
+struct Sweep {
+    id: u32,
+    ns: u32,
+    nei: u32,
+}
+const NULL_NEI: u32 = 0xffff_ffff;
+
 /// The walkable spans only, with their neighbour links.
 struct Compact {
     w: i32,
@@ -454,8 +471,9 @@ impl Compact {
         }
     }
 
-    /// Monotone regions (rcBuildRegionsMonotone), the border cells marked as border regions.
-    fn regions_monotone(&self, border: i32) -> Vec<u32> {
+    /// Monotone regions (rcBuildRegionsMonotone), the border cells marked as border regions. With `chunks` > 1, UE's
+    /// ChunkyMonotone: the tile's inside is cut into `chunks` x `chunks` rectangles swept separately.
+    fn regions_monotone(&self, border: i32, chunks: i32) -> Vec<u32> {
         let (w, h) = (self.w, self.h);
         let mut reg = vec![0u32; self.span_count()];
         let mut id: u32 = 1;
@@ -483,28 +501,36 @@ impl Compact {
             paint(&mut reg, 0, w, h - bh, h, id | BORDER_REG);
             id += 1;
         }
-        #[derive(Clone, Copy, Default)]
-        struct Sweep {
-            id: u32,
-            ns: u32,
-            nei: u32,
-        }
-        const NULL_NEI: u32 = 0xffff_ffff;
         let mut sweeps: Vec<Sweep> = Vec::new();
         let mut prev: Vec<u32> = Vec::new();
-        for z in border..h - border {
+        let chunks = chunks.max(1);
+        let (cw, ch) = ((w - 2 * border + chunks - 1) / chunks, (h - 2 * border + chunks - 1) / chunks);
+        for (cx, cz) in (0..chunks).flat_map(|cz| (0..chunks).map(move |cx| (cx, cz))) {
+            let (x0, x1) = (border + cx * cw, (border + (cx + 1) * cw).min(w - border));
+            let (z0, z1) = (border + cz * ch, (border + (cz + 1) * ch).min(h - border));
+            self.sweep(&mut reg, &mut id, &mut sweeps, &mut prev, x0, x1, z0, z1);
+        }
+        reg
+    }
+
+    /// One rectangle of the monotone partitioning: rows of spans become sweeps, a sweep joined one-to-one with a
+    /// region of the row before keeps it, the others start new ones. Neighbours outside the rectangle don't count.
+    #[allow(clippy::too_many_arguments)]
+    fn sweep(&self, reg: &mut [u32], id: &mut u32, sweeps: &mut Vec<Sweep>, prev: &mut Vec<u32>, x0: i32, x1: i32, z0: i32, z1: i32) {
+        let w = self.w;
+        for z in z0..z1 {
             // Collect the row's spans into sweeps.
             prev.iter_mut().for_each(|p| *p = 0);
             let mut rid: u32 = 1;
-            for x in border..w - border {
+            for x in x0..x1 {
                 let (f, c) = self.cells[(x + z * w) as usize];
                 for i in f as usize..(f + c) as usize {
                     if self.area[i] == NULL_AREA {
                         continue;
                     }
-                    // -x
+                    // -x (within the rectangle)
                     let mut previd = 0;
-                    if let Some(a) = self.nei(i, 0) {
+                    if let Some(a) = self.nei(i, 0).filter(|_| x > x0) {
                         if reg[a] & BORDER_REG == 0 && self.area[i] == self.area[a] {
                             previd = reg[a];
                         }
@@ -517,8 +543,8 @@ impl Compact {
                         }
                         sweeps[previd as usize] = Sweep { id: 0, ns: 0, nei: 0 };
                     }
-                    // -z
-                    if let Some(a) = self.nei(i, 3) {
+                    // -z (within the rectangle)
+                    if let Some(a) = self.nei(i, 3).filter(|_| z > z0) {
                         let nr = reg[a];
                         if nr != 0 && nr & BORDER_REG == 0 && self.area[i] == self.area[a] {
                             let s = &mut sweeps[previd as usize];
@@ -543,11 +569,11 @@ impl Compact {
                 if s.nei != NULL_NEI && s.nei != 0 && prev.get(s.nei as usize).copied() == Some(s.ns) {
                     sweeps[i].id = s.nei;
                 } else {
-                    sweeps[i].id = id;
-                    id += 1;
+                    sweeps[i].id = *id;
+                    *id += 1;
                 }
             }
-            for x in border..w - border {
+            for x in x0..x1 {
                 let (f, c) = self.cells[(x + z * w) as usize];
                 for i in f as usize..(f + c) as usize {
                     if reg[i] > 0 && reg[i] < rid {
@@ -556,7 +582,175 @@ impl Compact {
                 }
             }
         }
-        reg
+    }
+
+    /// The regions around region `reg[i]`, walking its outline from span `i`'s edge `dir` (Recast's region
+    /// walkContour): neighbour ids in order, 0 for a wall, without repeats.
+    fn region_outline(&self, reg: &[u32], mut i: usize, mut dir: usize) -> Vec<u32> {
+        let (start_i, start_dir) = (i, dir);
+        let across = |i: usize, d: usize| self.nei(i, d).map_or(0, |a| reg[a]);
+        let mut cur = across(i, dir);
+        let mut out = vec![cur];
+        for _ in 0..40000 {
+            if across(i, dir) != reg[i] {
+                let r = across(i, dir);
+                if r != cur {
+                    cur = r;
+                    out.push(cur);
+                }
+                dir = (dir + 1) & 3;
+            } else {
+                let Some(n) = self.nei(i, dir) else { return out };
+                i = n;
+                dir = (dir + 3) & 3;
+            }
+            if i == start_i && dir == start_dir {
+                break;
+            }
+        }
+        dedup_ring(&mut out);
+        out
+    }
+
+    /// Recast's mergeAndFilterRegions (minimum region area 0): a region smaller than `merge_area` cells, or one with
+    /// no wall around it, joins its smallest neighbour of the same area that it borders along one stretch only and
+    /// that isn't above or below it, until nothing merges.
+    fn merge_regions(&self, reg: &mut [u32], merge_area: usize) {
+        #[derive(Default)]
+        struct Region {
+            spans: usize,
+            id: u32,
+            area: u8,
+            overlap: bool,
+            connections: Vec<u32>,
+            floors: Vec<u32>,
+        }
+        let nreg = reg.iter().filter(|r| **r & BORDER_REG == 0).max().map_or(0, |m| *m as usize + 1);
+        let mut regions: Vec<Region> = (0..nreg).map(|i| Region { id: i as u32, ..Default::default() }).collect();
+        for z in 0..self.h {
+            for x in 0..self.w {
+                let (f, c) = self.cells[(x + z * self.w) as usize];
+                for i in f as usize..(f + c) as usize {
+                    let r = reg[i] as usize;
+                    if r == 0 || r >= nreg {
+                        continue;
+                    }
+                    regions[r].spans += 1;
+                    for j in f as usize..(f + c) as usize {
+                        let floor = reg[j];
+                        if i == j || floor == 0 || floor as usize >= nreg {
+                            continue;
+                        }
+                        if floor as usize == r {
+                            regions[r].overlap = true;
+                        }
+                        if !regions[r].floors.contains(&floor) {
+                            regions[r].floors.push(floor);
+                        }
+                    }
+                    if !regions[r].connections.is_empty() {
+                        continue;
+                    }
+                    regions[r].area = self.area[i];
+                    if let Some(d) = (0..4).find(|&d| self.nei(i, d).map_or(0, |a| reg[a]) != reg[i]) {
+                        regions[r].connections = self.region_outline(reg, i, d);
+                    }
+                }
+            }
+        }
+        let can_merge = |a: &Region, b: &Region| a.area == b.area && a.connections.iter().filter(|&&c| c == b.id).count() <= 1 && !a.floors.contains(&b.id);
+        loop {
+            let mut merged = 0;
+            for i in 0..nreg {
+                let r = &regions[i];
+                if r.id == 0 || r.id & BORDER_REG != 0 || r.overlap || r.spans == 0 {
+                    continue;
+                }
+                if r.spans > merge_area && r.connections.contains(&0) {
+                    continue;
+                }
+                // The smallest neighbour it can join.
+                let mut target = None;
+                let mut smallest = usize::MAX;
+                for &c in &r.connections {
+                    if c & BORDER_REG != 0 || c as usize >= nreg {
+                        continue;
+                    }
+                    let m = &regions[c as usize];
+                    if m.id == 0 || m.id & BORDER_REG != 0 || m.overlap {
+                        continue;
+                    }
+                    if m.spans < smallest && can_merge(r, m) && can_merge(m, r) {
+                        smallest = m.spans;
+                        target = Some(m.id);
+                    }
+                }
+                let Some(to) = target.filter(|&t| t != r.id) else { continue };
+                let old = r.id;
+                // Splice the outlines together where they meet.
+                let (acon, bcon) = (regions[to as usize].connections.clone(), regions[i].connections.clone());
+                let (Some(ia), Some(ib)) = (acon.iter().position(|&c| c == old), bcon.iter().position(|&c| c == to)) else { continue };
+                let mut joined: Vec<u32> = (0..acon.len() - 1).map(|k| acon[(ia + 1 + k) % acon.len()]).collect();
+                joined.extend((0..bcon.len() - 1).map(|k| bcon[(ib + 1 + k) % bcon.len()]));
+                dedup_ring(&mut joined);
+                let floors = std::mem::take(&mut regions[i].floors);
+                let spans = std::mem::take(&mut regions[i].spans);
+                regions[i].connections.clear();
+                let t = &mut regions[to as usize];
+                t.connections = joined;
+                for f in floors {
+                    if !t.floors.contains(&f) {
+                        t.floors.push(f);
+                    }
+                }
+                t.spans += spans;
+                // Everything that pointed at the merged region now points at the one it joined.
+                for g in regions.iter_mut() {
+                    if g.id == 0 || g.id & BORDER_REG != 0 {
+                        continue;
+                    }
+                    if g.id == old {
+                        g.id = to;
+                    }
+                    let mut changed = false;
+                    for c in g.connections.iter_mut() {
+                        if *c == old {
+                            *c = to;
+                            changed = true;
+                        }
+                    }
+                    for f in g.floors.iter_mut() {
+                        if *f == old {
+                            *f = to;
+                        }
+                    }
+                    if changed {
+                        dedup_ring(&mut g.connections);
+                    }
+                }
+                merged += 1;
+            }
+            if merged == 0 {
+                break;
+            }
+        }
+        for r in reg.iter_mut() {
+            if *r & BORDER_REG == 0 && (*r as usize) < nreg {
+                *r = regions[*r as usize].id;
+            }
+        }
+    }
+}
+
+/// Drops repeats next to each other in a ring (the last and the first are next to each other too).
+fn dedup_ring(v: &mut Vec<u32>) {
+    let mut j = 0;
+    while v.len() > 1 && j < v.len() {
+        if v[j] == v[(j + 1) % v.len()] {
+            v.remove(j);
+        } else {
+            j += 1;
+        }
     }
 }
 
@@ -853,8 +1047,9 @@ impl Tri2<'_> {
 
 const EAR: usize = 0x8000_0000;
 
-/// Triangles (indices into `v`) of a simple polygon; None if it can't be triangulated.
-fn triangulate(v: &[(i32, i32)]) -> Option<Vec<[usize; 3]>> {
+/// Triangles (indices into `v`) of a simple polygon, and whether it had to cut a corner that isn't a proper ear (an
+/// outline touching itself); None if it can't be triangulated at all.
+fn triangulate(v: &[(i32, i32)]) -> Option<(Vec<[usize; 3]>, bool)> {
     let t = Tri2 { v };
     let mut idx: Vec<usize> = (0..v.len()).collect();
     let mut tris = Vec::new();
@@ -867,6 +1062,7 @@ fn triangulate(v: &[(i32, i32)]) -> Option<Vec<[usize; 3]>> {
             idx[i1] |= EAR;
         }
     }
+    let mut stuck = false;
     while idx.len() > 3 {
         let n = idx.len();
         let mut best: Option<(i64, usize)> = None;
@@ -893,6 +1089,21 @@ fn triangulate(v: &[(i32, i32)]) -> Option<Vec<[usize; 3]>> {
                 }
             }
         }
+        if best.is_none() {
+            // Still none (an outline that touches itself): cut the convex corner with the shortest diagonal, so the
+            // region keeps its floor rather than losing all of it (Recast gives up here).
+            for i in 0..n {
+                let (i1, i2) = (next(i, n), next(next(i, n), n));
+                let (p0, p1, p2) = (t.p(&idx, i), t.p(&idx, i1), t.p(&idx, i2));
+                if left(p0, p1, p2) {
+                    let len = ((p2.0 - p0.0) as i64).pow(2) + ((p2.1 - p0.1) as i64).pow(2);
+                    if best.is_none_or(|(l, _)| len < l) {
+                        best = Some((len, i));
+                    }
+                }
+            }
+            stuck = true;
+        }
         let (_, i) = best?;
         let i1 = next(i, n);
         let i2 = next(i1, n);
@@ -907,7 +1118,7 @@ fn triangulate(v: &[(i32, i32)]) -> Option<Vec<[usize; 3]>> {
         idx[i1] = if ok { idx[i1] | EAR } else { idx[i1] & !EAR };
     }
     tris.push([idx[0] & !EAR, idx[1] & !EAR, idx[2] & !EAR]);
-    Some(tris)
+    Some((tris, stuck))
 }
 
 /// The merge value of two polygons sharing an edge (its squared length), if the result is convex and small enough.
@@ -958,22 +1169,46 @@ fn merge_polys(pa: &[usize], pb: &[usize], ea: usize, eb: usize) -> Vec<usize> {
     out
 }
 
-/// Time spent per build stage (microseconds, summed over tiles): rasterize, filter, compact and erode, regions,
-/// contours, polygons.
+/// A build's progress, readable while it runs: tiles done of the total, and the time spent per stage (microseconds,
+/// summed over tiles): rasterize, filter, compact and erode, regions, contours, polygons.
 #[derive(Default, Debug)]
-pub struct BuildStats(pub [std::sync::atomic::AtomicU64; 6]);
+pub struct BuildStats {
+    times: [AtomicU64; 6],
+    pub tiles_done: AtomicUsize,
+    pub tiles_total: AtomicUsize,
+    /// Region outlines that didn't triangulate cleanly (cut at corners that aren't proper ears; Recast drops them).
+    pub bad_contours: AtomicUsize,
+}
 
 impl BuildStats {
     fn add(&self, stage: usize, since: &mut std::time::Instant) {
         let now = std::time::Instant::now();
-        self.0[stage].fetch_add((now - *since).as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
+        self.times[stage].fetch_add((now - *since).as_micros() as u64, Ordering::Relaxed);
         *since = now;
     }
 
     /// Seconds per stage.
     pub fn seconds(&self) -> [f32; 6] {
-        std::array::from_fn(|i| self.0[i].load(std::sync::atomic::Ordering::Relaxed) as f32 / 1e6)
+        std::array::from_fn(|i| self.times[i].load(Ordering::Relaxed) as f32 / 1e6)
     }
+
+    /// Tiles done and in all.
+    pub fn progress(&self) -> (usize, usize) {
+        (self.tiles_done.load(Ordering::Relaxed), self.tiles_total.load(Ordering::Relaxed))
+    }
+}
+
+/// The voxel column at `p` (diagnostics): its solid spans bottom up, (bottom, top, walkable by slope) in world
+/// units.
+pub fn probe_column(world: &(impl TriSource + ?Sized), cfg: &NavConfig, p: Vec3, ymin: f32, ymax: f32) -> Vec<(f32, f32, bool)> {
+    let cs = cfg.cell_size;
+    let bmin = Vec3::new((p.x / cs).floor() * cs, ymin, (p.z / cs).floor() * cs);
+    let mut hf = Heightfield { w: 1, h: 1, bmin, cs, ch: cfg.cell_height, cols: vec![Vec::new()] };
+    let walkable_y = cfg.agent_max_slope_deg.to_radians().cos();
+    world.for_each_in(bmin - Vec3::Y, Vec3::new(bmin.x + cs, ymax, bmin.z + cs), &mut |t| {
+        rasterize_tri(&mut hf, t, if t.n.y > walkable_y { WALKABLE } else { NULL_AREA }, cfg.walkable_climb());
+    });
+    hf.cols[0].iter().map(|s| (ymin + s.smin as f32 * cfg.cell_height, ymin + s.smax as f32 * cfg.cell_height, s.area != NULL_AREA)).collect()
 }
 
 /// Builds one tile from the triangles `world` has around it. `tx`, `tz` index tiles from `origin`.
@@ -999,7 +1234,8 @@ pub fn build_tile(world: &(impl TriSource + ?Sized), cfg: &NavConfig, origin: Ve
     let mut c = Compact::build(&hf, height, climb);
     c.erode(radius);
     stats.add(2, &mut clock);
-    let reg = c.regions_monotone(border);
+    let mut reg = c.regions_monotone(border, cfg.region_chunk_splits);
+    c.merge_regions(&mut reg, cfg.merge_region_area);
     stats.add(3, &mut clock);
 
     // Contours: a bit per span edge that borders another region.
@@ -1051,7 +1287,13 @@ pub fn build_tile(world: &(impl TriSource + ?Sized), cfg: &NavConfig, origin: Ve
     };
     for cont in &contours {
         let xz: Vec<(i32, i32)> = cont.iter().map(|v| (v.x, v.z)).collect();
-        let Some(tris) = triangulate(&xz) else { continue };
+        let Some((tris, stuck)) = triangulate(&xz) else {
+            stats.bad_contours.fetch_add(1, Ordering::Relaxed);
+            continue;
+        };
+        if stuck {
+            stats.bad_contours.fetch_add(1, Ordering::Relaxed);
+        }
         let mut polys: Vec<Vec<usize>> = tris.iter().filter(|t| area2(xz[t[0]], xz[t[1]], xz[t[2]]) != 0).map(|t| t.to_vec()).collect();
         loop {
             let mut best: Option<(i64, usize, usize, usize, usize)> = None;
@@ -1089,7 +1331,8 @@ pub fn build(world: &(impl TriSource + Sync + ?Sized), cfg: &NavConfig, min: Vec
     let (nx, nz) = (((max.x - min.x) / ts).ceil() as i32, ((max.z - min.z) / ts).ceil() as i32);
     let jobs: Vec<(i32, i32)> = (0..nz).flat_map(|z| (0..nx).map(move |x| (x, z))).collect();
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
-    let next = std::sync::atomic::AtomicUsize::new(0);
+    let next = AtomicUsize::new(0);
+    stats.tiles_total.store(jobs.len(), Ordering::Relaxed);
     let mut out: Vec<TileMesh> = Vec::new();
     std::thread::scope(|s| {
         let handles: Vec<_> = (0..threads)
@@ -1097,9 +1340,10 @@ pub fn build(world: &(impl TriSource + Sync + ?Sized), cfg: &NavConfig, min: Vec
                 s.spawn(|| {
                     let mut mine = Vec::new();
                     loop {
-                        let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let k = next.fetch_add(1, Ordering::Relaxed);
                         let Some(&(x, z)) = jobs.get(k) else { break };
                         let t = build_tile(world, cfg, origin, x, z, min.y - 1.0, max.y + 1.0, stats);
+                        stats.tiles_done.fetch_add(1, Ordering::Relaxed);
                         if !t.polys.is_empty() {
                             mine.push(t);
                         }

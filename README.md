@@ -92,7 +92,8 @@ the sound pings your noise puts on his screen (the game's formula: sprinting is 
 Stealth isn't, standing still is silent) and Sense (unlocked 46 s in; it reaches further with your fear and late in
 the match, and finds hiders only once he's enraged). Out of sight, he goes where he last saw, heard or sensed you and
 searches the hiding spots around there. He finds his way on a navmesh built at load time from the map's collision
-with the game's own settings, like the game's runtime navmesh (`--nav-debug` draws it around you).
+with the game's own settings, like the game's runtime navmesh (about 4 s in the background; the HUD shows its
+progress, and `--nav-debug` draws it around you).
 `--no-jason` leaves him out, `--jason-delay s` gives you a head start, and `--bot-jason` waits to be killed
 (screenshots of the swing, grab and kill go to the temp folder). The counselor bots below leave him out.
 Hiding: E at a wardrobe, outhouse, bed or tent hides you (the game's enter, idle and exit animations; the view is
@@ -119,7 +120,7 @@ and durability are the game's), fires the flare gun or shotgun at what the middl
 places a bear trap in front of you; 1-3 throw firecrackers from that pocket (they go off 1.5 s later and stun him if
 he comes within 2 m). A pocket knife frees you the moment he grabs you; otherwise mash A / D to struggle free. M opens
 the map (when you carry one). The walkie-talkie only matters with other players. A dead counselor goes limp (a
-ragdoll from her physics asset). `--give Class,Class` starts with items (e.g. `--give BaseballBat_C,BP_PocketKnife_C`);
+ragdoll from her physics asset; in a kill, where the kill animation hands her over, as in the game). `--give Class,Class` starts with items (e.g. `--give BaseballBat_C,BP_PocketKnife_C`);
 `--bot-fight` uses them on Jason and passes once he's been stunned and recovers.
 For screenshots: `--screenshot out.png` (after loading; `--screenshot-after s` waits longer), `--camera
 x,y,z,tx,ty,tz` (eye and look-at, relative to her feet), `--pose <animation>@<seconds>` (holds her in one animation).

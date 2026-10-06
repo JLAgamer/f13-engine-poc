@@ -46,7 +46,8 @@ Mechanics: counselor side
   are placeholders)
 - [x] Grab escape (wiggle, stat-scaled, 10/s cap) and the pocket knife
 - [ ] Combat, remaining: blocking with a weapon, counselors caught in placed traps, Jason shaking off stuns
-- [x] Ragdoll on death (f13-core::ragdoll, the physics asset's bodies against the world collision)
+- [x] Ragdoll on death (f13-core::ragdoll, the physics asset's bodies against the world collision); in kills at the
+  counselor montage's shouldRagdoll notify
 
 Mechanics: Jason side
 - [x] Ability unlock order, recharge, rage
@@ -56,8 +57,11 @@ Mechanics: Jason side
   grab kill (Throat Hack, both sides' paired animation)
 - [x] Jason's perception (senses.rs, f13-core::perception): sight, the game's noise blips, Sense; he investigates
   clues and searches nearby hiding spots
-- [x] Navmesh built at load time from the collision with the game's Recast settings (f13-core::recast/navmesh); the
-  cooked navmesh is exported (navmesh-<agent>.json) as a reference
+- [x] Navmesh built at load time from the collision with the game's Recast settings (f13-core::recast/navmesh):
+  ChunkyMonotone regions merged as the cooked navmesh shows (93% the same walkable area, a few percent apart in
+  polygon count), tiles on the game's grid; paths pulled taut and shortened along the mesh; the HUD shows the build.
+  The cooked navmesh is exported (navmesh-<agent>.json) as a reference. Not ported: detail meshes (heights come from
+  the polygon corners), border vertex removal
 - [ ] Jason AI, remaining: heavy attacks, the grabbed counselor on his grab socket, kill cameras; playing as Jason;
   holding breath while hiding
 - [ ] Shift, Morph, Stalk (Sense done)

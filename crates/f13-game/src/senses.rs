@@ -60,6 +60,8 @@ pub struct Knowledge {
     pub abilities: KillerAbilities,
     /// Sense is on until this game time.
     pub sense_until: f32,
+    /// What Sense showed last (logged when it changes).
+    sense_shows: Option<Clue>,
     next_blip: f32,
     next_sight: f32,
 }
@@ -130,6 +132,7 @@ fn setup(
             hiding_spot: None,
             abilities: KillerAbilities::new(a.0.clone(), None),
             sense_until: 0.0,
+            sense_shows: None,
             next_blip: 0.0,
             next_sight: 0.0,
         });
@@ -228,12 +231,14 @@ fn perceive(
             k.sense_until = now + v.sense.duration;
             info!("Jason: Sense ({:.0} s)", v.sense.duration);
         }
+        let mut shows = None;
         if k.sensing(now) {
             let radius = perception::sense_radius(&v.sense, p.fear, hidden, k.abilities.rage_active, k.abilities.rage_timer) / 100.0;
             if flat.length() <= radius {
                 let indoors = f13_core::collision::segment_hit(&world, her + Vec3::Y * 1.7, her + Vec3::Y * INDOORS_ROOF_M, 2.0).is_some();
                 let clue = if indoors { Clue::SensedIndoors } else { Clue::Sensed };
-                if k.last_known.is_none_or(|(_, t, c)| c != clue || now - t > 1.0) {
+                shows = Some(clue);
+                if k.sense_shows != shows {
                     info!("Jason: Sense shows her ({}, {:.0} m, radius {radius:.0} m)", if indoors { "in a cabin" } else { "outside" }, flat.length());
                 }
                 if !k.sees {
@@ -244,5 +249,6 @@ fn perceive(
                 }
             }
         }
+        k.sense_shows = shows;
     }
 }

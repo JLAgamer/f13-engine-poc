@@ -1,6 +1,7 @@
 //! Path finding on a navmesh (recast.rs builds it), the way Detour does it: tiles are stitched where polygon edges
-//! overlap on a shared tile border, a path is an A* search over polygons (moving between portal midpoints), then pulled
-//! taut through the portals (the "simple stupid funnel").
+//! overlap on a shared tile border, a path is an A* search over polygons, then pulled taut through the portals (the
+//! "simple stupid funnel"). Detour's A* moves between portal midpoints; this one crosses each portal where the line
+//! toward the goal does (or at its nearer end), which costs large polygons more truly and picks better corridors.
 
 use crate::recast::TileMesh;
 use glam::{Vec2, Vec3};
@@ -39,6 +40,16 @@ fn tri_area(a: Vec3, b: Vec3, c: Vec3) -> f32 {
 
 fn xz(v: Vec3) -> Vec2 {
     Vec2::new(v.x, v.z)
+}
+
+/// Where the way from `from` toward `to` crosses the portal `l`..`r` (XZ): the point on the line, or the portal's
+/// end nearest the line.
+fn crossing(from: Vec3, to: Vec3, l: Vec3, r: Vec3) -> Vec3 {
+    // from + d s = l + e t  =>  t = ((from - l) x d) / (e x d)
+    let (d, e) = (xz(to) - xz(from), xz(r) - xz(l));
+    let denom = e.perp_dot(d);
+    let t = if denom.abs() < 1e-9 { 0.5 } else { (xz(from) - xz(l)).perp_dot(d) / denom };
+    l.lerp(r, t.clamp(0.0, 1.0))
 }
 
 impl NavMesh {
@@ -142,6 +153,40 @@ impl NavMesh {
         NavMesh { verts, polys, cell, grid }
     }
 
+    /// Which island (polygons joined by portals) each polygon is on.
+    pub fn island_of(&self) -> Vec<u32> {
+        let mut island = vec![u32::MAX; self.polys.len()];
+        let mut next = 0;
+        for start in 0..self.polys.len() {
+            if island[start] != u32::MAX {
+                continue;
+            }
+            let mut stack = vec![start as u32];
+            island[start] = next;
+            while let Some(p) = stack.pop() {
+                for q in &self.polys[p as usize].portals {
+                    if island[q.to as usize] == u32::MAX {
+                        island[q.to as usize] = next;
+                        stack.push(q.to);
+                    }
+                }
+            }
+            next += 1;
+        }
+        island
+    }
+
+    /// The islands' sizes (polygons), largest first.
+    pub fn islands(&self) -> Vec<usize> {
+        let of = self.island_of();
+        let mut sizes = vec![0usize; of.iter().map(|&i| i as usize + 1).max().unwrap_or(0)];
+        for i in of {
+            sizes[i as usize] += 1;
+        }
+        sizes.sort_unstable_by(|a, b| b.cmp(a));
+        sizes
+    }
+
     fn poly_verts(&self, p: u32) -> impl Iterator<Item = Vec3> + '_ {
         self.polys[p as usize].verts.iter().map(|&v| self.verts[v as usize])
     }
@@ -241,9 +286,10 @@ impl NavMesh {
         }
     }
 
-    /// A path from `from` to `to` (both snapped onto the mesh), as corner points ending at the goal. When the goal
-    /// can't be reached, the path leads to the reachable point nearest to it. `max_nodes` bounds the search.
-    pub fn find_path(&self, from: Vec3, to: Vec3, max_nodes: usize) -> Option<Vec<Vec3>> {
+    /// A path from `from` to `to` (both snapped onto the mesh), as corner points ending at the goal, and whether it
+    /// gets there: when the goal can't be reached, the path leads to the reachable point nearest to it. `max_nodes`
+    /// bounds the search.
+    pub fn find_path(&self, from: Vec3, to: Vec3, max_nodes: usize) -> Option<(Vec<Vec3>, bool)> {
         let (start, sp) = self.snap(from, 2.0)?;
         let (goal, gp) = self.snap(to, 4.0).unwrap_or((u32::MAX, to));
         #[derive(PartialEq)]
@@ -277,7 +323,7 @@ impl NavMesh {
             }
             let (g, pos, _) = info[&cur];
             for portal in &self.polys[cur as usize].portals {
-                let mid = (portal.left + portal.right) * 0.5;
+                let mid = crossing(pos, gp, portal.left, portal.right);
                 let ng = g + pos.distance(mid) + if portal.to == goal { mid.distance(gp) } else { 0.0 };
                 if info.get(&portal.to).is_some_and(|i| i.0 <= ng) {
                     continue;
@@ -303,7 +349,91 @@ impl NavMesh {
         }
         corridor.reverse();
         let target = if end == goal { gp } else { info[&end].1 };
-        Some(self.string_pull(sp, target, &corridor))
+        let pulled = self.string_pull(sp, target, &corridor);
+        Some((self.shortcut(sp, pulled), end == goal))
+    }
+
+    /// Whether a straight walk from `from` to `to` stays on the mesh (Detour's raycast, in XZ): from the polygon
+    /// under `from`, out through the edge the line leaves by, on through the portal there, until the polygon that
+    /// holds `to`; a wall edge stops it.
+    pub fn walkable_line(&self, from: Vec3, to: Vec3) -> bool {
+        let dir = xz(to) - xz(from);
+        let len = dir.length();
+        if len < 1e-4 {
+            return true;
+        }
+        // Start just inside the line, so a start on an edge or a corner picks the polygon the line goes into.
+        let nudge = dir / len * 0.01;
+        let start = from + Vec3::new(nudge.x, 0.0, nudge.y);
+        let Some((mut poly, _)) = self.nearest(start, 0.3) else { return false };
+        let mut at = xz(start);
+        let target = xz(to);
+        for _ in 0..4096 {
+            let v: Vec<Vec2> = self.poly_verts(poly).map(xz).collect();
+            let centre = v.iter().copied().sum::<Vec2>() / v.len() as f32;
+            // The edge the line leaves by: the nearest crossing of an edge it heads out through.
+            let d = target - at;
+            let mut exit: Option<(f32, usize)> = None;
+            for k in 0..v.len() {
+                let (a, b) = (v[k], v[(k + 1) % v.len()]);
+                let e = b - a;
+                let mut n = Vec2::new(e.y, -e.x);
+                if n.dot(a - centre) < 0.0 {
+                    n = -n;
+                }
+                let denom = n.dot(d);
+                if denom <= 1e-9 {
+                    continue;
+                }
+                let s = n.dot(a - at) / denom;
+                if exit.is_none_or(|(best, _)| s < best) {
+                    exit = Some((s, k));
+                }
+            }
+            let Some((s, k)) = exit else { return true };
+            if s >= 1.0 {
+                return true; // `to` is in this polygon
+            }
+            let out = at + d * s.max(0.0);
+            // Through a portal on that edge, else into a wall.
+            let (a, b) = (v[k], v[(k + 1) % v.len()]);
+            let on_edge = |p: Vec2| {
+                let e = b - a;
+                let t = (p - a).dot(e) / e.length_squared().max(1e-12);
+                (a + e * t).distance(p) < 0.02
+            };
+            let next = self.polys[poly as usize].portals.iter().find(|q| {
+                let (l, r) = (xz(q.left), xz(q.right));
+                if !on_edge(l) || !on_edge(r) {
+                    return false;
+                }
+                let span = r - l;
+                let t = (out - l).dot(span) / span.length_squared().max(1e-12);
+                (-0.01..=1.01).contains(&t)
+            });
+            let Some(q) = next else { return false };
+            poly = q.to;
+            at = out + d.normalize_or_zero() * 0.001;
+        }
+        false
+    }
+
+    /// Drops the corners a straight line past them can skip (the funnel is only as good as the polygon corridor the
+    /// search picked; a line along the mesh is shorter).
+    fn shortcut(&self, start: Vec3, path: Vec<Vec3>) -> Vec<Vec3> {
+        let mut pts = vec![start];
+        pts.extend(path);
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i + 1 < pts.len() {
+            let mut j = pts.len() - 1;
+            while j > i + 1 && !self.walkable_line(pts[i], pts[j]) {
+                j -= 1;
+            }
+            out.push(pts[j]);
+            i = j;
+        }
+        out
     }
 
     /// Pulls a path taut through the corridor's portals (the simple stupid funnel).
@@ -384,6 +514,8 @@ mod tests {
             max_simplification_error: 1.2,
             max_edge_len: 133,
             max_verts_per_poly: 6,
+            merge_region_area: 4444,
+            region_chunk_splits: 2,
         }
     }
 
@@ -408,6 +540,13 @@ mod tests {
     }
 
     #[test]
+    fn crossing_follows_the_line_or_takes_the_nearer_end() {
+        let (l, r) = (Vec3::new(1.0, 0.0, -1.0), Vec3::new(1.0, 0.0, 1.0));
+        assert!(crossing(Vec3::ZERO, Vec3::new(2.0, 0.0, 1.0), l, r).distance(Vec3::new(1.0, 0.0, 0.5)) < 1e-5);
+        assert!(crossing(Vec3::ZERO, Vec3::new(2.0, 0.0, 9.0), l, r).distance(r) < 1e-5);
+    }
+
+    #[test]
     fn paths_go_through_the_gap_in_the_wall() {
         let w = world();
         let c = cfg();
@@ -418,15 +557,20 @@ mod tests {
         let (_, p) = mesh.nearest(Vec3::new(5.0, 0.0, 5.0), 1.0).expect("on the floor");
         assert!(p.y.abs() < 0.15, "{p}");
         assert!(mesh.nearest(Vec3::new(10.0, 0.0, 10.0), 0.1).is_none(), "the wall is not walkable");
-        let path = mesh.find_path(Vec3::new(5.0, 0.0, 15.0), Vec3::new(15.0, 0.0, 15.0), 10000).expect("a path");
+        let (path, reached) = mesh.find_path(Vec3::new(5.0, 0.0, 15.0), Vec3::new(15.0, 0.0, 15.0), 10000).expect("a path");
+        assert!(reached);
         let last = *path.last().unwrap();
         assert!(last.distance(Vec3::new(15.0, 0.0, 15.0)) < 0.2, "{path:?}");
         // It bends through the gap (z 2..3.2), keeping clear of its posts.
         let through = path.windows(2).any(|w| (w[0].x - 10.0) * (w[1].x - 10.0) <= 0.0 && w[0].z.max(w[1].z) < 3.3);
         assert!(through, "{path:?}");
-        // Taut: a few corners only, and not much longer than the way through the gap.
+        // Taut: round the gap's chamfered corners and on to the goal, within a few percent of the shortest way
+        // (about 26.9 m; the polygon corridor the search picks can still cost a corner, 28.0 m here).
         assert!(path.len() <= 5, "{path:?}");
         let len: f32 = std::iter::once(Vec3::new(5.0, 0.0, 15.0)).chain(path.iter().copied()).collect::<Vec<_>>().windows(2).map(|w| w[0].distance(w[1])).sum();
-        assert!(len < 30.0, "{len} {path:?}");
+        assert!(len < 28.5, "{len} {path:?}");
+        // Straight lines: along the floor yes, through the wall no.
+        assert!(mesh.walkable_line(Vec3::new(2.0, 0.0, 15.0), Vec3::new(8.0, 0.0, 3.0)));
+        assert!(!mesh.walkable_line(Vec3::new(5.0, 0.0, 15.0), Vec3::new(15.0, 0.0, 15.0)));
     }
 }

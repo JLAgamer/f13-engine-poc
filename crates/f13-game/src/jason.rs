@@ -78,6 +78,9 @@ const DOOR_REACH_M: f32 = 1.4;
 /// Within this range (m) of a goal he can't get closer to for this long (s), he counts as there.
 const STALL_RANGE_M: f32 = 4.0;
 const STALL_SECONDS: f32 = 1.5;
+/// How long, and how near, clues around one he couldn't reach are ignored.
+const UNREACHABLE_SECONDS: f32 = 15.0;
+const UNREACHABLE_RADIUS_M: f32 = 5.0;
 /// He starts a hiding spot's search or kill this close (m) to its spot.
 const SPECIAL_MOVE_REACH_M: f32 = 1.5;
 /// Losing her, he searches the hiding spots this close (m) to where she was last known.
@@ -171,8 +174,8 @@ pub enum JasonState {
     Stunned { t: f32, stun: Stun },
     /// Searching an empty hiding spot (from its search spot): where the search leaves him.
     Searching { spot: Entity, t: f32, end: Transform, anim: &'static str },
-    /// Killing the counselor in a hiding spot.
-    HideKill { spot: Entity, t: f32, end: Transform, anim: &'static str },
+    /// Killing the counselor in a hiding spot (his animation, and hers).
+    HideKill { spot: Entity, t: f32, end: Transform, anim: &'static str, victim: &'static str },
     /// Hit without being stunned: a short flinch.
     Flinching { t: f32 },
     /// The counselor is dead.
@@ -187,6 +190,8 @@ pub struct Jason {
     vel_y: f32,
     grounded: bool,
     path: Vec<Vec3>,
+    /// Whether the path gets to the goal (else it ends at the nearest point it can reach).
+    path_reaches: bool,
     replan: f32,
     cooldown: f32,
     wants_grab: bool,
@@ -208,6 +213,8 @@ pub struct Jason {
     stall: f32,
     /// Distance to the goal at the last progress check.
     last_gdist: f32,
+    /// A clue he couldn't get to (where, and when he gave up): clues near it are ignored for a while.
+    unreachable: Option<(Vec3, f32)>,
     /// Next goal log (game time).
     next_log: f32,
 }
@@ -317,7 +324,7 @@ fn spawn_jason(
         return;
     };
     let world = collision.with(&dynamic);
-    let feet = f13_core::collision::spawn_floor(&world, start.translation, 1.5, &WALK).unwrap_or(start.translation);
+    let feet = f13_core::collision::spawn_floor(&world, start.translation, 1.5, tuning.capsule.half_height * 2.0, &WALK).unwrap_or(start.translation);
     // Unreal actors face +X; characters here face +Z.
     let (yaw, _, _) = start.rotation.to_euler(EulerRot::YXZ);
     let rotation = Quat::from_rotation_y(yaw - std::f32::consts::FRAC_PI_2);
@@ -330,6 +337,7 @@ fn spawn_jason(
                 vel_y: 0.0,
                 grounded: true,
                 path: Vec::new(),
+                path_reaches: true,
                 replan: 0.0,
                 cooldown: 0.0,
                 wants_grab: rng.0.frand() < GRAB_ODDS,
@@ -343,6 +351,7 @@ fn spawn_jason(
                 wander: None,
                 stall: 0.0,
                 last_gdist: f32::MAX,
+                unreachable: None,
                 next_log: 0.0,
             },
             Transform { translation: feet, rotation, ..default() },
@@ -403,9 +412,9 @@ fn steer(j: &mut Jason, nav: &mut NavGrid, navmesh: Option<&f13_core::navmesh::N
     j.replan -= dt;
     if j.replan <= 0.0 || j.path.is_empty() {
         j.replan = REPLAN_SECONDS;
-        j.path = match navmesh {
+        (j.path, j.path_reaches) = match navmesh {
             Some(m) => m.find_path(from, to, NAVMESH_BUDGET).unwrap_or_default(),
-            None => nav.find_path(world, from, to, PATH_BUDGET).0,
+            None => nav.find_path(world, from, to, PATH_BUDGET),
         };
     }
     while j.path.first().is_some_and(|p| Vec2::new(p.x - from.x, p.z - from.z).length() < 0.35) {
@@ -580,7 +589,9 @@ pub(crate) fn update_jason(
                         }
                         j.target_spot = Some(s);
                     }
-                    let clue = know.and_then(|k| k.last_known).filter(|c| c.1 > j.clue_done);
+                    // Clues near one he couldn't get to don't count for a while (Sense keeps showing her there).
+                    let unreachable = j.unreachable.filter(|u| now - u.1 < UNREACHABLE_SECONDS);
+                    let clue = know.and_then(|k| k.last_known).filter(|c| c.1 > j.clue_done && unreachable.is_none_or(|u| c.0.distance(u.0) > UNREACHABLE_RADIUS_M));
                     if let Some(s) = j.target_spot {
                         match spots.get_mut(s) {
                             Ok((_, mut spot, g)) if !spot.destroyed || spot.occupant.is_some() => {
@@ -598,7 +609,7 @@ pub(crate) fn update_jason(
                                             info!("Jason: found Vanessa in a {:?}: hiding spot kill", spot.kind);
                                             let (origin, end) = killer.place(kill, crate::hiding::HidingSpot::world(g, &s_.kill));
                                             *xf = origin;
-                                            j.state = JasonState::HideKill { spot: s, t: 0.0, end, anim: kill };
+                                            j.state = JasonState::HideKill { spot: s, t: 0.0, end, anim: kill, victim: vkill };
                                             commands.entity(je).insert(PlayAction(kill.into()));
                                             if let (Some(h), Some(c)) = (hiding.as_mut(), counselor_model.as_ref()) {
                                                 h.phase = crate::hiding::HidePhase::Killed;
@@ -631,6 +642,10 @@ pub(crate) fn update_jason(
                     } else if let Some((at, when, how)) = clue {
                         goal = at;
                         if stalled || Vec2::new(at.x - xf.translation.x, at.z - xf.translation.z).length() < 1.5 {
+                            if stalled && !j.path_reaches {
+                                info!("Jason: can't get to the clue ({:.0} m away)", Vec2::new(at.x - xf.translation.x, at.z - xf.translation.z).length());
+                                j.unreachable = Some((at, now));
+                            }
                             j.stall = 0.0;
                             // Nothing here: the hiding spots around it, nearest first.
                             j.clue_done = when;
@@ -730,7 +745,8 @@ pub(crate) fn update_jason(
                 j.progress.1 += dt;
                 if j.progress.1 >= 1.0 {
                     let moved = xf.translation.distance(j.progress.0);
-                    if !sees && gdist < STALL_RANGE_M && gdist > j.last_gdist - 0.3 {
+                    // Not getting closer near the goal, or at the end of a path that doesn't get there.
+                    if !sees && (gdist < STALL_RANGE_M || !j.path_reaches) && gdist > j.last_gdist - 0.3 {
                         j.stall += 1.0;
                     } else {
                         j.stall = 0.0;
@@ -890,13 +906,24 @@ pub(crate) fn update_jason(
                 let at = at + dt;
                 let jrig = rigs.iter().find(|(_, c, _)| c.parent() == je);
                 let crig = rigs.iter().find(|(_, c, _)| c.parent() == pe);
-                if let (Some((jr, _, _)), Some((cr, _, cxf)), Some(c)) = (jrig, crig, &counselor_model) {
-                    place_held(pe, &mut pxf, true, jr, (cr, cxf), &killer.info, &c.info, &globals);
+                if alive {
+                    if let (Some((jr, _, _)), Some((cr, _, cxf)), Some(c)) = (jrig, crig, &counselor_model) {
+                        place_held(pe, &mut pxf, true, jr, (cr, cxf), &killer.info, &c.info, &globals);
+                    }
+                    // She dies, and goes limp, where her side of the kill says (he plays his out).
+                    if at >= ragdoll_time(counselor_model.as_deref(), COUNSELOR_KILL) {
+                        let health = p.counselor.health;
+                        p.counselor.take_damage(Hit { amount: health, blocked_with_weapon: false }, &ptuning.counselor);
+                        commands.entity(pe).remove::<(Held, PlayAction)>();
+                        info!("Vanessa: killed by Jason (Pickaxe Throat Hack)");
+                    }
                 }
                 if at >= killer.length(KILL).unwrap_or(12.0) {
-                    let health = p.counselor.health;
-                    p.counselor.take_damage(Hit { amount: health, blocked_with_weapon: false }, &ptuning.counselor);
-                    info!("Vanessa: killed by Jason (Pickaxe Throat Hack)");
+                    // He stays where the kill took him (its root motion), not back at its start.
+                    if let Some((_, last)) = killer.root_motion(KILL) {
+                        *xf = crate::character::flat(Transform::from_matrix(xf.to_matrix() * last.to_matrix()));
+                        snap_rig(&mut rigs, je);
+                    }
                     j.state = JasonState::Done;
                     commands.entity(je).remove::<PlayAction>();
                 } else {
@@ -946,13 +973,15 @@ pub(crate) fn update_jason(
                     j.state = JasonState::Searching { spot, t: at, end, anim };
                 }
             }
-            JasonState::HideKill { spot, t: at, end, anim } => {
+            JasonState::HideKill { spot, t: at, end, anim, victim } => {
                 let at = at + dt;
-                if at >= killer.length(anim).unwrap_or(4.0) {
-                    *xf = end;
+                if alive && at >= ragdoll_time(counselor_model.as_deref(), victim) {
                     let health = p.counselor.health;
                     p.counselor.take_damage(Hit { amount: health, blocked_with_weapon: false }, &ptuning.counselor);
                     info!("Vanessa: killed by Jason in her hiding spot");
+                }
+                if at >= killer.length(anim).unwrap_or(4.0) {
+                    *xf = end;
                     j.state = JasonState::Done;
                     commands.entity(je).remove::<PlayAction>();
                     snap_rig(&mut rigs, je);
@@ -962,7 +991,7 @@ pub(crate) fn update_jason(
                         s.searched(&mut commands);
                     }
                 } else {
-                    j.state = JasonState::HideKill { spot, t: at, end, anim };
+                    j.state = JasonState::HideKill { spot, t: at, end, anim, victim };
                 }
             }
             JasonState::Flinching { t: at } => {
@@ -980,6 +1009,13 @@ pub(crate) fn update_jason(
             }
         }
     }
+}
+
+/// When a counselor's kill animation hands her to the ragdoll: its "shouldRagdoll" notify (the counselor anim
+/// Blueprint's cue), else its end.
+fn ragdoll_time(model: Option<&crate::character::CounselorCharacter>, anim: &str) -> f32 {
+    let info = model.and_then(|m| m.info.animations.get(anim));
+    info.and_then(|a| a.window("shouldRagdoll")).map(|w| w.0).or(info.map(|a| a.length)).unwrap_or(4.0)
 }
 
 /// Snaps Jason's rig to its next pose (he was moved to where a root motion ended).

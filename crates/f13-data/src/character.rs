@@ -177,7 +177,8 @@ pub struct AnimInfo {
     /// The root keeps its animated translation (paired kills: both characters play around one origin).
     #[serde(default)]
     pub keep_root: bool,
-    /// Notify states with a duration (e.g. `AttackTraceNotify`, when a weapon swing can hit), in seconds.
+    /// Notify states with a duration (e.g. `AttackTraceNotify`, when a weapon swing can hit) and named notifies (zero
+    /// length, e.g. `shouldRagdoll`), in seconds.
     #[serde(default, deserialize_with = "crate::level::null_as_empty")]
     pub windows: Vec<Window>,
 }

@@ -694,13 +694,15 @@ fn run_bot(
                 let (yaw, _, _) = jxf.rotation.to_euler(EulerRot::YXZ);
                 let right = Vec3::new(-yaw.cos(), 0.0, yaw.sin());
                 camera.yaw = (-right.x).atan2(-right.z);
-                camera.pitch = -0.15;
+                // Looking down at the end of the kill, where she lies.
+                camera.pitch = if matches!(j.state, crate::jason::JasonState::Killing { t } if t > 9.0) { -0.6 } else { -0.15 };
             }
             // Screenshots of the hit, the grab and the kill, to check the paired poses.
             let shot = match j.state {
                 crate::jason::JasonState::Swinging { t, door: None, .. } if t > 0.35 => Some("swing"),
                 crate::jason::JasonState::Holding { t } if t > 1.0 => Some("grab"),
-                crate::jason::JasonState::Killing { t } if t > 9.0 => Some("kill2"),
+                crate::jason::JasonState::Killing { t } if t > 9.3 => Some("kill3"),
+                crate::jason::JasonState::Killing { t } if t > 7.0 => Some("kill2"),
                 crate::jason::JasonState::Killing { t } if t > 4.0 => Some("kill"),
                 _ => None,
             };
@@ -847,8 +849,17 @@ fn run_bot(
         }
         Step::Done => {
             // After a death, let the ragdoll settle and photograph it from above.
+            // The ragdoll taking over from the kill's last frame, then settled, from above.
             if bot.goal == Goal::Jason && !p.counselor.alive() {
-                camera.pitch = -0.75;
+                for (name, at) in [("dead0", 0.1), ("dead1", 0.4), ("dead2", 1.0)] {
+                    if bot.timer > at && !bot.jason_shots.contains(&name) {
+                        bot.jason_shots.push(name);
+                        let path = std::env::temp_dir().join(format!("f13-bot-jason-{name}.png"));
+                        info!("bot: screenshot {}", path.display());
+                        commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+                    }
+                }
+                camera.pitch = if bot.timer > 1.5 { -0.75 } else { -0.6 };
             }
             if bot.goal == Goal::Jason && !p.counselor.alive() && !bot.jason_shots.contains(&"dead") && bot.timer > 3.0 {
                 bot.jason_shots.push("dead");

@@ -402,7 +402,7 @@ pub(crate) fn move_player(
     // Move the capsule through the world's collision (walls, steps, slopes, falling).
     let world = collision.with(&dynamic);
     if settle.is_some() {
-        if let Some(at) = f13_core::collision::spawn_floor(&world, xf.translation, SPAWN_PROBE_M, &WALK) {
+        if let Some(at) = f13_core::collision::spawn_floor(&world, xf.translation, SPAWN_PROBE_M, CAPSULE_HALF_HEIGHT_M * 2.0, &WALK) {
             if at.distance(xf.translation) > 0.01 {
                 info!("placed on the floor at {at} (was {})", xf.translation);
             }
@@ -424,7 +424,7 @@ pub(crate) fn move_player(
     }
     // Fell out of the world (no surface under the feet at all): back onto the surface above.
     if !r.grounded && f13_core::collision::surface_below(&world, pos.x, pos.z, pos.y + MAX_STEP_HEIGHT_M, pos.y - 100.0).is_none() {
-        if let Some(at) = f13_core::collision::spawn_floor(&world, pos, SPAWN_PROBE_M, &WALK) {
+        if let Some(at) = f13_core::collision::spawn_floor(&world, pos, SPAWN_PROBE_M, CAPSULE_HALF_HEIGHT_M * 2.0, &WALK) {
             warn!("fell out of the map at {pos}; back to {at}");
             pos = at;
             p.vel_y = 0.0;
@@ -532,6 +532,7 @@ fn update_hud(
     jason: Query<(&crate::jason::Jason, &Transform), Without<Player>>,
     tuning: Res<PlayerTuning>,
     diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
+    navmesh: Res<crate::navigation::NavmeshStatus>,
     mut hud: Single<&mut Text, With<Hud>>,
 ) {
     use bevy::diagnostic::FrameTimeDiagnosticsPlugin as Ftd;
@@ -579,4 +580,6 @@ fn update_hud(
         hud.0.push_str(&format!("
 Jason: {:?}, {:.0} m away", j.state, jxf.translation.distance(pxf.translation)));
     }
+    hud.0.push('\n');
+    hud.0.push_str(&navmesh.0);
 }

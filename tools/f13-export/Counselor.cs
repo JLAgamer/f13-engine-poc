@@ -49,7 +49,7 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         public bool RootMotion;
         /// The root bone keeps its animated translation (paired kill animations, authored around a shared origin).
         public bool KeepRoot;
-        /// The montage's notify states (e.g. AttackTraceNotify: when the weapon hits), seconds.
+        /// The montage's notify states (e.g. AttackTraceNotify: when the weapon hits) and named notifies, seconds.
         public List<Window>? Windows;
     }
 
@@ -424,13 +424,15 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         return map.Count > 0 ? map : null;
     }
 
-    /// A montage's notify states (those with a duration), by name.
+    /// A montage's notify states (those with a duration) and its named notifies (no notify object: events for the
+    /// anim Blueprint, e.g. "shouldRagdoll" in the counselors' kill montages; zero length), by name.
     List<Window>? Windows(string path)
     {
         var obj = provider.LoadPackageObject(path + "." + path.Split('/')[^1]);
         var list = obj.GetOrDefault<FStructFallback[]>("Notifies", [])
-            .Select(n => (Name: n.GetOrDefault<FName>("NotifyName").Text, Start: n.GetOrDefault<float>("LinkValue"), Duration: n.GetOrDefault<float>("Duration")))
-            .Where(n => n.Duration > 0)
+            .Select(n => (Name: n.GetOrDefault<FName>("NotifyName").Text, Start: n.GetOrDefault<float>("LinkValue"), Duration: n.GetOrDefault<float>("Duration"),
+                Named: n.GetOrDefault<FPackageIndex>("Notify") is not { IsNull: false } && n.GetOrDefault<FPackageIndex>("NotifyStateClass") is not { IsNull: false }))
+            .Where(n => n.Duration > 0 || n.Named)
             .Select(n => new Window { Name = n.Name, Start = n.Start, End = n.Start + n.Duration })
             .ToList();
         return list.Count > 0 ? list : null;

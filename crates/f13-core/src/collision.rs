@@ -513,14 +513,17 @@ pub fn move_capsule(
     result
 }
 
-/// Where a character placed near `at` stands: the walkable floor nearest below a point `above` over it, or, if
-/// there's none (spawned outside the map's collision), the highest surface over it from far above.
-pub fn spawn_floor(world: &(impl TriSource + ?Sized), at: Vec3, above: f32, s: &WalkSettings) -> Option<Vec3> {
+/// Where a character placed near `at` stands: the walkable floor nearest below a point `above` over it with
+/// `headroom` free above it (not the top of a ceiling slab, under a roof), or, if there's none (spawned outside the
+/// map's collision), the highest surface over it from far above.
+pub fn spawn_floor(world: &(impl TriSource + ?Sized), at: Vec3, above: f32, headroom: f32, s: &WalkSettings) -> Option<Vec3> {
     let mut y = at.y + above;
-    // Walk down through the surfaces under the point until a walkable one.
+    // Walk down through the surfaces under the point until a walkable one with room above it.
     for _ in 0..16 {
         match surface_below(world, at.x, at.z, y, at.y - 1000.0) {
-            Some((h, n)) if n.y >= s.walkable_normal_y => return Some(Vec3::new(at.x, h, at.z)),
+            Some((h, n)) if n.y >= s.walkable_normal_y && surface_below(world, at.x, at.z, h + headroom, h + 0.05).is_none() => {
+                return Some(Vec3::new(at.x, h, at.z));
+            }
             Some((h, _)) => y = h - 1e-3,
             None => break,
         }
@@ -661,9 +664,14 @@ mod tests {
         for t in cube(Vec3::new(0.0, 3.0, 0.0), Vec3::new(1.0, 0.1, 1.0)) {
             g.insert(t); // a slab overhead
         }
+        for t in cube(Vec3::new(0.0, 3.5, 0.0), Vec3::new(1.0, 0.1, 1.0)) {
+            g.insert(t); // and a roof 0.3 m over it
+        }
         // Under the slab: the ground below the spawn point, not the slab's top.
-        assert_eq!(spawn_floor(&g, Vec3::new(0.0, 1.0, 0.0), 1.0, &WALK).unwrap().y, 0.0);
+        assert_eq!(spawn_floor(&g, Vec3::new(0.0, 1.0, 0.0), 1.0, 1.7, &WALK).unwrap().y, 0.0);
+        // From above the slab too: no room on it under the roof.
+        assert_eq!(spawn_floor(&g, Vec3::new(0.0, 1.0, 0.0), 2.3, 1.7, &WALK).unwrap().y, 0.0);
         // Spawned under the map: up onto the highest surface.
-        assert!((spawn_floor(&g, Vec3::new(10.0, -5.0, 0.0), 1.0, &WALK).unwrap().y).abs() < 1e-5);
+        assert!((spawn_floor(&g, Vec3::new(10.0, -5.0, 0.0), 1.0, 1.7, &WALK).unwrap().y).abs() < 1e-5);
     }
 }
