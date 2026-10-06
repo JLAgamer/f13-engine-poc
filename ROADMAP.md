@@ -40,8 +40,12 @@ Mechanics: counselor side
   DiveDamage); windows.rs. Vault/dive are instant moves for now; barricade mesh placement unverified
 - [ ] Hiding: closets, beds
 - [x] Health, wounded, death, blocking damage, first aid (f13-core::health); limp animation later
-- [ ] Weapons and combat: hit, stun, block
-- [ ] Grab escape (wiggle), pocket knife (a grab always ends in the kill for now)
+- [x] Items against Jason (items.rs): weapon swings (stun chance, wear, breaking), flare gun, shotgun, firecrackers,
+  bear traps, the map; stun times and animations from the game (swing reach/angle, throw speed and gun fire timing
+  are placeholders)
+- [x] Grab escape (wiggle, stat-scaled, 10/s cap) and the pocket knife
+- [ ] Combat, remaining: blocking with a weapon, counselors caught in placed traps, Jason shaking off stuns
+- [x] Ragdoll on death (f13-core::ragdoll, the physics asset's bodies against the world collision)
 
 Mechanics: Jason side
 - [x] Ability unlock order, recharge, rage
