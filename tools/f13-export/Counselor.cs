@@ -1,4 +1,4 @@
-// counselors/<name>.json: how a counselor Blueprint assembles its character (body, outfit, face, hair), the shared
+// counselors/<name>.json (killers/<name>.json for Jason): how a character Blueprint assembles its character (body, outfit, face, hair), the shared
 // skeleton's bones with their translation retargeting modes, and the animations f13-game plays on it.
 // anims/<sequence>.anim: one animation sequence sampled at its own frame rate (format below).
 //
@@ -15,6 +15,7 @@ using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Objects.Engine;
 using CUE4Parse.UE4.Assets.Objects;
 using CUE4Parse.UE4.Assets.Exports.Texture;
+using CUE4Parse.UE4.Assets.Exports.StaticMesh;
 using CUE4Parse_Conversion.Animations;
 using CUE4Parse_Conversion.Meshes;
 
@@ -45,11 +46,23 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         public float Length, Fps;
         public int Frames;
         public bool RootMotion;
+        /// The root bone keeps its animated translation (paired kill animations, authored around a shared origin).
+        public bool KeepRoot;
+        /// The montage's notify states (e.g. AttackTraceNotify: when the weapon hits), seconds.
+        public List<Window>? Windows;
+    }
+
+    public class Window
+    {
+        public string Name = "";
+        public float Start, End;
     }
 
     public class Info
     {
         public string Name = "", Body = "";
+        /// Capsule radius (cm).
+        public float CapsuleRadius = 34;
         /// CharacterMesh0 relative to the capsule (Unreal space).
         public Xform? MeshTransform;
         public float CapsuleHalfHeight;
@@ -60,6 +73,8 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         public List<string> SkinMasks = new();
         public List<Bone> Bones = new();
         public SortedDictionary<string, AnimInfo> Animations = new(StringComparer.OrdinalIgnoreCase);
+        /// Gameplay values (killers): Blueprint overrides, else the C++ constructor's defaults.
+        public SortedDictionary<string, float>? Values;
     }
 
     static Xform Xf(FVector t, FRotator r) => new()
@@ -83,7 +98,7 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
 
     static string MeshFile(USkeletalMesh m) => new CUE4Parse_Conversion.Exporters.SkinnedAssetExporter(m).SavePath + ".glb";
 
-    public void Export(string blueprint, IEnumerable<string> animations)
+    public void Export(string blueprint, IEnumerable<string> animations, ICollection<string> keepRoot)
     {
         var cls = provider.LoadPackageObject<UBlueprintGeneratedClass>(blueprint + "." + blueprint.Split('/')[^1] + "_C");
         var cdo = cls.ClassDefaultObject.Load()!;
@@ -140,18 +155,155 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         for (var i = 0; i < bones.Length; i++)
             info.Bones.Add(new Bone { Name = bones[i].Name.Text, Parent = bones[i].ParentIndex, Retarget = skeleton.BoneTree[i].ToString() });
 
-        Directory.CreateDirectory(Path.Combine(outDir, "anims"));
-        foreach (var path in animations)
-        foreach (var seq in Sequences(path))
-        {
-            if (info.Animations.ContainsKey(seq.Name)) continue;
-            info.Animations[seq.Name] = WriteSequence(seq, skeleton);
-        }
+        WriteAnimations(info, skeleton, animations, "anims", keepRoot);
+        Save(info, "counselors");
+    }
 
-        Directory.CreateDirectory(Path.Combine(outDir, "counselors"));
-        File.WriteAllText(Path.Combine(outDir, "counselors", info.Name + ".json"),
+    void WriteAnimations(Info info, USkeleton skeleton, IEnumerable<string> animations, string dir, ICollection<string> keepRoot)
+    {
+        Directory.CreateDirectory(Path.Combine(outDir, dir));
+        foreach (var path in animations)
+        {
+            var windows = Windows(path);
+            foreach (var seq in Sequences(path))
+            {
+                if (info.Animations.ContainsKey(seq.Name)) continue;
+                var a = WriteSequence(seq, skeleton, dir, keepRoot.Contains(path));
+                a.Windows = windows;
+                info.Animations[seq.Name] = a;
+            }
+        }
+    }
+
+    void Save(Info info, string dir)
+    {
+        Directory.CreateDirectory(Path.Combine(outDir, dir));
+        File.WriteAllText(Path.Combine(outDir, dir, info.Name + ".json"),
             Newtonsoft.Json.JsonConvert.SerializeObject(info, Newtonsoft.Json.Formatting.Indented));
         Console.WriteLine($"{info.Name}: {info.Parts.Count} parts, {info.Animations.Count} animations");
+    }
+
+    /// A component property, looked up through the component's archetypes (a subclass only stores what it overrides).
+    static T? Inherited<T>(UObject component, string name)
+    {
+        for (UObject? a = component; a != null; a = a.Template?.Load())
+            if (a.TryGetValue(out T v, name)) return v;
+        return default;
+    }
+
+    /// The killer's character: body (CharacterMesh0), mask and hair (same skeleton: master pose), the weapon in its hand
+    /// socket, and the animations f13-game plays on it.
+    public void ExportKiller(string blueprint, IEnumerable<string> animations, ICollection<string> keepRoot)
+    {
+        var cls = provider.LoadPackageObject<UBlueprintGeneratedClass>(blueprint + "." + blueprint.Split('/')[^1] + "_C");
+        var cdo = cls.ClassDefaultObject.Load()!;
+        var info = new Info { Name = blueprint.Split('/')[^1] };
+
+        var meshComp = Component(cdo, "Mesh");
+        var body = Inherited<FPackageIndex>(meshComp, "SkeletalMesh")!.Load<USkeletalMesh>()!;
+        queue(body);
+        info.Body = MeshFile(body);
+        info.MeshTransform = Xf(Inherited<FVector>(meshComp, "RelativeLocation"), Inherited<FRotator>(meshComp, "RelativeRotation"));
+        var capsule = Component(cdo, "CapsuleComponent");
+        // Not set by the killer's Blueprints or its C++ constructor: ACharacter's InitCapsuleSize(34, 88).
+        info.CapsuleHalfHeight = Inherited<float?>(capsule, "CapsuleHalfHeight") ?? 88f;
+        info.CapsuleRadius = Inherited<float?>(capsule, "CapsuleRadius") ?? 34f;
+
+        void MasterPose(string name, UObject comp)
+        {
+            if (Inherited<FPackageIndex>(comp, "SkeletalMesh")?.Load<USkeletalMesh>() is not { } mesh) return;
+            // Jason_Base's separate hair component is hidden (bVisible false) unless a Jason turns it on.
+            if (Inherited<bool?>(comp, "bVisible") == false) return;
+            queue(mesh);
+            info.Parts.Add(new Part { Name = name, File = MeshFile(mesh), Attach = "MasterPose", MaterialMap = Overrides(comp, mesh) });
+        }
+        MasterPose("Mask", Component(cdo, "JasonSkeletalMask"));
+        // The hair is a Blueprint-added component: its template (overridden per Jason) is a _GEN_VARIABLE export.
+        var hair = provider.LoadPackage(blueprint).GetExports().FirstOrDefault(e => e.Name == "Jason_Hair_GEN_VARIABLE");
+        if (hair != null) MasterPose("Hair", hair);
+
+        // The weapon hangs off its HandAttachSocket (a skeleton socket: bone + offset).
+        var weaponPath = cdo.GetOrDefault<FSoftObjectPath>("WeaponClass").AssetPathName.Text;
+        var weaponClass = provider.LoadPackageObject<UBlueprintGeneratedClass>(weaponPath);
+        var weapon = weaponClass.ClassDefaultObject.Load()!;
+        var socketName = weapon.GetOrDefault<FName>("HandAttachSocket").Text;
+        var skeleton = body.Skeleton.Load<USkeleton>()!;
+        var socket = body.GetOrDefault<FPackageIndex[]>("Sockets", []).Concat(skeleton.GetOrDefault<FPackageIndex[]>("Sockets", []))
+            .Select(s => s.Load()).FirstOrDefault(s => s?.GetOrDefault<FName>("SocketName").Text == socketName)
+            ?? throw new Exception($"no socket {socketName} on {body.Name}");
+        info.Parts.Add(new Part
+        {
+            Name = "WeaponSocket",
+            Attach = socket.GetOrDefault<FName>("BoneName").Text,
+            Transform = Xf(socket.GetOrDefault<FVector>("RelativeLocation"), socket.GetOrDefault<FRotator>("RelativeRotation")),
+        });
+        var item = Component(weapon, "ItemMesh3P");
+        var weaponMesh = Inherited<FPackageIndex>(item, "StaticMesh")!.Load<UStaticMesh>()!;
+        queue(weaponMesh);
+        info.Parts.Add(new Part
+        {
+            Name = "Weapon",
+            File = new CUE4Parse_Conversion.Exporters.StaticMeshExporter(weaponMesh).SavePath + ".glb",
+            Attach = "WeaponSocket",
+            Transform = Xf(Inherited<FVector>(item, "RelativeLocation"), Inherited<FRotator>(item, "RelativeRotation")),
+        });
+
+        // Gameplay values. Defaults: SCKillerCharacter's constructor (AttackDelay 1, grab 100..200 cm within 45 deg,
+        // attack interact 200 cm / 45 deg, DamageCharacterModifier and DamageWorldModifier 1) and SCCharacterMovement's / UE 4.18's
+        // (MaxAcceleration 2048, RotationRate 360).
+        var values = new SortedDictionary<string, float>();
+        foreach (var (name, fallback) in new[] { ("AttackDelay", 1f), ("MaxGrabDistance", 200f), ("MinGrabDistance", 100f), ("MinGrabAngle", 45f),
+                     ("MaxAttackInteractCounselorDistance", 200f), ("MaxAttackInteractAngle", 45f), ("DamageCharacterModifier", 1f),
+                     ("DamageWorldModifier", 1f) })
+            values[name] = ClassValue<float?>(cls, name) ?? fallback;
+        var move = Component(cdo, "CharacterMovement");
+        foreach (var (name, fallback) in new[] { ("MaxWalkSpeed", 104f), ("MaxRunSpeed", 280f), ("MaxSprintSpeed", 450f), ("MaxCombatSpeed", 104f), ("MaxAcceleration", 2048f) })
+            values[name] = Inherited<float?>(move, name) ?? fallback;
+        values["RotationRateYaw"] = Inherited<FRotator?>(move, "RotationRate")?.Yaw ?? 360f;
+        values["CanRun"] = (Inherited<FPackageIndex>(meshComp, "AnimClass")?.Load<UStruct>() is { } animClass ? ClassValue<bool?>(animClass, "bCanRun") : null) == true ? 1 : 0;
+        var stats = ClassValue<FStructFallback>(weaponClass, "WeaponStats");
+        values["WeaponDamage"] = stats?.GetOrDefault<float>("Damage") ?? 0;
+        info.Values = values;
+
+        var bones = skeleton.ReferenceSkeleton.FinalRefBoneInfo;
+        for (var i = 0; i < bones.Length; i++)
+            info.Bones.Add(new Bone { Name = bones[i].Name.Text, Parent = bones[i].ParentIndex, Retarget = skeleton.BoneTree[i].ToString() });
+        WriteAnimations(info, skeleton, animations, "anims/jason", keepRoot);
+        Save(info, "killers");
+    }
+
+    /// A component's OverrideMaterials, as the mesh's own material name -> replacement.
+    Dictionary<string, string>? Overrides(UObject comp, USkeletalMesh mesh)
+    {
+        var map = new Dictionary<string, string>();
+        var overrides = Inherited<FPackageIndex[]>(comp, "OverrideMaterials") ?? [];
+        for (var i = 0; i < overrides.Length && i < mesh.SkeletalMaterials.Length; i++)
+        {
+            if (overrides[i].Load<UMaterialInterface>() is not { } m) continue;
+            queue(m);
+            if (mesh.SkeletalMaterials[i].MaterialInterface?.Load() is UMaterialInterface own && own.Name != m.Name) map[own.Name] = m.Name;
+        }
+        return map.Count > 0 ? map : null;
+    }
+
+    /// A montage's notify states (those with a duration), by name.
+    List<Window>? Windows(string path)
+    {
+        var obj = provider.LoadPackageObject(path + "." + path.Split('/')[^1]);
+        var list = obj.GetOrDefault<FStructFallback[]>("Notifies", [])
+            .Select(n => (Name: n.GetOrDefault<FName>("NotifyName").Text, Start: n.GetOrDefault<float>("LinkValue"), Duration: n.GetOrDefault<float>("Duration")))
+            .Where(n => n.Duration > 0)
+            .Select(n => new Window { Name = n.Name, Start = n.Start, End = n.Start + n.Duration })
+            .ToList();
+        return list.Count > 0 ? list : null;
+    }
+
+    /// A class default, through the Blueprint's parents (each CDO only stores what its class overrides).
+    static T? ClassValue<T>(UStruct? cls, string name)
+    {
+        for (; cls != null; cls = cls.SuperStruct?.Load<UStruct>())
+            if (cls is UBlueprintGeneratedClass bp && bp.ClassDefaultObject.Load() is { } cdo && cdo.TryGetValue(out T v, name)) return v;
+        return default;
     }
 
     /// A sequence, or each sequence a montage plays.
@@ -171,7 +323,7 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
     // only written for the skeleton's "Animation" retargeting bones (the others keep the mesh's bind pose, as Unreal
     // retargets them). Root motion and bForceRootLock sequences have the root locked at its reference pose (Unreal's
     // default RootMotionRootLock::RefPose), since the game moves the character instead.
-    AnimInfo WriteSequence(UAnimSequence seq, USkeleton skeleton)
+    AnimInfo WriteSequence(UAnimSequence seq, USkeleton skeleton, string dir, bool keepRoot)
     {
         var set = seq.ConvertAnims();
         var anim = set.Sequences[0];
@@ -180,9 +332,9 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         var rootMotion = seq.GetOrDefault<bool>("bEnableRootMotion");
         // Root motion sequences, and in-place cycles authored moving forward (bForceRootLock: the locomotion cycles),
         // keep the root at its reference pose.
-        var rootLock = rootMotion || seq.GetOrDefault<bool>("bForceRootLock");
+        var rootLock = !keepRoot && (rootMotion || seq.GetOrDefault<bool>("bForceRootLock"));
         var refPose = skeleton.ReferenceSkeleton.FinalRefBonePose;
-        var file = Path.Combine("anims", seq.Name + ".anim");
+        var file = Path.Combine(dir, seq.Name + ".anim");
         using var w = new BinaryWriter(File.Create(Path.Combine(outDir, file)));
         w.Write("F13A"u8);
         w.Write(1u);
@@ -211,6 +363,6 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             foreach (var q in rot) { w.Write(q.X); w.Write(q.Y); w.Write(q.Z); w.Write(q.W); }
             if (translate) foreach (var p in pos) { w.Write(p.X); w.Write(p.Y); w.Write(p.Z); }
         }
-        return new AnimInfo { File = file.Replace('\\', '/'), Length = (frames - 1) / fps, Fps = fps, Frames = frames, RootMotion = rootMotion };
+        return new AnimInfo { File = file.Replace('\\', '/'), Length = (frames - 1) / fps, Fps = fps, Frames = frames, RootMotion = rootMotion, KeepRoot = keepRoot };
     }
 }

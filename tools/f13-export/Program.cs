@@ -332,7 +332,8 @@ switch (rest[0])
         foreach (var l in Mvp.Layouts) ExportLevel(l);
         WriteClasses();
         AnimExporter.Write(provider, outDir, Mvp.Montages);
-        new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims);
+        new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims, Mvp.PairedKills);
+        new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, Mvp.KillerAnims, Mvp.PairedKills);
         WriteCollision();
         break;
     case "collision": // levels (for collision flags), classes and collision.json; no meshes or textures
@@ -342,7 +343,10 @@ switch (rest[0])
         WriteCollision();
         return 0;
     case "counselor": // the MVP counselor's parts and animations (and the meshes they need)
-        new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims);
+        new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims, Mvp.PairedKills);
+        break;
+    case "killer": // the MVP Jason's parts, weapon and animations (and the meshes they need)
+        new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, Mvp.KillerAnims, Mvp.PairedKills);
         break;
     case "anims":
         AnimExporter.Write(provider, outDir, Mvp.Montages);
@@ -555,7 +559,41 @@ static class Mvp
         $"{Female}/Locomotion/Stumbles/f_normal_stand_run_stumble_short_01",
         $"{Female}/Locomotion/Stumbles/f_normal_stand_sprint_stumble_short_01",
         $"{Female}/Interaction/Items/f_normal_stand_use_firstaid_self",
+        // Jason's hits, grab and kill.
+        $"{Female}/Death-Hit-Stun/Hits/f_normal_stand_hitreaction_back_01",
+        $"{Female}/Death-Hit-Stun/Hits/f_normal_stand_hitreaction_left_01",
+        $"{Female}/Death-Hit-Stun/Hits/f_normal_stand_hitreaction_right_01",
+        $"{Female}/Death-Hit-Stun/Deaths/f_normal_stand_death_01",
+        $"{Female}/Grab/f_normal_grab_enter",
+        $"{Female}/Grab/f_normal_grab_idle",
+        $"{Female}/Grab/f_normal_grab_struggle",
+        CounselorKill,
         .. Montages,
+    ];
+    // The pickaxe's DefaultGrabKill (Pickaxe_ThroatHack_GrabKill): Jason_PickaxeKill_01 and Counselor_PickaxeKill_01
+    // play these paired montages around one origin.
+    const string CounselorKill = $"{Shared}/Cinematic/AM_cinematic_pickaxe_throathack";
+    const string JasonAnim = "/Game/Characters/Killers/Jason/Base/Animation";
+    const string JasonKill = $"{JasonAnim}/Cinematic/AM_cinematic_pickaxe_throathack";
+    public static readonly string[] PairedKills = [CounselorKill, JasonKill];
+    public const string Killer = "/Game/Characters/Killers/Jason/J2/Jason_SackHead";
+    // Jason_AnimBP's BS_Jason_Normal_Move (SpeedState 0 idle, 1 walk, 2 fast walk, 3 run), the pickaxe's combat idle,
+    // attacks (PickAxe's NeutralAttack and ForwardAttack), the grab, and the grab kill.
+    public static readonly string[] KillerAnims =
+    [
+        $"{JasonAnim}/normal_stand_idle_01",
+        $"{JasonAnim}/Locomotion/normal_stand_walk_forward",
+        $"{JasonAnim}/Locomotion/normal_stand_walk_forward_fast",
+        $"{JasonAnim}/Locomotion/normal_stand_run_forward_02",
+        $"{JasonAnim}/Combat/Axe/combat_stand_idle_2h",
+        $"{JasonAnim}/Combat/Axe/AM_combat_stand_2h_attack_light",
+        $"{JasonAnim}/Combat/Axe/AM_combat_stand_2h_attack_light_impact",
+        $"{JasonAnim}/Combat/Axe/AM_combat_stand_2h_attack_heavy",
+        $"{JasonAnim}/Grab/normal_grab_startup",
+        $"{JasonAnim}/Grab/normal_grab_enter_1",
+        $"{JasonAnim}/Grab/normal_grab_idle",
+        $"{JasonAnim}/Grab/normal_grab_miss",
+        JasonKill,
     ];
 }
 

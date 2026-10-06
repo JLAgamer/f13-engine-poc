@@ -22,6 +22,7 @@ Mechanics: counselor side
 - [x] Combat stance and dodge: double-tap, stamina cost, root motion (f13-core::dodge, anims.json)
 - [ ] Swimming
 - [ ] Fear events pushed in the client (darkness, indoors, wounded, water, Jason near...)
+- [x] Hit reactions and death animations when Jason hits
 - [x] Collision: the counselor's capsule (34 x 82 cm) against the game's simple collision (convex hulls, boxes,
   spheres, capsules of every mesh whose profile blocks pawns, BlockingVolumes, terrain), doors, windows and cars
   moving with their actors; steps (45 cm), walkable slopes (44.8°), falling; spawns put on the floor, and a
@@ -40,13 +41,19 @@ Mechanics: counselor side
 - [ ] Hiding: closets, beds
 - [x] Health, wounded, death, blocking damage, first aid (f13-core::health); limp animation later
 - [ ] Weapons and combat: hit, stun, block
-- [ ] Grab escape (wiggle), pocket knife
+- [ ] Grab escape (wiggle), pocket knife (a grab always ends in the kill for now)
 
 Mechanics: Jason side
 - [x] Ability unlock order, recharge, rage
-- [ ] Movement, Shift, Morph, Sense, Stalk
-- [ ] Attacks, grab, kills (one basic kill to start), throwing knives
-- [ ] Breaking doors, walls, generators; traps
+- [x] Jason Part 2 as a computer player (jason.rs): J2's movement values, paths over the collision (f13-core::nav),
+  opening doors and breaking locked or barricaded ones (BaseDoorHealth vs weapon damage), pickaxe swings (damage,
+  AttackDelay, reach/angle, hits in the AttackTraceNotify window), grabs (min/max distance, angle) and the pickaxe's
+  grab kill (Throat Hack, both sides' paired animation)
+- [ ] Jason AI, remaining: perception (he always knows where the counselor is), heavy attacks, the grabbed
+  counselor on his grab socket, kill cameras; playing as Jason
+- [ ] Shift, Morph, Sense, Stalk
+- [ ] More kills, throwing knives
+- [ ] Breaking walls, generators; traps
 - [ ] Car interactions: stopping and grabbing out of the car
 
 Match
@@ -76,8 +83,9 @@ Presentation
       clipped under the clothes by the outfit's skin mask (f13-game character.rs, shaders/skin.wgsl)
 - [ ] Counselor model, remaining: facial animation and hair dynamics (their own anim Blueprints), the eyes' iris and
       lid overlays, outfit choice
-- [ ] Jason model (Part 2)
-- [ ] Characters placed in the scene
+- [x] Jason model (Part 2): body, sack mask (master pose), pickaxe on weapon_attach_r; locomotion
+  (BS_Jason_Normal_Move), combat idle, swing, grab, grab kill
+- [x] Characters placed in the scene (Vanessa at a counselor start, Jason at the killer start)
 - [x] Animations: female sequences retargeted as Unreal does (rotations from the animation, translations only on the
       skeleton's "Animation" bones), blended like Athlete_AnimBP's blendspaces: idle/walk/run/sprint, wounded idle,
       crouch, combat strafing (8 directions), dodges, stumbles, first aid

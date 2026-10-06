@@ -1,4 +1,6 @@
-//! The counselor's model and animations, from the export's `counselors/<Blueprint>.json` and `anims/*.anim`.
+//! Character models and animations, from the export's `counselors/<Blueprint>.json`, `killers/<Blueprint>.json`
+//! and their `.anim` files. Jason (jason.rs) is assembled the same way: his mask and hair follow the body as
+//! master-pose parts and his weapon hangs off its hand socket.
 //!
 //! Assembled as the game does it: the bare base body (CharacterMesh0) carries the skeleton, the outfit follows it as
 //! a master-pose component (its skin is re-bound to the body's bones of the same names), the face hangs off the head
@@ -62,7 +64,8 @@ fn female_sequence(montage: &str) -> Option<&'static str> {
     })
 }
 
-/// Loads the MVP counselor (Vanessa) from the export before the player spawns, then assembles and animates her.
+/// Loads the MVP counselor (Vanessa) and Jason from the export before anything spawns, then assembles their models
+/// and animates the counselor (Jason's animation is driven by jason.rs).
 pub struct CharacterPlugin {
     pub export: std::path::PathBuf,
     /// Testing: hold the counselor in one animation at a time (seconds) instead of driving it from her state.
@@ -72,8 +75,9 @@ pub struct CharacterPlugin {
 #[derive(Resource)]
 struct ForcedPose(String, f32);
 
-/// Vanessa's Blueprint, as the exporter names her file.
+/// Vanessa's and Jason's Blueprints, as the exporter names their files.
 const COUNSELOR: &str = "Athlete_Counselor";
+const KILLER: &str = "Jason_SackHead";
 
 impl Plugin for CharacterPlugin {
     fn build(&self, app: &mut App) {
@@ -82,34 +86,44 @@ impl Plugin for CharacterPlugin {
             app.insert_resource(ForcedPose(name, at));
         }
         app.add_systems(PreStartup, move |mut commands: Commands, mut clips: ResMut<Assets<AnimationClip>>, mut graphs: ResMut<Assets<AnimationGraph>>| {
-            if let Some(c) = CounselorCharacter::load(&export, COUNSELOR, &mut clips, &mut graphs) {
-                commands.insert_resource(c);
+            if let Some(c) = CharacterModel::load(&export.join("counselors").join(format!("{COUNSELOR}.json")), &export, &mut clips, &mut graphs) {
+                commands.insert_resource(CounselorCharacter(c));
+            }
+            if let Some(c) = CharacterModel::load(&export.join("killers").join(format!("{KILLER}.json")), &export, &mut clips, &mut graphs) {
+                commands.insert_resource(KillerCharacter(c));
             }
         })
         .add_systems(Update, (assemble, animate).chain());
     }
 }
 
-/// The loaded character: its description and one graph node per animation (with its length).
-#[derive(Resource)]
-pub struct CounselorCharacter {
+/// A loaded character: its description and one graph node per animation (with its length).
+pub struct CharacterModel {
     pub info: CharacterInfo,
     graph: Handle<AnimationGraph>,
     clips: HashMap<String, (AnimationNodeIndex, f32)>,
 }
 
-impl CounselorCharacter {
-    /// Loads `counselors/<blueprint>.json` and its animations. None if the export predates character export.
-    pub fn load(
-        export: &std::path::Path,
-        blueprint: &str,
-        clips: &mut Assets<AnimationClip>,
-        graphs: &mut Assets<AnimationGraph>,
-    ) -> Option<Self> {
-        let info = match CharacterInfo::load(&export.join("counselors").join(format!("{blueprint}.json"))) {
+#[derive(Resource, Deref)]
+pub struct CounselorCharacter(pub CharacterModel);
+
+#[derive(Resource, Deref)]
+pub struct KillerCharacter(pub CharacterModel);
+
+/// Which loaded model a rig shows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Model {
+    Counselor,
+    Killer,
+}
+
+impl CharacterModel {
+    /// Loads a character file and its animations. None if the export predates character export.
+    pub fn load(path: &std::path::Path, export: &std::path::Path, clips: &mut Assets<AnimationClip>, graphs: &mut Assets<AnimationGraph>) -> Option<Self> {
+        let info = match CharacterInfo::load(path) {
             Ok(i) => i,
             Err(e) => {
-                warn!("no counselor model ({e}); re-export with tools/f13-export counselor");
+                warn!("no character model {} ({e}); re-export with tools/f13-export counselor / killer", path.display());
                 return None;
             }
         };
@@ -127,8 +141,13 @@ impl CounselorCharacter {
             let clip = build_clip(&data, a.length, &animated);
             nodes.insert(name.clone(), (graph.add_clip(clips.add(clip), 1.0, graph.root), a.length));
         }
-        info!("counselor model {}: {} animations", info.name, nodes.len());
+        info!("character model {}: {} animations", info.name, nodes.len());
         Some(Self { info, graph: graphs.add(graph), clips: nodes })
+    }
+
+    /// An animation's length, if it was exported.
+    pub fn length(&self, name: &str) -> Option<f32> {
+        self.clips.get(name).map(|c| c.1)
     }
 }
 
@@ -160,9 +179,10 @@ fn build_clip(data: &AnimData, length: f32, animated: &[&str]) -> AnimationClip 
     clip
 }
 
-/// The animated model under the player: holds the AnimationPlayer every bone is animated by.
+/// The animated model under a character: holds the AnimationPlayer every bone is animated by.
 #[derive(Component)]
 pub struct Rig {
+    pub model: Model,
     body: Entity,
     outfit: Vec<Entity>,
     /// Parts hanging off a bone or another part, spawned once the body is in: (part index, entity holding its scene).
@@ -175,15 +195,20 @@ pub struct Rig {
     phase: f32,
     idle_time: f32,
     /// The montage or action playing: its animation and time since it started.
-    action: Option<(String, f32)>,
+    pub action: Option<(String, f32)>,
 }
+
+/// A full-body animation a character plays now (hit reactions, grabs, kills, death), whatever its movement state.
+/// Restarts when the name changes; holds its last frame once over.
+#[derive(Component, Clone, Debug, PartialEq)]
+pub struct PlayAction(pub String);
 
 /// A part's scene finished spawning.
 #[derive(Component)]
 struct SceneReady;
 
-/// Spawns the model under `player` (feet at the player's origin, facing +Z). Returns the rig entity.
-pub fn spawn_model(commands: &mut Commands, assets: &AssetServer, character: &CounselorCharacter, player: Entity) -> Entity {
+/// Spawns the model under `owner` (feet at its origin, facing +Z), with `marker` on the rig. Returns the rig entity.
+pub fn spawn_model(commands: &mut Commands, assets: &AssetServer, character: &CharacterModel, model: Model, owner: Entity, marker: impl Bundle) -> Entity {
     let info = &character.info;
     // CharacterMesh0 sits at MeshTransform from the capsule's centre; the player's origin is the capsule's bottom.
     // Unreal actors face +X, the player here faces +Z: a quarter turn about Y on top of the mesh's own yaw.
@@ -196,7 +221,7 @@ pub fn spawn_model(commands: &mut Commands, assets: &AssetServer, character: &Co
         commands.entity(ev.entity).insert(SceneReady);
     };
     let rig = commands
-        .spawn((rig_xf, Visibility::default(), AnimationPlayer::default(), AnimationGraphHandle(character.graph.clone()), crate::player::PlayerPart, ChildOf(player)))
+        .spawn((rig_xf, Visibility::default(), AnimationPlayer::default(), AnimationGraphHandle(character.graph.clone()), marker, ChildOf(owner)))
         .id();
     let mut body = commands.spawn((WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(info.body.clone()))), ChildOf(rig)));
     if info.skin_masks.len() == 2 {
@@ -212,6 +237,7 @@ pub fn spawn_model(commands: &mut Commands, assets: &AssetServer, character: &Co
         outfit.push(e.observe(ready).id());
     }
     commands.entity(rig).insert(Rig {
+        model,
         body,
         outfit,
         attached: Vec::new(),
@@ -230,19 +256,23 @@ pub fn spawn_model(commands: &mut Commands, assets: &AssetServer, character: &Co
 fn assemble(
     mut commands: Commands,
     assets: Res<AssetServer>,
-    character: Option<Res<CounselorCharacter>>,
+    counselor: Option<Res<CounselorCharacter>>,
+    killer: Option<Res<KillerCharacter>>,
     mut rigs: Query<(Entity, &mut Rig)>,
     ready: Query<(), With<SceneReady>>,
     children: Query<&Children>,
     names: Query<&Name>,
     mut skins: Query<&mut bevy::mesh::skinning::SkinnedMesh>,
 ) {
-    let Some(character) = character else { return };
-    let info = &character.info;
     for (rig_entity, mut rig) in &mut rigs {
         if !ready.contains(rig.body) {
             continue;
         }
+        let character = match rig.model {
+            Model::Counselor => counselor.as_deref().map(|c| &c.0),
+            Model::Killer => killer.as_deref().map(|c| &c.0),
+        };
+        let Some(info) = character.map(|c| &c.info) else { continue };
         let bones: HashMap<&str, Entity> = children
             .iter_descendants(rig.body)
             .filter_map(|e| names.get(e).ok().map(|n| (n.as_str(), e)))
@@ -264,14 +294,16 @@ fn assemble(
                     });
                     let Some(parent) = parent else { return true };
                     let xf = p.transform.as_ref().map(crate::to_transform).unwrap_or_default();
-                    let e = commands
-                        .spawn((WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(p.file.clone()))), xf, ChildOf(parent)))
-                        .id();
+                    let mut e = commands.spawn((xf, Visibility::default(), ChildOf(parent)));
+                    if !p.file.is_empty() {
+                        e.insert(WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(p.file.clone()))));
+                    }
+                    let e = e.id();
                     rig.attached.push((i, e));
                     false
                 });
                 if pending.len() == before {
-                    warn!("counselor parts with nothing to attach to: {:?}", pending.iter().map(|&i| &info.parts[i].name).collect::<Vec<_>>());
+                    warn!("character parts with nothing to attach to: {:?}", pending.iter().map(|&i| &info.parts[i].name).collect::<Vec<_>>());
                     break;
                 }
             }
@@ -298,42 +330,48 @@ fn assemble(
 fn animate(
     time: Res<Time>,
     character: Option<Res<CounselorCharacter>>,
+    killer: Option<Res<KillerCharacter>>,
     tuning: Res<PlayerTuning>,
     forced: Option<Res<ForcedPose>>,
-    players: Query<(&Player, &Transform, Option<&crate::interact::UsingItem>)>,
+    players: Query<(&Player, &Transform, Option<&crate::interact::UsingItem>, Option<&PlayAction>)>,
     mut rigs: Query<(&ChildOf, &mut Rig, &mut AnimationPlayer)>,
 ) {
     let Some(character) = character else { return };
     let dt = time.delta_secs();
     if let Some(f) = forced {
-        let Some(&(node, len)) = character.clips.get(&f.0) else { return };
-        for (_, _, mut anim) in &mut rigs {
+        for (_, rig, mut anim) in &mut rigs {
+            let model = match rig.model {
+                Model::Counselor => &character.0,
+                Model::Killer => match killer.as_deref() {
+                    Some(k) => &k.0,
+                    None => continue,
+                },
+            };
+            let Some(&(node, len)) = model.clips.get(&f.0) else { continue };
             anim.play(node).set_speed(0.0).set_weight(1.0).set_seek_time(f.1.min(len));
         }
         return;
     }
     for (parent, mut rig, mut anim) in &mut rigs {
-        let Ok((p, xf, using)) = players.get(parent.parent()) else { continue };
+        let Ok((p, xf, using, scripted)) = players.get(parent.parent()) else { continue };
         let c = &p.counselor;
         let t = &tuning.counselor;
         let speed = p.velocity.length();
 
-        // A full-body action: the montage the rules started (dodge, stumble) or the first aid spray.
-        let action = match (&p.montage, using) {
-            (Some(m), _) if p.root_motion.is_some() => female_sequence(m),
-            (_, Some(_)) => Some(FIRST_AID),
+        // A full-body action: a scripted one (hit, grab, kill, death), the montage the rules started (dodge,
+        // stumble) or the first aid spray.
+        let action = match (scripted, &p.montage, using) {
+            (Some(a), _, _) => Some(a.0.as_str()),
+            (_, Some(m), _) if p.root_motion.is_some() => female_sequence(m),
+            (_, _, Some(_)) => Some(FIRST_AID),
             _ => None,
         };
-        match (&mut rig.action, action) {
-            (Some((name, at)), Some(a)) if name == a => *at += dt,
-            (_, Some(a)) => rig.action = Some((a.to_string(), 0.0)),
-            (_, None) => rig.action = None,
-        }
+        rig.set_action(action, dt);
 
         let mut targets: HashMap<&str, f32> = HashMap::new();
-        if let Some((a, _)) = &rig.action {
-            targets.insert(character.clips.get_key_value(a.as_str()).map_or(IDLE, |(k, _)| k.as_str()), 1.0);
-        } else {
+        if rig.action.as_ref().is_some_and(|(a, _)| !character.clips.contains_key(a.as_str())) {
+            targets.insert(IDLE, 1.0);
+        } else if rig.action.is_none() {
             match c.stance {
                 Stance::Crouching => {
                     let s = (speed / t.max_walk_speed_crouched.max(1.0)).clamp(0.0, 1.0);
@@ -371,51 +409,76 @@ fn animate(
             }
         }
 
+        let synced = |n: &str| MOVE.contains(&n) || n == CROUCH_WALK || COMBAT_WALK.iter().any(|(_, m)| *m == n);
+        rig.drive(&character.0, &targets, &synced, dt, &mut anim);
+    }
+}
+
+impl Rig {
+    /// Starts, continues or ends the full-body action.
+    pub fn set_action(&mut self, action: Option<&str>, dt: f32) {
+        match (&mut self.action, action) {
+            (Some((name, at)), Some(a)) if name == a => *at += dt,
+            (_, Some(a)) => self.action = Some((a.to_string(), 0.0)),
+            (_, None) => self.action = None,
+        }
+    }
+
+    /// Eases every animation's weight toward `targets` (the action, when one plays, gets all of it), advances the
+    /// shared locomotion phase of the `synced` cycles, and poses the player.
+    pub fn drive(&mut self, model: &CharacterModel, targets: &HashMap<&str, f32>, synced: &dyn Fn(&str) -> bool, dt: f32, anim: &mut AnimationPlayer) {
+        let action_target: HashMap<&str, f32>;
+        let targets = match &self.action {
+            Some((a, _)) if model.clips.contains_key(a.as_str()) => {
+                action_target = HashMap::from([(a.as_str(), 1.0)]);
+                &action_target
+            }
+            _ => targets,
+        };
         // Ease every weight toward its target (absent = 0).
-        let rate = if rig.action.is_some() { MONTAGE_BLEND_RATE } else { BLEND_RATE } * dt;
-        let mut names: Vec<String> = rig.weights.keys().cloned().collect();
+        let rate = if self.action.is_some() { MONTAGE_BLEND_RATE } else { BLEND_RATE } * dt;
+        let mut names: Vec<String> = self.weights.keys().cloned().collect();
         for k in targets.keys() {
-            if !rig.weights.contains_key(*k) {
+            if !self.weights.contains_key(*k) {
                 names.push(k.to_string());
             }
         }
         for name in names {
             let target = targets.get(name.as_str()).copied().unwrap_or(0.0);
-            let w = rig.weights.entry(name.clone()).or_insert(0.0);
+            let w = self.weights.entry(name.clone()).or_insert(0.0);
             *w += (target - *w).clamp(-rate, rate);
             if *w <= 1e-4 && target == 0.0 {
-                rig.weights.remove(&name);
+                self.weights.remove(&name);
             }
         }
 
         // Locomotion cycles share one normalised phase, advanced by their weighted cycle length.
-        let synced = |n: &str| MOVE.contains(&n) || n == CROUCH_WALK || COMBAT_WALK.iter().any(|(_, m)| *m == n);
         let (mut wsum, mut lsum) = (0.0, 0.0);
-        for (n, w) in &rig.weights {
-            if let (true, Some((_, len))) = (synced(n), character.clips.get(n)) {
+        for (n, w) in &self.weights {
+            if let (true, Some((_, len))) = (synced(n), model.clips.get(n)) {
                 wsum += w;
                 lsum += w * len;
             }
         }
         if wsum > 0.0 && lsum > 0.0 {
-            rig.phase = (rig.phase + dt * wsum / lsum).fract();
+            self.phase = (self.phase + dt * wsum / lsum).fract();
         }
-        rig.idle_time += dt;
+        self.idle_time += dt;
 
-        for (name, &(node, len)) in &character.clips {
-            let w = rig.weights.get(name).copied().unwrap_or(0.0);
+        for (name, &(node, len)) in &model.clips {
+            let w = self.weights.get(name).copied().unwrap_or(0.0);
             if w <= 1e-4 {
                 if anim.is_playing_animation(node) {
                     anim.stop(node);
                 }
                 continue;
             }
-            let at = if rig.action.as_ref().is_some_and(|(a, _)| a == name) {
-                rig.action.as_ref().unwrap().1.min(len)
+            let at = if self.action.as_ref().is_some_and(|(a, _)| a == name) {
+                self.action.as_ref().unwrap().1.min(len)
             } else if synced(name) {
-                rig.phase * len
+                self.phase * len
             } else {
-                rig.idle_time % len.max(1e-3)
+                self.idle_time % len.max(1e-3)
             };
             anim.play(node).set_speed(0.0).set_weight(w).set_seek_time(at);
         }

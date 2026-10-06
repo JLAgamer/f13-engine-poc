@@ -262,6 +262,8 @@ fn spawn_props(
                 leaf_center,
                 angle: 0.0,
                 target: 0.0,
+                health: classes.prop(&actor.class, "BaseDoorHealth").as_f64().map_or(100.0, |v| v as f32),
+                broken: false,
             });
             *counts.entry("doors").or_default() += 1;
         }

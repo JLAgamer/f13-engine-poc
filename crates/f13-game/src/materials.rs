@@ -606,7 +606,7 @@ fn standard_material(root: &Path, info: &MaterialInfo, loader: &Loader) -> Stand
             })
         })
     };
-    m.base_color_texture = tex(&["Diffuse", "BaseColor", "Diffuse/Opacity", "Skin Diffuse", "Clothing Diffuse", "EyeDiffuse", "PM_Diffuse"]).and_then(|p| loader.load(&p, Tex::Color));
+    m.base_color_texture = tex(&["Diffuse", "BaseColor", "Diffuse/Opacity", "Skin Diffuse", "Clothing Diffuse", "EyeDiffuse", "HairAlpha", "PM_Diffuse"]).and_then(|p| loader.load(&p, Tex::Color));
     if let Some(n) = tex(&["Normal", "normalMap", "Skin Normal", "Clothing Normal", "PM_Normals"]).and_then(|p| loader.load(&p, Tex::Data)) {
         m.normal_map_texture = Some(n);
         m.flip_normal_map_y = true; // Unreal normal maps are DirectX-style (green down)

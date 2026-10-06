@@ -2,7 +2,8 @@
 //!
 //!   cargo run -p f13-game --release -- --export <dir made by tools/f13-export> [--layout 1-4] [--seed n] [--near-car] [--bot-escape] [--bot-heal] [--bot-dodge] [--bot-door] [--grass]
 //!       [--fly] [--capsule] [--demo] [--fear 0-100] [--health 1-100] [--speed x] [--tuning file] [--aerial] [--no-foliage] [--screenshot out.png [--screenshot-after s]]
-//!       [--pose <animation>@<seconds>]  (hold the counselor in one exported animation, for screenshots)
+//!       [--pose <animation>@<seconds>]  (hold the counselor (and Jason) in one exported animation, for screenshots)
+//!       [--no-jason] [--jason-delay s] [--bot-jason]  (Jason hunts the counselor unless left out; counselor bots leave him out)
 //!       [--camera x,y,z,tx,ty,tz]  (--fly start: eye and look-at point; playing: both relative to the counselor's feet)
 //!   Default: play as Vanessa (see player.rs for controls). --fly: free camera instead.   (screenshot: wait for loading, save one frame, exit)
 
@@ -11,6 +12,7 @@ mod character;
 mod collision;
 mod doors;
 mod interact;
+mod jason;
 mod materials;
 mod mipmaps;
 mod player;
@@ -40,6 +42,11 @@ struct Args {
     bot_heal: bool,
     bot_dodge: bool,
     bot_door: bool,
+    bot_jason: bool,
+    /// Leave Jason out (the counselor-only bots always do).
+    no_jason: bool,
+    /// Seconds before Jason starts hunting.
+    jason_delay: f32,
     grass: bool,
     aerial: bool,
     fly: bool,
@@ -67,6 +74,9 @@ fn parse_args() -> Args {
     let mut bot_heal = false;
     let mut bot_dodge = false;
     let mut bot_door = false;
+    let mut bot_jason = false;
+    let mut no_jason = false;
+    let mut jason_delay = 0.0;
     let mut grass = false;
     let mut aerial = false;
     let mut fly = false;
@@ -92,6 +102,9 @@ fn parse_args() -> Args {
             "--bot-heal" => bot_heal = true,
             "--bot-dodge" => bot_dodge = true,
             "--bot-door" => bot_door = true,
+            "--bot-jason" => bot_jason = true,
+            "--no-jason" => no_jason = true,
+            "--jason-delay" => jason_delay = it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0f32).max(0.0),
             "--grass" => grass = true,
             "--aerial" => aerial = true,
             "--fly" => fly = true,
@@ -125,7 +138,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera }
+    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera }
 }
 
 #[derive(Resource)]
@@ -232,6 +245,13 @@ fn main() {
             app.add_plugins(bot::BotPlugin(bot::Goal::Dodge));
         } else if args.bot_door {
             app.add_plugins(bot::BotPlugin(bot::Goal::Door));
+        } else if args.bot_jason {
+            app.add_plugins(bot::BotPlugin(bot::Goal::Jason));
+        }
+        // The counselor bots test her alone; --bot-jason tests him.
+        let bot_alone = args.bot_escape || args.bot_heal || args.bot_dodge || args.bot_door;
+        if !args.no_jason && !bot_alone {
+            app.add_plugins(jason::JasonPlugin { delay: args.jason_delay });
         }
     }
     if let Some(path) = args.screenshot.clone() {

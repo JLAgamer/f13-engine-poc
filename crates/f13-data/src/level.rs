@@ -253,6 +253,7 @@ mod tests {
 }
 
 /// `null` (what the exporter writes for "none") as an empty map.
-pub(crate) fn null_as_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<std::collections::HashMap<String, String>, D::Error> {
+/// A JSON null (the exporter's empty map or list) as the empty value.
+pub(crate) fn null_as_empty<'de, D: serde::Deserializer<'de>, T: Deserialize<'de> + Default>(d: D) -> Result<T, D::Error> {
     Ok(Option::deserialize(d)?.unwrap_or_default())
 }

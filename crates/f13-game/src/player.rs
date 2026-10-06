@@ -167,7 +167,7 @@ fn spawn_player(
     let player = player.id();
     match character.as_deref().filter(|_| !config.capsule) {
         Some(character) => {
-            crate::character::spawn_model(&mut commands, &assets, character, player);
+            crate::character::spawn_model(&mut commands, &assets, character, crate::character::Model::Counselor, player, PlayerPart);
         }
         None => {
             let capsule = meshes.add(Capsule3d::new(CAPSULE_RADIUS_M, 2.0 * (CAPSULE_HALF_HEIGHT_M - CAPSULE_RADIUS_M)));
@@ -356,19 +356,27 @@ fn move_player(
     time: Res<Time>,
     tuning: Res<PlayerTuning>,
     camera: Single<&PlayerCamera>,
-    mut player: Single<(Entity, &mut Player, &mut Transform, Option<&crate::interact::UsingItem>, Option<&Unsettled>), Without<Driving>>,
+    mut player: Single<
+        (Entity, &mut Player, &mut Transform, Option<&crate::interact::UsingItem>, Option<&Unsettled>, Has<crate::jason::Held>, Has<crate::jason::Staggered>),
+        Without<Driving>,
+    >,
     interaction: Option<Res<crate::interact::Interaction>>,
     collision: Res<crate::collision::WorldCollision>,
     dynamic: Res<crate::collision::DynamicColliders>,
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
-    let (entity, ref mut p, ref mut xf, using, settle) = *player;
+    let (entity, ref mut p, ref mut xf, using, settle, held, staggered) = *player;
+    if held {
+        // In Jason's hands: he places her.
+        p.velocity = Vec2::ZERO;
+        return;
+    }
     let (sin, cos) = camera.yaw.sin_cos();
     let forward = Vec2::new(-sin, -cos);
     let right = Vec2::new(cos, -sin);
     let repairing = interaction.as_ref().is_some_and(|i| i.busy());
-    let busy = !p.counselor.alive() || using.is_some() || repairing;
+    let busy = !p.counselor.alive() || using.is_some() || repairing || staggered;
     let wish = if busy { Vec2::ZERO } else { forward * intent.movement.y + right * intent.movement.x };
 
     let (facing, _, _) = xf.rotation.to_euler(EulerRot::YXZ);
@@ -509,7 +517,8 @@ fn follow_camera(
 }
 
 fn update_hud(
-    player: Single<&Player>,
+    player: Single<(&Player, &Transform)>,
+    jason: Query<(&crate::jason::Jason, &Transform), Without<Player>>,
     tuning: Res<PlayerTuning>,
     diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
     mut hud: Single<&mut Text, With<Hud>>,
@@ -517,6 +526,7 @@ fn update_hud(
     use bevy::diagnostic::FrameTimeDiagnosticsPlugin as Ftd;
     let fps = diagnostics.get(&Ftd::FPS).and_then(|d| d.smoothed()).unwrap_or(0.0);
     let frame_ms = diagnostics.get(&Ftd::FRAME_TIME).and_then(|d| d.smoothed()).unwrap_or(0.0);
+    let (player, pxf) = *player;
     let c = &player.counselor;
     let gait = if c.sprinting {
         "sprinting"
@@ -554,4 +564,8 @@ fn update_hud(
         player.velocity.length(),
         c.max_speed(&situation, &tuning.counselor),
     );
+    for (j, jxf) in &jason {
+        hud.0.push_str(&format!("
+Jason: {:?}, {:.0} m away", j.state, jxf.translation.distance(pxf.translation)));
+    }
 }

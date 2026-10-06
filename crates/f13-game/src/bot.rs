@@ -24,6 +24,8 @@ pub enum Goal {
     Heal,
     Dodge,
     Door,
+    /// Stand still and let Jason find, grab and kill the counselor.
+    Jason,
 }
 
 pub struct BotPlugin(pub Goal);
@@ -51,6 +53,8 @@ enum Step {
     Dodge(usize),
     /// Door test step `i` (see [`DOOR_STEPS`]).
     Door(usize),
+    /// Waiting for Jason.
+    AwaitJason,
     Done,
 }
 
@@ -73,11 +77,13 @@ struct Bot {
     /// Fixture test targets: lockable door, barricaded door, window.
     fixtures: [Option<Entity>; 3],
     door_ok: bool,
+    /// Jason states already screenshotted.
+    jason_shots: Vec<&'static str>,
 }
 
 impl Default for Bot {
     fn default() -> Self {
-        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false, hold_e: false, fixtures: [None; 3], door_ok: false }
+        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false, hold_e: false, fixtures: [None; 3], door_ok: false, jason_shots: Vec::new() }
     }
 }
 
@@ -163,11 +169,12 @@ fn run_bot(
     carried: Query<&Item, With<Carried>>,
     cabinets: Query<(&Cabinet, &GlobalTransform)>,
     mut vehicles: Query<(Entity, &Vehicle, &GlobalTransform, &mut Transform), Without<Player>>,
-    (zones, doors, windows, barricades): (
+    (zones, doors, windows, barricades, jasons): (
         Query<(&EscapeZone, &GlobalTransform)>,
         Query<(Entity, &crate::doors::Door, &GlobalTransform)>,
         Query<(Entity, &crate::windows::Window, &GlobalTransform)>,
         Query<&crate::windows::Barricade>,
+        Query<(&crate::jason::Jason, &Transform), (Without<Player>, Without<Vehicle>)>,
     ),
     escaped: Option<Res<Escaped>>,
     mut exit: MessageWriter<AppExit>,
@@ -183,7 +190,8 @@ fn run_bot(
     for k in [KeyCode::KeyW, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::KeyC, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD] {
         keys.release(k);
     }
-    if bot.total > 240.0 && bot.step != Step::Done {
+    let limit = if bot.goal == Goal::Jason { 600.0 } else { 240.0 };
+    if bot.total > limit && bot.step != Step::Done {
         error!("bot: gave up at {:?}", bot.step);
         exit.write(AppExit::error());
         return;
@@ -207,6 +215,19 @@ fn run_bot(
                 bot.fixtures = [pick(false), pick(true), window];
                 info!("bot: fixtures {:?}", bot.fixtures);
                 bot.step = Step::Door(0);
+                bot.timer = 0.0;
+                return;
+            }
+            if bot.goal == Goal::Jason {
+                match jasons.iter().next() {
+                    Some((_, jxf)) => info!("bot: waiting for Jason, {:.0} m away", jxf.translation.distance(pxf.translation)),
+                    None => {
+                        error!("bot: no Jason");
+                        bot.step = Step::Done;
+                        return;
+                    }
+                }
+                bot.step = Step::AwaitJason;
                 bot.timer = 0.0;
                 return;
             }
@@ -505,6 +526,32 @@ fn run_bot(
                 _ => {}
             }
         }
+        Step::AwaitJason => {
+            let Some((j, jxf)) = jasons.iter().next() else { return };
+            if bot.timer >= 5.0 {
+                bot.timer = 0.0;
+                info!("bot: Jason {:?}, {:.1} m away; health {:.0}", j.state, jxf.translation.distance(pxf.translation), p.counselor.health);
+            }
+            // Screenshots of the hit, the grab and the kill, to check the paired poses.
+            let shot = match j.state {
+                crate::jason::JasonState::Swinging { t, door: None, .. } if t > 0.35 => Some("swing"),
+                crate::jason::JasonState::Holding { t } if t > 1.0 => Some("grab"),
+                crate::jason::JasonState::Killing { t } if t > 9.0 => Some("kill2"),
+                crate::jason::JasonState::Killing { t } if t > 4.0 => Some("kill"),
+                _ => None,
+            };
+            if let Some(s) = shot.filter(|s| !bot.jason_shots.contains(s)) {
+                bot.jason_shots.push(s);
+                let path = std::env::temp_dir().join(format!("f13-bot-jason-{s}.png"));
+                info!("bot: screenshot {}", path.display());
+                commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+            }
+            if !p.counselor.alive() {
+                info!("bot: Vanessa died after {:.1}s ({:?})", bot.total, j.state);
+                bot.step = Step::Done;
+                bot.timer = 0.0;
+            }
+        }
         Step::Done => {
             if bot.timer > 2.0 {
                 let ok = match bot.goal {
@@ -512,6 +559,7 @@ fn run_bot(
                     Goal::Heal => p.counselor.health >= 100.0,
                     Goal::Dodge => bot.dodges_ok == 3,
                     Goal::Door => bot.door_ok,
+                    Goal::Jason => !p.counselor.alive(),
                 };
                 exit.write(if ok { AppExit::Success } else { AppExit::error() });
             }

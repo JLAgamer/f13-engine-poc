@@ -15,6 +15,8 @@ shipped. They are passed in at runtime, and a loader will read them from the pla
   - `movement`: Unreal 4.18 walking velocity (acceleration, friction, braking)
   - `curve`: float curves matching Unreal 4.18 `FRichCurve` evaluation
   - `spawn`: match-start spawning of vehicles, repair parts and items (the game mode's rules)
+  - `collision`: the capsule mover over the game's collision (walls, steps, slopes, falling)
+  - `nav`: paths for computer-controlled characters over the same collision (grid A*)
 - `f13-data`: loads `tuning.json` into the core types, plus the exporter's level layouts and class descriptions,
   and builds a match's actors (`world`)
 - `f13-bevy`: Bevy 0.19 plugin (`F13GameplayPlugin`) with components, `FixedUpdate` systems and messages
@@ -53,6 +55,10 @@ dotnet run --project tools/f13-export -- --game "<path to F13Game>" --out "<expo
   body, default outfit with its default materials, face on the head bone, hair on the face, skin masks), the shared
   skeleton's bones with their retargeting modes, and her animations sampled per frame. `tools/f13-export ... counselor`
   writes just these.
+- `killers/Jason_SackHead.json` and `anims/jason/*.anim`: Jason Part 2 the same way (body, sack mask, his pickaxe in
+  its hand socket), his gameplay values (speeds, attack and grab ranges, attack delay, weapon damage: Blueprint
+  overrides, else the C++ constructor's) and his animations with their notify windows (when a swing can hit).
+  `tools/f13-export ... killer` writes just these.
 - `collision.json`: each static mesh's simple collision (convex point sets); level placements and class components
   say whether they block counselors (their collision profile, read from the game's DefaultEngine.ini), and
   BlockingVolumes carry their hulls. `tools/f13-export ... collision` writes just these (and the level files).
@@ -76,8 +82,14 @@ dodges, stumbles, first aid; `--capsule` for the old placeholder): WASD move (ru
 A/D/S to dodge), click to capture the mouse,
 Esc to release. The HUD shows health, stamina, fear and speed. `--demo` sprints in a straight line and logs stamina every second.
 Counselors stumble as in the game (by fear, stamina and wounds); fear events aren't pushed yet, so `--fear 0-100` sets
-a fixed fear level for testing. Health is the game's (wounded at 50, dead at 0); nothing deals damage yet, so
-`--health 1-100` starts you hurt.
+a fixed fear level for testing. Health is the game's (wounded at 50, dead at 0); `--health 1-100` starts you hurt.
+
+Jason (Part 2) starts at the layout's killer start and hunts you: he walks or runs (his own speeds), opens doors in
+his way and breaks down locked or barricaded ones (three pickaxe hits), swings his pickaxe (20 damage, one swing
+per 1.3 s, hitting during the swing's attack window) and grabs you; a grab ends in the pickaxe's Throat Hack kill.
+He's a computer player for now (he always knows where you are; you can't struggle free yet). `--no-jason` leaves him
+out, `--jason-delay s` gives you a head start, and `--bot-jason` stands still and waits to be killed (screenshots of
+the swing, grab and kill go to the temp folder). The counselor bots below leave him out.
 `--fly` gives a free camera instead. Add `--grass` for grass and flowers.
 
 Items, cabinets and cars spawn as in the game (`--seed n` repeats a match; the log lists where the cars and parts

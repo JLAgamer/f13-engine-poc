@@ -15,18 +15,30 @@ pub struct CharacterInfo {
     /// CharacterMesh0 relative to the capsule's centre.
     pub mesh_transform: Xform,
     pub capsule_half_height: f32,
+    /// Capsule radius (cm; ACharacter's 34 unless the Blueprint sets it).
+    #[serde(default = "default_radius")]
+    pub capsule_radius: f32,
     pub parts: Vec<Part>,
     /// The two skin masks the game multiplies to hide the body under the outfit (counselor's own, outfit's).
     #[serde(default)]
     pub skin_masks: Vec<String>,
     pub bones: Vec<Bone>,
     pub animations: BTreeMap<String, AnimInfo>,
+    /// Gameplay values (killers: speeds, attack and grab ranges, weapon damage), by Unreal property name.
+    #[serde(default, deserialize_with = "crate::level::null_as_empty")]
+    pub values: HashMap<String, f32>,
+}
+
+fn default_radius() -> f32 {
+    34.0
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Part {
     pub name: String,
+    /// Empty for an attach point only (a socket other parts hang off).
+    #[serde(default)]
     pub file: String,
     /// "MasterPose": the part's skin uses the body's bones of the same names. Otherwise the body bone (or another
     /// part's name) its root hangs off, at `transform`.
@@ -60,6 +72,27 @@ pub struct AnimInfo {
     pub fps: f32,
     pub frames: u32,
     pub root_motion: bool,
+    /// The root keeps its animated translation (paired kills: both characters play around one origin).
+    #[serde(default)]
+    pub keep_root: bool,
+    /// Notify states with a duration (e.g. `AttackTraceNotify`, when a weapon swing can hit), in seconds.
+    #[serde(default, deserialize_with = "crate::level::null_as_empty")]
+    pub windows: Vec<Window>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct Window {
+    pub name: String,
+    pub start: f32,
+    pub end: f32,
+}
+
+impl AnimInfo {
+    /// The first notify window called `name`.
+    pub fn window(&self, name: &str) -> Option<(f32, f32)> {
+        self.windows.iter().find(|w| w.name == name).map(|w| (w.start, w.end))
+    }
 }
 
 impl CharacterInfo {

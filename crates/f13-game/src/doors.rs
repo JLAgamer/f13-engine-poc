@@ -38,6 +38,9 @@ pub struct Door {
     /// Current and target swing angle (radians, about the pivot's Y).
     pub angle: f32,
     pub target: f32,
+    /// Health left against Jason's weapon (`BaseDoorHealth`); at 0 the door is broken: gone, open for good.
+    pub health: f32,
+    pub broken: bool,
 }
 
 impl Door {
@@ -79,6 +82,22 @@ impl Door {
         "opened"
     }
 
+    /// A hit from Jason's weapon (`damage` already scaled by his `DamageWorldModifier`). Returns true when it
+    /// breaks the door: it no longer locks, bars or blocks (the leaf is hidden by the caller).
+    pub fn damage(&mut self, damage: f32) -> bool {
+        if self.broken {
+            return false;
+        }
+        self.health = (self.health - damage).max(0.0);
+        if self.health > 0.0 {
+            return false;
+        }
+        self.broken = true;
+        self.open = true;
+        self.locked = false;
+        true
+    }
+
     pub fn toggle_lock(&mut self) -> &'static str {
         self.locked = !self.locked;
         if self.locked {
@@ -101,5 +120,39 @@ pub fn swing_doors(time: Res<Time>, mut doors: Query<&mut Door>, mut pivots: Que
         if let Ok(mut t) = pivots.get_mut(d.pivot) {
             t.rotation = d.pivot_closed.rotation * Quat::from_rotation_y(d.angle);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn door(locked: bool) -> Door {
+        Door {
+            open: false,
+            locked,
+            lockable: true,
+            pivot: Entity::PLACEHOLDER,
+            pivot_closed: Transform::IDENTITY,
+            interact: Vec3::ZERO,
+            reach: 200.0,
+            hold_time: 0.5,
+            leaf_center: Vec3::X,
+            angle: 0.0,
+            target: 0.0,
+            health: 60.0,
+            broken: false,
+        }
+    }
+
+    #[test]
+    fn a_locked_door_breaks_on_the_third_pickaxe_hit() {
+        let mut d = door(true);
+        assert!(!d.damage(20.0));
+        assert!(!d.damage(20.0));
+        assert!(d.locked && !d.open);
+        assert!(d.damage(20.0));
+        assert!(d.broken && d.open && !d.locked);
+        assert!(!d.damage(20.0), "already broken");
     }
 }
