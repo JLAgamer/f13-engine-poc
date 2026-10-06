@@ -13,7 +13,7 @@
 //! her there. Screenshots f13-bot-hide-*.png.
 //! `--bot-locked-in` / `--bot-barred-in`: shut her in behind the lockable (barricaded) door nearest Jason, locked
 //! (barred), and tell him where she is; passes when he breaks it down in a hit per 20 of its health (10 barred) and
-//! kills her. Screenshots
+//! kills her; `--bot-raged-in`: a locked door with Jason raged, who bursts through it. Screenshots
 //! f13-bot-breakdown-*.png.
 //! With Jason (`--bot-jason`, `--bot-fight`, the hide bots), she steps out 10 m in front of him when he hasn't seen
 //! her for a while (he only knows what he sees, hears and senses).
@@ -43,7 +43,7 @@ pub enum Goal {
     /// Hide where Jason can see her: he should find and kill her.
     HideSeen,
     /// Shut in behind a locked (or barricaded) door: he should break it down and kill her.
-    LockedIn { barred: bool },
+    LockedIn { barred: bool, raged: bool },
 }
 
 pub struct BotPlugin(pub Goal);
@@ -292,7 +292,7 @@ fn run_bot(
                 bot.timer = 0.0;
                 return;
             }
-            if let Goal::LockedIn { barred } = bot.goal {
+            if let Goal::LockedIn { barred, .. } = bot.goal {
                 // The door nearest Jason that locks (that has a barricade), with room to stand inside it.
                 let Some((_, jxf)) = jasons.iter().next() else {
                     error!("bot: no Jason");
@@ -773,8 +773,11 @@ fn run_bot(
         Step::LockedIn => {
             let (Some((j, jxf)), Some(de)) = (jasons.iter().next(), bot.fixtures[0]) else { return };
             let Ok((_, d, g)) = doors.get(de) else { return };
-            // He hears her in there.
+            // He hears her in there (and is raged, for --bot-raged-in).
             if let Some(mut k) = knowledge.iter_mut().next() {
+                if matches!(bot.goal, Goal::LockedIn { raged: true, .. }) {
+                    k.abilities.rage_active = true;
+                }
                 if !k.sees {
                     k.last_known = Some((pxf.translation, time.elapsed_secs(), crate::senses::Clue::Heard));
                 }
@@ -794,7 +797,9 @@ fn run_bot(
                 look_at(&mut camera, pxf, g.translation() + Vec3::Y);
             }
             let shot = match j.state {
+                crate::jason::JasonState::BreakingDoor { section: 1, t, .. } if t > 1.5 && bot.door_hits.len() == 3 => Some("medium"),
                 crate::jason::JasonState::BreakingDoor { section: 1, t, .. } if t > 0.9 => Some("loop"),
+                crate::jason::JasonState::BurstingDoor { t, .. } if t > 0.45 => Some("burst"),
                 _ if d.broken && !bot.jason_shots.contains(&"broken") => Some("broken"),
                 _ => None,
             };
@@ -970,8 +975,9 @@ fn run_bot(
                     Goal::HideSeen => !p.counselor.alive() && bot.jason_shots.contains(&"kill"),
                     // A hit per 20 health (the pickaxe), per 10 through a barricade: cabin doors (60) take three or six,
                     // Higgins Haven's outer doors (20) one or two. The first entry is the starting health.
-                    Goal::LockedIn { barred } => {
-                        let hits = bot.door_hits.first().map_or(0, |h| (h.1 / if barred { 10.0 } else { 20.0 }).ceil() as usize);
+                    Goal::LockedIn { barred, raged } => {
+                        // Raged: one burst.
+                        let hits = if raged { 1 } else { bot.door_hits.first().map_or(0, |h| (h.1 / if barred { 10.0 } else { 20.0 }).ceil() as usize) };
                         !p.counselor.alive() && bot.jason_shots.contains(&"broken") && bot.door_hits.len() == hits + 1
                     }
                 };

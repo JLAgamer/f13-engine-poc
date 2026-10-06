@@ -69,7 +69,7 @@ impl Plugin for MaterialsPlugin {
 
 /// Material overrides for one placed mesh (slot material name, lowercase -> material used instead), on the entity
 /// holding its scene.
-#[derive(Component, Clone)]
+#[derive(Component, Clone, Debug)]
 pub(crate) struct MaterialOverrides(std::sync::Arc<HashMap<String, String>>);
 
 impl MaterialOverrides {

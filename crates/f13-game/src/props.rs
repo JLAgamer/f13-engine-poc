@@ -259,6 +259,7 @@ fn spawn_props(
             (commands.spawn((t, Visibility::default(), ChildOf(root))).id(), t)
         });
         let mut leaf_center = Vec3::ZERO;
+        let mut leaf: Option<(Entity, Transform, Option<crate::materials::MaterialOverrides>)> = None;
         let mut parts: HashMap<&str, Entity> = HashMap::new();
         // Hiding spot doors swing on their pivots (hiding.rs).
         let is_hiding_spot = classes.is_child_of(&actor.class, "SCHidingSpot");
@@ -286,10 +287,12 @@ fn spawn_props(
             if let (Some((p, pt)), Some("Pivot")) = (pivot, c.parent.as_deref()) {
                 let rel = Transform::from_matrix(pt.to_matrix().inverse() * local(c).to_matrix());
                 leaf_center = rel.translation;
-                let leaf = commands.spawn((WorldAssetRoot(scene(mesh)), rel, ChildOf(p))).id();
-                if let Some(o) = crate::materials::MaterialOverrides::new(&c.material_map) {
-                    commands.entity(leaf).insert(o);
+                let e = commands.spawn((WorldAssetRoot(scene(mesh)), rel, ChildOf(p))).id();
+                let overrides = crate::materials::MaterialOverrides::new(&c.material_map);
+                if let Some(o) = &overrides {
+                    commands.entity(e).insert(o.clone());
                 }
+                leaf = Some((e, rel, overrides));
                 continue;
             }
             let child = commands.spawn((WorldAssetRoot(scene(mesh)), local(c), ChildOf(root))).id();
@@ -368,6 +371,15 @@ fn spawn_props(
                 health: classes.prop(&actor.class, "BaseDoorHealth").as_f64().map_or(100.0, |v| v as f32),
                 broken: false,
                 swing_seconds: crate::doors::SWING_SECONDS,
+                base_health: classes.prop(&actor.class, "BaseDoorHealth").as_f64().map_or(100.0, |v| v as f32),
+                damage_thresholds: [("Light", 0.75), ("Medium", 0.5), ("Heavy", 0.25)]
+                    .map(|(k, d)| classes.prop(&actor.class, &format!("{k}DestructionThreshold")).as_f64().map_or(d, |v| v as f32)),
+                visuals: leaf.take().map(|(leaf, leaf_xf, overrides)| crate::doors::DoorVisuals {
+                    leaf,
+                    leaf_xf,
+                    overrides,
+                    damaged: ["Light", "Medium", "Heavy"].map(|k| classes.prop(&actor.class, &format!("{k}DestructionMeshFile")).as_str().map(&mut scene)),
+                }),
             });
             *counts.entry("doors").or_default() += 1;
         }

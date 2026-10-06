@@ -564,6 +564,8 @@ static class Mvp
         $"{Shared}/Combat/Dodge/AM_combat_stand_dodge_back",
         $"{Shared}/Stumble/AM_normal_stand_run_stumble_short",
         $"{Shared}/Stumble/AM_normal_stand_sprint_stumble_short",
+        // Jason's rage door burst carries him through the doorway.
+        "/Game/Characters/Killers/Jason/Base/Animation/Abilities/AM_Jason_uber_stand_wall_smash_02",
     ];
     public const string Counselor = "/Game/Characters/Counselors/Athlete/Athlete_Counselor";
     // Animations f13-game plays on the counselor: Athlete_AnimBP's female overrides of Base_Counselor_AnimBP's
@@ -694,6 +696,8 @@ static class Mvp
         $"{JasonAnim}/Interaction/Doors/AM_normal_stand_door_open_inside",
         $"{JasonAnim}/Interaction/Doors/AM_normal_stand_door_open_outside",
         $"{JasonAnim}/Interaction/Doors/AM_normal_stand_door_break_axe",
+        // Raged, he bursts through a closed door instead (BurstDoorFrom*: Jason_WallSmash).
+        $"{JasonAnim}/Abilities/AM_Jason_uber_stand_wall_smash_02",
         JasonKill,
         .. JasonHiding,
     ];

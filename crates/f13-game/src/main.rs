@@ -7,7 +7,8 @@
 //!       [--give Class,Class...] [--bot-fight]  (start with these items (testing); a bot that uses them on Jason)
 //!       [--nav-debug]  (draw the navmesh around the counselor)
 //!       [--bot-hide] [--bot-hide-seen]  (hide out of Jason's sight and come out; hide where he sees: he kills her)
-//!       [--bot-locked-in] [--bot-barred-in]  (behind a locked / barricaded cabin door: he breaks it down and kills her)
+//!       [--bot-locked-in] [--bot-barred-in] [--bot-raged-in]  (behind a locked / barricaded door: he breaks it down,
+//!       or raged bursts through it, and kills her)
 //!       [--camera x,y,z,tx,ty,tz]  (--fly start: eye and look-at point; playing: both relative to the counselor's feet)
 //!   Default: play as Vanessa (see player.rs for controls). --fly: free camera instead.   (screenshot: wait for loading, save one frame, exit)
 
@@ -59,6 +60,8 @@ struct Args {
     bot_hide_seen: bool,
     /// --bot-locked-in (false) or --bot-barred-in (true).
     bot_locked_in: Option<bool>,
+    /// --bot-raged-in: locked in, with Jason raged.
+    bot_raged: bool,
     /// Log frame time, entity counts and GPU pass times every few seconds.
     perf: bool,
     give: Vec<String>,
@@ -99,6 +102,7 @@ fn parse_args() -> Args {
     let mut nav_debug = false;
     let mut bot_hide_seen = false;
     let mut bot_locked_in = None;
+    let mut bot_raged = false;
     let mut perf = false;
     let mut give = Vec::new();
     let mut no_jason = false;
@@ -135,6 +139,10 @@ fn parse_args() -> Args {
             "--bot-hide-seen" => bot_hide_seen = true,
             "--bot-locked-in" => bot_locked_in = Some(false),
             "--bot-barred-in" => bot_locked_in = Some(true),
+            "--bot-raged-in" => {
+                bot_locked_in = Some(false);
+                bot_raged = true;
+            }
             "--perf" => perf = true,
             "--give" => give = it.next().map(|v| v.split(',').map(String::from).collect()).unwrap_or_default(),
             "--no-jason" => no_jason = true,
@@ -172,7 +180,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera }
+    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera }
 }
 
 #[derive(Resource)]
@@ -289,7 +297,7 @@ fn main() {
         } else if args.bot_hide_seen {
             app.add_plugins(bot::BotPlugin(bot::Goal::HideSeen));
         } else if let Some(barred) = args.bot_locked_in {
-            app.add_plugins(bot::BotPlugin(bot::Goal::LockedIn { barred }));
+            app.add_plugins(bot::BotPlugin(bot::Goal::LockedIn { barred, raged: args.bot_raged }));
         }
         if !args.give.is_empty() {
             app.insert_resource(items::Give(args.give.clone()));
@@ -315,7 +323,12 @@ fn main() {
                     ..default()
                 })
                 // Unreal meshes carry up to 8 UV sets; Bevy warns once per extra set per mesh.
-                .set(bevy::log::LogPlugin { filter: "wgpu=error,naga=warn,bevy_gltf::loader=error".into(), ..default() }),
+                .set(bevy::log::LogPlugin {
+                    filter: "wgpu=error,naga=warn,bevy_gltf::loader=error".into(),
+                    #[cfg(feature = "profile")]
+                    custom_layer: perf::systems::layer,
+                    ..default()
+                }),
         )
         .add_plugins((FreeCameraPlugin, bevy::diagnostic::FrameTimeDiagnosticsPlugin::default()))
         .insert_resource(Level { layouts, grass: args.grass, foliage: args.foliage, aerial: args.aerial, fly: args.fly || args.aerial, camera: args.camera, scenes: vec![] })

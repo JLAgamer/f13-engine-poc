@@ -573,4 +573,72 @@ mod tests {
         assert!(mesh.walkable_line(Vec3::new(2.0, 0.0, 15.0), Vec3::new(8.0, 0.0, 3.0)));
         assert!(!mesh.walkable_line(Vec3::new(5.0, 0.0, 15.0), Vec3::new(15.0, 0.0, 15.0)));
     }
+
+    /// A 5 x 5 m room (walls 0.3 m thick, a 1.2 m doorway in its east wall) at `at` on a 24 x 24 m floor.
+    fn cabin(at: Vec3) -> (TriGrid, Vec<Vec3>) {
+        let mut w = TriGrid::new(2.0);
+        let walls = [
+            (Vec3::new(0.0, 1.5, 2.5), Vec3::new(0.15, 1.5, 2.65)),
+            (Vec3::new(2.5, 1.5, 0.0), Vec3::new(2.5, 1.5, 0.15)),
+            (Vec3::new(2.5, 1.5, 5.0), Vec3::new(2.5, 1.5, 0.15)),
+            // East wall, x = 5, with the doorway at z 3.4..4.6.
+            (Vec3::new(5.0, 1.5, 1.7), Vec3::new(0.15, 1.5, 1.7)),
+            (Vec3::new(5.0, 1.5, 4.8), Vec3::new(0.15, 1.5, 0.2)),
+        ];
+        for t in cube(Vec3::new(12.0, -0.5, 12.0), Vec3::new(12.0, 0.5, 12.0)).into_iter().chain(walls.iter().flat_map(|&(c, h)| cube(at + c, h))) {
+            w.insert(t);
+        }
+        // Points inside the walls (not the doorway).
+        let solid = vec![at + Vec3::new(5.0, 0.0, 0.8), at + Vec3::new(5.0, 0.0, 2.0), at + Vec3::new(5.0, 0.0, 3.0), at + Vec3::new(2.5, 0.0, 0.0), at + Vec3::new(2.5, 0.0, 5.0), at + Vec3::new(0.0, 0.0, 2.5)];
+        (w, solid)
+    }
+
+    #[test]
+    fn no_polygon_crosses_a_cabin_wall() {
+        // Wherever the cabin sits on the tile and chunk grid, the floor's polygons stop at its walls (a border between
+        // two regions that winds through the doorway was drawn straight, across the wall).
+        let c = cfg();
+        for i in 0..12 {
+            let at = Vec3::new(4.0 + i as f32 * 0.77, 0.0, 6.0 + i as f32 * 0.53);
+            let (w, solid) = cabin(at);
+            let tiles = build(&w, &c, Vec3::new(0.0, -1.0, 0.0), Vec3::new(24.0, 3.0, 24.0), &Default::default());
+            let mesh = NavMesh::new(&tiles, Vec3::ZERO, c.tile_size(), c.agent_max_climb);
+            for p in &solid {
+                let over: Vec<usize> = (0..mesh.polys.len()).filter(|&k| mesh.height_on(k as u32, p.x, p.z).is_some_and(|h| h.abs() < 0.5)).collect();
+                assert!(over.is_empty(), "cabin at {at}: floor polygons {over:?} over the wall at {p}");
+            }
+            let (_, reached) = mesh.find_path(at + Vec3::new(8.0, 0.0, 2.0), at + Vec3::new(2.5, 0.0, 2.5), 20000).expect("a path");
+            assert!(reached, "cabin at {at}: in through the doorway");
+        }
+    }
+
+    #[test]
+    fn polygons_go_round_obstacles_inside_a_region() {
+        // A 20 x 20 m floor with a free-standing wall (x = 10, z 6..14) and a pillar: the regions merge round them, so
+        // their outlines wind round the wall's ends and the pillar is a hole.
+        let mut w = TriGrid::new(2.0);
+        for t in cube(Vec3::new(10.0, -0.5, 10.0), Vec3::new(10.0, 0.5, 10.0))
+            .into_iter()
+            .chain(cube(Vec3::new(10.0, 1.5, 10.0), Vec3::new(0.2, 1.5, 4.0)))
+            .chain(cube(Vec3::new(4.0, 1.5, 4.0), Vec3::new(0.6, 1.5, 0.6)))
+        {
+            w.insert(t);
+        }
+        let c = cfg();
+        let tiles = build(&w, &c, Vec3::new(0.0, -1.0, 0.0), Vec3::new(20.0, 3.0, 20.0), &Default::default());
+        let mesh = NavMesh::new(&tiles, Vec3::ZERO, c.tile_size(), c.agent_max_climb);
+        // The floor's polygons (the pillar's top is walkable too, and so is its hollow inside: a closed mesh is
+        // rasterized by its faces, as in Recast; both are islands of their own).
+        let islands = mesh.island_of();
+        let (start, _) = mesh.nearest(Vec3::new(1.0, 0.0, 1.0), 0.5).expect("on the floor");
+        let floor = islands[start as usize];
+        for p in [Vec3::new(10.0, 0.0, 7.0), Vec3::new(10.0, 0.0, 10.0), Vec3::new(10.0, 0.0, 13.0), Vec3::new(4.0, 0.0, 4.0)] {
+            let over: Vec<usize> = (0..mesh.polys.len()).filter(|&i| islands[i] == floor && mesh.height_on(i as u32, p.x, p.z).is_some()).collect();
+            assert!(over.is_empty(), "floor polygons {over:?} over the obstacle at {p}");
+        }
+        assert!(!mesh.walkable_line(Vec3::new(7.0, 0.0, 10.0), Vec3::new(13.0, 0.0, 10.0)), "straight through the wall");
+        assert!(!mesh.walkable_line(Vec3::new(2.0, 0.0, 4.0), Vec3::new(6.0, 0.0, 4.0)), "straight through the pillar");
+        let (_, reached) = mesh.find_path(Vec3::new(7.0, 0.0, 10.0), Vec3::new(13.0, 0.0, 10.0), 10000).expect("a path");
+        assert!(reached, "round the wall's end");
+    }
 }

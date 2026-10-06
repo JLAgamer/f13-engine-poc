@@ -1,6 +1,7 @@
 //! `--perf`: where a frame's time goes. Bevy's own diagnostics (frame time, entity count, GPU pass times) plus the
 //! time each top-level schedule of the main world takes (an empty marker schedule between each pair stamps the time),
-//! and the render world's system sets (a stamp system in each). Logged every few seconds as averages.
+//! and the render world's system sets (a stamp system in each). Logged every few seconds as averages. Built with
+//! `--features profile`, also the costliest systems (Bevy's tracing spans).
 
 use bevy::app::{First, Last, MainScheduleOrder, PostUpdate, PreUpdate, RunFixedMainLoop, SpawnScene, Update};
 use bevy::ecs::schedule::ScheduleLabel;
@@ -71,6 +72,8 @@ impl Plugin for PerfPlugin {
             bevy::render::diagnostic::RenderDiagnosticsPlugin,
         ));
         app.insert_resource(MainTimes(Times::new(&MAIN)));
+        #[cfg(feature = "profile")]
+        app.add_systems(Last, systems::log_top);
         let labels: [bevy::ecs::intern::Interned<dyn ScheduleLabel>; 7] =
             [First.intern(), PreUpdate.intern(), RunFixedMainLoop.intern(), Update.intern(), SpawnScene.intern(), PostUpdate.intern(), Last.intern()];
         {
@@ -91,5 +94,93 @@ impl Plugin for PerfPlugin {
             // Stamp 0 starts a frame; the last one ends its last section.
             render.add_systems(Render, (move |mut t: ResMut<RenderTimes>| t.0.stamp(i, "render world")).in_set(set));
         }
+    }
+}
+
+/// With the `profile` feature: Bevy's per-system tracing spans, totalled by system name (main and render world alike)
+/// and logged as the costliest systems per frame.
+#[cfg(feature = "profile")]
+pub mod systems {
+    use bevy::log::tracing_subscriber::{layer::Context, registry::LookupSpan, Layer};
+    use bevy::log::BoxedLayer;
+    use bevy::log::tracing::{field::Field, field::Visit, span, Subscriber};
+    use bevy::prelude::*;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::Instant;
+
+    /// System name -> (total seconds, runs) since the last log.
+    static TOTALS: Mutex<Option<HashMap<String, (f64, u32)>>> = Mutex::new(None);
+
+    struct Name(String);
+    struct Entered(Instant);
+
+    struct NameVisitor(Option<String>);
+    impl Visit for NameVisitor {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "name" {
+                self.0 = Some(format!("{value:?}").trim_matches('"').to_string());
+            }
+        }
+        fn record_str(&mut self, field: &Field, value: &str) {
+            if field.name() == "name" {
+                self.0 = Some(value.to_string());
+            }
+        }
+    }
+
+    struct SystemTimes;
+
+    impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for SystemTimes {
+        fn on_new_span(&self, attrs: &span::Attributes<'_>, id: &span::Id, ctx: Context<'_, S>) {
+            if attrs.metadata().name() != "system" {
+                return;
+            }
+            let mut v = NameVisitor(None);
+            attrs.record(&mut v);
+            if let (Some(name), Some(span)) = (v.0, ctx.span(id)) {
+                span.extensions_mut().insert(Name(name));
+            }
+        }
+        fn on_enter(&self, id: &span::Id, ctx: Context<'_, S>) {
+            if let Some(span) = ctx.span(id) {
+                let mut ext = span.extensions_mut();
+                if ext.get_mut::<Name>().is_some() {
+                    ext.replace(Entered(Instant::now()));
+                }
+            }
+        }
+        fn on_exit(&self, id: &span::Id, ctx: Context<'_, S>) {
+            let Some(span) = ctx.span(id) else { return };
+            let ext = span.extensions();
+            let (Some(name), Some(at)) = (ext.get::<Name>(), ext.get::<Entered>()) else { return };
+            let dt = at.0.elapsed().as_secs_f64();
+            let mut totals = TOTALS.lock().unwrap();
+            let e = totals.get_or_insert_with(HashMap::new).entry(name.0.clone()).or_default();
+            e.0 += dt;
+            e.1 += 1;
+        }
+    }
+
+    /// LogPlugin's custom layer: timing systems only with --perf.
+    pub fn layer(_app: &mut App) -> Option<BoxedLayer> {
+        std::env::args().any(|a| a == "--perf").then(|| Box::new(SystemTimes) as BoxedLayer)
+    }
+
+    /// Logs the costliest systems (ms per frame) every few seconds.
+    pub fn log_top(mut frames: Local<u32>, mut since: Local<Option<Instant>>) {
+        *frames += 1;
+        let since = since.get_or_insert_with(Instant::now);
+        if since.elapsed() < super::LOG_EVERY {
+            return;
+        }
+        let Some(totals) = TOTALS.lock().unwrap().take() else { return };
+        let mut v: Vec<_> = totals.into_iter().collect();
+        v.sort_by(|a, b| b.1 .0.total_cmp(&a.1 .0));
+        let n = (*frames).max(1) as f64;
+        let lines: Vec<String> = v.iter().take(25).map(|(name, (s, runs))| format!("  {:6.3} ms  {:4.1}x  {name}", s * 1000.0 / n, *runs as f64 / n)).collect();
+        info!("perf: costliest systems per frame (both worlds; parallel, so they overlap):\n{}", lines.join("\n"));
+        *frames = 0;
+        *since = Instant::now();
     }
 }

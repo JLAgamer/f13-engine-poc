@@ -94,7 +94,8 @@ Presentation
 - [x] Car, furniture, doors (frames and leaves), windows, barricades and items placed in the scene
 - [x] Each placement's CastShadow and cull distance (foliage InstanceEndCullDistance, max draw distance); sun shadows
       to 100 m in 3 cascades
-- [ ] Door damage states (the Light/Medium/Heavy destructible meshes at 75/50/25% health) and the break burst
+- [x] Door damage states (the Light/Medium/Heavy destructible meshes at 75/50/25% health); Jason's rage burst
+- [ ] Door break effects: the destructible chunks flying (BreakExplosionForce), sounds
 - [ ] Barricade plank: check its placement (not visible across the door in a screenshot)
 - [x] Counselor model: Vanessa's base body, default outfit (master pose), face on the head bone, hair on the face, skin
       clipped under the clothes by the outfit's skin mask (f13-game character.rs, shaders/skin.wgsl)

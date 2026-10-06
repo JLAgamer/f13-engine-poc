@@ -86,7 +86,8 @@ a fixed fear level for testing. Health is the game's (wounded at 50, dead at 0);
 
 Jason (Part 2) starts at the layout's killer start and hunts you: he walks or runs (his own speeds), opens doors in
 his way (his own door-opening animations) and breaks down locked or barricaded ones with the game's break-down
-move (an axe chop every 2 s: three on a locked door, six through a barricade), swings his pickaxe (20 damage, one swing
+move (an axe chop every 2 s: three on a cabin door, one on Higgins Haven's outer doors, twice that through a
+barricade; the door splinters as it weakens), or once enraged bursts straight through any closed door, swings his pickaxe (20 damage, one swing
 per 1.3 s, hitting during the swing's attack window) and grabs you; a grab ends in the pickaxe's Throat Hack kill.
 He's a computer player that only knows what he perceives: what he sees (100 m, the counselor's visibility distance),
 the sound pings your noise puts on his screen (the game's formula: sprinting is heard far off, walking at average
@@ -101,8 +102,8 @@ Hiding: E at a wardrobe, outhouse, bed or tent hides you (the game's enter, idle
 the spot's hiding camera, turned with the mouse), E again leaves. If Jason watched you get in, or lost you nearby, he
 searches it: an empty spot breaks, an occupied one ends in its hiding spot kill. `--bot-hide` hides out of his sight
 and comes out after 60 s; `--bot-hide-seen` hides where he sees and passes when he finds her. `--bot-locked-in` and
-`--bot-barred-in` shut her in behind a locked or barricaded door and pass when he breaks it down in three or six hits
-and kills her.
+`--bot-barred-in` shut her in behind a locked or barricaded door and pass when he breaks it down in a hit per 20 of
+its health (10 barricaded) and kills her; `--bot-raged-in` does it with him enraged (one burst).
 `--fly` gives a free camera instead. Add `--grass` for grass and flowers.
 
 Items, cabinets and cars spawn as in the game (`--seed n` repeats a match; the log lists where the cars and parts
@@ -125,7 +126,7 @@ he comes within 2 m). A pocket knife frees you the moment he grabs you; otherwis
 the map (when you carry one). The walkie-talkie only matters with other players. A dead counselor goes limp (a
 ragdoll from her physics asset; in a kill, where the kill animation hands her over, as in the game). `--give Class,Class` starts with items (e.g. `--give BaseballBat_C,BP_PocketKnife_C`);
 `--bot-fight` uses them on Jason and passes once he's been stunned and recovers.
-`--perf` logs where a frame's time goes every 5 s: the main world's schedules, the render world's system sets, GPU
+`--perf` logs where a frame's time goes every 5 s (built with `--features profile`, also the costliest systems): the main world's schedules, the render world's system sets, GPU
 pass times and entity counts (vsync off, to measure the real cost).
 For screenshots: `--screenshot out.png` (after loading; `--screenshot-after s` waits longer), `--camera
 x,y,z,tx,ty,tz` (eye and look-at, relative to her feet), `--pose <animation>@<seconds>` (holds her in one animation).

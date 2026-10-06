@@ -12,3 +12,7 @@ f13-bevy = { path = "../f13-bevy" }
 bevy = { version = "0.19", features = ["free_camera", "dds"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[features]
+# Per-system timings in --perf (Bevy's tracing spans; costs a little everywhere, so off by default).
+profile = ["bevy/trace", "bevy/debug"]

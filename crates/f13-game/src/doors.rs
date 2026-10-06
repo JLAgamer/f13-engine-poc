@@ -46,6 +46,21 @@ pub struct Door {
     pub broken: bool,
     /// How long the current swing takes (the opener's OpenCloseDoor driver window; [`SWING_SECONDS`] otherwise).
     pub swing_seconds: f32,
+    /// `BaseDoorHealth`, and the Light / Medium / Heavy DestructionThreshold fractions of it.
+    pub base_health: f32,
+    pub damage_thresholds: [f32; 3],
+    /// The leaf's look (None in tests).
+    pub visuals: Option<DoorVisuals>,
+}
+
+/// The leaf entity and what it shows: its transform on the pivot, its material overrides, and the Light, Medium and
+/// Heavy DestructionMesh scenes it's swapped for as the door takes damage.
+#[derive(Debug)]
+pub struct DoorVisuals {
+    pub leaf: Entity,
+    pub leaf_xf: Transform,
+    pub overrides: Option<crate::materials::MaterialOverrides>,
+    pub damaged: [Option<Handle<WorldAsset>>; 3],
 }
 
 impl Door {
@@ -103,20 +118,46 @@ impl Door {
     }
 
     /// A hit from Jason's weapon (see [`Door::hit_damage`]). Returns true when it breaks the door: it no longer
-    /// locks, bars or blocks (the leaf is hidden by the caller).
-    pub fn damage(&mut self, damage: f32, barred: bool) -> bool {
+    /// locks, bars or blocks (the leaf is hidden by the caller). Short of that, the leaf shows the damage state the
+    /// hit crossed into, if any.
+    pub fn damage(&mut self, damage: f32, barred: bool, commands: &mut Commands) -> bool {
         if self.broken {
             return false;
         }
+        let before = self.health;
         // Health is an int: the new value truncates.
         self.health = (self.health - Door::hit_damage(damage, barred)).trunc().max(0.0);
         if self.health > 0.0 {
+            if let Some(stage) = self.damage_stage(before) {
+                self.show_damage(stage, commands);
+            }
             return false;
         }
         self.broken = true;
         self.open = true;
         self.locked = false;
         true
+    }
+
+    /// The damage state (0 light, 1 medium, 2 heavy) a hit from `before` health crossed into, as SCDoor's
+    /// TakeDamage picks it: heavy if it crossed that threshold, else medium, else light.
+    pub fn damage_stage(&self, before: f32) -> Option<usize> {
+        let base = self.base_health.max(1.0);
+        let (was, now) = (before / base, self.health / base);
+        (0..3).rev().find(|&i| now <= self.damage_thresholds[i] && self.damage_thresholds[i] < was)
+    }
+
+    /// Swaps the leaf for damage state `stage`'s mesh (a new leaf entity on the pivot, same place).
+    fn show_damage(&mut self, stage: usize, commands: &mut Commands) {
+        let pivot = self.pivot;
+        let Some(v) = self.visuals.as_mut() else { return };
+        let Some(scene) = v.damaged[stage].clone() else { return };
+        commands.entity(v.leaf).despawn();
+        let mut leaf = commands.spawn((bevy::world_serialization::WorldAssetRoot(scene), v.leaf_xf, ChildOf(pivot)));
+        if let Some(o) = &v.overrides {
+            leaf.insert(o.clone());
+        }
+        v.leaf = leaf.id();
     }
 
     pub fn toggle_lock(&mut self) -> &'static str {
@@ -164,27 +205,41 @@ mod tests {
             health: 60.0,
             broken: false,
             swing_seconds: SWING_SECONDS,
+            base_health: 60.0,
+            damage_thresholds: [0.75, 0.5, 0.25],
+            visuals: None,
         }
+    }
+
+    /// Hits `d` and returns (broke, the damage state the hit crossed into).
+    fn hit(d: &mut Door, barred: bool) -> (bool, Option<usize>) {
+        let mut world = World::new();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &mut world);
+        let before = d.health;
+        let broke = d.damage(20.0, barred, &mut commands);
+        (broke, if broke { None } else { d.damage_stage(before) })
     }
 
     #[test]
     fn a_locked_door_breaks_on_the_third_pickaxe_hit() {
         let mut d = door(true);
-        assert!(!d.damage(20.0, false));
-        assert!(!d.damage(20.0, false));
+        // 60 -> 40 crosses 75% (light damage), 40 -> 20 crosses 50% (medium).
+        assert_eq!(hit(&mut d, false), (false, Some(0)));
+        assert_eq!(hit(&mut d, false), (false, Some(1)));
         assert!(d.locked && !d.open);
-        assert!(d.damage(20.0, false));
+        assert_eq!(hit(&mut d, false), (true, None));
         assert!(d.broken && d.open && !d.locked);
-        assert!(!d.damage(20.0, false), "already broken");
+        assert_eq!(hit(&mut d, false), (false, None), "already broken");
     }
 
     #[test]
     fn a_barricade_halves_each_hit() {
         let mut d = door(false);
-        for _ in 0..5 {
-            assert!(!d.damage(20.0, true));
-        }
+        // 50, 40 (light), 30 (medium: exactly 50%), 20, 10 (heavy).
+        let stages: Vec<_> = (0..5).map(|_| hit(&mut d, true)).collect();
+        assert_eq!(stages, [(false, None), (false, Some(0)), (false, Some(1)), (false, None), (false, Some(2))]);
         assert_eq!(d.health, 10.0);
-        assert!(d.damage(20.0, true), "the sixth hit");
+        assert!(hit(&mut d, true).0, "the sixth hit");
     }
 }

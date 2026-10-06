@@ -909,8 +909,11 @@ fn simplify_contour(pts: &[CVert], max_error: f32, max_edge_len: i32) -> Vec<CVe
             std::mem::swap(&mut a, &mut b);
             (pn - 1, (bi + pn - 1) % pn, ai)
         };
-        // Only outer edges and area borders are tessellated.
-        if pts[ci].r & REG_MASK == 0 || pts[ci].r & AREA_BORDER != 0 {
+        // Every edge is tessellated, borders between regions too (Recast only does walls and area borders): after
+        // region merging a border between two regions can wind round a wall end (outside a cabin, through its doorway,
+        // inside), and drawn straight it put both regions' polygons across the wall. The lexicographic walk makes both
+        // regions pick the same points, so their edges still match.
+        {
             while ci != endi {
                 let d = dist_pt_seg_sq(pts[ci].x, pts[ci].z, a.x, a.z, b.x, b.z);
                 if d > maxd {
@@ -1046,6 +1049,111 @@ impl Tri2<'_> {
 }
 
 const EAR: usize = 0x8000_0000;
+
+/// Twice a contour's signed area in XZ (Recast's calcAreaOfPolygon2D): negative for a hole, an obstacle inside a
+/// region that its outline goes round (walked the other way).
+fn contour_area(c: &[CVert]) -> i64 {
+    let n = c.len();
+    (0..n).map(|i| {
+        let (vi, vj) = (&c[i], &c[(i + n - 1) % n]);
+        vi.x as i64 * vj.z as i64 - vj.x as i64 * vi.z as i64
+    })
+    .sum()
+}
+
+/// Whether segment `d0`-`d1` crosses an edge of `verts` (Recast's intersectSegCountour), skipping the edges at vertex
+/// `skip` and edges sharing an end with it.
+fn crosses_contour(d0: (i32, i32), d1: (i32, i32), skip: Option<usize>, verts: &[(i32, i32)]) -> bool {
+    let n = verts.len();
+    (0..n).any(|k| {
+        let k1 = (k + 1) % n;
+        if skip.is_some_and(|i| i == k || i == k1) {
+            return false;
+        }
+        let (p0, p1) = (verts[k], verts[k1]);
+        if d0 == p0 || d1 == p0 || d0 == p1 || d1 == p1 {
+            return false;
+        }
+        intersect(d0, d1, p0, p1)
+    })
+}
+
+/// Whether `pj` lies in the cone of outline vertex `i` (Recast's inCone, for hole bridges).
+fn in_cone_of(i: usize, verts: &[(i32, i32)], pj: (i32, i32)) -> bool {
+    let n = verts.len();
+    let (pi, pi1, pin1) = (verts[i], verts[(i + 1) % n], verts[(i + n - 1) % n]);
+    if left_on(pin1, pi, pi1) {
+        return left(pi, pj, pin1) && left(pj, pi, pi1);
+    }
+    !(left_on(pi, pj, pi1) && left_on(pj, pi, pin1))
+}
+
+/// Recast's mergeRegionHoles: each hole joins its region's outline through a bridge (a diagonal from the outline to the
+/// hole's leftmost vertex that crosses nothing), so the polygons go round the obstacle instead of over it. Without it a
+/// region wrapped round a wall (inside and outside a cabin, joined through the doorway) got polygons across the wall,
+/// and the hole itself was garbage. Returns the outlines.
+fn merge_holes(walked: Vec<(u32, Vec<CVert>)>) -> Vec<Vec<CVert>> {
+    let xz = |c: &[CVert]| c.iter().map(|v| (v.x, v.z)).collect::<Vec<_>>();
+    let (mut outlines, mut holes): (Vec<(u32, Vec<CVert>)>, Vec<(u32, Vec<CVert>)>) = walked.into_iter().partition(|(_, c)| contour_area(c) >= 0);
+    // Leftmost first (min x, then min z), as Recast does.
+    let leftmost = |c: &[CVert]| (0..c.len()).min_by_key(|&i| (c[i].x, c[i].z)).unwrap_or(0);
+    holes.sort_by_key(|(_, h)| {
+        let l = leftmost(h);
+        (h[l].x, h[l].z)
+    });
+    for hi in 0..holes.len() {
+        let (region, hole) = (holes[hi].0, holes[hi].1.clone());
+        let hole_xz = xz(&hole);
+        // The region's outline that holds the hole (point in polygon on its leftmost vertex), else the first one.
+        let lm = hole_xz[leftmost(&hole)];
+        let contains = |c: &[(i32, i32)]| {
+            let n = c.len();
+            let mut inside = false;
+            for (i, j) in (0..n).zip((0..n).cycle().skip(n - 1)) {
+                let (a, b) = (c[i], c[j]);
+                if (a.1 > lm.1) != (b.1 > lm.1) {
+                    let cross_x = a.0 as f64 + (lm.1 - a.1) as f64 * (b.0 - a.0) as f64 / (b.1 - a.1) as f64;
+                    if (lm.0 as f64) < cross_x {
+                        inside = !inside;
+                    }
+                }
+            }
+            inside
+        };
+        let mine: Vec<usize> = (0..outlines.len()).filter(|&o| outlines[o].0 == region).collect();
+        let Some(&o) = mine.iter().find(|&&o| contains(&xz(&outlines[o].1))).or(mine.first()) else { continue };
+        let outline_xz = xz(&outlines[o].1);
+        let later: Vec<Vec<(i32, i32)>> = holes[hi..].iter().filter(|(r, _)| *r == region).map(|(_, h)| xz(h)).collect();
+        let mut bridge = None;
+        let mut best_vertex = leftmost(&hole);
+        for _ in 0..hole.len() {
+            let corner = hole_xz[best_vertex];
+            let mut diags: Vec<(i64, usize)> = (0..outline_xz.len())
+                .filter(|&j| in_cone_of(j, &outline_xz, corner))
+                .map(|j| {
+                    let (dx, dz) = ((outline_xz[j].0 - corner.0) as i64, (outline_xz[j].1 - corner.1) as i64);
+                    (dx * dx + dz * dz, j)
+                })
+                .collect();
+            diags.sort();
+            bridge = diags.into_iter().map(|(_, j)| j).find(|&j| {
+                let pt = outline_xz[j];
+                !crosses_contour(pt, corner, Some(j), &outline_xz) && !later.iter().any(|h| crosses_contour(pt, corner, None, h))
+            });
+            if bridge.is_some() {
+                break;
+            }
+            best_vertex = (best_vertex + 1) % hole.len();
+        }
+        let Some(ia) = bridge else { continue };
+        // Recast's mergeContours: the outline from the bridge round to it again, then the hole likewise.
+        let ca = &outlines[o].1;
+        let (na, nb) = (ca.len(), hole.len());
+        let merged: Vec<CVert> = (0..=na).map(|k| ca[(ia + k) % na]).chain((0..=nb).map(|k| hole[(best_vertex + k) % nb])).collect();
+        outlines[o].1 = merged;
+    }
+    outlines.into_iter().map(|(_, c)| c).collect()
+}
 
 /// Triangles (indices into `v`) of a simple polygon, and whether it had to cut a corner that isn't a proper ear (an
 /// outline touching itself); None if it can't be triangulated at all.
@@ -1253,7 +1361,7 @@ pub fn build_tile(world: &(impl TriSource + ?Sized), cfg: &NavConfig, origin: Ve
         }
         flags[i] = same ^ 0xf;
     }
-    let mut contours: Vec<Vec<CVert>> = Vec::new();
+    let mut walked: Vec<(u32, Vec<CVert>)> = Vec::new();
     for z in 0..size {
         for x in 0..size {
             let (f, cnt) = c.cells[(x + z * size) as usize];
@@ -1265,11 +1373,12 @@ pub fn build_tile(world: &(impl TriSource + ?Sized), cfg: &NavConfig, origin: Ve
                 let raw = walk_contour(&c, &reg, x, z, i, &mut flags);
                 let simple = simplify_contour(&raw, cfg.max_simplification_error, cfg.max_edge_len);
                 if simple.len() >= 3 {
-                    contours.push(simple);
+                    walked.push((reg[i], simple));
                 }
             }
         }
     }
+    let contours = merge_holes(walked);
 
     stats.add(4, &mut clock);
     // Polygons: triangulate each contour, merge into convex polygons, share vertices.
@@ -1358,4 +1467,54 @@ pub fn build(world: &(impl TriSource + Sync + ?Sized), cfg: &NavConfig, min: Vec
     });
     out.sort_by_key(|t| (t.tz, t.tx));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A raw outline: walls (region 0) on three sides of a 20 x 20 cell square, and on the fourth a border with
+    /// region 5 that winds down to (10, 10) and back (as one round a wall end through a doorway does).
+    fn winding() -> Vec<CVert> {
+        let mut pts = Vec::new();
+        let mut push = |x: i32, z: i32, r: u32| pts.push(CVert { x, y: 0, z, r });
+        for x in 0..20 {
+            push(x, 0, 0);
+        }
+        for z in 0..20 {
+            push(20, z, 0);
+        }
+        // The border with region 5: (20, 20) down to (10, 10) and up to (0, 20).
+        for k in 0..10 {
+            push(20 - k, 20 - k, 5);
+        }
+        for k in 0..10 {
+            push(10 - k, 10 + k, 5);
+        }
+        for z in (1..=20).rev() {
+            push(0, z, 0);
+        }
+        pts
+    }
+
+    #[test]
+    fn a_winding_border_between_regions_keeps_its_shape() {
+        let simple = simplify_contour(&winding(), 1.3, 0);
+        // Every raw point stays within the error of the simplified outline: the dip to (10, 10) is kept, not cut
+        // straight across.
+        let near = |x: i32, z: i32| {
+            (0..simple.len()).any(|i| {
+                let (a, b) = (&simple[i], &simple[(i + 1) % simple.len()]);
+                dist_pt_seg_sq(x, z, a.x, a.z, b.x, b.z) <= 1.3 * 1.3 + 1e-3
+            })
+        };
+        for p in winding() {
+            assert!(near(p.x, p.z), "({}, {}) is off the simplified outline {:?}", p.x, p.z, simple.iter().map(|v| (v.x, v.z)).collect::<Vec<_>>());
+        }
+        assert!(simple.iter().any(|v| (v.x, v.z) == (10, 10)), "the dip");
+        // Walked the other way (as the region on the far side walks it), the border keeps the same dip.
+        let mut pts = winding();
+        pts.reverse();
+        assert!(simplify_contour(&pts, 1.3, 0).iter().any(|v| (v.x, v.z) == (10, 10)), "the dip, walked the other way");
+    }
 }

@@ -75,6 +75,13 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
         {
             var cdo = Load(chain[i].ClassDefaultObject);
             if (cdo != null) Merge(props, Sanitize(PropsOf(cdo)));
+            // Doors' damage states (SCDoor's TakeDamage swaps the leaf for these): exported as meshes, by file.
+            foreach (var dm in new[] { "LightDestructionMesh", "MediumDestructionMesh", "HeavyDestructionMesh" })
+                if (cdo != null && Load(cdo.GetOrDefault<FPackageIndex?>(dm)) is USkeletalMesh mesh)
+                {
+                    queueMesh(mesh);
+                    props[dm + "File"] = meshFile(mesh);
+                }
         }
         info["Props"] = props;
 
