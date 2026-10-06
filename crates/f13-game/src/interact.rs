@@ -62,6 +62,7 @@ enum Target {
     Seat(Entity),
     Door(Entity),
     Window(Entity),
+    Hide(Entity),
 }
 
 #[derive(Resource, Default)]
@@ -122,7 +123,7 @@ fn has_part(inv: &Inventory, carried: &Query<&Item, With<Carried>>, parts: &[Str
 /// (score = distance x (1 + 2 x view angle / pi)). PLACEHOLDER weighting: the game's interactable manager
 /// also ranks by view, but its exact formula isn't ported.
 fn choose_target(
-    player: Single<(&Transform, &Inventory), (With<Player>, Without<Driving>)>,
+    player: Single<(&Transform, &Inventory), (With<Player>, Without<Driving>, Without<crate::hiding::Hiding>)>,
     camera: Single<&PlayerCamera>,
     items: Query<(Entity, &Item, &GlobalTransform, Option<&InCabinet>), Without<Carried>>,
     carried: Query<&Item, With<Carried>>,
@@ -131,6 +132,7 @@ fn choose_target(
     doors: Query<(Entity, &Door, &GlobalTransform)>,
     windows: Query<(Entity, &Window, &GlobalTransform)>,
     barricades: Query<&Barricade>,
+    spots: Query<(Entity, &crate::hiding::HidingSpot, &GlobalTransform)>,
     mut interaction: ResMut<Interaction>,
 ) {
     if interaction.busy() {
@@ -184,6 +186,11 @@ fn choose_target(
     for (e, w, gxf) in &windows {
         consider(gxf.transform_point(w.interact), w.reach, Target::Window(e));
     }
+    for (e, s, gxf) in &spots {
+        if s.usable() {
+            consider(gxf.transform_point(s.interact), s.reach, Target::Hide(e));
+        }
+    }
     let target = best.map(|(_, t)| t);
     if target != interaction.target {
         interaction.hold = None;
@@ -200,8 +207,9 @@ fn act(
     mouse: Res<ButtonInput<MouseButton>>,
     tuning: Res<PlayerTuning>,
     mut rng: ResMut<crate::GameRng>,
-    mut player: Single<(Entity, &mut Transform, &mut Inventory, &mut Player), Without<Driving>>,
+    mut player: Single<(Entity, &mut Transform, &mut Inventory, &mut Player), (Without<Driving>, Without<crate::hiding::Hiding>)>,
     items: Query<&Item>,
+    (mut spots, model): (Query<(&mut crate::hiding::HidingSpot, &GlobalTransform)>, Option<Res<crate::character::CounselorCharacter>>),
     mut cabinets: Query<&mut Cabinet>,
     mut drawers: Query<(&Drawer, &mut Transform), Without<Player>>,
     mut vehicles: Query<&mut Vehicle>,
@@ -362,6 +370,13 @@ fn act(
                 interaction.hold_done = true;
             }
         }
+        Target::Hide(s) if keys.just_pressed(KeyCode::KeyE) && p.counselor.alive() => {
+            let (Ok((mut spot, gxf)), Some(model)) = (spots.get_mut(s), model.as_ref()) else { return };
+            if spot.usable() {
+                crate::hiding::enter(&mut commands, player_entity, player_xf, p, s, &mut spot, gxf, model, time.elapsed_secs());
+            }
+            interaction.target = None;
+        }
         Target::Seat(v) if keys.just_pressed(KeyCode::KeyE) => {
             commands.entity(player_entity).insert(Driving { vehicle: v, starting: None });
             info!("got in the driver's seat");
@@ -464,12 +479,12 @@ fn update_prompt(
     tuning: Res<PlayerTuning>,
     doors: Query<(&Door, &GlobalTransform)>,
     (windows, barricades): (Query<&Window>, Query<&Barricade>),
-    player: Single<(&Inventory, Has<Driving>, &Transform, Option<&UsingItem>, &Player, Has<crate::jason::Held>)>,
+    player: Single<(&Inventory, Has<Driving>, &Transform, Option<&UsingItem>, &Player, Has<crate::jason::Held>, Option<&crate::hiding::Hiding>)>,
     items: Query<&Item>,
     vehicles: Query<&Vehicle>,
     mut text: Single<&mut Text, With<PromptText>>,
 ) {
-    let (inv, driving, _, using, p, held) = *player;
+    let (inv, driving, _, using, p, held, hiding) = *player;
     let name = |e: Entity| items.get(e).map_or("?".to_string(), |i| i.name.clone());
     let mut lines = vec![format!(
         "Hands: {}   Pockets: [{}] ({}/{})",
@@ -483,7 +498,13 @@ fn update_prompt(
         parts.push(format!("Ignition {}", if v.started { "running" } else { "--" }));
         lines.push(format!("{}: {}", v.class.trim_end_matches("_C"), parts.join(", ")));
     }
-    if let Some(u) = using {
+    if let Some(h) = hiding {
+        lines.push(match h.phase {
+            crate::hiding::HidePhase::Hidden => "Hiding   [E] Leave   (mouse: look around)".into(),
+            crate::hiding::HidePhase::Killed => String::new(),
+            _ => "...".into(),
+        });
+    } else if let Some(u) = using {
         lines.push(format!("Using {}... {:.1}s", name(u.item), u.left.max(0.0)));
     } else if driving {
         lines.push("[Hold E] Start (needs keys)   [W/S/A/D] Drive   [F] Get out".into());
@@ -506,6 +527,7 @@ fn update_prompt(
                 }
             }
             Some(Target::Seat(_)) => lines.push("[E] Get in (driver)".into()),
+            Some(Target::Hide(_)) => lines.push("[E] Hide".into()),
             Some(Target::Window(w)) => {
                 if let Ok(window) = windows.get(w) {
                     let press = match window.press_action(p.counselor.sprinting, p.counselor.wounded) {

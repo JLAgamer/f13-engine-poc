@@ -13,11 +13,17 @@
 //! - Doors: a locked or barricaded door takes his weapon damage x DamageWorldModifier per swing from its
 //!   BaseDoorHealth (60): three swings.
 //!
-//! PLACEHOLDERS (not from the game): the AI itself (the game's Jason is a player). He always knows where the
-//! counselor is, picks grab or swing with even odds, and holds a grabbed counselor [`HOLD_BEFORE_KILL`] seconds
-//! before killing her; she can't struggle free yet. Paths come from f13-core::nav over the collision (the game
-//! uses Recast). The grabbed counselor is placed as SCCounselorCharacter::UpdateGrabTransform does (see [`place_held`]). No
-//! Shift, Morph, Sense or Stalk; no character-to-character collision.
+//! - Hiding spots (hiding.rs): with the counselor inside he plays the spot's kill (the pickaxe uses the axe's
+//!   Jason_ClosetAxe_CK / Jason_BedAxe_CK, she the matching Counselor_Axe_*_CK, dying at its end), else its search,
+//!   from the special move's spot; the search breaks the spot.
+//!
+//! PLACEHOLDERS (not from the game): the AI itself (the game's Jason is a player). He only knows what senses.rs
+//! gives him: he chases her while he sees her; otherwise he goes to where he last saw, heard or sensed her and
+//! searches the hiding spots within [`SEARCH_RADIUS_M`] of it (the spot he watched her get into first), and
+//! otherwise wanders between cabins (hiding spots and cabinets). He picks grab or swing with even odds and holds a
+//! grabbed counselor [`HOLD_BEFORE_KILL`] seconds before killing her. Paths come from f13-core::nav over the
+//! collision (the game uses Recast). The grabbed counselor is placed as SCCounselorCharacter::UpdateGrabTransform
+//! does (see [`place_held`]). No Shift, Morph or Stalk; no character-to-character collision.
 
 use bevy::prelude::*;
 use f13_core::collision::{Capsule, WalkSettings};
@@ -68,6 +74,16 @@ const REPLAN_SECONDS: f32 = 0.5;
 const PATH_BUDGET: usize = 4000;
 /// A closed door this close (m) in the direction Jason walks is opened (or broken).
 const DOOR_REACH_M: f32 = 1.4;
+/// Within this range (m) of a goal he can't get closer to for this long (s), he counts as there.
+const STALL_RANGE_M: f32 = 4.0;
+const STALL_SECONDS: f32 = 1.5;
+/// He starts a hiding spot's search or kill this close (m) to its spot.
+const SPECIAL_MOVE_REACH_M: f32 = 1.5;
+/// Losing her, he searches the hiding spots this close (m) to where she was last known.
+pub const SEARCH_RADIUS_M: f32 = 8.0;
+/// Wandering: places this far (m) at most, a new one after this long (s).
+const WANDER_RANGE_M: f32 = 90.0;
+const WANDER_SECONDS: f32 = 40.0;
 
 pub struct JasonPlugin {
     /// Seconds before he starts hunting.
@@ -152,6 +168,10 @@ pub enum JasonState {
     Killing { t: f32 },
     /// Stunned by a counselor's item (s into it).
     Stunned { t: f32, stun: Stun },
+    /// Searching an empty hiding spot (from its search spot): where the search leaves him.
+    Searching { spot: Entity, t: f32, end: Transform, anim: &'static str },
+    /// Killing the counselor in a hiding spot.
+    HideKill { spot: Entity, t: f32, end: Transform, anim: &'static str },
     /// Hit without being stunned: a short flinch.
     Flinching { t: f32 },
     /// The counselor is dead.
@@ -175,6 +195,18 @@ pub struct Jason {
     unstick: Option<(Vec2, f32)>,
     /// Seconds left of immunity to stuns.
     stun_immune: f32,
+    /// The hiding spot he's going to search, the ones he searched, the last clue he followed up (its time), and the
+    /// place he's wandering to (with when he picked it).
+    target_spot: Option<Entity>,
+    searched: Vec<Entity>,
+    clue_done: f32,
+    wander: Option<(Vec3, f32)>,
+    /// Seconds he's been close to his goal without getting closer (furniture or walls in the way): counts as there.
+    stall: f32,
+    /// Distance to the goal at the last progress check.
+    last_gdist: f32,
+    /// Next goal log (game time).
+    next_log: f32,
 }
 
 /// How a counselor stunned Jason. Times are the stun classes' TotalStunTime base values (the AI doesn't wiggle out
@@ -259,7 +291,7 @@ pub struct Staggered(pub f32);
 pub struct JasonPart;
 
 #[derive(Resource)]
-struct Nav(NavGrid);
+pub(crate) struct Nav(NavGrid);
 
 fn spawn_jason(
     mut commands: Commands,
@@ -301,6 +333,13 @@ fn spawn_jason(
                 progress: (feet, 0.0),
                 unstick: None,
                 stun_immune: 0.0,
+                target_spot: None,
+                searched: Vec::new(),
+                clue_done: f32::MIN,
+                wander: None,
+                stall: 0.0,
+                last_gdist: f32::MAX,
+                next_log: 0.0,
             },
             Transform { translation: feet, rotation, ..default() },
             Visibility::default(),
@@ -440,7 +479,7 @@ fn place_held(
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-fn update_jason(
+pub(crate) fn update_jason(
     mut commands: Commands,
     time: Res<Time>,
     tuning: Option<Res<KillerTuning>>,
@@ -449,19 +488,21 @@ fn update_jason(
     (killer, counselor_model): (Option<Res<KillerCharacter>>, Option<Res<crate::character::CounselorCharacter>>),
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
     (mut rng, mut struggle): (ResMut<crate::GameRng>, ResMut<Struggle>),
-    mut jasons: Query<(Entity, &mut Jason, &mut Transform, Option<&HitJason>), Without<Player>>,
+    mut jasons: Query<(Entity, &mut Jason, &mut Transform, Option<&HitJason>, Option<&crate::senses::Knowledge>), Without<Player>>,
     (inventories, items): (Query<&crate::interact::Inventory>, Query<&crate::props::Item>),
-    mut players: Query<(Entity, &mut Player, &mut Transform, Has<crate::vehicle::Driving>), Without<Jason>>,
+    mut players: Query<(Entity, &mut Player, &mut Transform, Has<crate::vehicle::Driving>, Option<&mut crate::hiding::Hiding>), Without<Jason>>,
     mut doors: Query<(Entity, &mut crate::doors::Door, &GlobalTransform)>,
     mut barricades: Query<&mut crate::windows::Barricade>,
-    rigs: Query<(&Rig, &ChildOf, &Transform), (Without<Jason>, Without<Player>)>,
+    (mut spots, cabinets): (Query<(Entity, &mut crate::hiding::HidingSpot, &GlobalTransform)>, Query<&GlobalTransform, With<crate::props::Cabinet>>),
+    mut rigs: Query<(&mut Rig, &ChildOf, &Transform), (Without<Jason>, Without<Player>)>,
     globals: Query<&GlobalTransform>,
 ) {
     let (Some(t), Some(mut nav), Some(killer)) = (tuning, nav, killer) else { return };
     let dt = time.delta_secs();
+    let now = time.elapsed_secs();
     let world = collision.with(&dynamic);
-    let Ok((pe, mut p, mut pxf, driving)) = players.single_mut() else { return };
-    for (je, mut j, mut xf, hit) in &mut jasons {
+    let Ok((pe, mut p, mut pxf, driving, mut hiding)) = players.single_mut() else { return };
+    for (je, mut j, mut xf, hit, know) in &mut jasons {
         j.stun_immune = (j.stun_immune - dt).max(0.0);
         // A counselor's item hit him.
         if let Some(h) = hit {
@@ -506,7 +547,111 @@ fn update_jason(
                     continue;
                 }
                 j.cooldown -= dt;
-                if !driving && j.cooldown <= 0.0 {
+                let sees = know.is_none_or(|k| k.sees);
+                // Near the goal but not getting any closer: as good as there.
+                let stalled = j.stall > STALL_SECONDS;
+                // Where to go: her, if he sees her; else the hiding spot he's after, the last clue, or somewhere.
+                let mut goal = to;
+                if !sees {
+                    if let Some(s) = know.and_then(|k| k.hiding_spot).filter(|s| !j.searched.contains(s)) {
+                        j.target_spot = Some(s);
+                    }
+                    let clue = know.and_then(|k| k.last_known).filter(|c| c.1 > j.clue_done);
+                    if let Some(s) = j.target_spot {
+                        match spots.get_mut(s) {
+                            Ok((_, mut spot, g)) if !spot.destroyed || spot.occupant.is_some() => {
+                                let side = spot.nearest_side(g, xf.translation);
+                                let at = crate::hiding::HidingSpot::world(g, &spot.sides[side].search);
+                                goal = at.translation;
+                                // Close to the special move's spot: it puts him on it (the game moves him there too).
+                                if stalled || Vec2::new(at.translation.x - xf.translation.x, at.translation.z - xf.translation.z).length() < SPECIAL_MOVE_REACH_M {
+                                    j.stall = 0.0;
+                                    j.velocity = Vec2::ZERO;
+                                    let s_ = spot.sides[side].clone();
+                                    let victim = spot.occupant == Some(pe) && hiding.as_ref().is_some_and(|h| h.phase == crate::hiding::HidePhase::Hidden);
+                                    match (victim, s_.killer_kill, s_.victim_kill, s_.search_anim) {
+                                        (true, Some(kill), Some(vkill), _) => {
+                                            info!("Jason: found Vanessa in a {:?}: hiding spot kill", spot.kind);
+                                            let (origin, end) = killer.place(kill, crate::hiding::HidingSpot::world(g, &s_.kill));
+                                            *xf = origin;
+                                            j.state = JasonState::HideKill { spot: s, t: 0.0, end, anim: kill };
+                                            commands.entity(je).insert(PlayAction(kill.into()));
+                                            if let (Some(h), Some(c)) = (hiding.as_mut(), counselor_model.as_ref()) {
+                                                h.phase = crate::hiding::HidePhase::Killed;
+                                                *pxf = c.place(vkill, *pxf).0;
+                                            }
+                                            commands.entity(pe).insert((PlayAction(vkill.into()), Visibility::Inherited));
+                                            spot.open_until = now + killer.length(kill).unwrap_or(4.0);
+                                        }
+                                        (false, _, _, Some(search)) => {
+                                            info!("Jason: searching a {:?}", spot.kind);
+                                            let (origin, end) = killer.place(search, at);
+                                            *xf = origin;
+                                            j.state = JasonState::Searching { spot: s, t: 0.0, end, anim: search };
+                                            commands.entity(je).insert(PlayAction(search.into()));
+                                            spot.open_until = now + killer.length(search).unwrap_or(4.0);
+                                        }
+                                        _ => {
+                                            j.searched.push(s);
+                                            j.target_spot = None;
+                                        }
+                                    }
+                                    continue;
+                                }
+                            }
+                            _ => {
+                                j.searched.push(s);
+                                j.target_spot = None;
+                            }
+                        }
+                    } else if let Some((at, when, how)) = clue {
+                        goal = at;
+                        if stalled || Vec2::new(at.x - xf.translation.x, at.z - xf.translation.z).length() < 1.5 {
+                            j.stall = 0.0;
+                            // Nothing here: the hiding spots around it, nearest first.
+                            j.clue_done = when;
+                            j.target_spot = spots
+                                .iter()
+                                .filter(|(e, s, g)| !s.destroyed && !j.searched.contains(e) && g.translation().distance(at) < SEARCH_RADIUS_M)
+                                .min_by(|a, b| a.2.translation().distance(at).total_cmp(&b.2.translation().distance(at)))
+                                .map(|(e, _, _)| e);
+                            info!("Jason: lost her ({how:?}); {}", if j.target_spot.is_some() { "searching a hiding spot nearby" } else { "nothing to search here" });
+                            j.wander = None;
+                        }
+                    } else {
+                        // Wander between cabins.
+                        let here = xf.translation;
+                        let stale = stalled || j.wander.is_none_or(|(w, at)| now - at > WANDER_SECONDS || Vec2::new(w.x - here.x, w.z - here.z).length() < 2.0);
+                        if stale {
+                            j.stall = 0.0;
+                        }
+                        if stale {
+                            let places: Vec<Vec3> = spots
+                                .iter()
+                                .map(|(_, _, g)| g.translation())
+                                .chain(cabinets.iter().map(|g| g.translation()))
+                                .filter(|p| (10.0..WANDER_RANGE_M).contains(&p.distance(here)))
+                                .collect();
+                            if !places.is_empty() {
+                                let w = places[rng.0.index(places.len())];
+                                debug!("Jason: wandering to ({:.0}, {:.0})", w.x, w.z);
+                                j.wander = Some((w, now));
+                            }
+                        }
+                        if let Some((w, _)) = j.wander {
+                            goal = w;
+                        }
+                    }
+                }
+                let gflat = Vec2::new(goal.x - xf.translation.x, goal.z - xf.translation.z);
+                let gdist = gflat.length();
+                if now >= j.next_log {
+                    j.next_log = now + 5.0;
+                    let what = if sees { "her" } else if j.target_spot.is_some() { "a hiding spot" } else if j.wander.is_some() && goal == j.wander.unwrap().0 { "wandering" } else { "a clue" };
+                    let door = doors.iter().map(|(_, d, g)| (g.translation().distance(xf.translation), d.open, d.locked, g.translation())).min_by(|a, b| a.0.total_cmp(&b.0));
+                    info!("Jason: going for {what}, {gdist:.1} m to go (at {:.1},{:.1},{:.1} -> {:.1},{:.1},{:.1}; path {:?}); nearest door {door:?}", xf.translation.x, xf.translation.y, xf.translation.z, goal.x, goal.y, goal.z, j.path);
+                }
+                if sees && !driving && j.cooldown <= 0.0 {
                     // Going for a grab, he swings instead when she's inside the grab's minimum distance (else he'd
                     // stand there); going for a swing, he closes to swing range.
                     let can_grab = dist >= t.grab_min_m && dist <= t.grab_max_m && angle <= t.grab_angle_deg;
@@ -524,9 +669,9 @@ fn update_jason(
                         continue;
                     }
                 }
-                // Close in: straight at her when near, else along a path.
-                let mut wish = if dist < 1.5 { flat.normalize_or_zero() } else { steer(&mut j, &mut nav.0, &world, xf.translation, to, dt) };
-                if dist < t.attack_range_m * 0.7 {
+                // Close in: straight at the goal when near, else along a path.
+                let mut wish = if gdist < 1.5 { gflat.normalize_or_zero() } else { steer(&mut j, &mut nav.0, &world, xf.translation, goal, dt) };
+                if sees && dist < t.attack_range_m * 0.7 {
                     wish = Vec2::ZERO; // close enough for anything; don't walk into her
                 }
                 // A closed door ahead: open it, or break it down when it's locked or barred.
@@ -551,15 +696,21 @@ fn update_jason(
                         info!("Jason: {} a door", d.press(g, here));
                     }
                 }
-                let speed = if t.can_run && dist > t.attack_range_m * 1.5 { t.run_speed } else { t.walk_speed };
+                let speed = if t.can_run && gdist > t.attack_range_m * 1.5 { t.run_speed } else { t.walk_speed };
                 // Up close, square up to her (he only turns toward where he walks otherwise).
-                let face = (dist < t.grab_max_m * 1.5).then_some(flat);
+                let face = (sees && dist < t.grab_max_m * 1.5).then_some(flat);
                 walk(&mut j, &mut xf, wish, speed, face, dt, &t, &world);
                 // Not getting anywhere: try another way for a moment.
                 j.progress.1 += dt;
                 if j.progress.1 >= 1.0 {
                     let moved = xf.translation.distance(j.progress.0);
-                    if moved < 0.2 && wish != Vec2::ZERO && dist > 1.5 {
+                    if !sees && gdist < STALL_RANGE_M && gdist > j.last_gdist - 0.3 {
+                        j.stall += 1.0;
+                    } else {
+                        j.stall = 0.0;
+                    }
+                    j.last_gdist = gdist;
+                    if moved < 0.2 && wish != Vec2::ZERO && gdist > 1.5 {
                         let a = rng.0.frand() * std::f32::consts::TAU;
                         j.unstick = Some((Vec2::new(a.cos(), a.sin()), 0.6));
                         j.path.clear();
@@ -744,6 +895,42 @@ fn update_jason(
                     j.state = JasonState::Stunned { t: at, stun };
                 }
             }
+            JasonState::Searching { spot, t: at, end, anim } => {
+                let at = at + dt;
+                if at >= killer.length(anim).unwrap_or(6.0) {
+                    *xf = end;
+                    j.state = JasonState::Hunting;
+                    j.searched.push(spot);
+                    j.target_spot = None;
+                    if let Ok((_, mut s, _)) = spots.get_mut(spot) {
+                        s.searched(&mut commands);
+                    }
+                    commands.entity(je).remove::<PlayAction>();
+                    snap_rig(&mut rigs, je);
+                    info!("Jason: searched it: empty");
+                } else {
+                    j.state = JasonState::Searching { spot, t: at, end, anim };
+                }
+            }
+            JasonState::HideKill { spot, t: at, end, anim } => {
+                let at = at + dt;
+                if at >= killer.length(anim).unwrap_or(4.0) {
+                    *xf = end;
+                    let health = p.counselor.health;
+                    p.counselor.take_damage(Hit { amount: health, blocked_with_weapon: false }, &ptuning.counselor);
+                    info!("Vanessa: killed by Jason in her hiding spot");
+                    j.state = JasonState::Done;
+                    commands.entity(je).remove::<PlayAction>();
+                    snap_rig(&mut rigs, je);
+                    commands.entity(pe).remove::<crate::hiding::Hiding>();
+                    if let Ok((_, mut s, _)) = spots.get_mut(spot) {
+                        s.occupant = None;
+                        s.searched(&mut commands);
+                    }
+                } else {
+                    j.state = JasonState::HideKill { spot, t: at, end, anim };
+                }
+            }
             JasonState::Flinching { t: at } => {
                 let at = at + dt;
                 walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, None, dt, &t, &world);
@@ -758,6 +945,13 @@ fn update_jason(
                 walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, None, dt, &t, &world);
             }
         }
+    }
+}
+
+/// Snaps Jason's rig to its next pose (he was moved to where a root motion ended).
+fn snap_rig(rigs: &mut Query<(&mut Rig, &ChildOf, &Transform), (Without<Jason>, Without<Player>)>, owner: Entity) {
+    if let Some((mut r, _, _)) = rigs.iter_mut().find(|(_, c, _)| c.parent() == owner) {
+        r.snap();
     }
 }
 

@@ -297,6 +297,50 @@ impl<A: TriSource + ?Sized, B: TriSource + ?Sized> TriSource for (&A, &B) {
     }
 }
 
+/// Where the segment `from..to` first hits a triangle (either side), as a fraction of its length.
+/// The segment is tested in pieces of at most `step` so each region query stays small.
+pub fn segment_hit(world: &(impl TriSource + ?Sized), from: Vec3, to: Vec3, step: f32) -> Option<f32> {
+    let d = to - from;
+    let len = d.length();
+    if len < 1e-6 {
+        return None;
+    }
+    let pieces = (len / step.max(1e-3)).ceil().max(1.0) as usize;
+    for i in 0..pieces {
+        let (t0, t1) = (i as f32 / pieces as f32, (i + 1) as f32 / pieces as f32);
+        let (a, b) = (from + d * t0, from + d * t1);
+        let mut best: Option<f32> = None;
+        world.for_each_in(a.min(b), a.max(b), &mut |t| {
+            // Möller-Trumbore, both faces.
+            let (e1, e2) = (t.b - t.a, t.c - t.a);
+            let p = d.cross(e2);
+            let det = e1.dot(p);
+            if det.abs() < 1e-12 {
+                return;
+            }
+            let inv = 1.0 / det;
+            let s = from - t.a;
+            let u = s.dot(p) * inv;
+            if !(0.0..=1.0).contains(&u) {
+                return;
+            }
+            let q = s.cross(e1);
+            let v = d.dot(q) * inv;
+            if v < 0.0 || u + v > 1.0 {
+                return;
+            }
+            let at = e2.dot(q) * inv;
+            if (t0..=t1).contains(&at) && best.is_none_or(|b| at < b) {
+                best = Some(at);
+            }
+        });
+        if best.is_some() {
+            return best;
+        }
+    }
+    None
+}
+
 /// The highest surface crossing the vertical line at (x, z) between `bottom` and `top`: (height, normal).
 pub fn surface_below(world: &(impl TriSource + ?Sized), x: f32, z: f32, top: f32, bottom: f32) -> Option<(f32, Vec3)> {
     let mut best: Option<(f32, Vec3)> = None;
@@ -503,6 +547,20 @@ mod tests {
     }
 
     const CAP: Capsule = Capsule { radius: 0.34, half_height: 0.88 };
+
+    #[test]
+    fn segments_stop_at_walls() {
+        let mut g = ground();
+        for t in cube(Vec3::new(10.0, 1.0, 0.0), Vec3::new(0.5, 1.0, 5.0)) {
+            g.insert(t);
+        }
+        let eye = Vec3::new(0.0, 1.5, 0.0);
+        let hit = segment_hit(&g, eye, Vec3::new(20.0, 1.5, 0.0), 3.0).expect("the wall blocks");
+        assert!((hit * 20.0 - 9.5).abs() < 1e-3, "{hit}");
+        // Over the wall, and along the floor without touching it.
+        assert!(segment_hit(&g, eye + Vec3::Y * 2.0, Vec3::new(20.0, 3.5, 0.0), 3.0).is_none());
+        assert!(segment_hit(&g, eye, Vec3::new(0.0, 1.5, 20.0), 3.0).is_none());
+    }
     const WALK: WalkSettings = WalkSettings { max_step: 0.45, walkable_normal_y: 0.71, gravity: 9.8 };
 
     #[test]

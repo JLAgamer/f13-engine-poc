@@ -1,0 +1,385 @@
+//! Hiding spots (SCHidingSpot: wardrobes and barn closets, outhouses, beds, tents).
+//!
+//! From the game:
+//! - A counselor uses a spot through its `Interactable` component (within its `DistanceLimit`) when nobody is in it
+//!   and it isn't destroyed (`CanCounselorInteractWith`). She plays the enter special move's montage
+//!   (`Counselor_EnterArmoire`: AM_normal_stand_hidespot_closet_enter; beds have a left and a right side), from the
+//!   special move component's spot, its root motion carrying her in; the montage's HideIdle section loops while she
+//!   hides and its HideExit section takes her out (pressing interact again, `OnExitHidingPressed`).
+//! - While hiding (`bInHiding`) she pushes the HiddenFearEvent, her flashlight goes off, and the view is the spot's
+//!   `Hiding Camera` (its FieldOfView), turned at most `MaxHidingRotationOffset` degrees each way.
+//! - Jason uses the spot's `KillerInteractable`: with a counselor inside he plays the hiding spot kill
+//!   (`HidingSpotKill`, by his weapon: the pickaxe uses the axe's), else the search (`SearchComponent`, by weapon),
+//!   after which the spot is destroyed (`bDestroyOnSearch`, constructor default true; tents keep it false) when
+//!   `bDestructable`. Destroyed spots can't be used. jason.rs drives his side.
+//!
+//! PLACEHOLDERS: the wardrobe doors swing open (100 deg) while someone goes in or out, searches or kills, instead of
+//! following the montage's door curve; the outhouse door and the tent flaps (skeletal animations) don't move.
+//! The hidden counselor's model is hidden (the camera is inside the spot).
+
+use bevy::prelude::*;
+use f13_data::classes::ClassDb;
+use f13_data::level::ComponentInfo;
+
+use crate::character::{flat, CounselorCharacter, PlayAction, Rig};
+use crate::player::{Player, PlayerCamera};
+
+/// Jason's weapon class: it picks the weapon-specific search and kill moves.
+pub const KILLER_WEAPON: &str = "PickAxe_C";
+/// Door swing (degrees) and speed (degrees per second). PLACEHOLDER (see the module docs).
+const DOOR_OPEN_DEG: f32 = 100.0;
+const DOOR_SPEED_DEG: f32 = 300.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpotKind {
+    /// Wardrobes and barn closets (`ESCHidingSpotType` default and Barn).
+    Closet,
+    Outhouse,
+    Bed,
+    Tent,
+}
+
+/// One way in: where she enters from, where Jason searches and kills from (spot space), and the animations.
+#[derive(Clone, Debug)]
+pub struct Side {
+    pub enter: Transform,
+    pub search: Transform,
+    pub kill: Transform,
+    pub enter_anim: &'static str,
+    pub exit_anim: &'static str,
+    pub search_anim: Option<&'static str>,
+    pub killer_kill: Option<&'static str>,
+    pub victim_kill: Option<&'static str>,
+}
+
+#[derive(Component, Debug)]
+pub struct HidingSpot {
+    pub kind: SpotKind,
+    pub sides: Vec<Side>,
+    pub idle_anim: &'static str,
+    /// The interact point (spot space) and its reach (cm).
+    pub interact: Vec3,
+    pub reach: f32,
+    /// The hiding view (spot space; looks along its +X in Unreal terms), its horizontal field of view and how far
+    /// it turns (degrees: yaw, pitch).
+    pub camera: Transform,
+    pub fov_deg: f32,
+    pub max_look: Vec2,
+    pub occupant: Option<Entity>,
+    pub destroyed: bool,
+    pub destructible: bool,
+    pub destroy_on_search: bool,
+    /// Door pivots: entity, closed transform, opening direction (+1 / -1).
+    pub doors: Vec<(Entity, Transform, f32)>,
+    /// Game time until which the doors stand open.
+    pub open_until: f32,
+    door_angle: f32,
+}
+
+/// The montage each hiding special move plays (its ContextMontage; for the counselor's enter moves, the female
+/// sequences of its Default and HideExit sections).
+fn special_move_anims(class: &str) -> Option<(&'static str, Option<&'static str>)> {
+    Some(match class {
+        "Counselor_EnterArmoire_C" => ("f_normal_stand_hidespot_closet_enter", Some("f_normal_stand_hidespot_closet_exit")),
+        "Counselor_EnterOuthouse_C" => ("f_normal_stand_hidespot_outhouse_enter", Some("f_normal_stand_hidespot_closet_exit")),
+        "Counselor_EnterBedLeft_C" => ("f_normal_stand_hidespot_bed_left_enter", Some("f_normal_stand_hidespot_bed_left_exit")),
+        "Counselor_EnterBedRight_C" => ("f_normal_stand_hidespot_bed_right_enter", Some("f_normal_stand_hidespot_bed_right_exit")),
+        "Counselor_EnterTent_C" => ("f_normal_stand_hidespot_tent_enter", Some("f_normal_stand_hidespot_tent_exit")),
+        "Jason_SearchCloset_Axe_C" => ("cinematic_hidespot_axe_closet_search", None),
+        "Jason_SearchBed_Axe_C" => ("cinematic_hidespot_axe_bed_search", None),
+        "Jason_ClosetAxe_CK_C" => ("cinematic_hidespot_axe_closet_kill", None),
+        "Jason_BedAxe_CK_C" => ("cinematic_hidespot_axe_bed_kill", None),
+        "Jason_SleepingbagKill_C" => ("cinematic_hidespot_hand_sleepingbag_kill", None),
+        "Counselor_Axe_Closet_CK_C" => ("cinematic_hidespot_closet_kill_Axe", None),
+        "Counselor_Axe_Bed_CK_C" => ("cinematic_hidespot_bed_kill_Axe", None),
+        "Counselor_SleepingBagKill_C" => ("cinematic_hidespot_hand_Sleepingbag_kill", None),
+        _ => return None,
+    })
+}
+
+/// A special move component's move for `weapon` (its weapon-specific list when it uses one), else its default.
+fn special_move(c: &ComponentInfo, list: &str, default: &str, weapon: &str) -> Option<String> {
+    let specific = c.props[list].as_array().into_iter().flatten().find(|m| m["WeaponClass"].as_str() == Some(weapon));
+    let uses_specific = list != "WeaponSpecificMoves" || c.props["bUseWeaponSpecificMoves"].as_bool().unwrap_or(false);
+    specific
+        .filter(|_| uses_specific)
+        .and_then(|m| m["SpecialMove"].as_str())
+        .or_else(|| c.props[default].as_str())
+        .map(str::to_string)
+}
+
+impl HidingSpot {
+    /// Builds a spot from its class description; `local` turns a component into spot space.
+    pub fn new(classes: &ClassDb, class: &str, local: impl Fn(&ComponentInfo) -> Transform, doors: Vec<(Entity, Transform, f32)>) -> Option<Self> {
+        let info = classes.get(class)?;
+        let comp = |name: &str| info.components.iter().find(|c| c.name == name);
+        let kind = match classes.prop(class, "HidingSpotType").as_str() {
+            Some("ESCHidingSpotType::Bed") => SpotKind::Bed,
+            Some("ESCHidingSpotType::Tent") => SpotKind::Tent,
+            Some("ESCHidingSpotType::Outhouse") => SpotKind::Outhouse,
+            _ => SpotKind::Closet,
+        };
+        let anim = |m: Option<String>| m.as_deref().and_then(special_move_anims);
+        let side = |enter: &str, search: &str, kill: &str| -> Option<Side> {
+            let (e, s, k) = (comp(enter)?, comp(search)?, comp(kill)?);
+            let (enter_anim, exit_anim) = anim(e.props["SpecialMove"].as_str().map(str::to_string))?;
+            Some(Side {
+                enter: local(e),
+                search: local(s),
+                kill: local(k),
+                enter_anim,
+                exit_anim: exit_anim?,
+                search_anim: anim(special_move(s, "WeaponSpecificMoves", "SpecialMove", KILLER_WEAPON)).map(|a| a.0),
+                killer_kill: anim(special_move(k, "KillerWeaponKillClasses", "InteractorSpecialClass", KILLER_WEAPON)).map(|a| a.0),
+                victim_kill: anim(special_move(k, "VictimWeaponKillClasses", "VictimSpecialClass", KILLER_WEAPON)).map(|a| a.0),
+            })
+        };
+        let mut sides: Vec<Side> = side("EnterSpecialMove", "SearchComponent", "HidingSpotKill").into_iter().collect();
+        sides.extend(side("EnterRight", "RightSideSearch", "RightSideContextKill"));
+        if sides.is_empty() {
+            warn!("{class}: hiding spot without a usable enter move");
+            return None;
+        }
+        let interact = comp("Interactable")?;
+        let cam = comp("Hiding Camera");
+        let look = &classes.prop(class, "MaxHidingRotationOffset");
+        Some(HidingSpot {
+            kind,
+            sides,
+            idle_anim: match kind {
+                SpotKind::Closet | SpotKind::Outhouse => "f_normal_stand_hidespot_closet_idle",
+                SpotKind::Bed => "f_normal_stand_hidespot_bed_idle",
+                SpotKind::Tent => "f_normal_stand_hidespot_tent_loop",
+            },
+            interact: local(interact).translation,
+            reach: interact.props["DistanceLimit"].as_f64().map_or(100.0, |v| v as f32),
+            camera: cam.map_or(Transform::IDENTITY, &local),
+            fov_deg: cam.and_then(|c| c.props["FieldOfView"].as_f64()).map_or(90.0, |v| v as f32),
+            max_look: Vec2::new(look["X"].as_f64().unwrap_or(0.0) as f32, look["Y"].as_f64().unwrap_or(0.0) as f32),
+            occupant: None,
+            destroyed: false,
+            destructible: classes.prop(class, "bDestructable").as_bool().unwrap_or(false),
+            destroy_on_search: classes.prop(class, "bDestroyOnSearch").as_bool().unwrap_or(true),
+            doors,
+            open_until: 0.0,
+            door_angle: 0.0,
+        })
+    }
+
+    /// The side whose way in is nearest `p` (world), given the spot's transform.
+    pub fn nearest_side(&self, spot: &GlobalTransform, p: Vec3) -> usize {
+        (0..self.sides.len())
+            .min_by(|&a, &b| {
+                let d = |i: usize| spot.transform_point(self.sides[i].enter.translation).distance_squared(p);
+                d(a).total_cmp(&d(b))
+            })
+            .unwrap_or(0)
+    }
+
+    /// A component-space transform placed in the world (kept upright: characters stand on these).
+    pub fn world(spot: &GlobalTransform, t: &Transform) -> Transform {
+        flat(spot.mul_transform(*t).compute_transform())
+    }
+
+    pub fn usable(&self) -> bool {
+        !self.destroyed && self.occupant.is_none()
+    }
+
+    /// Searched by Jason: destroyed when the spot breaks on a search.
+    pub fn searched(&mut self, commands: &mut Commands) {
+        if self.destroy_on_search && self.destructible && !self.destroyed {
+            self.destroyed = true;
+            for (e, _, _) in &self.doors {
+                commands.entity(*e).insert(Visibility::Hidden);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HidePhase {
+    Entering,
+    Hidden,
+    Exiting,
+    /// Jason found her: his hiding spot kill plays (jason.rs ends it).
+    Killed,
+}
+
+/// The counselor is in (or going into, or coming out of) a hiding spot.
+#[derive(Component, Debug)]
+pub struct Hiding {
+    pub spot: Entity,
+    pub side: usize,
+    pub phase: HidePhase,
+    pub t: f32,
+    /// Where the current animation leaves her.
+    pub end: Transform,
+    wants_exit: bool,
+}
+
+pub struct HidingPlugin;
+
+impl Plugin for HidingPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(FixedUpdate, update_hiding.before(crate::player::move_player))
+            .add_systems(Update, (read_exit, swing_doors))
+            .add_systems(Update, hiding_camera.after(crate::player::follow_camera));
+    }
+}
+
+/// Starts hiding in `spot` (interact.rs): she plays the enter move from its spot.
+pub fn enter(
+    commands: &mut Commands,
+    player: Entity,
+    xf: &mut Transform,
+    p: &mut Player,
+    spot_entity: Entity,
+    spot: &mut HidingSpot,
+    gxf: &GlobalTransform,
+    model: &CounselorCharacter,
+    now: f32,
+) {
+    let side = spot.nearest_side(gxf, xf.translation);
+    let s = &spot.sides[side];
+    let (origin, end) = model.place(s.enter_anim, HidingSpot::world(gxf, &s.enter));
+    *xf = origin;
+    p.velocity = Vec2::ZERO;
+    p.counselor.set_sprinting(false);
+    if p.counselor.stance != f13_core::counselor::Stance::Standing {
+        p.counselor.stance = f13_core::counselor::Stance::Standing;
+    }
+    spot.occupant = Some(player);
+    spot.open_until = now + 2.6;
+    info!("Vanessa: hiding ({:?}, side {side})", spot.kind);
+    commands.entity(player).insert((Hiding { spot: spot_entity, side, phase: HidePhase::Entering, t: 0.0, end, wants_exit: false }, PlayAction(s.enter_anim.into())));
+}
+
+fn read_exit(keys: Res<ButtonInput<KeyCode>>, mut hiding: Query<&mut Hiding>) {
+    if keys.just_pressed(KeyCode::KeyE) {
+        for mut h in &mut hiding {
+            if h.phase == HidePhase::Hidden {
+                h.wants_exit = true;
+            }
+        }
+    }
+}
+
+/// Exit at the next step (bots).
+pub fn request_exit(h: &mut Hiding) {
+    if h.phase == HidePhase::Hidden {
+        h.wants_exit = true;
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn update_hiding(
+    mut commands: Commands,
+    time: Res<Time>,
+    model: Option<Res<CounselorCharacter>>,
+    mut players: Query<(Entity, &mut Hiding, &mut Transform, &mut Player, &mut Visibility)>,
+    mut spots: Query<(&mut HidingSpot, &GlobalTransform)>,
+    mut rigs: Query<(&ChildOf, &mut Rig)>,
+    mut camera: Query<&mut PlayerCamera>,
+) {
+    let Some(model) = model else { return };
+    let dt = time.delta_secs();
+    let now = time.elapsed_secs();
+    for (pe, mut h, mut xf, mut p, mut vis) in &mut players {
+        h.t += dt;
+        p.velocity = Vec2::ZERO;
+        let Ok((mut spot, gxf)) = spots.get_mut(h.spot) else { continue };
+        let side = spot.sides[h.side].clone();
+        let len = |n: &str| model.length(n).unwrap_or(1.0);
+        let phase = h.phase;
+        match phase {
+            HidePhase::Entering if h.t >= len(side.enter_anim) => {
+                // In: the idle loop from where the enter move left her, out of sight.
+                *xf = model.place(spot.idle_anim, h.end).0;
+                h.phase = HidePhase::Hidden;
+                h.t = 0.0;
+                *vis = Visibility::Hidden;
+                commands.entity(pe).insert(PlayAction(spot.idle_anim.into()));
+                if let Ok(mut c) = camera.single_mut() {
+                    c.pitch = 0.0;
+                    c.yaw = 0.0;
+                }
+                info!("Vanessa: hidden");
+            }
+            HidePhase::Hidden if std::mem::take(&mut h.wants_exit) => {
+                let (origin, end) = model.place(side.exit_anim, h.end);
+                *xf = origin;
+                h.end = end;
+                h.phase = HidePhase::Exiting;
+                h.t = 0.0;
+                *vis = Visibility::Inherited;
+                spot.open_until = now + len(side.exit_anim);
+                commands.entity(pe).insert(PlayAction(side.exit_anim.into()));
+                info!("Vanessa: leaving the hiding spot");
+            }
+            HidePhase::Exiting if h.t >= len(side.exit_anim) => {
+                *xf = h.end;
+                spot.occupant = None;
+                commands.entity(pe).remove::<(Hiding, PlayAction)>();
+                if let Some((_, mut rig)) = rigs.iter_mut().find(|(c, _)| c.parent() == pe) {
+                    rig.snap();
+                }
+                // Look the way she now faces.
+                if let Ok(mut c) = camera.single_mut() {
+                    let f = xf.rotation * Vec3::Z;
+                    c.yaw = (-f.x).atan2(-f.z);
+                    c.pitch = -0.2;
+                }
+                info!("Vanessa: out of hiding");
+            }
+            _ => {}
+        }
+        let _ = gxf;
+    }
+}
+
+/// Inside: the spot's hiding camera, turned by the mouse within its limits.
+fn hiding_camera(
+    players: Query<&Hiding>,
+    spots: Query<(&HidingSpot, &GlobalTransform)>,
+    mut camera: Single<(&mut PlayerCamera, &mut Transform, &mut Projection), Without<Player>>,
+    windows: Query<&Window>,
+    mut normal_fov: Local<Option<f32>>,
+) {
+    let (ref mut cam, ref mut xf, ref mut proj) = *camera;
+    let Projection::Perspective(persp) = &mut **proj else { return };
+    let normal = *normal_fov.get_or_insert(persp.fov);
+    let hidden = players.iter().find(|h| h.phase == HidePhase::Hidden);
+    let Some((spot, gxf)) = hidden.and_then(|h| spots.get(h.spot).ok()) else {
+        persp.fov = normal;
+        return;
+    };
+    // follow_camera turned yaw/pitch by the mouse; here they are offsets, clamped.
+    let max = spot.max_look * std::f32::consts::PI / 180.0;
+    cam.yaw = cam.yaw.clamp(-max.x, max.x);
+    cam.pitch = cam.pitch.clamp(-max.y, max.y);
+    // The camera component looks along Unreal +X (Bevy +X); a Bevy camera looks along -Z.
+    let base = gxf.mul_transform(spot.camera).compute_transform();
+    xf.translation = base.translation;
+    xf.rotation = base.rotation * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2) * Quat::from_euler(EulerRot::YXZ, cam.yaw, cam.pitch, 0.0);
+    // Unreal's FieldOfView is horizontal.
+    let aspect = windows.iter().next().map_or(16.0 / 9.0, |w| w.width() / w.height().max(1.0));
+    persp.fov = 2.0 * ((spot.fov_deg.to_radians() / 2.0).tan() / aspect).atan();
+}
+
+fn swing_doors(time: Res<Time>, mut spots: Query<&mut HidingSpot>, mut transforms: Query<&mut Transform>) {
+    let now = time.elapsed_secs();
+    let step = DOOR_SPEED_DEG * time.delta_secs();
+    for mut s in &mut spots {
+        let target = if now < s.open_until { DOOR_OPEN_DEG } else { 0.0 };
+        let angle = s.door_angle + (target - s.door_angle).clamp(-step, step);
+        if angle == s.door_angle {
+            continue;
+        }
+        s.door_angle = angle;
+        for (e, closed, dir) in s.doors.clone() {
+            if let Ok(mut t) = transforms.get_mut(e) {
+                t.rotation = closed.rotation * Quat::from_rotation_y(dir * angle.to_radians());
+            }
+        }
+    }
+}

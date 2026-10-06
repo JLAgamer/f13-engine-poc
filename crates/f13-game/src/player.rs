@@ -56,6 +56,8 @@ pub struct Player {
     /// Vertical speed (m/s, falling) and whether the last move ended on a walkable floor.
     pub vel_y: f32,
     pub grounded: bool,
+    /// In a hiding spot (hiding.rs).
+    pub hidden: bool,
 }
 
 /// Placed (spawned or teleported) but not yet put on the floor: the next move finds the floor under this point, or,
@@ -70,6 +72,7 @@ impl Player {
             speed_sq: self.velocity.length_squared(),
             fear: self.fear,
             dodging: self.counselor.dodging(),
+            in_hiding: self.hidden,
             ..Default::default()
         }
     }
@@ -124,7 +127,7 @@ pub struct PlayerPlugin {
 }
 
 #[derive(Resource)]
-struct PlayerConfig {
+pub(crate) struct PlayerConfig {
     spawn: Vec3,
     capsule: bool,
     camera: Option<(Vec3, Vec3)>,
@@ -159,7 +162,7 @@ fn spawn_player(
     counselor.health = config.health.unwrap_or(tuning.counselor.health.max_health).clamp(1.0, tuning.counselor.health.max_health);
     counselor.update_wounded(counselor.health, true, &tuning.counselor);
     let player = commands.spawn((
-        Player { counselor, velocity: Vec2::ZERO, walk_toggle: false, fear: config.fear, root_motion: None, montage: None, vel_y: 0.0, grounded: false },
+        Player { counselor, velocity: Vec2::ZERO, walk_toggle: false, fear: config.fear, root_motion: None, montage: None, vel_y: 0.0, grounded: false, hidden: false },
         Transform::from_translation(config.spawn),
         Visibility::default(),
         Unsettled,
@@ -358,7 +361,7 @@ pub(crate) fn move_player(
     tuning: Res<PlayerTuning>,
     camera: Single<&PlayerCamera>,
     mut player: Single<
-        (Entity, &mut Player, &mut Transform, Option<&crate::interact::UsingItem>, Option<&Unsettled>, Has<crate::jason::Held>, Has<crate::jason::Staggered>, Has<crate::items::ItemAction>),
+        (Entity, &mut Player, &mut Transform, Option<&crate::interact::UsingItem>, Option<&Unsettled>, (Has<crate::jason::Held>, Has<crate::hiding::Hiding>), Has<crate::jason::Staggered>, Has<crate::items::ItemAction>),
         Without<Driving>,
     >,
     interaction: Option<Res<crate::interact::Interaction>>,
@@ -367,9 +370,10 @@ pub(crate) fn move_player(
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
-    let (entity, ref mut p, ref mut xf, using, settle, held, staggered, item_action) = *player;
-    if held {
-        // In Jason's hands: he places her.
+    let (entity, ref mut p, ref mut xf, using, settle, (held, hiding), staggered, item_action) = *player;
+    p.hidden = hiding;
+    if held || hiding {
+        // In Jason's hands (he places her), or in a hiding spot (hiding.rs places her).
         p.velocity = Vec2::ZERO;
         return;
     }
@@ -481,7 +485,7 @@ fn aim_demo(
 }
 
 /// Third-person camera on a "spring arm": pulled in when the map is between the camera and the counselor.
-fn follow_camera(
+pub(crate) fn follow_camera(
     config: Res<PlayerConfig>,
     motion: Res<AccumulatedMouseMotion>,
     cursor: Single<&CursorOptions>,

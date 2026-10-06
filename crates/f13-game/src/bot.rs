@@ -8,6 +8,11 @@
 //! barricade the nearest barred door and check it holds from both sides, then open a window, climb in, close it,
 //! dive out through the glass (20 damage) and climb back in; screenshots to temp f13-bot-fixture-*.png.
 //! `--bot-dodge`: enter combat stance and double-tap S, A, D; logs how far each dodge moved (needs open ground).
+//! `--bot-hide`: hide in the nearest hiding spot while Jason is far off, stay 60 s, come out; passes alive.
+//! `--bot-hide-seen`: let Jason see her, then hide in the hiding spot nearest him; passes when he finds and kills
+//! her there. Screenshots f13-bot-hide-*.png.
+//! With Jason (`--bot-jason`, `--bot-fight`, the hide bots), she steps out 10 m in front of him when he hasn't seen
+//! her for a while (he only knows what he sees, hears and senses).
 
 use crate::interact::{Carried, Inventory, UsingItem, FIRST_AID};
 use crate::player::{Player, PlayerCamera};
@@ -29,6 +34,10 @@ pub enum Goal {
     /// Stand still and use the items she was given (--give) on Jason, and struggle when grabbed: passes when he is
     /// stunned (or she breaks free) and recovers.
     Fight,
+    /// Hide out of Jason's sight and come out alive.
+    Hide,
+    /// Hide where Jason can see her: he should find and kill her.
+    HideSeen,
 }
 
 pub struct BotPlugin(pub Goal);
@@ -58,6 +67,8 @@ enum Step {
     Door(usize),
     /// Waiting for Jason.
     AwaitJason,
+    /// Hiding test stage.
+    Hide(u8),
     Done,
 }
 
@@ -191,7 +202,7 @@ fn run_bot(
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     (interaction, tuning): (Res<crate::interact::Interaction>, Res<crate::player::PlayerTuning>),
-    mut player: Single<(&mut Transform, &Player, Option<&Inventory>, Has<Driving>, Has<UsingItem>, (Has<crate::jason::Held>, Has<crate::items::ItemAction>, Has<crate::jason::Staggered>))>,
+    mut player: Single<(&mut Transform, &Player, Option<&Inventory>, Has<Driving>, Has<UsingItem>, (Has<crate::jason::Held>, Has<crate::items::ItemAction>, Has<crate::jason::Staggered>), Option<&mut crate::hiding::Hiding>)>,
     mut camera: Single<&mut PlayerCamera>,
     items: Query<(Entity, &Item, &GlobalTransform, Option<&InCabinet>), Without<Carried>>,
     carried: Query<&Item, With<Carried>>,
@@ -204,7 +215,7 @@ fn run_bot(
         Query<&crate::windows::Barricade>,
         Query<(&crate::jason::Jason, &Transform), (Without<Player>, Without<Vehicle>)>,
     ),
-    escaped: Option<Res<Escaped>>,
+    (escaped, spots, knowledge): (Option<Res<Escaped>>, Query<(Entity, &crate::hiding::HidingSpot, &GlobalTransform)>, Query<&crate::senses::Knowledge>),
     mut exit: MessageWriter<AppExit>,
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
 ) {
@@ -220,14 +231,36 @@ fn run_bot(
     for k in [KeyCode::KeyW, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::KeyC, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD] {
         keys.release(k);
     }
-    let limit = if matches!(bot.goal, Goal::Jason | Goal::Fight) { 600.0 } else { 240.0 };
+    let with_jason = matches!(bot.goal, Goal::Jason | Goal::Fight | Goal::Hide | Goal::HideSeen);
+    let limit = if with_jason { 600.0 } else { 240.0 };
     if bot.total > limit && bot.step != Step::Done {
         error!("bot: gave up at {:?}", bot.step);
         exit.write(AppExit::error());
         return;
     }
-    let (ref mut pxf, p, inv, driving, using, (held, acting, staggered)) = *player;
+    let (ref mut pxf, p, inv, driving, using, (held, acting, staggered), ref mut hiding) = *player;
     let busy = acting || staggered || held;
+    let sees = knowledge.iter().next().is_some_and(|k| k.sees);
+    // Jason only knows what he perceives: when he hasn't seen her for a while, step out 10 m in front of him.
+    if matches!(bot.goal, Goal::Jason | Goal::Fight | Goal::HideSeen) && matches!(bot.step, Step::AwaitJason | Step::Hide(0)) && hiding.is_none() && p.counselor.alive() && !held {
+        if sees {
+            bot.dodge_from = Some((Vec3::ZERO, bot.total));
+        }
+        let unseen_for = bot.total - bot.dodge_from.map_or(0.0, |d| d.1);
+        if let Some((j, jxf)) = jasons.iter().next().filter(|(j, _)| matches!(j.state, crate::jason::JasonState::Hunting)) {
+            let _ = j;
+            if !sees && unseen_for > 8.0 {
+                let yaw = jxf.rotation.to_euler(EulerRot::YXZ).0;
+                let ahead = jxf.translation + Vec3::new(yaw.sin(), 0.0, yaw.cos()) * 10.0 + Vec3::Y * 1.0;
+                if let Some(at) = stand_spot(&world, ahead, 1.5) {
+                    info!("bot: stepping out in front of Jason");
+                    place(pxf, at);
+                    look_at(&mut camera, pxf, jxf.translation + Vec3::Y);
+                }
+                bot.dodge_from = Some((Vec3::ZERO, bot.total));
+            }
+        }
+    }
     match bot.step {
         Step::Start => {
             // Let the map finish loading (in real time: frames hitch while assets stream in, whatever --speed).
@@ -246,6 +279,12 @@ fn run_bot(
                 bot.fixtures = [pick(false), pick(true), window];
                 info!("bot: fixtures {:?}", bot.fixtures);
                 bot.step = Step::Door(0);
+                bot.timer = 0.0;
+                return;
+            }
+            if matches!(bot.goal, Goal::Hide | Goal::HideSeen) {
+                info!("bot: {} hiding spots", spots.iter().count());
+                bot.step = Step::Hide(0);
                 bot.timer = 0.0;
                 return;
             }
@@ -678,6 +717,134 @@ fn run_bot(
                 bot.timer = 0.0;
             }
         }
+        Step::Hide(stage) => {
+            let Some((j, jxf)) = jasons.iter().next() else {
+                error!("bot: no Jason");
+                bot.step = Step::Done;
+                return;
+            };
+            let jd = jxf.translation.distance(pxf.translation);
+            let shoot = |commands: &mut Commands, name: &str| {
+                let path = std::env::temp_dir().join(format!("f13-bot-hide-{name}.png"));
+                info!("bot: screenshot {}", path.display());
+                commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+            };
+            match stage {
+                // Pick a spot: unseen, the nearest one to her once Jason is far; seen, the one nearest Jason once he
+                // watches her (and she's 8..25 m from him).
+                0 => {
+                    let ready = match bot.goal {
+                        Goal::HideSeen => sees && (6.0..30.0).contains(&jd),
+                        _ => bot.timer > 1.0,
+                    };
+                    if !ready {
+                        return;
+                    }
+                    let from = if bot.goal == Goal::HideSeen { jxf.translation } else { pxf.translation };
+                    let Some((e, s, g)) = spots
+                        .iter()
+                        .filter(|(_, s, g)| s.usable() && (bot.goal != Goal::HideSeen || g.translation().distance(jxf.translation) > 4.0))
+                        .min_by(|a, b| a.2.translation().distance(from).total_cmp(&b.2.translation().distance(from)))
+                    else {
+                        error!("bot: no hiding spot");
+                        bot.step = Step::Done;
+                        return;
+                    };
+                    let point = g.transform_point(s.interact);
+                    let Some(stand) = stand_spot(&world, point, s.reach / 100.0 + 0.3) else {
+                        warn!("bot: nowhere to stand at {:?}", s.kind);
+                        return;
+                    };
+                    place(pxf, stand);
+                    look_at(&mut camera, pxf, point);
+                    info!("bot: going to hide in a {:?} ({e:?}), Jason {jd:.0} m away ({:?})", s.kind, j.state);
+                    bot.vehicle = Some(e);
+                    bot.step = Step::Hide(1);
+                    bot.timer = 0.0;
+                }
+                // Press E at it.
+                1 => {
+                    if hiding.is_some() {
+                        bot.step = Step::Hide(2);
+                        bot.timer = 0.0;
+                        return;
+                    }
+                    if bot.timer > 0.3 && !bot.second_tap {
+                        keys.press(KeyCode::KeyE);
+                        bot.second_tap = true;
+                    } else {
+                        bot.second_tap = false;
+                    }
+                    if bot.timer > 3.0 {
+                        error!("bot: couldn't get into the hiding spot");
+                        bot.step = Step::Done;
+                        bot.timer = 0.0;
+                    }
+                }
+                // Going in, then hidden.
+                2 => {
+                    let Some(h) = hiding.as_deref_mut() else {
+                        if !p.counselor.alive() {
+                            bot.step = Step::Done;
+                        }
+                        return;
+                    };
+                    if h.phase == crate::hiding::HidePhase::Entering && bot.timer > 1.2 && !bot.jason_shots.contains(&"entering") {
+                        bot.jason_shots.push("entering");
+                        shoot(&mut commands, "entering");
+                    }
+                    if h.phase == crate::hiding::HidePhase::Hidden {
+                        if !bot.jason_shots.contains(&"inside") && bot.timer > 4.0 {
+                            bot.jason_shots.push("inside");
+                            shoot(&mut commands, "inside");
+                        }
+                        if bot.timer >= 5.0 && (bot.timer - dt) as u32 / 10 != bot.timer as u32 / 10 {
+                            info!("bot: hidden {:.0}s; Jason {:?}, {jd:.0} m away", bot.timer, j.state);
+                        }
+                        if bot.goal == Goal::Hide && bot.timer > 60.0 {
+                            info!("bot: leaving the hiding spot");
+                            crate::hiding::request_exit(h);
+                            bot.step = Step::Hide(3);
+                            bot.timer = 0.0;
+                        }
+                    }
+                    if h.phase == crate::hiding::HidePhase::Killed && bot.timer > 0.0 && !bot.jason_shots.contains(&"kill") {
+                        bot.timer = -1.5;
+                        bot.jason_shots.push("kill");
+                    }
+                    if bot.jason_shots.contains(&"kill") && !bot.jason_shots.contains(&"killshot") && bot.timer > 0.0 {
+                        bot.jason_shots.push("killshot");
+                        let d = jxf.translation - pxf.translation;
+                        camera.yaw = (d.z).atan2(-d.x);
+                        camera.pitch = -0.2;
+                        shoot(&mut commands, "kill");
+                    }
+                    if bot.goal == Goal::HideSeen && bot.timer > 240.0 {
+                        error!("bot: Jason never came for her");
+                        bot.step = Step::Done;
+                        bot.timer = 0.0;
+                    }
+                }
+                // Coming out.
+                _ => {
+                    if hiding.is_some() {
+                        if bot.timer > 0.6 && !bot.jason_shots.contains(&"exit") {
+                            bot.jason_shots.push("exit");
+                            shoot(&mut commands, "exit");
+                        }
+                        return;
+                    }
+                    info!("bot: out of hiding after {:.1}s, alive {}", bot.total, p.counselor.alive());
+                    bot.step = Step::Done;
+                    bot.timer = 0.0;
+                }
+            }
+            if !p.counselor.alive() && bot.step != Step::Done {
+                info!("bot: Vanessa died after {:.1}s ({:?})", bot.total, j.state);
+                bot.step = Step::Done;
+                bot.timer = 0.0;
+            }
+        }
         Step::Done => {
             // After a death, let the ragdoll settle and photograph it from above.
             if bot.goal == Goal::Jason && !p.counselor.alive() {
@@ -697,6 +864,8 @@ fn run_bot(
                     Goal::Door => bot.door_ok,
                     Goal::Jason => !p.counselor.alive(),
                     Goal::Fight => p.counselor.alive() && bot.jason_shots.contains(&"stun"),
+                    Goal::Hide => p.counselor.alive() && hiding.is_none() && bot.jason_shots.contains(&"inside"),
+                    Goal::HideSeen => !p.counselor.alive() && bot.jason_shots.contains(&"kill"),
                 };
                 exit.write(if ok { AppExit::Success } else { AppExit::error() });
             }

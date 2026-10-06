@@ -13,6 +13,7 @@ using CUE4Parse.UE4.Assets.Exports.SkeletalMesh;
 using CUE4Parse.UE4.Objects.Core.Math;
 using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Objects.Engine;
+using CUE4Parse.UE4.Objects.Engine.Curves;
 using CUE4Parse.UE4.Assets.Objects;
 using CUE4Parse.UE4.Assets.Exports.Texture;
 using CUE4Parse.UE4.Assets.Exports.StaticMesh;
@@ -52,6 +53,13 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         public List<Window>? Windows;
     }
 
+    /// A RichCurve key: Interp "linear", "constant" or "cubic".
+    public class CurveKey
+    {
+        public float Time, Value, ArriveTangent, LeaveTangent;
+        public string Interp = "";
+    }
+
     public class Window
     {
         public string Name = "";
@@ -75,8 +83,12 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         public SortedDictionary<string, AnimInfo> Animations = new(StringComparer.OrdinalIgnoreCase);
         /// The skeleton's and mesh's sockets: name -> bone and offset (Unreal space).
         public SortedDictionary<string, Part> Sockets = new();
-        /// Gameplay values (killers): Blueprint overrides, else the C++ constructor's defaults.
+        /// Gameplay values: Blueprint overrides, else the C++ constructor's defaults.
         public SortedDictionary<string, float>? Values;
+        /// Stat-modified values (FStatModifiedValue): [BaseValue, then StatModifiers by ECounselorStats].
+        public SortedDictionary<string, float[]>? Stats;
+        /// Float curves the values refer to, by property name.
+        public SortedDictionary<string, List<CurveKey>>? Curves;
         /// The body mesh's physics asset (the ragdoll): one body per simulated bone, and the joints between them.
         public List<RagdollBody>? Ragdoll;
         public List<RagdollJoint>? Joints;
@@ -178,6 +190,16 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         var bones = skeleton.ReferenceSkeleton.FinalRefBoneInfo;
         for (var i = 0; i < bones.Length; i++)
             info.Bones.Add(new Bone { Name = bones[i].Name.Text, Parent = bones[i].ParentIndex, Retarget = skeleton.BoneTree[i].ToString() });
+
+        // Noise and visibility (SCCounselorCharacter::GetNoiseLevel, SCCharacter::LineOfSight). Defaults: the
+        // counselor constructor (noise 1 crouching, 2 walking, 3 running, 4 sprinting, 10 swimming) and SCCharacter's
+        // (MaxVisibilityDistance 6000).
+        var values = new SortedDictionary<string, float>();
+        foreach (var (name, fallback) in new[] { ("CrouchingNoiseMod", 1f), ("WalkingNoiseMod", 2f), ("RunningNoiseMod", 3f),
+                     ("SprintingNoiseMod", 4f), ("SwimmingNoiseMod", 10f), ("MaxVisibilityDistance", 6000f) })
+            values[name] = ClassValue<float?>(cls, name) ?? fallback;
+        info.Values = values;
+        info.Stats = new() { ["NoiseStatMod"] = StatValue(cls, "NoiseStatMod", 1f) };
 
         AddSockets(info, body, skeleton);
         AddRagdoll(info, body);
@@ -365,7 +387,20 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         values["CanRun"] = (Inherited<FPackageIndex>(meshComp, "AnimClass")?.Load<UStruct>() is { } animClass ? ClassValue<bool?>(animClass, "bCanRun") : null) == true ? 1 : 0;
         var stats = ClassValue<FStructFallback>(weaponClass, "WeaponStats");
         values["WeaponDamage"] = stats?.GetOrDefault<float>("Damage") ?? 0;
+        // What he hears and senses: sound blips (constructor: MinBlipRadius 1000, NoiseLevelThreshold 2,
+        // NoiseDistanceThreshold 50000, blips every 0.5..2 s), Sense (RageUnlockTime 900; SenseDuration and
+        // RagedSenseDistanceModifier have no constructor value).
+        foreach (var (name, fallback) in new[] { ("MinBlipRadius", 1000f), ("NoiseLevelThreshold", 2f), ("NoiseDistanceThreshold", 50000f),
+                     ("MinBlipFrequencyTime", 0.5f), ("MaxBlipFrequencyTime", 2f), ("SenseDuration", 0f), ("RagedSenseDistanceModifier", 1f),
+                     ("RageUnlockTime", 900f) })
+            values[name] = ClassValue<float?>(cls, name) ?? fallback;
+        // The sound blip actor's lifetime (InitialLifeSpan).
+        if (ClassValue<FPackageIndex>(cls, "SoundBlipClass")?.Load<UStruct>() is { } blip)
+            values["SoundBlipLifeSpan"] = ClassValue<float?>(blip, "InitialLifeSpan") ?? 0;
         info.Values = values;
+        info.Curves = new();
+        foreach (var name in new[] { "SenseFearRadiusCurve", "SenseFearHidingRadiusCurve", "RageSenseDistanceCurve" })
+            if (CurveValue(cls, name) is { } keys) info.Curves[name] = keys;
 
         var bones = skeleton.ReferenceSkeleton.FinalRefBoneInfo;
         for (var i = 0; i < bones.Length; i++)
@@ -399,6 +434,34 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             .Select(n => new Window { Name = n.Name, Start = n.Start, End = n.Start + n.Duration })
             .ToList();
         return list.Count > 0 ? list : null;
+    }
+
+    /// A stat-modified value through the Blueprint's parents: [BaseValue, StatModifiers[0..7]] (StatModifiers is a
+    /// static array indexed by stat; unset entries are 0). `baseValue` is the C++ constructor's.
+    static float[] StatValue(UStruct cls, string name, float baseValue)
+    {
+        var v = new float[8];
+        v[0] = baseValue;
+        if (ClassValue<FStructFallback>(cls, name) is not { } s) return v;
+        foreach (var p in s.Properties)
+        {
+            if (p.Name.Text == "BaseValue") v[0] = p.Tag?.GetValue<float>() ?? v[0];
+            else if (p.Name.Text == "StatModifiers" && p.ArrayIndex < 7) v[1 + p.ArrayIndex] = p.Tag?.GetValue<float>() ?? 0;
+        }
+        return v;
+    }
+
+    /// A curve property's keys through the Blueprint's parents (null when unset).
+    static List<CurveKey>? CurveValue(UStruct cls, string name)
+    {
+        if (ClassValue<FPackageIndex>(cls, name)?.Load() is not { } curve) return null;
+        var rich = curve.GetOrDefault<FStructFallback>("FloatCurve");
+        var keys = rich?.GetOrDefault<FRichCurveKey[]>("Keys", []) ?? [];
+        return keys.Select(k => new CurveKey
+        {
+            Time = k.Time, Value = k.Value, ArriveTangent = k.ArriveTangent, LeaveTangent = k.LeaveTangent,
+            Interp = k.InterpMode switch { ERichCurveInterpMode.RCIM_Linear => "linear", ERichCurveInterpMode.RCIM_Constant => "constant", _ => "cubic" },
+        }).ToList();
     }
 
     /// A class default, through the Blueprint's parents (each CDO only stores what its class overrides).

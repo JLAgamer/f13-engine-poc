@@ -5,6 +5,7 @@
 //!       [--pose <animation>@<seconds>]  (hold the counselor (and Jason) in one exported animation, for screenshots)
 //!       [--no-jason] [--jason-delay s] [--bot-jason]  (Jason hunts the counselor unless left out; counselor bots leave him out)
 //!       [--give Class,Class...] [--bot-fight]  (start with these items (testing); a bot that uses them on Jason)
+//!       [--bot-hide] [--bot-hide-seen]  (hide out of Jason's sight and come out; hide where he sees: he kills her)
 //!       [--camera x,y,z,tx,ty,tz]  (--fly start: eye and look-at point; playing: both relative to the counselor's feet)
 //!   Default: play as Vanessa (see player.rs for controls). --fly: free camera instead.   (screenshot: wait for loading, save one frame, exit)
 
@@ -13,6 +14,7 @@ mod character;
 mod collision;
 mod doors;
 mod interact;
+mod hiding;
 mod items;
 mod jason;
 mod materials;
@@ -20,6 +22,7 @@ mod mipmaps;
 mod player;
 mod props;
 mod ragdoll;
+mod senses;
 mod windows;
 mod vehicle;
 
@@ -47,6 +50,8 @@ struct Args {
     bot_door: bool,
     bot_jason: bool,
     bot_fight: bool,
+    bot_hide: bool,
+    bot_hide_seen: bool,
     give: Vec<String>,
     /// Leave Jason out (the counselor-only bots always do).
     no_jason: bool,
@@ -81,6 +86,8 @@ fn parse_args() -> Args {
     let mut bot_door = false;
     let mut bot_jason = false;
     let mut bot_fight = false;
+    let mut bot_hide = false;
+    let mut bot_hide_seen = false;
     let mut give = Vec::new();
     let mut no_jason = false;
     let mut jason_delay = 0.0;
@@ -111,6 +118,8 @@ fn parse_args() -> Args {
             "--bot-door" => bot_door = true,
             "--bot-jason" => bot_jason = true,
             "--bot-fight" => bot_fight = true,
+            "--bot-hide" => bot_hide = true,
+            "--bot-hide-seen" => bot_hide_seen = true,
             "--give" => give = it.next().map(|v| v.split(',').map(String::from).collect()).unwrap_or_default(),
             "--no-jason" => no_jason = true,
             "--jason-delay" => jason_delay = it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0f32).max(0.0),
@@ -147,7 +156,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_fight, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera }
+    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_fight, bot_hide, bot_hide_seen, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera }
 }
 
 #[derive(Resource)]
@@ -244,8 +253,9 @@ fn main() {
             repair_hold_time: tuning.repair_hold_time,
             vehicle_start: tuning.vehicle_start.clone(),
         })
+            .insert_resource(senses::KillerAbilityTuning(tuning.jason.clone()))
             .add_plugins(player::PlayerPlugin { spawn, capsule: args.capsule, camera: args.camera, demo: args.demo, fear: args.fear, health: args.health })
-            .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }, collision::CollisionPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin));
+            .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }, collision::CollisionPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin));
         if args.bot_escape {
             app.add_plugins(bot::BotPlugin(bot::Goal::Escape));
         } else if args.bot_heal {
@@ -258,6 +268,10 @@ fn main() {
             app.add_plugins(bot::BotPlugin(bot::Goal::Jason));
         } else if args.bot_fight {
             app.add_plugins(bot::BotPlugin(bot::Goal::Fight));
+        } else if args.bot_hide {
+            app.add_plugins(bot::BotPlugin(bot::Goal::Hide));
+        } else if args.bot_hide_seen {
+            app.add_plugins(bot::BotPlugin(bot::Goal::HideSeen));
         }
         if !args.give.is_empty() {
             app.insert_resource(items::Give(args.give.clone()));
@@ -271,7 +285,7 @@ fn main() {
     if let Some(path) = args.screenshot.clone() {
         app.insert_resource(ScreenshotPlan { path, frames_loaded: 0, after: args.screenshot_after, shot_at: None }).add_systems(Update, take_screenshot);
     }
-    app
+    let exit = app
         .add_plugins(
             DefaultPlugins
                 .set(AssetPlugin { file_path: args.export.to_string_lossy().into_owned(), ..default() })
@@ -286,6 +300,10 @@ fn main() {
         .insert_resource(GlobalAmbientLight { brightness: 400.0, ..default() })
         .add_systems(Startup, spawn_level)
         .run();
+    // Bots report success or failure through the exit code.
+    if exit.is_error() {
+        std::process::exit(1);
+    }
 }
 
 pub(crate) fn to_transform(x: &Xform) -> Transform {

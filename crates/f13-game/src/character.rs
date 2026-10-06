@@ -102,6 +102,8 @@ pub struct CharacterModel {
     pub info: CharacterInfo,
     graph: Handle<AnimationGraph>,
     clips: HashMap<String, (AnimationNodeIndex, f32)>,
+    /// Animations that keep their root motion: the root bone's first and last pose (rig space).
+    roots: HashMap<String, (Transform, Transform)>,
 }
 
 #[derive(Resource, Deref)]
@@ -130,6 +132,7 @@ impl CharacterModel {
         let animated: Vec<&str> = info.bones.iter().filter(|b| b.retarget == "Animation").map(|b| b.name.as_str()).collect();
         let mut graph = AnimationGraph::new();
         let mut nodes = HashMap::new();
+        let mut roots = HashMap::new();
         for (name, a) in &info.animations {
             let data = match AnimData::load(&export.join(&a.file)) {
                 Ok(d) => d,
@@ -138,11 +141,50 @@ impl CharacterModel {
                     continue;
                 }
             };
+            if a.keep_root {
+                if let Some(t) = data.tracks.iter().find(|t| t.bone == "root") {
+                    let at = |i: usize| Transform {
+                        translation: t.translation.as_ref().and_then(|v| v.get(i)).map_or(Vec3::ZERO, |v| Vec3::from_array(*v)),
+                        rotation: t.rotation.get(i).map_or(Quat::IDENTITY, |q| Quat::from_array(*q).normalize()),
+                        ..default()
+                    };
+                    let last = t.rotation.len().max(t.translation.as_ref().map_or(0, |v| v.len())).saturating_sub(1);
+                    roots.insert(name.clone(), (at(0), at(last)));
+                }
+            }
             let clip = build_clip(&data, a.length, &animated);
             nodes.insert(name.clone(), (graph.add_clip(clips.add(clip), 1.0, graph.root), a.length));
         }
         info!("character model {}: {} animations", info.name, nodes.len());
-        Some(Self { info, graph: graphs.add(graph), clips: nodes })
+        Some(Self { info, graph: graphs.add(graph), clips: nodes, roots })
+    }
+
+    /// The rig's place under its owner (see [`spawn_model`]).
+    pub fn rig_transform(&self) -> Transform {
+        let mut mesh = crate::to_transform(&self.info.mesh_transform);
+        mesh.translation.y += self.info.capsule_half_height / 100.0;
+        Transform::from_rotation(FACING) * mesh
+    }
+
+    /// Root motion of an animation that keeps it: its root's first and last pose as moves of the owner (identity
+    /// when the root is where it normally is).
+    pub fn root_motion(&self, name: &str) -> Option<(Transform, Transform)> {
+        let (first, last) = self.roots.get(name)?;
+        let rig = self.rig_transform().to_matrix();
+        let owner = |root: &Transform| Transform::from_matrix(rig * root.to_matrix() * rig.inverse());
+        Some((owner(first), owner(last)))
+    }
+
+    /// The owner transform that plays `name` (keeping its root motion) so its first frame stands at `at`, and where
+    /// it leaves the character when it ends. Animations without root motion play at `at` and end there.
+    pub fn place(&self, name: &str, at: Transform) -> (Transform, Transform) {
+        match self.root_motion(name) {
+            Some((first, last)) => {
+                let origin = Transform::from_matrix(at.to_matrix() * first.to_matrix().inverse());
+                (origin, flat(Transform::from_matrix(origin.to_matrix() * last.to_matrix())))
+            }
+            None => (at, at),
+        }
     }
 
     /// An animation's length, if it was exported.
@@ -183,6 +225,12 @@ fn build_clip(data: &AnimData, length: f32, animated: &[&str]) -> AnimationClip 
 /// the owner's transform times this is the Unreal actor's.
 pub const FACING: Quat = Quat::from_xyzw(0.0, -std::f32::consts::FRAC_1_SQRT_2, 0.0, std::f32::consts::FRAC_1_SQRT_2);
 
+/// A character transform kept upright (yaw only, unit scale).
+pub fn flat(t: Transform) -> Transform {
+    let f = t.rotation * Vec3::Z;
+    Transform { translation: t.translation, rotation: Quat::from_rotation_y(f.x.atan2(f.z)), scale: Vec3::ONE }
+}
+
 /// The animated model under a character: holds the AnimationPlayer every bone is animated by.
 #[derive(Component)]
 pub struct Rig {
@@ -202,6 +250,8 @@ pub struct Rig {
     idle_time: f32,
     /// The montage or action playing: its animation and time since it started.
     pub action: Option<(String, f32)>,
+    /// Jump straight to the next pose instead of blending (after the owner moved to where a root motion ended).
+    snap: bool,
 }
 
 /// A full-body animation a character plays now (hit reactions, grabs, kills, death), whatever its movement state.
@@ -253,6 +303,7 @@ pub fn spawn_model(commands: &mut Commands, assets: &AssetServer, character: &Ch
         phase: 0.0,
         idle_time: 0.0,
         action: None,
+        snap: false,
     });
     rig
 }
@@ -430,6 +481,11 @@ impl Rig {
         Some(bone.mul_transform(offset).compute_transform())
     }
 
+    /// The next pose replaces the current one at once (no blend).
+    pub fn snap(&mut self) {
+        self.snap = true;
+    }
+
     /// Starts, continues or ends the full-body action.
     pub fn set_action(&mut self, action: Option<&str>, dt: f32) {
         match (&mut self.action, action) {
@@ -450,8 +506,12 @@ impl Rig {
             }
             _ => targets,
         };
-        // Ease every weight toward its target (absent = 0).
-        let rate = if self.action.is_some() { MONTAGE_BLEND_RATE } else { BLEND_RATE } * dt;
+        // Ease every weight toward its target (absent = 0), or take them at once after a snap.
+        let rate = if std::mem::take(&mut self.snap) {
+            f32::MAX
+        } else {
+            (if self.action.is_some() { MONTAGE_BLEND_RATE } else { BLEND_RATE }) * dt
+        };
         let mut names: Vec<String> = self.weights.keys().cloned().collect();
         for k in targets.keys() {
             if !self.weights.contains_key(*k) {

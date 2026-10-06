@@ -260,9 +260,26 @@ fn spawn_props(
         });
         let mut leaf_center = Vec3::ZERO;
         let mut parts: HashMap<&str, Entity> = HashMap::new();
+        // Hiding spot doors swing on their pivots (hiding.rs).
+        let is_hiding_spot = classes.is_child_of(&actor.class, "SCHidingSpot");
+        let mut spot_pivots: HashMap<&str, (Entity, Transform)> = HashMap::new();
+        if is_hiding_spot {
+            for c in info.components.iter().filter(|c| c.name.ends_with("DoorPivot")) {
+                let t = local(c);
+                spot_pivots.insert(c.name.as_str(), (commands.spawn((t, Visibility::default(), ChildOf(root))).id(), t));
+            }
+        }
         for c in &info.components {
             let Some(mesh) = &c.mesh else { continue };
             if c.hidden || ["Destroyed", "Broken", "Broke"].iter().any(|s| c.name.contains(s)) {
+                continue;
+            }
+            if let Some(&(p, pt)) = c.parent.as_deref().and_then(|n| spot_pivots.get(n)) {
+                let rel = Transform::from_matrix(pt.to_matrix().inverse() * local(c).to_matrix());
+                let door = commands.spawn((WorldAssetRoot(scene(mesh)), rel, ChildOf(p))).id();
+                if let Some(o) = crate::materials::MaterialOverrides::new(&c.material_map) {
+                    commands.entity(door).insert(o);
+                }
                 continue;
             }
             // Door leaves hang on the pivot (actor-space transforms re-expressed relative to it).
@@ -312,6 +329,11 @@ fn spawn_props(
                 }
                 false
             });
+            if let Some(&(p, pt)) = c.parent.as_deref().and_then(|n| spot_pivots.get(n)) {
+                let rel = Transform::from_matrix(pt.to_matrix().inverse() * local(c).to_matrix());
+                commands.spawn((rel, Visibility::default(), collider, ChildOf(p)));
+                continue;
+            }
             match on_pivot {
                 Some((p, pt)) => {
                     let rel = Transform::from_matrix(pt.to_matrix().inverse() * local(c).to_matrix());
@@ -346,6 +368,14 @@ fn spawn_props(
                 broken: false,
             });
             *counts.entry("doors").or_default() += 1;
+        }
+        if is_hiding_spot {
+            // The left pivot opens one way, the right one the other.
+            let doors = spot_pivots.iter().map(|(n, &(e, t))| (e, t, if n.starts_with("Right") { -1.0 } else { 1.0 })).collect();
+            if let Some(spot) = crate::hiding::HidingSpot::new(&classes, &actor.class, local, doors) {
+                commands.entity(root).insert(spot);
+                *counts.entry("hiding spots").or_default() += 1;
+            }
         }
         if classes.is_child_of(&actor.class, "SCBarricade") {
             // The plank across the door (`..._01_a`, horizontal) vs the one stood against the wall (`..._01_b`).

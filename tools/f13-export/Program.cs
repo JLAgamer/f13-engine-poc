@@ -336,8 +336,8 @@ switch (rest[0])
         foreach (var l in Mvp.Layouts) ExportLevel(l);
         WriteClasses();
         AnimExporter.Write(provider, outDir, Mvp.Montages);
-        new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims, Mvp.PairedKills);
-        new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, Mvp.KillerAnims, Mvp.PairedKills);
+        new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims, Mvp.KeepRoot);
+        new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, Mvp.KillerAnims, Mvp.KeepRoot);
         WriteCollision();
         break;
     case "collision": // levels (for collision flags), classes and collision.json; no meshes or textures
@@ -347,10 +347,10 @@ switch (rest[0])
         WriteCollision();
         return 0;
     case "counselor": // the MVP counselor's parts and animations (and the meshes they need)
-        new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims, Mvp.PairedKills);
+        new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims, Mvp.KeepRoot);
         break;
     case "killer": // the MVP Jason's parts, weapon and animations (and the meshes they need)
-        new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, Mvp.KillerAnims, Mvp.PairedKills);
+        new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, Mvp.KillerAnims, Mvp.KeepRoot);
         break;
     case "anims":
         AnimExporter.Write(provider, outDir, Mvp.Montages);
@@ -584,7 +584,42 @@ static class Mvp
         $"{Shared}/Grab/AM_Grab_Break",
         $"{Shared}/Grab/AM_normal_grab_pocketknife_break",
         CounselorKill,
+        .. CounselorHiding,
         .. Montages,
+    ];
+    // Hiding spots: the sections of each enter special move's montage (AM_normal_stand_hidespot_closet_enter: enter,
+    // HideIdle, HideExit; the outhouse reuses the closet's idle and exit) and the counselor's side of the pickaxe's
+    // hiding spot kills (Counselor_Axe_Closet_CK, Counselor_Axe_Bed_CK) and the tent's Counselor_SleepingBagKill.
+    // They keep their root motion: the game plays them from the special move's spot.
+    const string Hide = $"{Female}/Interaction/Hidespots";
+    public static string[] CounselorHiding =>
+    [
+        $"{Hide}/f_normal_stand_hidespot_closet_enter",
+        $"{Hide}/f_normal_stand_hidespot_closet_idle",
+        $"{Hide}/f_normal_stand_hidespot_closet_exit",
+        $"{Hide}/f_normal_stand_hidespot_outhouse_enter",
+        $"{Hide}/f_normal_stand_hidespot_bed_left_enter",
+        $"{Hide}/f_normal_stand_hidespot_bed_left_exit",
+        $"{Hide}/f_normal_stand_hidespot_bed_right_enter",
+        $"{Hide}/f_normal_stand_hidespot_bed_right_exit",
+        $"{Hide}/f_normal_stand_hidespot_bed_idle",
+        $"{Hide}/f_normal_stand_hidespot_tent_enter",
+        $"{Hide}/f_normal_stand_hidespot_tent_loop",
+        $"{Hide}/f_normal_stand_hidespot_tent_exit",
+        $"{Shared}/Cinematic/AM_cinematic_hidespot_closet_kill_Axe",
+        $"{Shared}/Cinematic/AM_cinematic_hidespot_bed_kill_Axe",
+        $"{Shared}/Cinematic/AM_cinematic_hidespot_hand_Sleepingbag_kill",
+    ];
+    // Jason's side: the pickaxe's search moves (Jason_SearchCloset_Axe, Jason_SearchBed_Axe; the tent's search maps the
+    // pickaxe to the closet search) and context kills (Jason_ClosetAxe_CK, Jason_BedAxe_CK, Jason_SleepingbagKill).
+    const string JasonHide = $"{JasonAnim}/Interaction/Hidespot";
+    public static string[] JasonHiding =>
+    [
+        $"{JasonHide}/AM_cinematic_hidespot_axe_closet_search",
+        $"{JasonHide}/AM_cinematic_hidespot_axe_bed_search",
+        $"{JasonHide}/AM_cinematic_hidespot_axe_closet_kill",
+        $"{JasonHide}/AM_cinematic_hidespot_axe_bed_kill",
+        $"{JasonAnim}/Cinematic/AM_cinematic_hidespot_hand_sleepingbag_kill",
     ];
     // The pickaxe's DefaultGrabKill (Pickaxe_ThroatHack_GrabKill): Jason_PickaxeKill_01 and Counselor_PickaxeKill_01
     // play these paired montages around one origin.
@@ -593,6 +628,8 @@ static class Mvp
     const string JasonKill = $"{JasonAnim}/Cinematic/AM_cinematic_pickaxe_throathack";
     const string JasonStun = $"{JasonAnim}/Deaths_HitReacts_Stuns";
     public static readonly string[] PairedKills = [CounselorKill, JasonKill];
+    /// Animations that keep their root translation (played from a fixed spot: paired kills, hiding spots).
+    public static string[] KeepRoot => [.. PairedKills, .. CounselorHiding, .. JasonHiding];
     public const string Killer = "/Game/Characters/Killers/Jason/J2/Jason_SackHead";
     // Jason_AnimBP's BS_Jason_Normal_Move (SpeedState 0 idle, 1 walk, 2 fast walk, 3 run), the pickaxe's combat idle,
     // attacks (PickAxe's NeutralAttack and ForwardAttack), the grab, and the grab kill.
@@ -623,6 +660,7 @@ static class Mvp
         $"{JasonStun}/HitReaction/AM_combat_stand_hit_reaction_back",
         $"{JasonAnim}/Interaction/Beartrap/AM_Jason_BearTrap_LF",
         JasonKill,
+        .. JasonHiding,
     ];
 }
 

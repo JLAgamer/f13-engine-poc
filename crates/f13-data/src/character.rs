@@ -35,6 +35,56 @@ pub struct CharacterInfo {
     pub ragdoll: Vec<RagdollBody>,
     #[serde(default, deserialize_with = "crate::level::null_as_empty")]
     pub joints: Vec<RagdollJoint>,
+    /// Stat-modified values by property name: [BaseValue, then the StatModifiers by stat].
+    #[serde(default, deserialize_with = "crate::level::null_as_empty")]
+    pub stats: HashMap<String, [f32; 8]>,
+    /// Float curves by property name.
+    #[serde(default, deserialize_with = "crate::level::null_as_empty")]
+    pub curves: HashMap<String, Vec<CurveKey>>,
+}
+
+/// A RichCurve key as the exporter writes it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct CurveKey {
+    pub time: f32,
+    pub value: f32,
+    pub arrive_tangent: f32,
+    pub leave_tangent: f32,
+    /// "linear", "constant" or "cubic".
+    pub interp: String,
+}
+
+impl CharacterInfo {
+    /// A stat-modified value, if the export has it.
+    pub fn stat(&self, name: &str) -> Option<f13_core::stats::StatModifiedValue> {
+        let v = self.stats.get(name)?;
+        let mut modifiers = [0.0; f13_core::stats::STAT_COUNT];
+        modifiers.copy_from_slice(&v[1..]);
+        Some(f13_core::stats::StatModifiedValue { base: v[0], modifiers })
+    }
+
+    /// A float curve, if the export has it.
+    pub fn curve(&self, name: &str) -> Option<f13_core::curve::RichCurve> {
+        use f13_core::curve::{Interp, Key};
+        let keys = self
+            .curves
+            .get(name)?
+            .iter()
+            .map(|k| Key {
+                time: k.time,
+                value: k.value,
+                interp: match k.interp.as_str() {
+                    "linear" => Interp::Linear,
+                    "constant" => Interp::Constant,
+                    _ => Interp::Cubic,
+                },
+                arrive_tangent: k.arrive_tangent,
+                leave_tangent: k.leave_tangent,
+            })
+            .collect();
+        Some(f13_core::curve::RichCurve { keys })
+    }
 }
 
 /// A physics asset body: its bone's largest shape ("Sphyl" capsule: radius, length between the sphere centres along
