@@ -10,8 +10,12 @@
 //! - Grab: counselors between MinGrabDistance and MaxGrabDistance (100..235 cm) within MinGrabAngle (35 deg).
 //! - Kill: the pickaxe's DefaultGrabKill (Pickaxe_ThroatHack_GrabKill): Jason and the counselor play the paired
 //!   cinematic_pickaxe_throathack around one origin; the counselor dies when it ends (bDieOnFinish).
-//! - Doors: a locked or barricaded door takes his weapon damage x DamageWorldModifier per swing from its
-//!   BaseDoorHealth (60): three swings.
+//! - Doors: he opens a closed one with Jason_OpenDoorInside / Jason_OpenDoorOutside (the leaf swings during the
+//!   montage's OpenCloseDoor driver window). A locked or barricaded one he breaks down with the pickaxe's
+//!   Jason_BreakDoor_Axe: its Enter section, then its Loop until the door is down, then Success. Each BreakDownSync
+//!   window checks whether this hit finishes the door (health <= the hit: on to Success) and hits it for
+//!   WeaponStats.Damage x DamageWorldModifier, halved through a barricade (SCDoor's TakeDamage): a door's
+//!   BaseDoorHealth 60 takes three hits, six barricaded.
 //!
 //! - Hiding spots (hiding.rs): with the counselor inside he plays the spot's kill (the pickaxe uses the axe's
 //!   Jason_ClosetAxe_CK / Jason_BedAxe_CK, she the matching Counselor_Axe_*_CK, dying at its end), else its search,
@@ -57,6 +61,10 @@ const DEATH: &str = "f_normal_stand_death_01";
 const GRABBED_ENTER: &str = "f_normal_grab_enter";
 const GRABBED_IDLE: &str = "f_normal_grab_idle";
 const COUNSELOR_KILL: &str = "cinematic_pickaxe_throathack";
+const DOOR_OPEN_INSIDE: &str = "normal_stand_door_open_inside_forward";
+const DOOR_OPEN_OUTSIDE: &str = "normal_stand_door_open_outside_forward";
+/// AM_normal_stand_door_break_axe's Enter, Loop and Success sections.
+const BREAK_DOOR: [&str; 3] = ["normal_stand_door_break_axe_enter", "normal_stand_door_break_axe_cycle", "normal_stand_door_break_axe_success"];
 
 /// Sockets of SCCounselorCharacter::UpdateGrabTransform: Jason_Base's CharacterAttachmentSocket, SCKillerCharacter's
 /// hand socket (constructor), the counselor's neck socket (native FName).
@@ -163,8 +171,12 @@ pub enum JasonState {
     /// Before the hunt starts (s left).
     Waiting(f32),
     Hunting,
-    /// A pickaxe swing at the counselor, or at a door in his way.
-    Swinging { t: f32, hit: bool, door: Option<Entity> },
+    /// A pickaxe swing at the counselor.
+    Swinging { t: f32, hit: bool },
+    /// Opening a closed door in his way (s into the montage).
+    OpeningDoor { door: Entity, t: f32, anim: &'static str },
+    /// Breaking down a locked or barricaded door: s into `section` of [`BREAK_DOOR`], and whether its hit landed.
+    BreakingDoor { door: Entity, t: f32, section: usize, hit: bool },
     /// Reaching for a grab; it connects (or misses) when the startup ends.
     Reaching { t: f32 },
     Missed { t: f32 },
@@ -217,6 +229,31 @@ pub struct Jason {
     unreachable: Option<(Vec3, f32)>,
     /// Next goal log (game time).
     next_log: f32,
+}
+
+/// AM_normal_stand_door_break_axe's timing, per section of [`BREAK_DOOR`] (s into it): its length (where the next
+/// section starts: the montage's BreakDownLoop driver windows mark the Loop and Success starts), and when its hit lands
+/// (the end of its BreakDownSync window; Success's AttackTraceNotify).
+struct BreakTiming {
+    lengths: [f32; 3],
+    hits: [f32; 3],
+}
+
+fn break_timing(killer: &KillerCharacter) -> BreakTiming {
+    let windows = killer.info.animations.get(BREAK_DOOR[0]).map(|a| a.windows.as_slice()).unwrap_or_default();
+    let named = |name: &str| windows.iter().filter(|w| w.name == name).map(|w| (w.start, w.end)).collect::<Vec<_>>();
+    let (loops, syncs, traces) = (named("Driver: BreakDownLoop"), named("Driver: BreakDownSync"), named("AttackTraceNotify"));
+    let (loop_at, success_at) = match loops.as_slice() {
+        [a, b, ..] => (a.0, b.0),
+        _ => (2.167, 4.167),
+    };
+    let success_len = killer.length(BREAK_DOOR[2]).unwrap_or(1.567);
+    // A window's end, in the section that starts at `from` and ends at `to`.
+    let in_section = |w: &[(f32, f32)], from: f32, to: f32, default: f32| w.iter().find(|w| w.0 >= from && w.0 < to).map_or(default, |w| w.1 - from);
+    BreakTiming {
+        lengths: [loop_at, success_at - loop_at, success_len],
+        hits: [in_section(&syncs, 0.0, loop_at, 1.11), in_section(&syncs, loop_at, success_at, 0.96), in_section(&traces, success_at, f32::MAX, 0.2)],
+    }
 }
 
 /// How a counselor stunned Jason. Times are the stun classes' TotalStunTime base values (the AI doesn't wiggle out
@@ -523,10 +560,10 @@ pub(crate) fn update_jason(
     let (Some(t), Some(mut nav), Some(killer)) = (tuning, nav, killer) else { return };
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
-    // The leaves of open (or broken) doors don't stop him: the navmesh leaves doorways open, as UE's does.
+    // Broken doors' leaves are gone, and a swinging leaf doesn't shove him; an open one stops him like a wall.
     let open_leaves: Vec<Entity> = leaves
         .iter()
-        .filter(|(_, pivot)| parents.get(pivot.parent()).ok().and_then(|root| doors.get(root.parent()).ok()).is_some_and(|(_, d, _)| d.open || d.broken))
+        .filter(|(_, pivot)| parents.get(pivot.parent()).ok().and_then(|root| doors.get(root.parent()).ok()).is_some_and(|(_, d, _)| d.broken || d.angle != d.target))
         .map(|(e, _)| e)
         .collect();
     let (grid, lists) = collision.without(&dynamic, |e| open_leaves.contains(&e));
@@ -538,7 +575,17 @@ pub(crate) fn update_jason(
         if let Some(h) = hit {
             commands.entity(je).remove::<HitJason>();
             let can_stun = j.stun_immune <= 0.0
-                && matches!(j.state, JasonState::Hunting | JasonState::Swinging { .. } | JasonState::Reaching { .. } | JasonState::Missed { .. } | JasonState::Holding { .. } | JasonState::Flinching { .. });
+                && matches!(
+                    j.state,
+                    JasonState::Hunting
+                        | JasonState::Swinging { .. }
+                        | JasonState::Reaching { .. }
+                        | JasonState::Missed { .. }
+                        | JasonState::Holding { .. }
+                        | JasonState::Flinching { .. }
+                        | JasonState::OpeningDoor { .. }
+                        | JasonState::BreakingDoor { .. }
+                );
             match h.stun {
                 Some(stun) if can_stun => {
                     info!("Jason: stunned ({stun:?}, {:.0}s)", stun.seconds());
@@ -704,7 +751,7 @@ pub(crate) fn update_jason(
                     }
                     if can_swing && (!j.wants_grab || dist < t.grab_min_m) {
                         info!("Jason: swing ({dist:.2} m, {angle:.0} deg)");
-                        j.state = JasonState::Swinging { t: 0.0, hit: false, door: None };
+                        j.state = JasonState::Swinging { t: 0.0, hit: false };
                         commands.entity(je).insert(PlayAction(ATTACK.into()));
                         continue;
                     }
@@ -724,17 +771,20 @@ pub(crate) fn update_jason(
                         to_door.length() < DOOR_REACH_M && (wish == Vec2::ZERO || to_door.normalize_or_zero().dot(wish) > 0.3)
                     })
                     .map(|(e, _, _)| e);
-                if let Some(de) = door_ahead {
+                if let Some((de, d, g)) = door_ahead.and_then(|de| doors.get(de).ok()) {
                     let barred = barricades.iter().any(|b| b.door == Some(de) && b.enabled);
-                    if let Ok((_, mut d, g)) = doors.get_mut(de) {
-                        if d.locked || barred {
-                            info!("Jason: breaking a {} door (health {:.0})", if barred { "barricaded" } else { "locked" }, d.health);
-                            j.state = JasonState::Swinging { t: 0.0, hit: false, door: Some(de) };
-                            commands.entity(je).insert(PlayAction(ATTACK.into()));
-                            continue;
-                        }
-                        info!("Jason: {} a door", d.press(g, here));
+                    j.velocity = Vec2::ZERO;
+                    if d.locked || barred {
+                        info!("Jason: breaking down a {} door (health {:.0})", if barred { "barricaded" } else { "locked" }, d.health);
+                        j.state = JasonState::BreakingDoor { door: de, t: 0.0, section: 0, hit: false };
+                        commands.entity(je).insert(PlayAction(BREAK_DOOR[0].into()));
+                    } else {
+                        let anim = if crate::doors::Door::is_inside(g, here) { DOOR_OPEN_INSIDE } else { DOOR_OPEN_OUTSIDE };
+                        info!("Jason: opening a door");
+                        j.state = JasonState::OpeningDoor { door: de, t: 0.0, anim };
+                        commands.entity(je).insert(PlayAction(anim.into()));
                     }
+                    continue;
                 }
                 let speed = if t.can_run && gdist > t.attack_range_m * 1.5 { t.run_speed } else { t.walk_speed };
                 // Up close, square up to her (he only turns toward where he walks otherwise).
@@ -768,45 +818,22 @@ pub(crate) fn update_jason(
                     j.progress = (xf.translation, 0.0);
                 }
             }
-            JasonState::Swinging { t: at, hit, door } => {
+            JasonState::Swinging { t: at, hit } => {
                 let at = at + dt;
-                let target = match door.and_then(|d| doors.get(d).ok()) {
-                    Some((_, _, g)) => Vec2::new(g.translation().x - xf.translation.x, g.translation().z - xf.translation.z),
-                    None => flat,
-                };
-                walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(target), dt, &t, &world);
+                walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(flat), dt, &t, &world);
                 let mut hit = hit;
-                if !hit && at >= t.attack_window.0 && at <= t.attack_window.1 {
-                    match door {
-                        Some(de) => {
-                            hit = true;
-                            if let Ok((_, mut d, _)) = doors.get_mut(de) {
-                                let broke = d.damage(t.world_damage);
-                                info!("Jason: hit the door ({:.0} left)", d.health);
-                                if broke {
-                                    info!("Jason: broke the door down");
-                                    commands.entity(d.pivot).insert(Visibility::Hidden);
-                                    for mut b in barricades.iter_mut().filter(|b| b.door == Some(de)) {
-                                        b.enabled = false;
-                                    }
-                                }
-                            }
-                        }
-                        None if alive && dist <= t.attack_range_m && angle_to(xf.rotation, flat) <= t.attack_angle_deg => {
-                            hit = true;
-                            let r = p.counselor.take_damage(Hit { amount: t.damage, blocked_with_weapon: false }, &ptuning.counselor);
-                            info!("Jason: hit Vanessa for {:.0} (health {:.0})", r.dealt, p.counselor.health);
-                            if r.died {
-                                info!("Vanessa: killed by Jason's swing");
-                                commands.entity(pe).insert(PlayAction(DEATH.into())).remove::<(Staggered, crate::items::ItemAction)>();
-                            } else if r.dealt > 0.0 {
-                                let reaction = hit_reaction(&pxf, xf.translation);
-                                let len = counselor_model.as_ref().and_then(|c| c.length(reaction)).unwrap_or(0.67);
-                                commands.entity(pe).insert((PlayAction(reaction.into()), Staggered(len))).remove::<crate::items::ItemAction>();
-                                p.velocity = Vec2::ZERO;
-                            }
-                        }
-                        _ => {}
+                if !hit && at >= t.attack_window.0 && at <= t.attack_window.1 && alive && dist <= t.attack_range_m && angle_to(xf.rotation, flat) <= t.attack_angle_deg {
+                    hit = true;
+                    let r = p.counselor.take_damage(Hit { amount: t.damage, blocked_with_weapon: false }, &ptuning.counselor);
+                    info!("Jason: hit Vanessa for {:.0} (health {:.0})", r.dealt, p.counselor.health);
+                    if r.died {
+                        info!("Vanessa: killed by Jason's swing");
+                        commands.entity(pe).insert(PlayAction(DEATH.into())).remove::<(Staggered, crate::items::ItemAction)>();
+                    } else if r.dealt > 0.0 {
+                        let reaction = hit_reaction(&pxf, xf.translation);
+                        let len = counselor_model.as_ref().and_then(|c| c.length(reaction)).unwrap_or(0.67);
+                        commands.entity(pe).insert((PlayAction(reaction.into()), Staggered(len))).remove::<crate::items::ItemAction>();
+                        p.velocity = Vec2::ZERO;
                     }
                 }
                 if at >= t.attack_length {
@@ -815,8 +842,83 @@ pub(crate) fn update_jason(
                     j.wants_grab = rng.0.frand() < GRAB_ODDS;
                     commands.entity(je).remove::<PlayAction>();
                 } else {
-                    j.state = JasonState::Swinging { t: at, hit, door };
+                    j.state = JasonState::Swinging { t: at, hit };
                 }
+            }
+            JasonState::OpeningDoor { door: de, t: at, anim } => {
+                let at = at + dt;
+                let Ok((_, mut d, g)) = doors.get_mut(de) else {
+                    j.state = JasonState::Hunting;
+                    continue;
+                };
+                let to_door = Vec2::new(g.translation().x - xf.translation.x, g.translation().z - xf.translation.z);
+                walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(to_door), dt, &t, &world);
+                // The leaf swings during the montage's OpenCloseDoor driver window.
+                let (swing_at, swing_len) = killer.info.animations.get(anim).and_then(|a| a.window("Driver: OpenCloseDoor")).map_or((0.5, 0.9), |(s, e)| (s, e - s));
+                if !d.open && at >= swing_at {
+                    let barred = barricades.iter().any(|b| b.door == Some(de) && b.enabled);
+                    if d.locked || barred {
+                        // Locked while he reached for it.
+                        info!("Jason: the door's locked now; breaking it down");
+                        j.state = JasonState::BreakingDoor { door: de, t: 0.0, section: 0, hit: false };
+                        commands.entity(je).insert(PlayAction(BREAK_DOOR[0].into()));
+                        continue;
+                    }
+                    d.press(g, xf.translation);
+                    d.swing_seconds = swing_len;
+                }
+                if at >= killer.length(anim).unwrap_or(1.6) {
+                    j.state = JasonState::Hunting;
+                    commands.entity(je).remove::<PlayAction>();
+                } else {
+                    j.state = JasonState::OpeningDoor { door: de, t: at, anim };
+                }
+            }
+            JasonState::BreakingDoor { door: de, t: at, section, hit } => {
+                let Ok((_, mut d, g)) = doors.get_mut(de) else {
+                    j.state = JasonState::Hunting;
+                    continue;
+                };
+                let to_door = Vec2::new(g.translation().x - xf.translation.x, g.translation().z - xf.translation.z);
+                walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(to_door), dt, &t, &world);
+                let barred = barricades.iter().any(|b| b.door == Some(de) && b.enabled);
+                // Unlocked (or unbarred) from inside before it gave way: he stops (the montage's Abort).
+                if section < 2 && !d.broken && !d.locked && !barred {
+                    info!("Jason: the door's no longer locked; stopped breaking it");
+                    j.state = JasonState::Hunting;
+                    commands.entity(je).remove::<PlayAction>();
+                    continue;
+                }
+                let timing = break_timing(&killer);
+                let (mut at, mut section, mut hit) = (at + dt, section, hit);
+                if !hit && at >= timing.hits[section] {
+                    if section < 2 && d.health <= crate::doors::Door::hit_damage(t.world_damage, barred) {
+                        // BreakDownSync: this hit finishes it.
+                        (at, section) = (0.0, 2);
+                    } else {
+                        hit = true;
+                        if d.damage(t.world_damage, barred) {
+                            info!("Jason: broke the door down");
+                            commands.entity(d.pivot).insert(Visibility::Hidden);
+                            for mut b in barricades.iter_mut().filter(|b| b.door == Some(de)) {
+                                b.enabled = false;
+                            }
+                        } else {
+                            info!("Jason: hit the door ({:.0} left)", d.health);
+                        }
+                    }
+                }
+                if at >= timing.lengths[section] {
+                    if section == 2 {
+                        j.state = JasonState::Hunting;
+                        commands.entity(je).remove::<PlayAction>();
+                        continue;
+                    }
+                    // On to (another) Loop.
+                    (at, section, hit) = (at - timing.lengths[section], 1, false);
+                }
+                commands.entity(je).insert(PlayAction(BREAK_DOOR[section].into()));
+                j.state = JasonState::BreakingDoor { door: de, t: at, section, hit };
             }
             JasonState::Reaching { t: at } => {
                 let at = at + dt;

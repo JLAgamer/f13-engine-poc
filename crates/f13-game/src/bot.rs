@@ -11,6 +11,10 @@
 //! `--bot-hide`: hide in the nearest hiding spot while Jason is far off, stay 60 s, come out; passes alive.
 //! `--bot-hide-seen`: let Jason see her, then hide in the hiding spot nearest him; passes when he finds and kills
 //! her there. Screenshots f13-bot-hide-*.png.
+//! `--bot-locked-in` / `--bot-barred-in`: shut her in behind the lockable (barricaded) door nearest Jason, locked
+//! (barred), and tell him where she is; passes when he breaks it down in a hit per 20 of its health (10 barred) and
+//! kills her. Screenshots
+//! f13-bot-breakdown-*.png.
 //! With Jason (`--bot-jason`, `--bot-fight`, the hide bots), she steps out 10 m in front of him when he hasn't seen
 //! her for a while (he only knows what he sees, hears and senses).
 
@@ -38,6 +42,8 @@ pub enum Goal {
     Hide,
     /// Hide where Jason can see her: he should find and kill her.
     HideSeen,
+    /// Shut in behind a locked (or barricaded) door: he should break it down and kill her.
+    LockedIn { barred: bool },
 }
 
 pub struct BotPlugin(pub Goal);
@@ -69,6 +75,8 @@ enum Step {
     AwaitJason,
     /// Hiding test stage.
     Hide(u8),
+    /// Behind the door, waiting for Jason.
+    LockedIn,
     Done,
 }
 
@@ -93,11 +101,13 @@ struct Bot {
     door_ok: bool,
     /// Jason states already screenshotted.
     jason_shots: Vec<&'static str>,
+    /// The door's health after each of Jason's hits (bot time, health).
+    door_hits: Vec<(f32, f32)>,
 }
 
 impl Default for Bot {
     fn default() -> Self {
-        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false, hold_e: false, fixtures: [None; 3], door_ok: false, jason_shots: Vec::new() }
+        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false, hold_e: false, fixtures: [None; 3], door_ok: false, jason_shots: Vec::new(), door_hits: Vec::new() }
     }
 }
 
@@ -208,14 +218,14 @@ fn run_bot(
     carried: Query<&Item, With<Carried>>,
     cabinets: Query<(&Cabinet, &GlobalTransform)>,
     mut vehicles: Query<(Entity, &Vehicle, &GlobalTransform, &mut Transform), Without<Player>>,
-    (zones, doors, windows, barricades, jasons): (
+    (zones, mut doors, windows, mut barricades, jasons): (
         Query<(&EscapeZone, &GlobalTransform)>,
-        Query<(Entity, &crate::doors::Door, &GlobalTransform)>,
+        Query<(Entity, &mut crate::doors::Door, &GlobalTransform)>,
         Query<(Entity, &crate::windows::Window, &GlobalTransform)>,
-        Query<&crate::windows::Barricade>,
+        Query<&mut crate::windows::Barricade>,
         Query<(&crate::jason::Jason, &Transform), (Without<Player>, Without<Vehicle>)>,
     ),
-    (escaped, spots, knowledge): (Option<Res<Escaped>>, Query<(Entity, &crate::hiding::HidingSpot, &GlobalTransform)>, Query<&crate::senses::Knowledge>),
+    (escaped, spots, mut knowledge): (Option<Res<Escaped>>, Query<(Entity, &crate::hiding::HidingSpot, &GlobalTransform)>, Query<&mut crate::senses::Knowledge>),
     mut exit: MessageWriter<AppExit>,
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
 ) {
@@ -231,7 +241,7 @@ fn run_bot(
     for k in [KeyCode::KeyW, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::KeyC, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD] {
         keys.release(k);
     }
-    let with_jason = matches!(bot.goal, Goal::Jason | Goal::Fight | Goal::Hide | Goal::HideSeen);
+    let with_jason = matches!(bot.goal, Goal::Jason | Goal::Fight | Goal::Hide | Goal::HideSeen | Goal::LockedIn { .. });
     let limit = if with_jason { 600.0 } else { 240.0 };
     if bot.total > limit && bot.step != Step::Done {
         error!("bot: gave up at {:?}", bot.step);
@@ -279,6 +289,47 @@ fn run_bot(
                 bot.fixtures = [pick(false), pick(true), window];
                 info!("bot: fixtures {:?}", bot.fixtures);
                 bot.step = Step::Door(0);
+                bot.timer = 0.0;
+                return;
+            }
+            if let Goal::LockedIn { barred } = bot.goal {
+                // The door nearest Jason that locks (that has a barricade), with room to stand inside it.
+                let Some((_, jxf)) = jasons.iter().next() else {
+                    error!("bot: no Jason");
+                    bot.step = Step::Done;
+                    return;
+                };
+                let jat = jxf.translation;
+                let has_bar = |e: Entity| barricades.iter().any(|b| b.door == Some(e));
+                let mut candidates: Vec<(Entity, Vec3, Vec3)> = doors
+                    .iter()
+                    .filter(|(e, d, _)| if barred { has_bar(*e) } else { d.lockable && !has_bar(*e) })
+                    .filter_map(|(e, _, g)| {
+                        let inside = g.translation() - g.rotation() * Vec3::X * 1.5 + Vec3::Y;
+                        stand_spot(&world, inside, 0.8).map(|at| (e, at, g.translation()))
+                    })
+                    .collect();
+                candidates.sort_by(|a, b| a.2.distance(jat).total_cmp(&b.2.distance(jat)));
+                let Some(&(de, at, door_at)) = candidates.first() else {
+                    error!("bot: no door to shut her in behind");
+                    bot.step = Step::Done;
+                    return;
+                };
+                place(pxf, at);
+                look_at(&mut camera, pxf, door_at + Vec3::Y);
+                if let Ok((_, mut d, _)) = doors.get_mut(de) {
+                    if barred {
+                        for mut b in barricades.iter_mut().filter(|b| b.door == Some(de)) {
+                            b.enabled = true;
+                        }
+                    } else {
+                        d.locked = true;
+                    }
+                    info!("bot: shut in behind a {} door (health {:.0}), Jason {:.0} m away", if barred { "barricaded" } else { "locked" }, d.health, door_at.distance(jat));
+                    bot.door_hits.push((0.0, d.health));
+                }
+                bot.fixtures[0] = Some(de);
+                bot.step = Step::LockedIn;
                 bot.timer = 0.0;
                 return;
             }
@@ -699,7 +750,7 @@ fn run_bot(
             }
             // Screenshots of the hit, the grab and the kill, to check the paired poses.
             let shot = match j.state {
-                crate::jason::JasonState::Swinging { t, door: None, .. } if t > 0.35 => Some("swing"),
+                crate::jason::JasonState::Swinging { t, .. } if t > 0.35 => Some("swing"),
                 crate::jason::JasonState::Holding { t } if t > 1.0 => Some("grab"),
                 crate::jason::JasonState::Killing { t } if t > 9.3 => Some("kill3"),
                 crate::jason::JasonState::Killing { t } if t > 7.0 => Some("kill2"),
@@ -715,6 +766,46 @@ fn run_bot(
             }
             if !p.counselor.alive() {
                 info!("bot: Vanessa died after {:.1}s ({:?})", bot.total, j.state);
+                bot.step = Step::Done;
+                bot.timer = 0.0;
+            }
+        }
+        Step::LockedIn => {
+            let (Some((j, jxf)), Some(de)) = (jasons.iter().next(), bot.fixtures[0]) else { return };
+            let Ok((_, d, g)) = doors.get(de) else { return };
+            // He hears her in there.
+            if let Some(mut k) = knowledge.iter_mut().next() {
+                if !k.sees {
+                    k.last_known = Some((pxf.translation, time.elapsed_secs(), crate::senses::Clue::Heard));
+                }
+            }
+            if bot.timer >= 5.0 {
+                bot.timer = 0.0;
+                info!("bot: Jason {:?}, {:.1} m away; door health {:.0}", j.state, jxf.translation.distance(pxf.translation), d.health);
+            }
+            if let Some(&(_, last)) = bot.door_hits.last() {
+                if d.health < last {
+                    info!("bot: hit {} on the door at {:.1}s: health {:.0}", bot.door_hits.len(), bot.total, d.health);
+                    let total = bot.total;
+                    bot.door_hits.push((total, d.health));
+                }
+            }
+            if !held && !busy {
+                look_at(&mut camera, pxf, g.translation() + Vec3::Y);
+            }
+            let shot = match j.state {
+                crate::jason::JasonState::BreakingDoor { section: 1, t, .. } if t > 0.9 => Some("loop"),
+                _ if d.broken && !bot.jason_shots.contains(&"broken") => Some("broken"),
+                _ => None,
+            };
+            if let Some(s) = shot.filter(|s| !bot.jason_shots.contains(s)) {
+                bot.jason_shots.push(s);
+                let path = std::env::temp_dir().join(format!("f13-bot-breakdown-{s}.png"));
+                info!("bot: screenshot {}", path.display());
+                commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+            }
+            if !p.counselor.alive() {
+                info!("bot: Vanessa died after {:.1}s ({:?}); door hits {:?}", bot.total, j.state, bot.door_hits);
                 bot.step = Step::Done;
                 bot.timer = 0.0;
             }
@@ -877,6 +968,12 @@ fn run_bot(
                     Goal::Fight => p.counselor.alive() && bot.jason_shots.contains(&"stun"),
                     Goal::Hide => p.counselor.alive() && hiding.is_none() && bot.jason_shots.contains(&"inside"),
                     Goal::HideSeen => !p.counselor.alive() && bot.jason_shots.contains(&"kill"),
+                    // A hit per 20 health (the pickaxe), per 10 through a barricade: cabin doors (60) take three or six,
+                    // Higgins Haven's outer doors (20) one or two. The first entry is the starting health.
+                    Goal::LockedIn { barred } => {
+                        let hits = bot.door_hits.first().map_or(0, |h| (h.1 / if barred { 10.0 } else { 20.0 }).ceil() as usize);
+                        !p.counselor.alive() && bot.jason_shots.contains(&"broken") && bot.door_hits.len() == hits + 1
+                    }
                 };
                 exit.write(if ok { AppExit::Success } else { AppExit::error() });
             }

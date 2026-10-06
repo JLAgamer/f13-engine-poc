@@ -367,6 +367,7 @@ fn spawn_props(
                 target: 0.0,
                 health: classes.prop(&actor.class, "BaseDoorHealth").as_f64().map_or(100.0, |v| v as f32),
                 broken: false,
+                swing_seconds: crate::doors::SWING_SECONDS,
             });
             *counts.entry("doors").or_default() += 1;
         }

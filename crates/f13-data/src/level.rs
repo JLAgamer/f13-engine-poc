@@ -35,6 +35,13 @@ pub struct Placement {
     /// Blocks counselors (its collision profile); its shapes are in collision.json. Exports before collision: true.
     #[serde(default = "yes")]
     pub blocks_pawn: bool,
+    /// Casts shadows (the component's CastShadow).
+    #[serde(default = "yes")]
+    pub cast_shadow: bool,
+    /// Not drawn past this distance from the camera, cm (foliage InstanceEndCullDistance, else the max draw
+    /// distance); 0: always drawn.
+    #[serde(default)]
+    pub cull_distance: f32,
 }
 
 fn yes() -> bool {

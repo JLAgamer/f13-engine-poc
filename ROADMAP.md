@@ -52,7 +52,8 @@ Mechanics: counselor side
 Mechanics: Jason side
 - [x] Ability unlock order, recharge, rage
 - [x] Jason Part 2 as a computer player (jason.rs): J2's movement values, paths over the collision (f13-core::nav),
-  opening doors and breaking locked or barricaded ones (BaseDoorHealth vs weapon damage), pickaxe swings (damage,
+  opening doors (Jason_OpenDoorInside/Outside) and breaking locked or barricaded ones (Jason_BreakDoor_Axe's
+  Enter/Loop/Success sections; BaseDoorHealth vs weapon damage, halved by a barricade), pickaxe swings (damage,
   AttackDelay, reach/angle, hits in the AttackTraceNotify window), grabs (min/max distance, angle) and the pickaxe's
   grab kill (Throat Hack, both sides' paired animation)
 - [x] Jason's perception (senses.rs, f13-core::perception): sight, the game's noise blips, Sense; he investigates
@@ -91,6 +92,9 @@ Presentation
 - [ ] Materials, remaining: water (first pass only: colour, gloss, panning ripples; no depth fade, foam or
       reflections), POM parallax, emissive/light materials, foliage subsurface, the Chevette's paint mask
 - [x] Car, furniture, doors (frames and leaves), windows, barricades and items placed in the scene
+- [x] Each placement's CastShadow and cull distance (foliage InstanceEndCullDistance, max draw distance); sun shadows
+      to 100 m in 3 cascades
+- [ ] Door damage states (the Light/Medium/Heavy destructible meshes at 75/50/25% health) and the break burst
 - [ ] Barricade plank: check its placement (not visible across the door in a screenshot)
 - [x] Counselor model: Vanessa's base body, default outfit (master pose), face on the head bone, hair on the face, skin
       clipped under the clothes by the outfit's skin mask (f13-game character.rs, shaders/skin.wgsl)

@@ -18,6 +18,8 @@ use bevy::prelude::*;
 
 pub const SWING_SECONDS: f32 = 0.5;
 const OPEN_DEGREES: f32 = 90.0;
+/// What an enabled barricade lets through of a hit (SCDoor's TakeDamage constant).
+const BARRICADE_DAMAGE_SCALE: f32 = 0.5;
 
 #[derive(Component, Debug)]
 pub struct Door {
@@ -38,9 +40,12 @@ pub struct Door {
     /// Current and target swing angle (radians, about the pivot's Y).
     pub angle: f32,
     pub target: f32,
-    /// Health left against Jason's weapon (`BaseDoorHealth`); at 0 the door is broken: gone, open for good.
+    /// Health left against Jason's weapon (`BaseDoorHealth`; whole numbers, an int in the game); at 0 the door is
+    /// broken: gone, open for good.
     pub health: f32,
     pub broken: bool,
+    /// How long the current swing takes (the opener's OpenCloseDoor driver window; [`SWING_SECONDS`] otherwise).
+    pub swing_seconds: f32,
 }
 
 impl Door {
@@ -55,6 +60,10 @@ impl Door {
     /// door offers only the hold, which unlocks it (`UnlockDoorOutside`); from inside a closed door offers the
     /// lock, or its barricade when it has one (`barricade` = Some(enabled)).
     pub fn can_interact(&self, door: &GlobalTransform, at: Vec3, barricade: Option<bool>) -> (bool, bool) {
+        // A broken door is gone (SCDoor::CanInteractWith: bIsDestroyed).
+        if self.broken {
+            return (false, false);
+        }
         let barred = barricade == Some(true);
         let press = !self.locked && !barred;
         let hold = if Door::is_inside(door, at) { !self.open && (self.lockable || barricade.is_some()) } else { self.locked };
@@ -67,6 +76,7 @@ impl Door {
             return "locked";
         }
         self.open = !self.open;
+        self.swing_seconds = SWING_SECONDS;
         if !self.open {
             self.target = 0.0;
             return "closed";
@@ -82,13 +92,24 @@ impl Door {
         "opened"
     }
 
-    /// A hit from Jason's weapon (`damage` already scaled by his `DamageWorldModifier`). Returns true when it
-    /// breaks the door: it no longer locks, bars or blocks (the leaf is hidden by the caller).
-    pub fn damage(&mut self, damage: f32) -> bool {
+    /// What a hit from Jason's weapon (`damage` already scaled by his `DamageWorldModifier`) takes off: half through
+    /// an enabled barricade (SCDoor's TakeDamage, and BreakDownSync's check).
+    pub fn hit_damage(damage: f32, barred: bool) -> f32 {
+        if barred {
+            damage * BARRICADE_DAMAGE_SCALE
+        } else {
+            damage
+        }
+    }
+
+    /// A hit from Jason's weapon (see [`Door::hit_damage`]). Returns true when it breaks the door: it no longer
+    /// locks, bars or blocks (the leaf is hidden by the caller).
+    pub fn damage(&mut self, damage: f32, barred: bool) -> bool {
         if self.broken {
             return false;
         }
-        self.health = (self.health - damage).max(0.0);
+        // Health is an int: the new value truncates.
+        self.health = (self.health - Door::hit_damage(damage, barred)).trunc().max(0.0);
         if self.health > 0.0 {
             return false;
         }
@@ -110,11 +131,11 @@ impl Door {
 
 /// Swings leaves toward their target angle.
 pub fn swing_doors(time: Res<Time>, mut doors: Query<&mut Door>, mut pivots: Query<&mut Transform>) {
-    let step = OPEN_DEGREES.to_radians() / SWING_SECONDS * time.delta_secs();
     for mut d in &mut doors {
         if d.angle == d.target {
             continue;
         }
+        let step = OPEN_DEGREES.to_radians() / d.swing_seconds.max(1e-3) * time.delta_secs();
         let delta = (d.target - d.angle).clamp(-step, step);
         d.angle += delta;
         if let Ok(mut t) = pivots.get_mut(d.pivot) {
@@ -142,17 +163,28 @@ mod tests {
             target: 0.0,
             health: 60.0,
             broken: false,
+            swing_seconds: SWING_SECONDS,
         }
     }
 
     #[test]
     fn a_locked_door_breaks_on_the_third_pickaxe_hit() {
         let mut d = door(true);
-        assert!(!d.damage(20.0));
-        assert!(!d.damage(20.0));
+        assert!(!d.damage(20.0, false));
+        assert!(!d.damage(20.0, false));
         assert!(d.locked && !d.open);
-        assert!(d.damage(20.0));
+        assert!(d.damage(20.0, false));
         assert!(d.broken && d.open && !d.locked);
-        assert!(!d.damage(20.0), "already broken");
+        assert!(!d.damage(20.0, false), "already broken");
+    }
+
+    #[test]
+    fn a_barricade_halves_each_hit() {
+        let mut d = door(false);
+        for _ in 0..5 {
+            assert!(!d.damage(20.0, true));
+        }
+        assert_eq!(d.health, 10.0);
+        assert!(d.damage(20.0, true), "the sixth hit");
     }
 }

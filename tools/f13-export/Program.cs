@@ -196,6 +196,11 @@ void ExportLevel(string mapPath)
                     .Select(m => m?.ResolvedObject?.GetPathName()).ToArray(),
                 MaterialMap = MeshMaterials.OverrideMap(mesh, smc.GetOrDefault<FPackageIndex[]>("OverrideMaterials", []), Queue),
                 BlocksPawn = Collision.BlocksPawn(smc),
+                CastShadow = smc.GetOrDefault("CastShadow", true),
+                // Foliage instances fade out at InstanceEndCullDistance; other components at their max draw distance
+                // (LDMaxDrawDistance, or the cull distance volume's CachedMaxDrawDistance), the nearer one when both are set.
+                CullDistance = new[] { smc.GetOrDefault("InstanceEndCullDistance", 0), (int)smc.GetOrDefault("LDMaxDrawDistance", 0f), (int)smc.GetOrDefault("CachedMaxDrawDistance", 0f) }
+                    .Where(d => d > 0).DefaultIfEmpty(0).Min(),
             };
             var world_ = smc.GetAbsoluteTransform();
             if (smc is F13InstancedMeshComponent ism)
@@ -684,6 +689,11 @@ static class Mvp
         $"{JasonStun}/HitReaction/AM_combat_stand_hit_reaction_front",
         $"{JasonStun}/HitReaction/AM_combat_stand_hit_reaction_back",
         $"{JasonAnim}/Interaction/Beartrap/AM_Jason_BearTrap_LF",
+        // Doors: Jason_OpenDoorInside / Jason_OpenDoorOutside, and the pickaxe's break down (Jason_BreakDoor_Axe:
+        // Enter, Loop, Success, Abort sections).
+        $"{JasonAnim}/Interaction/Doors/AM_normal_stand_door_open_inside",
+        $"{JasonAnim}/Interaction/Doors/AM_normal_stand_door_open_outside",
+        $"{JasonAnim}/Interaction/Doors/AM_normal_stand_door_break_axe",
         JasonKill,
         .. JasonHiding,
     ];
@@ -744,6 +754,10 @@ class Placement
     public List<Xform>? Instances;
     /// Blocks counselors (its collision profile or custom responses); its shapes are in collision.json.
     public bool BlocksPawn = true;
+    /// Casts shadows (CastShadow; baked ones included, which f13-game's dynamic sun stands in for).
+    public bool CastShadow = true;
+    /// Not drawn past this distance from the camera (cm; 0 = always drawn).
+    public int CullDistance;
 }
 class ActorInfo
 {

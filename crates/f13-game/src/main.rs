@@ -7,6 +7,7 @@
 //!       [--give Class,Class...] [--bot-fight]  (start with these items (testing); a bot that uses them on Jason)
 //!       [--nav-debug]  (draw the navmesh around the counselor)
 //!       [--bot-hide] [--bot-hide-seen]  (hide out of Jason's sight and come out; hide where he sees: he kills her)
+//!       [--bot-locked-in] [--bot-barred-in]  (behind a locked / barricaded cabin door: he breaks it down and kills her)
 //!       [--camera x,y,z,tx,ty,tz]  (--fly start: eye and look-at point; playing: both relative to the counselor's feet)
 //!   Default: play as Vanessa (see player.rs for controls). --fly: free camera instead.   (screenshot: wait for loading, save one frame, exit)
 
@@ -20,6 +21,7 @@ mod items;
 mod jason;
 mod materials;
 mod navigation;
+mod perf;
 mod mipmaps;
 mod player;
 mod props;
@@ -55,6 +57,10 @@ struct Args {
     bot_hide: bool,
     nav_debug: bool,
     bot_hide_seen: bool,
+    /// --bot-locked-in (false) or --bot-barred-in (true).
+    bot_locked_in: Option<bool>,
+    /// Log frame time, entity counts and GPU pass times every few seconds.
+    perf: bool,
     give: Vec<String>,
     /// Leave Jason out (the counselor-only bots always do).
     no_jason: bool,
@@ -92,6 +98,8 @@ fn parse_args() -> Args {
     let mut bot_hide = false;
     let mut nav_debug = false;
     let mut bot_hide_seen = false;
+    let mut bot_locked_in = None;
+    let mut perf = false;
     let mut give = Vec::new();
     let mut no_jason = false;
     let mut jason_delay = 0.0;
@@ -125,6 +133,9 @@ fn parse_args() -> Args {
             "--bot-hide" => bot_hide = true,
             "--nav-debug" => nav_debug = true,
             "--bot-hide-seen" => bot_hide_seen = true,
+            "--bot-locked-in" => bot_locked_in = Some(false),
+            "--bot-barred-in" => bot_locked_in = Some(true),
+            "--perf" => perf = true,
             "--give" => give = it.next().map(|v| v.split(',').map(String::from).collect()).unwrap_or_default(),
             "--no-jason" => no_jason = true,
             "--jason-delay" => jason_delay = it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0f32).max(0.0),
@@ -161,7 +172,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_fight, bot_hide, bot_hide_seen, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera }
+    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera }
 }
 
 #[derive(Resource)]
@@ -277,6 +288,8 @@ fn main() {
             app.add_plugins(bot::BotPlugin(bot::Goal::Hide));
         } else if args.bot_hide_seen {
             app.add_plugins(bot::BotPlugin(bot::Goal::HideSeen));
+        } else if let Some(barred) = args.bot_locked_in {
+            app.add_plugins(bot::BotPlugin(bot::Goal::LockedIn { barred }));
         }
         if !args.give.is_empty() {
             app.insert_resource(items::Give(args.give.clone()));
@@ -290,10 +303,17 @@ fn main() {
     if let Some(path) = args.screenshot.clone() {
         app.insert_resource(ScreenshotPlan { path, frames_loaded: 0, after: args.screenshot_after, shot_at: None }).add_systems(Update, take_screenshot);
     }
-    let exit = app
-        .add_plugins(
+    app.add_plugins(
             DefaultPlugins
                 .set(AssetPlugin { file_path: args.export.to_string_lossy().into_owned(), ..default() })
+                // --perf measures the frame's real cost: no waiting for the display.
+                .set(WindowPlugin {
+                    primary_window: Some(bevy::window::Window {
+                        present_mode: if args.perf { bevy::window::PresentMode::AutoNoVsync } else { bevy::window::PresentMode::AutoVsync },
+                        ..default()
+                    }),
+                    ..default()
+                })
                 // Unreal meshes carry up to 8 UV sets; Bevy warns once per extra set per mesh.
                 .set(bevy::log::LogPlugin { filter: "wgpu=error,naga=warn,bevy_gltf::loader=error".into(), ..default() }),
         )
@@ -304,7 +324,11 @@ fn main() {
         .add_plugins(props::PropsPlugin { seed, near_car: args.near_car && !(args.fly || args.aerial) })
         .insert_resource(GlobalAmbientLight { brightness: 400.0, ..default() })
         .add_systems(Startup, spawn_level)
-        .run();
+        .add_systems(PostUpdate, apply_placed.before(bevy::camera::visibility::VisibilitySystems::CheckVisibility));
+    if args.perf {
+        app.add_plugins(perf::PerfPlugin);
+    }
+    let exit = app.run();
     // Bots report success or failure through the exit code.
     if exit.is_error() {
         std::process::exit(1);
@@ -347,10 +371,14 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
                 .clone();
             let xforms = p.instances.iter().flatten().chain(p.transform.iter());
             let overrides = materials::MaterialOverrides::new(&p.material_map);
+            let placed = Placed { cast_shadow: p.cast_shadow, cull_m: p.cull_distance / 100.0 };
             for x in xforms {
                 let mut e = commands.spawn((WorldAssetRoot(scene.clone()), to_transform(x)));
                 if let Some(o) = &overrides {
                     e.insert(o.clone());
+                }
+                if placed != Placed::default() {
+                    e.insert(placed);
                 }
                 spawned += 1;
             }
@@ -369,8 +397,11 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
     info!("spawned {spawned} mesh instances from {} unique meshes", scenes.len());
     level.scenes = scenes.values().map(|h| h.clone().untyped()).collect();
 
+    // Shadows out to 100 m in 3 cascades (UE4's usual for a movable sun), not Bevy's 1 km in 4: every caster in range
+    // is drawn into each cascade, and that was most of a frame.
     commands.spawn((
         DirectionalLight { illuminance: 8_000.0, shadow_maps_enabled: true, ..default() },
+        bevy::light::CascadeShadowConfigBuilder { num_cascades: 3, maximum_distance: 100.0, first_cascade_far_bound: 8.0, ..default() }.build(),
         Transform::from_rotation(Quat::from_euler(EulerRot::YXZ, 0.6, -0.9, 0.0)),
     ));
 
@@ -394,6 +425,35 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
 }
 
 /// Waits until every mesh scene (and its dependencies) has loaded, lets materials settle, saves a frame, exits.
+/// A placement's draw settings, for the meshes its scene spawns: no shadow (CastShadow off), and not drawn past
+/// `cull_m` from the camera (0: always). Most of the map's shrubs, ivy and small rocks cast none and vanish within
+/// 20-60 m; without this every one would be drawn, into every shadow cascade too.
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+struct Placed {
+    cast_shadow: bool,
+    cull_m: f32,
+}
+
+impl Default for Placed {
+    fn default() -> Self {
+        Self { cast_shadow: true, cull_m: 0.0 }
+    }
+}
+
+fn apply_placed(mut commands: Commands, added: Query<Entity, Added<Mesh3d>>, parents: Query<&ChildOf>, placed: Query<&Placed>) {
+    for e in &added {
+        let Some(p) = parents.iter_ancestors(e).find_map(|a| placed.get(a).ok()) else { continue };
+        let mut ec = commands.entity(e);
+        if !p.cast_shadow {
+            ec.insert(bevy::light::NotShadowCaster);
+        }
+        if p.cull_m > 0.0 {
+            // Fading over the last tenth (UE dithers its cull distance fade too).
+            ec.insert(bevy::camera::visibility::VisibilityRange { start_margin: 0.0..0.0, end_margin: p.cull_m * 0.9..p.cull_m, use_aabb: true });
+        }
+    }
+}
+
 fn take_screenshot(
     mut commands: Commands,
     mut plan: ResMut<ScreenshotPlan>,
