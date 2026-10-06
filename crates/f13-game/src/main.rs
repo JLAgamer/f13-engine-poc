@@ -16,6 +16,7 @@ mod bot;
 mod character;
 mod collision;
 mod doors;
+mod fear_events;
 mod interact;
 mod hiding;
 mod items;
@@ -74,7 +75,8 @@ struct Args {
     fly: bool,
     capsule: bool,
     demo: bool,
-    fear: f32,
+    /// --fear: fear held at this level (no fear events).
+    fear: Option<f32>,
     /// Game clock multiplier (testing: run bots faster than real time).
     speed: f32,
     health: Option<f32>,
@@ -112,7 +114,7 @@ fn parse_args() -> Args {
     let mut fly = false;
     let mut capsule = false;
     let mut demo = false;
-    let mut fear = 0.0;
+    let mut fear = None;
     let mut speed = 1.0f32;
     let mut health = None;
     let mut tuning = None;
@@ -153,7 +155,7 @@ fn parse_args() -> Args {
             "--capsule" => capsule = true,
             "--demo" => demo = true,
             "--speed" => speed = it.next().and_then(|v| v.parse().ok()).unwrap_or(1.0f32).clamp(0.1, 16.0),
-            "--fear" => fear = it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0f32).clamp(0.0, 100.0),
+            "--fear" => fear = Some(it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0f32).clamp(0.0, 100.0)),
             "--health" => health = it.next().and_then(|v| v.parse().ok()),
             "--tuning" => tuning = it.next().map(PathBuf::from),
             "--no-foliage" => foliage = false,
@@ -268,6 +270,12 @@ fn main() {
             std::process::exit(1);
         });
         let stats = *tuning.characters.get("Vanessa").expect("Vanessa missing from tuning.json");
+        app.insert_resource(fear_events::FearTuning {
+            update_delay: tuning.update_fear_delay,
+            fear_modifier: tuning.fear_modifier.clone(),
+            events: tuning.fear_events.clone(),
+            jason_near_range: tuning.jason_near_range,
+        });
         app.insert_resource(player::PlayerTuning {
             counselor: tuning.counselor,
             movement: tuning.counselor_movement,
@@ -278,7 +286,8 @@ fn main() {
             vehicle_start: tuning.vehicle_start.clone(),
         })
             .insert_resource(senses::KillerAbilityTuning(tuning.jason.clone()))
-            .add_plugins(player::PlayerPlugin { spawn, capsule: args.capsule, camera: args.camera, demo: args.demo, fear: args.fear, health: args.health })
+            .add_plugins(player::PlayerPlugin { spawn, capsule: args.capsule, camera: args.camera, demo: args.demo, fear: args.fear.unwrap_or(0.0), health: args.health })
+            .add_plugins(fear_events::FearEventsPlugin { locked: args.fear })
             .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }, collision::CollisionPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin, navigation::NavigationPlugin { debug: args.nav_debug }));
         if args.bot_escape {
             app.add_plugins(bot::BotPlugin(bot::Goal::Escape));

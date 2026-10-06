@@ -191,12 +191,13 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         for (var i = 0; i < bones.Length; i++)
             info.Bones.Add(new Bone { Name = bones[i].Name.Text, Parent = bones[i].ParentIndex, Retarget = skeleton.BoneTree[i].ToString() });
 
-        // Noise and visibility (SCCounselorCharacter::GetNoiseLevel, SCCharacter::LineOfSight). Defaults: the
-        // counselor constructor (noise 1 crouching, 2 walking, 3 running, 4 sprinting, 10 swimming) and SCCharacter's
-        // (MaxVisibilityDistance 6000).
+        // Noise, visibility and light (SCCounselorCharacter::GetNoiseLevel, SCCharacter::LineOfSight, the light
+        // check of her Darkness fear event). Defaults: the counselor constructor (noise 1 crouching, 2 walking,
+        // 3 running, 4 sprinting, 10 swimming; MinLightStrength 0.3) and SCCharacter's (MaxVisibilityDistance 6000).
         var values = new SortedDictionary<string, float>();
         foreach (var (name, fallback) in new[] { ("CrouchingNoiseMod", 1f), ("WalkingNoiseMod", 2f), ("RunningNoiseMod", 3f),
-                     ("SprintingNoiseMod", 4f), ("SwimmingNoiseMod", 10f), ("MaxVisibilityDistance", 6000f) })
+                     ("SprintingNoiseMod", 4f), ("SwimmingNoiseMod", 10f), ("MaxVisibilityDistance", 6000f),
+                     ("MinLightStrength", 0.3f) })
             values[name] = ClassValue<float?>(cls, name) ?? fallback;
         info.Values = values;
         info.Stats = new() { ["NoiseStatMod"] = StatValue(cls, "NoiseStatMod", 1f) };

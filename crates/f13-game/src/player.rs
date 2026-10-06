@@ -47,7 +47,7 @@ pub struct Player {
     /// Horizontal velocity in Bevy's XZ plane, in cm/s (Unreal units).
     pub velocity: Vec2,
     pub walk_toggle: bool,
-    /// Fear 0..=100 (no fear events are pushed in the client yet).
+    /// Fear 0..=100 (fear_events.rs keeps it up to date).
     pub fear: f32,
     /// A montage's root motion moving the counselor (dodge, stumble): local velocity (x right, y forward), cm/s.
     pub root_motion: Option<(Vec2, f32)>,
@@ -120,7 +120,7 @@ pub struct PlayerPlugin {
     pub camera: Option<(Vec3, Vec3)>,
     /// Scripted run: hold forward and sprint, logging stamina every second.
     pub demo: bool,
-    /// Fixed fear level (testing: fear events aren't pushed in the client yet).
+    /// Fear at the start (--fear holds it there: fear_events.rs).
     pub fear: f32,
     /// Starting health (testing: nothing deals damage in the client yet).
     pub health: Option<f32>,

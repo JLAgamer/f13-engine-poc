@@ -21,7 +21,9 @@ Mechanics: counselor side
 - [x] Stumbles: random (fear and stamina curves, wounds, stats, cooldown) and on running out of stamina (f13-core::stumble)
 - [x] Combat stance and dodge: double-tap, stamina cost, root motion (f13-core::dodge, anims.json)
 - [ ] Swimming
-- [ ] Fear events pushed in the client (darkness, indoors, wounded, water, Jason near...)
+- [x] Fear events pushed in the client (fear_events.rs): darkness (f13-core::light, the map's point and spot lights),
+  indoors (the cabins' indoor volumes, also used by Sense), wounded, Jason near and in view, grabbed, hidden, items
+  held. Not yet: in water (with swimming), near friendlies and corpses (other counselors), blackouts (power)
 - [x] Hit reactions and death animations when Jason hits
 - [x] Collision: the counselor's capsule (34 x 82 cm) against the game's simple collision (convex hulls, boxes,
   spheres, capsules of every mesh whose profile blocks pawns, BlockingVolumes, terrain), doors, windows and cars

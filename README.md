@@ -81,8 +81,11 @@ By default you play Vanessa, in her default outfit and animated (idle, walk/run/
 dodges, stumbles, first aid; `--capsule` for the old placeholder): WASD move (running by default), Shift sprint, Caps Lock toggle walk, Ctrl crouch, C combat stance (double-tap
 A/D/S to dodge), click to capture the mouse,
 Esc to release. The HUD shows health, stamina, fear and speed. `--demo` sprints in a straight line and logs stamina every second.
-Counselors stumble as in the game (by fear, stamina and wounds); fear events aren't pushed yet, so `--fear 0-100` sets
-a fixed fear level for testing. Health is the game's (wounded at 50, dead at 0); `--health 1-100` starts you hurt.
+Counselors stumble as in the game (by fear, stamina and wounds). Fear comes from the game's fear events: darkness
+(out of reach of the map's lamps and cabin lights), being outdoors and alone, wounded, Jason near (by distance), Jason
+in view, grabbed, hiding (calms her) and holding a weapon; it raises stumbles and lets Jason's Sense reach further.
+`--fear 0-100` holds it at a fixed level instead. Health is the game's (wounded at 50, dead at 0); `--health 1-100`
+starts you hurt.
 
 Jason (Part 2) starts at the layout's killer start and hunts you: he walks or runs (his own speeds), opens doors in
 his way (his own door-opening animations) and breaks down locked or barricaded ones with the game's break-down

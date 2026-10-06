@@ -8,7 +8,8 @@
 //! PLACEHOLDERS (the game's Jason is a player): he sees within 60 degrees of where he faces (a player turns the
 //! camera) or anywhere within 3 m, from his eyes (1.85 m) to her head or chest, through the world's blocking
 //! collision only (foliage and darkness don't hide her). He uses Sense whenever it's ready and he can't see her.
-//! "Indoors" (where Sense shows her cabin, not her) is something above her head within 6 m.
+//! Indoors (where Sense shows her cabin, not her) is the cabins' SCIndoorComponent volumes (fear_events.rs), or
+//! without them something above her head within 6 m.
 
 use bevy::prelude::*;
 use f13_core::killer_abilities::{Ability, AbilityEvent, Blockers, KillerAbilities, KillerTuning};
@@ -152,6 +153,7 @@ fn perceive(
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
     mut jasons: Query<(&Jason, &Transform, &mut Knowledge)>,
     players: Query<(&Player, &Transform, Option<&Hiding>), Without<Jason>>,
+    surroundings: Option<Res<crate::fear_events::Surroundings>>,
 ) {
     let Some(v) = values else { return };
     let dt = time.delta_secs();
@@ -235,7 +237,10 @@ fn perceive(
         if k.sensing(now) {
             let radius = perception::sense_radius(&v.sense, p.fear, hidden, k.abilities.rage_active, k.abilities.rage_timer) / 100.0;
             if flat.length() <= radius {
-                let indoors = f13_core::collision::segment_hit(&world, her + Vec3::Y * 1.7, her + Vec3::Y * INDOORS_ROOF_M, 2.0).is_some();
+                let indoors = surroundings.as_ref().map_or_else(
+                    || f13_core::collision::segment_hit(&world, her + Vec3::Y * 1.7, her + Vec3::Y * INDOORS_ROOF_M, 2.0).is_some(),
+                    |s| s.indoors(her),
+                );
                 let clue = if indoors { Clue::SensedIndoors } else { Clue::Sensed };
                 shows = Some(clue);
                 if k.sense_shows != shows {

@@ -50,7 +50,9 @@ pub struct BotPlugin(pub Goal);
 
 impl Plugin for BotPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(Bot { goal: self.0, ..default() }).add_systems(PreUpdate, run_bot.after(InputSystems));
+        app.insert_resource(Bot { goal: self.0, ..default() })
+            .add_systems(PreUpdate, run_bot.after(InputSystems))
+            .add_systems(FixedPostUpdate, watch_fear);
     }
 }
 
@@ -103,11 +105,13 @@ struct Bot {
     jason_shots: Vec<&'static str>,
     /// The door's health after each of Jason's hits (bot time, health).
     door_hits: Vec<(f32, f32)>,
+    /// Fear events that have been active (fear_events.rs).
+    fear_seen: Vec<String>,
 }
 
 impl Default for Bot {
     fn default() -> Self {
-        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false, hold_e: false, fixtures: [None; 3], door_ok: false, jason_shots: Vec::new(), door_hits: Vec::new() }
+        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false, hold_e: false, fixtures: [None; 3], door_ok: false, jason_shots: Vec::new(), door_hits: Vec::new(), fear_seen: Vec::new() }
     }
 }
 
@@ -981,7 +985,32 @@ fn run_bot(
                         !p.counselor.alive() && bot.jason_shots.contains(&"broken") && bot.door_hits.len() == hits + 1
                     }
                 };
-                exit.write(if ok { AppExit::Success } else { AppExit::error() });
+                // The fear events the run must have pushed.
+                let fear: &[&str] = match bot.goal {
+                    Goal::Jason => &["JasonNearFearEvent", "JasonSpottedFearEvent", "GrabFearEvent"],
+                    Goal::Fight => &["JasonNearFearEvent", "PickedUpWeaponFearEvent"],
+                    Goal::Hide | Goal::HideSeen => &["HiddenFearEvent"],
+                    Goal::LockedIn { .. } => &["IndoorFearEvent", "JasonNearFearEvent"],
+                    _ => &[],
+                };
+                let missing: Vec<&&str> = fear.iter().filter(|e| !bot.fear_seen.iter().any(|s| s == **e)).collect();
+                info!("bot: fear events pushed: {}", bot.fear_seen.join(", "));
+                if !missing.is_empty() {
+                    error!("bot: fear events never pushed: {missing:?}");
+                }
+                exit.write(if ok && missing.is_empty() { AppExit::Success } else { AppExit::error() });
+            }
+        }
+    }
+}
+
+/// Records the fear events that have been active.
+fn watch_fear(mut bot: ResMut<Bot>, fear: Query<&f13_bevy::CounselorFear>) {
+    for f in &fear {
+        for e in f.0.events.iter().filter(|e| e.state.active) {
+            if !bot.fear_seen.contains(&e.key) {
+                info!("bot: fear event {} ({:.1} fear)", e.key, f.0.fear);
+                bot.fear_seen.push(e.key.clone());
             }
         }
     }

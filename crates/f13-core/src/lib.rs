@@ -8,6 +8,7 @@ pub mod dodge;
 pub mod fear;
 pub mod health;
 pub mod killer_abilities;
+pub mod light;
 pub mod minigame;
 pub mod movement;
 pub mod nav;
