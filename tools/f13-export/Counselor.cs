@@ -199,6 +199,21 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
                      ("SprintingNoiseMod", 4f), ("SwimmingNoiseMod", 10f), ("MaxVisibilityDistance", 6000f),
                      ("MinLightStrength", 0.3f) })
             values[name] = ClassValue<float?>(cls, name) ?? fallback;
+        // Her flashlight (the Flashlight spot light; defaults: Unreal's spot light) and how fast it turns to its aim
+        // (FlashlightLerpSpeed, constructor 15).
+        var flash = Component(cdo, "Flashlight");
+        var color = flash.GetOrDefault<FColor?>("LightColor") ?? new FColor(255, 255, 255, 255);
+        values["FlashlightIntensity"] = flash.GetOrDefault("Intensity", 5000f);
+        values["FlashlightColorR"] = color.R;
+        values["FlashlightColorG"] = color.G;
+        values["FlashlightColorB"] = color.B;
+        values["FlashlightTemperature"] = flash.GetOrDefault("bUseTemperature", false) ? flash.GetOrDefault("Temperature", 6500f) : 0f;
+        values["FlashlightInnerConeAngle"] = flash.GetOrDefault("InnerConeAngle", 0f);
+        values["FlashlightOuterConeAngle"] = flash.GetOrDefault("OuterConeAngle", 44f);
+        values["FlashlightAttenuationRadius"] = flash.GetOrDefault("AttenuationRadius", 1000f);
+        values["FlashlightFalloffExponent"] = flash.GetOrDefault("LightFalloffExponent", 8f);
+        values["FlashlightInverseSquared"] = flash.GetOrDefault("bUseInverseSquaredFalloff", true) ? 1f : 0f;
+        values["FlashlightLerpSpeed"] = ClassValue<float?>(cls, "FlashlightLerpSpeed") ?? 15f;
         info.Values = values;
         info.Stats = new() { ["NoiseStatMod"] = StatValue(cls, "NoiseStatMod", 1f) };
 

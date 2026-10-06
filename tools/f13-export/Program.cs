@@ -93,12 +93,14 @@ void ExportAsset(string path)
     Console.WriteLine($"{path}: {n} meshes");
 }
 
-void ExportLevel(string mapPath)
+// `extra`: levels the game loads from code rather than as streaming levels (the weather's).
+void ExportLevel(string mapPath, params string[] extra)
 {
     var layout = new LevelLayout { Map = mapPath };
     var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     var pending = new Queue<string>();
     pending.Enqueue(mapPath);
+    foreach (var e in extra) pending.Enqueue(e);
     while (pending.Count > 0)
     {
         var path = pending.Dequeue();
@@ -146,6 +148,10 @@ void ExportLevel(string mapPath)
                     info.Components.Add(j);
                 }
                 if (actor.ExportType == "SCWorldSettings") AddWorldSettingsClasses(info.Props);
+                // The ambient cubemap's mean radiance (linear RGB): f13-game lights the scene with it.
+                if (actor.ExportType == "PostProcessVolume" && actor.GetOrDefault<FStructFallback?>("Settings") is { } pp
+                    && pp.GetOrDefault<FPackageIndex?>("AmbientCubemap")?.Load<UTextureCube>() is { } cube && CubeAverage(cube) is { } avg)
+                    info.Props["AmbientCubemapAverage"] = new Newtonsoft.Json.Linq.JArray(avg);
             }
             if (actor.ExportType == "BlockingVolume")
             {
@@ -183,6 +189,16 @@ void ExportLevel(string mapPath)
         {
             if (e is not UStaticMeshComponent smc) continue;
             var mesh = smc.GetOrDefault<FPackageIndex?>("StaticMesh")?.Load<UStaticMesh>();
+            // The engine's sky sphere isn't in the game's paks: keep its material's parameters (the sky's colour).
+            if (mesh == null && smc.GetOrDefault<FPackageIndex?>("StaticMesh") is { IsNull: false } meshRef && meshRef.Name == "SM_SkySphere"
+                && smc.GetOrDefault<FPackageIndex[]>("OverrideMaterials", []).FirstOrDefault(m => m is { IsNull: false })?.Load<UMaterialInstanceConstant>() is { } sky)
+            {
+                var j = new Newtonsoft.Json.Linq.JObject { ["Material"] = sky.Name };
+                foreach (var s in sky.ScalarParameterValues) j[s.Name] = s.ParameterValue;
+                foreach (var v in sky.VectorParameterValues)
+                    if (v.ParameterValue is { } c) j[v.Name] = new Newtonsoft.Json.Linq.JArray(c.R, c.G, c.B);
+                layout.Sky = j;
+            }
             if (mesh == null) continue;
             Queue(mesh);
             var p = new Placement
@@ -258,6 +274,17 @@ void WriteClasses()
     Console.WriteLine($"{path}: {classes.Classes.Count} classes");
 }
 
+// Mean colour of an RGBA16F cubemap's top mip (all six faces), or null for another format.
+static float[]? CubeAverage(UTextureCube cube)
+{
+    if (cube.Format != EPixelFormat.PF_FloatRGBA || cube.PlatformData.Mips[0].BulkData?.Data is not { } data) return null;
+    var sum = new double[3];
+    var n = data.Length / 8;
+    for (var i = 0; i < n; i++)
+        for (var c = 0; c < 3; c++) sum[c] += (float)BitConverter.ToHalf(data, i * 8 + c * 2);
+    return [(float)(sum[0] / n), (float)(sum[1] / n), (float)(sum[2] / n)];
+}
+
 string ToFile(string objectPath)
 {
     var p = objectPath.Split('.')[0];
@@ -297,6 +324,16 @@ switch (rest[0])
         foreach (var f in provider.Files.Keys.Where(k => rest.Skip(1).All(q => k.Contains(q, StringComparison.OrdinalIgnoreCase))).Order())
             Console.WriteLine(f);
         return 0;
+    case "rawtexture": // rawtexture <package> <out file>: a texture's format, size and top mip's bytes (reverse engineering)
+    {
+        var tex = provider.LoadPackage(ToFile(rest[1])).GetExports().OfType<UTexture>().First();
+        var pd = tex.PlatformData;
+        var mip = pd.Mips[0];
+        var bytes = mip.BulkData?.Data ?? [];
+        File.WriteAllBytes(rest[2], bytes);
+        Console.WriteLine($"{tex.GetType().Name} {tex.Format} {mip.SizeX}x{mip.SizeY}x{mip.SizeZ} mips {pd.Mips.Length}, {bytes.Length} bytes");
+        return 0;
+    }
     case "cat": // cat <file path>: a packed file's bytes to stdout (config .ini files)
     {
         using var stdout = Console.OpenStandardOutput();
@@ -320,7 +357,8 @@ switch (rest[0])
         foreach (var a in rest.Skip(1)) ExportAsset(a);
         break;
     case "level":
-        ExportLevel(rest[1]);
+        if (rest[1] == Mvp.Map) ExportLevel(Mvp.Map, Mvp.Weather);
+        else ExportLevel(rest[1]);
         break;
     case "materials":
         WriteMaterialIndex();
@@ -367,7 +405,7 @@ switch (rest[0])
         return 0;
     case "mvp":
         foreach (var a in Mvp.Assets) ExportAsset(a);
-        ExportLevel(Mvp.Map);
+        ExportLevel(Mvp.Map, Mvp.Weather);
         foreach (var l in Mvp.Layouts) ExportLevel(l);
         WriteClasses();
         NavMeshExporter.Write(provider, outDir, Mvp.Map);
@@ -377,7 +415,7 @@ switch (rest[0])
         WriteCollision();
         break;
     case "collision": // levels (for collision flags), classes and collision.json; no meshes or textures
-        ExportLevel(Mvp.Map);
+        ExportLevel(Mvp.Map, Mvp.Weather);
         foreach (var l in Mvp.Layouts) ExportLevel(l);
         WriteClasses();
         WriteCollision();
@@ -544,6 +582,8 @@ static LandscapeMaterial? LandscapeLayers(UObject master)
 static class Mvp
 {
     public const string Map = "/Game/Maps/CrystalLake_Small/CrystalLake_Small";
+    // The weather level (moon, height fog, sky); the game loads it, or CLsm_RainOn, from code. Clear for now.
+    public const string Weather = "/Game/Maps/CrystalLake_Small/CLsm_RainOff";
     // Alternative cabin/spawn layouts; the game streams in one of these per match.
     public static readonly string[] Layouts = [.. Enumerable.Range(1, 4).Select(i => $"/Game/Maps/CrystalLake_Small/CLsm_Design_SL{i}")];
     public static readonly string[] Assets =
@@ -790,6 +830,8 @@ class LevelLayout
     public List<Placement> Placements = [];
     public List<ActorInfo> Actors = [];
     public List<LandscapeInfo> Landscapes = [];
+    /// The sky sphere's material parameters (null when the level has none).
+    public Newtonsoft.Json.Linq.JObject? Sky;
 }
 
 /// UE 4.18 as shipped by F13 serializes 96-byte instance records (transform matrix + 32 bytes of lightmap/shadowmap

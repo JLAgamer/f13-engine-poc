@@ -13,6 +13,9 @@ pub struct LevelLayout {
     pub placements: Vec<Placement>,
     pub actors: Vec<ActorInfo>,
     pub landscapes: Vec<LandscapeInfo>,
+    /// The sky sphere's material parameters (its MaterialInstanceConstant's scalars, and vectors as [r, g, b]).
+    #[serde(default)]
+    pub sky: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -11,6 +11,7 @@
 //!       or raged bursts through it, and kills her)
 //!       [--camera x,y,z,tx,ty,tz]  (--fly start: eye and look-at point; playing: both relative to the counselor's feet)
 //!       [--round-time s]  (the match's length instead of the game's RoundTime)
+//!       [--flashlight]  (start with the flashlight on; F toggles it)
 //!   Default: play as Vanessa (see player.rs for controls). --fly: free camera instead.   (screenshot: wait for loading, save one frame, exit)
 
 mod bot;
@@ -22,6 +23,7 @@ mod interact;
 mod hiding;
 mod items;
 mod jason;
+mod lighting;
 mod match_flow;
 mod materials;
 mod navigation;
@@ -36,7 +38,6 @@ mod vehicle;
 
 use bevy::asset::AssetPlugin;
 use bevy::camera_controller::free_camera::{FreeCamera, FreeCameraPlugin};
-use bevy::light::GlobalAmbientLight;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::world_serialization::WorldAssetRoot;
@@ -91,6 +92,8 @@ struct Args {
     camera: Option<(Vec3, Vec3)>,
     /// --round-time: the match's length (s) instead of the game's.
     round_time: Option<i32>,
+    /// --flashlight: start with the flashlight on.
+    flashlight: bool,
 }
 
 fn parse_args() -> Args {
@@ -114,6 +117,7 @@ fn parse_args() -> Args {
     let mut no_jason = false;
     let mut jason_delay = 0.0;
     let mut round_time = None;
+    let mut flashlight = false;
     let mut grass = false;
     let mut aerial = false;
     let mut fly = false;
@@ -163,6 +167,7 @@ fn parse_args() -> Args {
             "--fear" => fear = Some(it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0f32).clamp(0.0, 100.0)),
             "--health" => health = it.next().and_then(|v| v.parse().ok()),
             "--tuning" => tuning = it.next().map(PathBuf::from),
+            "--flashlight" => flashlight = true,
             "--round-time" => round_time = it.next().and_then(|v| v.parse().ok()).map(|t: i32| t.max(1)),
             "--no-foliage" => foliage = false,
             "--screenshot" => screenshot = it.next().map(PathBuf::from),
@@ -188,7 +193,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time }
+    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight }
 }
 
 #[derive(Resource)]
@@ -357,7 +362,7 @@ fn main() {
         .add_plugins((materials::MaterialsPlugin { export: args.export.clone() }, mipmaps::MipmapsPlugin))
         .insert_resource(ExportRoot(args.export.clone()))
         .add_plugins(props::PropsPlugin { seed, near_car: args.near_car && !(args.fly || args.aerial) })
-        .insert_resource(GlobalAmbientLight { brightness: 400.0, ..default() })
+        .add_plugins(lighting::LightingPlugin { flashlight: args.flashlight })
         .add_systems(Startup, spawn_level)
         .add_systems(PostUpdate, apply_placed.before(bevy::camera::visibility::VisibilitySystems::CheckVisibility));
     if args.perf {
@@ -431,14 +436,6 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
     }
     info!("spawned {spawned} mesh instances from {} unique meshes", scenes.len());
     level.scenes = scenes.values().map(|h| h.clone().untyped()).collect();
-
-    // Shadows out to 100 m in 3 cascades (UE4's usual for a movable sun), not Bevy's 1 km in 4: every caster in range
-    // is drawn into each cascade, and that was most of a frame.
-    commands.spawn((
-        DirectionalLight { illuminance: 8_000.0, shadow_maps_enabled: true, ..default() },
-        bevy::light::CascadeShadowConfigBuilder { num_cascades: 3, maximum_distance: 100.0, first_cascade_far_bound: 8.0, ..default() }.build(),
-        Transform::from_rotation(Quat::from_euler(EulerRot::YXZ, 0.6, -0.9, 0.0)),
-    ));
 
     if !level.fly {
         return;

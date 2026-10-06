@@ -68,6 +68,21 @@ pub fn is_lit(lights: &[Light], centre: Vec3, bounds_radius: f32, min_strength: 
 }
 
 /// Bounds radius of an upright capsule (Unreal's capsule bounds: the box round it, as a sphere).
+/// A light's colour temperature as linear RGB (Unreal's FLinearColor::MakeFromColorTemperature): the Planckian
+/// locus in CIE 1960 UCS, to XYZ with Y = 1, to linear sRGB. Unreal clamps the temperature to 1000..15000 K.
+pub fn temperature_color(kelvin: f32) -> [f32; 3] {
+    let t = kelvin.clamp(1000.0, 15000.0) as f64;
+    let u = (0.860117757 + 1.54118254e-4 * t + 1.28641212e-7 * t * t) / (1.0 + 8.42420235e-4 * t + 7.08145163e-7 * t * t);
+    let v = (0.317398726 + 4.22806245e-5 * t + 4.20481691e-8 * t * t) / (1.0 - 2.89741816e-5 * t + 1.61456053e-7 * t * t);
+    let x = 3.0 * u / (2.0 * u - 8.0 * v + 4.0);
+    let y = 2.0 * v / (2.0 * u - 8.0 * v + 4.0);
+    let (cx, cy, cz) = (x / y, 1.0, (1.0 - x - y) / y);
+    let r = 3.2404542 * cx - 1.5371385 * cy - 0.4985314 * cz;
+    let g = -0.9692660 * cx + 1.8760108 * cy + 0.0415560 * cz;
+    let b = 0.0556434 * cx - 0.2040259 * cy + 1.0572252 * cz;
+    [r as f32, g as f32, b as f32]
+}
+
 pub fn capsule_bounds_radius(radius: f32, half_height: f32) -> f32 {
     (2.0 * radius * radius + half_height * half_height).sqrt()
 }
@@ -88,6 +103,17 @@ mod tests {
         // Near the edge the score drops under MinLightStrength: (1 - 495/500)^3 * 500 * 1.25 = 0.00078.
         assert!(!is_lit(&l, Vec3::new(495.0, 0.0, 0.0), r, 0.3));
         assert!(!is_lit(&l, Vec3::new(700.0, 0.0, 0.0), r, 0.3));
+    }
+
+    #[test]
+    fn colour_temperature_is_warm_below_daylight_and_blue_above() {
+        // About white at 6500 K (D65 is 6504 K); 2700 K is orange, 12000 K blue.
+        let d = temperature_color(6504.0);
+        assert!(d.iter().all(|c| (c - 1.0).abs() < 0.05), "{d:?}");
+        let warm = temperature_color(2700.0);
+        assert!(warm[0] > warm[1] && warm[1] > warm[2]);
+        let cold = temperature_color(12000.0);
+        assert!(cold[2] > cold[1] && cold[1] > cold[0]);
     }
 
     #[test]

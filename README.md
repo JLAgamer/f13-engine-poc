@@ -88,6 +88,22 @@ in view, grabbed, hiding (calms her) and holding a weapon; it raises stumbles an
 `--fear 0-100` holds it at a fixed level instead. Health is the game's (wounded at 50, dead at 0); `--health 1-100`
 starts you hurt.
 
+The night is lit as the game lights it, from the export:
+- the moon, its height fog and the sky colour come from the clear-weather level (CLsm_RainOff);
+- the map's 162 lamps, porch and cabin lights;
+- the fixed exposure and ambient light of the map's post-process volume.
+
+F turns your flashlight on and off (the game's settings: cone, range, colour, the way it turns with you). While it's
+on, darkness doesn't scare you. `--flashlight` starts with it on.
+
+Not yet:
+- Enlighten's bounce light;
+- shadows from lamps;
+- colour grading;
+- the sky's clouds and stars;
+- rain;
+- power cuts.
+
 Jason (Part 2) starts at the layout's killer start and hunts you: he walks or runs (his own speeds), opens doors in
 his way (his own door-opening animations) and breaks down locked or barricaded ones with the game's break-down
 move (an axe chop every 2 s: three on a cabin door, one on Higgins Haven's outer doors, twice that through a

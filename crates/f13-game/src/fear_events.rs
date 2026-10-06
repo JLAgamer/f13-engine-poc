@@ -20,7 +20,7 @@ use f13_bevy::{CounselorFear, CounselorStats, F13GameplayPlugin};
 use f13_core::fear::{Fear, FearEventData};
 use f13_core::light::{capsule_bounds_radius, is_lit, Light};
 use f13_data::classes::ClassDb;
-use f13_data::level::{ComponentInfo, Xform};
+use f13_data::level::Xform;
 use std::collections::{BTreeMap, HashMap};
 
 use crate::character::{CounselorCharacter, KillerCharacter};
@@ -110,41 +110,16 @@ fn load_surroundings(mut commands: Commands, level: Res<crate::Level>, export: R
         }
     };
     let mut s = Surroundings::default();
-    for a in level.layouts.iter().flat_map(|l| &l.actors) {
-        let Some(t) = a.transform else { continue };
-        // The class's components, with the placed actor's own values on top.
-        let class: &[ComponentInfo] = classes.get(&a.class).map_or(&[], |c| &c.components);
-        let mut comps: Vec<(&ComponentInfo, Option<&ComponentInfo>)> = class.iter().map(|c| (c, a.components.iter().find(|i| i.name == c.name))).collect();
-        comps.extend(a.components.iter().filter(|i| !class.iter().any(|c| c.name == i.name)).map(|i| (i, None)));
-        for (c, inst) in comps {
-            let kind = c.kind.as_str();
-            let spot = kind.ends_with("SpotLightComponent");
-            let indoor = classes.is_child_of(kind, "SCIndoorComponent") || kind == "SCIndoorComponent";
-            if !(spot || kind.ends_with("PointLightComponent") || indoor) {
-                continue;
-            }
-            let prop = |name: &str| inst.and_then(|i| i.props.get(name)).filter(|v| !v.is_null()).or_else(|| c.props.get(name));
-            let num = |name: &str, d: f32| prop(name).and_then(|v| v.as_f64()).map_or(d, |v| v as f32);
-            let Some(world) = inst.and_then(|i| i.world).or(c.world).or_else(|| c.local.map(|l| l.then(&t))) else { continue };
-            if indoor {
-                let e = prop("BoxExtent");
-                let ext = |k: &str| e.and_then(|e| e.get(k)).and_then(|v| v.as_f64()).map_or(32.0, |v| v as f32);
-                s.indoors.push((world, Vec3::new(ext("X"), ext("Y"), ext("Z"))));
-                continue;
-            }
-            if prop("bVisible").and_then(|v| v.as_bool()) == Some(false) {
-                continue;
-            }
-            // Unreal's defaults: AttenuationRadius 1000, LightFalloffExponent 8, cone 0 / 44 degrees.
-            s.lights.push(Light {
-                position: Vec3::from_array(world.t),
-                direction: Vec3::from_array(world.rotate([1.0, 0.0, 0.0])).normalize_or_zero(),
-                radius: num("AttenuationRadius", 1000.0),
-                falloff_exponent: num("LightFalloffExponent", 8.0),
-                cone: spot.then(|| (num("InnerConeAngle", 0.0), num("OuterConeAngle", 44.0))),
-            });
-        }
+    // Unreal's BoxExtent default is 32.
+    for (_, world, props) in crate::lighting::placed_components(&level, &classes, |k| classes.is_child_of(k, "SCIndoorComponent") || k == "SCIndoorComponent") {
+        let ext = |k: &str| props.get("BoxExtent").and_then(|e| e.get(k)).and_then(|v| v.as_f64()).map_or(32.0, |v| v as f32);
+        s.indoors.push((world, Vec3::new(ext("X"), ext("Y"), ext("Z"))));
     }
+    s.lights = crate::lighting::placed_lights(&level, &classes)
+        .iter()
+        .filter(|l| l.kind != crate::lighting::LightKind::Directional && l.visible())
+        .map(|l| l.rule_light())
+        .collect();
     for (name, c) in &classes.classes {
         if let Some(e) = classes.prop(name, "PickedUpFearEvent").as_str() {
             s.item_events.insert(c.name.clone(), e.trim_end_matches("_C").to_string());
@@ -184,14 +159,14 @@ fn push_events(
     surroundings: Option<Res<Surroundings>>,
     (counselor, killer): (Option<Res<CounselorCharacter>>, Option<Res<KillerCharacter>>),
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
-    mut players: Query<(&mut Player, &Transform, &mut CounselorFear, &mut Pushed, Option<&Inventory>, Option<&Hiding>, Has<Held>), Without<Jason>>,
+    mut players: Query<(&mut Player, &Transform, &mut CounselorFear, &mut Pushed, Option<&Inventory>, Option<&Hiding>, Has<Held>, Option<&crate::lighting::Flashlight>), Without<Jason>>,
     jasons: Query<&Transform, (With<Jason>, Without<Player>)>,
     camera: Query<&Transform, (With<PlayerCamera>, Without<Player>, Without<Jason>)>,
     items: Query<&Item>,
     (time, mut next_log): (Res<Time>, Local<f32>),
 ) {
     let (Some(t), Some(s)) = (tuning, surroundings) else { return };
-    let Ok((mut p, xf, mut fear, mut pushed, inventory, hiding, held)) = players.single_mut() else { return };
+    let Ok((mut p, xf, mut fear, mut pushed, inventory, hiding, held, flashlight)) = players.single_mut() else { return };
     p.fear = fear.0.fear;
     if fear.0.locked {
         return;
@@ -215,7 +190,7 @@ fn push_events(
     let centre = xf.translation + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M;
 
     // Her tick, in the game's order.
-    let lit = is_lit(&s.lights, to_unreal(centre), capsule_bounds_radius(r, hh), cv("MinLightStrength", 0.3));
+    let lit = flashlight.is_some_and(|f| f.on) || is_lit(&s.lights, to_unreal(centre), capsule_bounds_radius(r, hh), cv("MinLightStrength", 0.3));
     if pushed.lit != Some(lit) {
         debug!("fear: {}", if lit { "in the light" } else { "in the dark" });
         set("DarknessFearEvent", !lit, 0.0);

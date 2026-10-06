@@ -117,7 +117,12 @@ Presentation
       and instant vault/dive)
 - [ ] Repair minigame dial UI (now a text dial in the HUD)
 - [ ] HUD: health, stamina, fear and inventory (now debug text)
-- [ ] Night lighting, fog, flashlight
+- [x] Night lighting, fog, flashlight (lighting.rs): the map's point/spot lights (inverse-square lumens, or Unreal's
+  falloff-exponent lights matched at a third of their radius; colour temperature; draw-distance fades), the moon and
+  height fog of the clear-weather level (CLsm_RainOff), the post-process volume's fixed exposure and ambient cubemap,
+  the sky's colour; the counselor's flashlight (F; its Blueprint values, attachment, turn rate, wall check; lit for
+  fear). Not yet: Enlighten GI, local light shadows, light functions, colour grading LUT/contrast, bloom, the sky
+  texture, rain, power cuts
 - [ ] Audio: footsteps, music and Jason's stingers, doors, windows, car
 
 Setup
