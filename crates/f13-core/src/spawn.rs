@@ -336,7 +336,8 @@ fn spawn_small_items(world: &mut SpawnWorld, s: &SpawnSettings, q: &impl ClassQu
             }
             match world.cabinet_spawn(cab, &item.class, q, rng) {
                 Some(sp) => {
-                    out.push(Spawned { spawner: sp, class: item.class.clone(), kind: SpawnKind::SmallItem });
+                    let class = world.spawners[sp].spawned.clone().unwrap_or_else(|| item.class.clone());
+                    out.push(Spawned { spawner: sp, class, kind: SpawnKind::SmallItem });
                     placed.push(pos);
                     if world.cabinet_full(&world.cabinets[cab]) {
                         list.remove(k);

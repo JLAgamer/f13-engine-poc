@@ -167,6 +167,7 @@ fn spawn_props(
     };
     let mut entities: HashMap<usize, Entity> = HashMap::new();
     let mut counts: HashMap<&'static str, usize> = HashMap::new();
+    let mut item_classes: std::collections::BTreeMap<String, usize> = Default::default();
 
     for (id, actor) in world.spawned_actors() {
         let Some(info) = classes.get(&actor.class) else { continue };
@@ -313,6 +314,7 @@ fn spawn_props(
                 large,
                 reach: interact.map_or(150.0, |c| reach(c, 150.0)),
             });
+            *item_classes.entry(actor.class.clone()).or_default() += 1;
             *counts.entry(if actor.kind == Some(SpawnKind::RepairPart) { "repair parts" } else { "items" }).or_default() += 1;
             if actor.kind == Some(SpawnKind::RepairPart) {
                 let p = to_transform(&actor.transform).translation;
@@ -387,6 +389,7 @@ fn spawn_props(
         }
     }
     info!("match (seed {}): {} runtime actors, {:?}", seed.0, entities.len(), counts);
+    info!("items: {:?}", item_classes);
 }
 
 /// Tags every mesh under a vehicle with [`VehiclePart`] once its scenes have spawned.
