@@ -77,7 +77,7 @@ impl Player {
 
 /// What the player wants this tick, from the keyboard or the demo script.
 #[derive(Resource, Default)]
-struct Intent {
+pub(crate) struct Intent {
     /// x = right, y = forward, relative to the camera.
     movement: Vec2,
     sprint_held: bool,
@@ -185,6 +185,7 @@ fn spawn_player(
         Camera3d::default(),
         Transform::from_translation(config.spawn + Vec3::new(0.0, CAMERA_HEIGHT_M, CAMERA_DISTANCE_M)),
         PlayerCamera { yaw: 0.0, pitch: -0.35 },
+        IsDefaultUiCamera,
     ));
     commands.spawn((
         Text::new(""),
@@ -351,13 +352,13 @@ fn update_counselor(
     }
 }
 
-fn move_player(
+pub(crate) fn move_player(
     intent: Res<Intent>,
     time: Res<Time>,
     tuning: Res<PlayerTuning>,
     camera: Single<&PlayerCamera>,
     mut player: Single<
-        (Entity, &mut Player, &mut Transform, Option<&crate::interact::UsingItem>, Option<&Unsettled>, Has<crate::jason::Held>, Has<crate::jason::Staggered>),
+        (Entity, &mut Player, &mut Transform, Option<&crate::interact::UsingItem>, Option<&Unsettled>, Has<crate::jason::Held>, Has<crate::jason::Staggered>, Has<crate::items::ItemAction>),
         Without<Driving>,
     >,
     interaction: Option<Res<crate::interact::Interaction>>,
@@ -366,7 +367,7 @@ fn move_player(
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
-    let (entity, ref mut p, ref mut xf, using, settle, held, staggered) = *player;
+    let (entity, ref mut p, ref mut xf, using, settle, held, staggered, item_action) = *player;
     if held {
         // In Jason's hands: he places her.
         p.velocity = Vec2::ZERO;
@@ -376,7 +377,7 @@ fn move_player(
     let forward = Vec2::new(-sin, -cos);
     let right = Vec2::new(cos, -sin);
     let repairing = interaction.as_ref().is_some_and(|i| i.busy());
-    let busy = !p.counselor.alive() || using.is_some() || repairing || staggered;
+    let busy = !p.counselor.alive() || using.is_some() || repairing || staggered || item_action;
     let wish = if busy { Vec2::ZERO } else { forward * intent.movement.y + right * intent.movement.x };
 
     let (facing, _, _) = xf.rotation.to_euler(EulerRot::YXZ);

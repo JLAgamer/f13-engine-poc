@@ -4,6 +4,7 @@
 //!       [--fly] [--capsule] [--demo] [--fear 0-100] [--health 1-100] [--speed x] [--tuning file] [--aerial] [--no-foliage] [--screenshot out.png [--screenshot-after s]]
 //!       [--pose <animation>@<seconds>]  (hold the counselor (and Jason) in one exported animation, for screenshots)
 //!       [--no-jason] [--jason-delay s] [--bot-jason]  (Jason hunts the counselor unless left out; counselor bots leave him out)
+//!       [--give Class,Class...] [--bot-fight]  (start with these items (testing); a bot that uses them on Jason)
 //!       [--camera x,y,z,tx,ty,tz]  (--fly start: eye and look-at point; playing: both relative to the counselor's feet)
 //!   Default: play as Vanessa (see player.rs for controls). --fly: free camera instead.   (screenshot: wait for loading, save one frame, exit)
 
@@ -12,6 +13,7 @@ mod character;
 mod collision;
 mod doors;
 mod interact;
+mod items;
 mod jason;
 mod materials;
 mod mipmaps;
@@ -44,6 +46,8 @@ struct Args {
     bot_dodge: bool,
     bot_door: bool,
     bot_jason: bool,
+    bot_fight: bool,
+    give: Vec<String>,
     /// Leave Jason out (the counselor-only bots always do).
     no_jason: bool,
     /// Seconds before Jason starts hunting.
@@ -76,6 +80,8 @@ fn parse_args() -> Args {
     let mut bot_dodge = false;
     let mut bot_door = false;
     let mut bot_jason = false;
+    let mut bot_fight = false;
+    let mut give = Vec::new();
     let mut no_jason = false;
     let mut jason_delay = 0.0;
     let mut grass = false;
@@ -104,6 +110,8 @@ fn parse_args() -> Args {
             "--bot-dodge" => bot_dodge = true,
             "--bot-door" => bot_door = true,
             "--bot-jason" => bot_jason = true,
+            "--bot-fight" => bot_fight = true,
+            "--give" => give = it.next().map(|v| v.split(',').map(String::from).collect()).unwrap_or_default(),
             "--no-jason" => no_jason = true,
             "--jason-delay" => jason_delay = it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0f32).max(0.0),
             "--grass" => grass = true,
@@ -139,7 +147,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera }
+    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_fight, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera }
 }
 
 #[derive(Resource)]
@@ -237,7 +245,7 @@ fn main() {
             vehicle_start: tuning.vehicle_start.clone(),
         })
             .add_plugins(player::PlayerPlugin { spawn, capsule: args.capsule, camera: args.camera, demo: args.demo, fear: args.fear, health: args.health })
-            .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }, collision::CollisionPlugin, ragdoll::RagdollPlugin));
+            .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }, collision::CollisionPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin));
         if args.bot_escape {
             app.add_plugins(bot::BotPlugin(bot::Goal::Escape));
         } else if args.bot_heal {
@@ -248,6 +256,11 @@ fn main() {
             app.add_plugins(bot::BotPlugin(bot::Goal::Door));
         } else if args.bot_jason {
             app.add_plugins(bot::BotPlugin(bot::Goal::Jason));
+        } else if args.bot_fight {
+            app.add_plugins(bot::BotPlugin(bot::Goal::Fight));
+        }
+        if !args.give.is_empty() {
+            app.insert_resource(items::Give(args.give.clone()));
         }
         // The counselor bots test her alone; --bot-jason tests him.
         let bot_alone = args.bot_escape || args.bot_heal || args.bot_dodge || args.bot_door;

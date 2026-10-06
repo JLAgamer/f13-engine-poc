@@ -404,7 +404,7 @@ fn barricade_of(barricades: &Query<&Barricade>, door: Entity) -> Option<bool> {
 fn drop_at(commands: &mut Commands, visibility: &mut Query<&mut Visibility>, item: Entity, player: &Transform) {
     let forward = player.rotation * Vec3::Z;
     let at = player.translation + forward * 0.5 + Vec3::Y * 0.05;
-    commands.entity(item).remove::<Carried>().insert(Transform::from_translation(at));
+    commands.entity(item).remove::<(Carried, ChildOf, crate::items::InHand)>().insert(Transform::from_translation(at));
     if let Ok(mut v) = visibility.get_mut(item) {
         *v = Visibility::Inherited;
     }
@@ -464,12 +464,12 @@ fn update_prompt(
     tuning: Res<PlayerTuning>,
     doors: Query<(&Door, &GlobalTransform)>,
     (windows, barricades): (Query<&Window>, Query<&Barricade>),
-    player: Single<(&Inventory, Has<Driving>, &Transform, Option<&UsingItem>, &Player)>,
+    player: Single<(&Inventory, Has<Driving>, &Transform, Option<&UsingItem>, &Player, Has<crate::jason::Held>)>,
     items: Query<&Item>,
     vehicles: Query<&Vehicle>,
     mut text: Single<&mut Text, With<PromptText>>,
 ) {
-    let (inv, driving, _, using, p) = *player;
+    let (inv, driving, _, using, p, held) = *player;
     let name = |e: Entity| items.get(e).map_or("?".to_string(), |i| i.name.clone());
     let mut lines = vec![format!(
         "Hands: {}   Pockets: [{}] ({}/{})",
@@ -545,6 +545,25 @@ fn update_prompt(
         }
         if let Some(i) = inv.pockets.iter().position(|&e| items.get(e).is_ok_and(|it| it.class == FIRST_AID)) {
             lines.push(format!("[{}] Use first aid", i + 1));
+        }
+        use crate::props::ItemKind;
+        match inv.hand.and_then(|e| items.get(e).ok()).map(|i| &i.kind) {
+            Some(ItemKind::Weapon(_)) => lines.push("[LMB] Swing   [W + LMB] Heavy swing".into()),
+            Some(ItemKind::Gun { .. }) => lines.push("[LMB] Fire (aim with the camera)".into()),
+            Some(ItemKind::Trap) => lines.push("[LMB] Place the bear trap".into()),
+            _ => {}
+        }
+        for (i, it) in inv.pockets.iter().filter_map(|&e| items.get(e).ok()).enumerate() {
+            match it.kind {
+                ItemKind::Firecracker { .. } => lines.push(format!("[{}] Throw firecrackers", i + 1)),
+                ItemKind::PocketKnife => lines.push("Pocket knife: frees you when Jason grabs you".into()),
+                ItemKind::Map => lines.push("[M] Map".into()),
+                ItemKind::WalkieTalkie => lines.push("Walkie-talkie: talks to other players (no use offline)".into()),
+                _ => {}
+            }
+        }
+        if held {
+            lines.push("GRABBED: mash A / D to break free".into());
         }
     }
     text.0 = lines.join("\n");

@@ -94,7 +94,9 @@ impl ClassQuery for ClassDb {
     }
 
     fn is_large(&self, class: &str) -> bool {
-        self.prop(class, "bIsLarge").as_bool().unwrap_or(false)
+        // Weapons (guns too) and traps are carried in the hands by their native constructors; Blueprints only store
+        // bIsLarge when they differ from their parent.
+        self.prop(class, "bIsLarge").as_bool().unwrap_or_else(|| self.is_child_of(class, "SCWeapon") || self.is_child_of(class, "SCTrap"))
     }
 
     fn required_parts(&self, vehicle_class: &str) -> Vec<String> {

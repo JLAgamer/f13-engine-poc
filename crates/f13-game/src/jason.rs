@@ -60,7 +60,7 @@ const NECK_GRAB_SOCKET: &str = "NeckGrabSocket";
 /// Fallback when the sockets aren't posed yet: how far in front of Jason a held counselor stands.
 const GRAB_HOLD_M: f32 = 0.65;
 /// Seconds Jason holds a grabbed counselor before the kill (a player's choice in the game).
-const HOLD_BEFORE_KILL: f32 = 2.5;
+const HOLD_BEFORE_KILL: f32 = 4.0;
 /// Odds of going for a grab rather than a swing, rolled after each attempt (AI choice).
 const GRAB_ODDS: f32 = 0.5;
 /// Paths: re-planned this often (s), with this many cells explored at most.
@@ -83,8 +83,9 @@ impl Plugin for JasonPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(JasonConfig { delay: self.delay })
             .add_systems(Startup, spawn_jason)
+            .init_resource::<Struggle>()
             .add_systems(FixedUpdate, (update_jason, recover_counselor))
-            .add_systems(Update, (tag_jason_parts, animate_jason));
+            .add_systems(Update, (tag_jason_parts, animate_jason, read_struggle));
     }
 }
 
@@ -149,6 +150,10 @@ pub enum JasonState {
     Missed { t: f32 },
     Holding { t: f32 },
     Killing { t: f32 },
+    /// Stunned by a counselor's item (s into it).
+    Stunned { t: f32, stun: Stun },
+    /// Hit without being stunned: a short flinch.
+    Flinching { t: f32 },
     /// The counselor is dead.
     Done,
 }
@@ -168,7 +173,78 @@ pub struct Jason {
     progress: (Vec3, f32),
     /// Walking a fixed direction for a moment to get unstuck.
     unstick: Option<(Vec2, f32)>,
+    /// Seconds left of immunity to stuns.
+    stun_immune: f32,
 }
+
+/// How a counselor stunned Jason. Times are the stun classes' TotalStunTime base values (the AI doesn't wiggle out
+/// early); animations are their JasonStunAnimMontage / JasonDirectionalStunAnimMontages sections.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Stun {
+    /// BaseWeaponStun_C, by the side he was hit on.
+    Weapon { left: bool },
+    /// FlareGunLightStun_C.
+    Flare,
+    /// HeavyShotgunStun_C.
+    Shotgun,
+    /// FirecrackerKillerStun_C.
+    Firecracker,
+    /// BreakGrabKillerStunPocketKnife_C.
+    PocketKnife,
+    /// BreakGrabKillerStun_C: she struggled free.
+    GrabBreak,
+    /// BearTrapLeftFootStun_C.
+    BearTrap,
+}
+
+impl Stun {
+    pub fn seconds(self) -> f32 {
+        match self {
+            Stun::Weapon { .. } | Stun::Flare => 5.0,
+            Stun::Shotgun => 7.0,
+            Stun::Firecracker => 4.0,
+            Stun::PocketKnife | Stun::GrabBreak => 6.0,
+            Stun::BearTrap => 10.0,
+        }
+    }
+
+    /// Enter, loop (until the exit is due) and exit animations; a single animation plays once and holds.
+    fn anims(self) -> (&'static str, Option<&'static str>, Option<&'static str>) {
+        match self {
+            Stun::Weapon { left: true } => ("combat_stand_stunned_left_enter_01", Some("combat_stand_stunned_left_loop_01"), Some("combat_stand_stunned_left_exit_01")),
+            Stun::Weapon { left: false } => ("combat_stand_stunned_right_enter_01", Some("combat_stand_stunned_right_loop_01"), Some("combat_stand_stunned_right_exit_01")),
+            Stun::Flare => ("combat_stand_stunned_back_enter_01", Some("combat_stand_stunned_back_loop_01"), Some("combat_stand_stunned_back_exit_01")),
+            Stun::Shotgun => ("combat_stand_stunned_down_enter_01", Some("combat_stand_stunned_down_loop_01"), Some("combat_stand_stunned_down_exit_01")),
+            Stun::Firecracker => ("combat_stand_stunned_firecracker_enter_01", Some("combat_stand_stunned_firecracker_loop_01"), Some("combat_stand_stunned_firecracker_exit_01")),
+            Stun::PocketKnife => ("normal_stand_knife_pullout", None, None),
+            Stun::GrabBreak => ("normal_grab_break", None, None),
+            Stun::BearTrap => ("normal_stand_trap01_enter_lf", Some("normal_stand_trap01_cycle_lf"), Some("normal_stand_trap01_exit_lf")),
+        }
+    }
+}
+
+/// A counselor's item hit Jason (items.rs): `stun` if it stunned him, else he flinches.
+#[derive(Component, Clone, Debug)]
+pub struct HitJason {
+    pub stun: Option<Stun>,
+    pub from: Vec3,
+}
+
+/// Grab struggle input: the counselor's wiggles (A/D presses) since the grab.
+#[derive(Resource, Default)]
+pub struct Struggle {
+    pub wiggles: u32,
+    last: f32,
+}
+
+/// SCCharacter MaxWigglesPerSecond (constructor).
+const MAX_WIGGLES_PER_SECOND: f32 = 10.0;
+/// SCCharacter InvulnerableStunDuration (constructor): no new stun this long after one ends.
+const STUN_IMMUNE_SECONDS: f32 = 3.0;
+const FLINCH_FRONT: &str = "combat_stand_hit_reaction_front";
+const FLINCH_BACK: &str = "combat_stand_hit_reaction_back";
+const GRAB_BREAK: &str = "f_normal_grab_break_rev";
+const KNIFE_BREAK: &str = "f_normal_grab_pocketknife_break";
 
 /// The counselor is in Jason's hands: no movement of her own (jason.rs places her).
 #[derive(Component)]
@@ -224,6 +300,7 @@ fn spawn_jason(
                 wants_grab: rng.0.frand() < GRAB_ODDS,
                 progress: (feet, 0.0),
                 unstick: None,
+                stun_immune: 0.0,
             },
             Transform { translation: feet, rotation, ..default() },
             Visibility::default(),
@@ -369,12 +446,11 @@ fn update_jason(
     tuning: Option<Res<KillerTuning>>,
     ptuning: Res<PlayerTuning>,
     nav: Option<ResMut<Nav>>,
-    killer: Option<Res<KillerCharacter>>,
-    counselor_model: Option<Res<crate::character::CounselorCharacter>>,
-    collision: Res<crate::collision::WorldCollision>,
-    dynamic: Res<crate::collision::DynamicColliders>,
-    mut rng: ResMut<crate::GameRng>,
-    mut jasons: Query<(Entity, &mut Jason, &mut Transform), Without<Player>>,
+    (killer, counselor_model): (Option<Res<KillerCharacter>>, Option<Res<crate::character::CounselorCharacter>>),
+    (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
+    (mut rng, mut struggle): (ResMut<crate::GameRng>, ResMut<Struggle>),
+    mut jasons: Query<(Entity, &mut Jason, &mut Transform, Option<&HitJason>), Without<Player>>,
+    (inventories, items): (Query<&crate::interact::Inventory>, Query<&crate::props::Item>),
     mut players: Query<(Entity, &mut Player, &mut Transform, Has<crate::vehicle::Driving>), Without<Jason>>,
     mut doors: Query<(Entity, &mut crate::doors::Door, &GlobalTransform)>,
     mut barricades: Query<&mut crate::windows::Barricade>,
@@ -385,7 +461,32 @@ fn update_jason(
     let dt = time.delta_secs();
     let world = collision.with(&dynamic);
     let Ok((pe, mut p, mut pxf, driving)) = players.single_mut() else { return };
-    for (je, mut j, mut xf) in &mut jasons {
+    for (je, mut j, mut xf, hit) in &mut jasons {
+        j.stun_immune = (j.stun_immune - dt).max(0.0);
+        // A counselor's item hit him.
+        if let Some(h) = hit {
+            commands.entity(je).remove::<HitJason>();
+            let can_stun = j.stun_immune <= 0.0
+                && matches!(j.state, JasonState::Hunting | JasonState::Swinging { .. } | JasonState::Reaching { .. } | JasonState::Missed { .. } | JasonState::Holding { .. } | JasonState::Flinching { .. });
+            match h.stun {
+                Some(stun) if can_stun => {
+                    info!("Jason: stunned ({stun:?}, {:.0}s)", stun.seconds());
+                    if matches!(j.state, JasonState::Holding { .. }) {
+                        release(&mut commands, pe, GRAB_BREAK, counselor_model.as_deref());
+                    }
+                    j.state = JasonState::Stunned { t: 0.0, stun };
+                    j.velocity = Vec2::ZERO;
+                    commands.entity(je).insert(PlayAction(stun.anims().0.into()));
+                }
+                _ if matches!(j.state, JasonState::Hunting) => {
+                    let front = angle_to(xf.rotation, Vec2::new(h.from.x - xf.translation.x, h.from.z - xf.translation.z)) < 90.0;
+                    info!("Jason: hit, not stunned");
+                    j.state = JasonState::Flinching { t: 0.0 };
+                    commands.entity(je).insert(PlayAction(if front { FLINCH_FRONT } else { FLINCH_BACK }.into()));
+                }
+                _ => info!("Jason: hit, shrugged it off ({:?})", j.state),
+            }
+        }
         let to = pxf.translation;
         let flat = Vec2::new(to.x - xf.translation.x, to.z - xf.translation.z);
         let dist = flat.length();
@@ -496,11 +597,11 @@ fn update_jason(
                             info!("Jason: hit Vanessa for {:.0} (health {:.0})", r.dealt, p.counselor.health);
                             if r.died {
                                 info!("Vanessa: killed by Jason's swing");
-                                commands.entity(pe).insert(PlayAction(DEATH.into())).remove::<Staggered>();
+                                commands.entity(pe).insert(PlayAction(DEATH.into())).remove::<(Staggered, crate::items::ItemAction)>();
                             } else if r.dealt > 0.0 {
                                 let reaction = hit_reaction(&pxf, xf.translation);
                                 let len = counselor_model.as_ref().and_then(|c| c.length(reaction)).unwrap_or(0.67);
-                                commands.entity(pe).insert((PlayAction(reaction.into()), Staggered(len)));
+                                commands.entity(pe).insert((PlayAction(reaction.into()), Staggered(len))).remove::<crate::items::ItemAction>();
                                 p.velocity = Vec2::ZERO;
                             }
                         }
@@ -523,11 +624,31 @@ fn update_jason(
                 if at < startup {
                     j.state = JasonState::Reaching { t: at };
                 } else if alive && !driving && dist <= t.grab_max_m && angle_to(xf.rotation, flat) <= t.grab_angle_deg {
+                    // A pocket knife in her pockets breaks the grab at once (and is used up).
+                    let knife = inventories.get(pe).ok().and_then(|inv| {
+                        inv.pockets.iter().copied().find(|&e| items.get(e).is_ok_and(|i| i.kind == crate::props::ItemKind::PocketKnife))
+                    });
+                    if let Some(k) = knife {
+                        info!("Jason: grabbed Vanessa; she stabs him with her pocket knife");
+                        commands.entity(pe).queue(move |mut e: EntityWorldMut| {
+                            if let Some(mut inv) = e.get_mut::<crate::interact::Inventory>() {
+                                inv.pockets.retain(|&x| x != k);
+                            }
+                        });
+                        commands.entity(k).despawn();
+                        let len = counselor_model.as_ref().and_then(|c| c.length(KNIFE_BREAK)).unwrap_or(2.0);
+                        commands.entity(pe).insert((PlayAction(KNIFE_BREAK.into()), Staggered(len)));
+                        j.state = JasonState::Stunned { t: 0.0, stun: Stun::PocketKnife };
+                        j.velocity = Vec2::ZERO;
+                        commands.entity(je).insert(PlayAction(Stun::PocketKnife.anims().0.into()));
+                        continue;
+                    }
                     info!("Jason: grabbed Vanessa");
+                    struggle.wiggles = 0;
                     j.state = JasonState::Holding { t: 0.0 };
                     j.velocity = Vec2::ZERO;
                     commands.entity(je).insert(PlayAction(GRAB_ENTER.into()));
-                    commands.entity(pe).insert((Held, PlayAction(GRABBED_ENTER.into()))).remove::<Staggered>();
+                    commands.entity(pe).insert((Held, PlayAction(GRABBED_ENTER.into()))).remove::<(Staggered, crate::items::ItemAction)>();
                     p.velocity = Vec2::ZERO;
                 } else {
                     info!("Jason: grab missed");
@@ -566,7 +687,12 @@ fn update_jason(
                 if at >= counselor_model.as_ref().and_then(|c| c.length(GRABBED_ENTER)).unwrap_or(2.0) {
                     commands.entity(pe).insert(PlayAction(GRABBED_IDLE.into()));
                 }
-                if at >= HOLD_BEFORE_KILL {
+                if struggle_progress(&p.counselor.stats, at, struggle.wiggles) >= 1.0 {
+                    info!("Vanessa: struggled free after {at:.1}s ({} wiggles)", struggle.wiggles);
+                    release(&mut commands, pe, GRAB_BREAK, counselor_model.as_deref());
+                    j.state = JasonState::Stunned { t: 0.0, stun: Stun::GrabBreak };
+                    commands.entity(je).insert(PlayAction(Stun::GrabBreak.anims().0.into()));
+                } else if at >= HOLD_BEFORE_KILL {
                     info!("Jason: Pickaxe Throat Hack");
                     j.state = JasonState::Killing { t: 0.0 };
                     commands.entity(je).insert(PlayAction(KILL.into()));
@@ -592,11 +718,79 @@ fn update_jason(
                     j.state = JasonState::Killing { t: at };
                 }
             }
+            JasonState::Stunned { t: at, stun } => {
+                let at = at + dt;
+                walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, None, dt, &t, &world);
+                let (enter, looped, exit) = stun.anims();
+                let len = |n: &str| killer.length(n).unwrap_or(1.0);
+                // The exit plays out the last part of the stun.
+                let exit_at = exit.map_or(stun.seconds(), |e| (stun.seconds() - len(e)).max(len(enter)));
+                let end = exit.map_or(stun.seconds(), |e| exit_at + len(e));
+                let anim = if at < len(enter) {
+                    enter
+                } else if at < exit_at {
+                    looped.unwrap_or(enter)
+                } else {
+                    exit.unwrap_or(enter)
+                };
+                commands.entity(je).insert(PlayAction(anim.into()));
+                if at >= end {
+                    info!("Jason: recovered");
+                    j.state = JasonState::Hunting;
+                    j.cooldown = t.attack_delay;
+                    j.stun_immune = STUN_IMMUNE_SECONDS;
+                    commands.entity(je).remove::<PlayAction>();
+                } else {
+                    j.state = JasonState::Stunned { t: at, stun };
+                }
+            }
+            JasonState::Flinching { t: at } => {
+                let at = at + dt;
+                walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, None, dt, &t, &world);
+                if at >= killer.length(FLINCH_FRONT).unwrap_or(0.5) {
+                    j.state = JasonState::Hunting;
+                    commands.entity(je).remove::<PlayAction>();
+                } else {
+                    j.state = JasonState::Flinching { t: at };
+                }
+            }
             JasonState::Done => {
                 walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, None, dt, &t, &world);
             }
         }
     }
+}
+
+/// A/D presses while held are wiggles, at most MaxWigglesPerSecond.
+fn read_struggle(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, held: Query<(), (With<Player>, With<Held>)>, mut s: ResMut<Struggle>) {
+    if held.is_empty() {
+        s.wiggles = 0;
+        return;
+    }
+    let now = time.elapsed_secs();
+    if (keys.just_pressed(KeyCode::KeyA) || keys.just_pressed(KeyCode::KeyD)) && now - s.last >= 1.0 / MAX_WIGGLES_PER_SECOND {
+        s.wiggles += 1;
+        s.last = now;
+    }
+}
+
+/// CounselorGrabStun_C: the grab is a stun on the counselor that she wiggles out of. Progress per wiggle
+/// (PercentPerWiggle 4.5% x Composure 60) and its total time (TotalStunTime 15 s, lower with Strength 15 and
+/// Composure 60); she is free when time and wiggles add up to the whole.
+fn struggle_progress(stats: &f13_core::stats::Stats, held_for: f32, wiggles: u32) -> f32 {
+    use f13_core::stats::{Stat, StatModifiedValue};
+    let mut total = StatModifiedValue::constant(15.0);
+    total.modifiers[Stat::Strength as usize] = 15.0;
+    total.modifiers[Stat::Composure as usize] = 60.0;
+    let mut per = StatModifiedValue::constant(4.5);
+    per.modifiers[Stat::Composure as usize] = 60.0;
+    held_for / total.value(stats, true).max(1.0) + wiggles as f32 * per.value(stats, false) / 100.0
+}
+
+/// Lets the counselor go: she plays `anim` (and can't move until it ends).
+fn release(commands: &mut Commands, counselor: Entity, anim: &str, model: Option<&crate::character::CounselorCharacter>) {
+    let len = model.and_then(|c| c.length(anim)).unwrap_or(1.5);
+    commands.entity(counselor).remove::<Held>().insert((PlayAction(anim.into()), Staggered(len)));
 }
 
 /// Ends a counselor's hit reaction.

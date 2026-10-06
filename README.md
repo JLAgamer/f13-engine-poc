@@ -105,6 +105,13 @@ a car escape zone; F gets out. `--near-car` starts you next to a car. `--bot-esc
 automatically (teleporting between goals) and exits when done; `--bot-heal` fetches and uses a first aid spray;
 `--bot-dodge` dodges in each direction and checks the distance and stamina; `--bot-door` runs 16 checks on a door, a
 barricaded door and a window.
+Against Jason: left mouse swings the weapon in your hands (W + left mouse: the heavy swing; each weapon's stun chance
+and durability are the game's), fires the flare gun or shotgun at what the middle of the screen shows (one shot), or
+places a bear trap in front of you; 1-3 throw firecrackers from that pocket (they go off 1.5 s later and stun him if
+he comes within 2 m). A pocket knife frees you the moment he grabs you; otherwise mash A / D to struggle free. M opens
+the map (when you carry one). The walkie-talkie only matters with other players. A dead counselor goes limp (a
+ragdoll from her physics asset). `--give Class,Class` starts with items (e.g. `--give BaseballBat_C,BP_PocketKnife_C`);
+`--bot-fight` uses them on Jason and passes once he's been stunned and recovers.
 For screenshots: `--screenshot out.png` (after loading; `--screenshot-after s` waits longer), `--camera
 x,y,z,tx,ty,tz` (eye and look-at, relative to her feet), `--pose <animation>@<seconds>` (holds her in one animation).
 `--speed x` runs the game clock faster (bots included; 4 keeps every result the same and cuts a bot run to ~15 s).

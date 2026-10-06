@@ -18,6 +18,85 @@ pub struct Item {
     pub large: bool,
     /// Interaction range in cm (the item's interact component `DistanceLimit`).
     pub reach: f32,
+    pub kind: ItemKind,
+    /// The counselor's socket it's held by (`HandAttachSocket`, else SCItem's WeaponSocket).
+    pub hand_socket: String,
+}
+
+/// What an item does (by its native class).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ItemKind {
+    /// SCWeapon: swung at Jason.
+    Weapon(WeaponStats),
+    /// SCGun: the flare gun (a projectile) or the shotgun (pellets).
+    Gun { stats: WeaponStats, projectile: bool, pellets: u32, spread_deg: f32, velocity: f32 },
+    /// SCTrap: placed on the ground.
+    Trap,
+    FirstAid,
+    /// SCNoiseMaker: the firecrackers, thrown `throw_delay` seconds into the throw (ThrowDelayTime).
+    Firecracker { throw_delay: f32 },
+    /// Breaks Jason's grab.
+    PocketKnife,
+    Map,
+    WalkieTalkie,
+    /// Car parts and anything else used elsewhere.
+    Other,
+}
+
+/// A weapon's WeaponStats.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WeaponStats {
+    pub damage: f32,
+    pub durability: f32,
+    pub attacking_wear: f32,
+    /// Percent.
+    pub stun_chance: f32,
+    pub stun: String,
+    pub two_handed: bool,
+}
+
+impl ItemKind {
+    fn of(classes: &ClassDb, class: &str) -> Self {
+        let p = |n: &str| classes.prop(class, n);
+        let stats = || {
+            let w = p("WeaponStats");
+            let f = |n: &str, d: f32| w[n].as_f64().map_or(d, |v| v as f32);
+            WeaponStats {
+                damage: f("Damage", 10.0),
+                durability: f("Durability", 30.0),
+                attacking_wear: f("AttackingWear", 5.0),
+                stun_chance: f("StunChance", 0.0),
+                stun: w["WeaponStunClass"].as_str().unwrap_or("BaseWeaponStun_C").to_string(),
+                two_handed: p("bIsTwoHanded").as_bool().unwrap_or(false),
+            }
+        };
+        let is = |n: &str| classes.is_child_of(class, n);
+        if is("SCGun") {
+            ItemKind::Gun {
+                stats: stats(),
+                projectile: !p("ProjectileClass").is_null(),
+                pellets: p("NumPellets").as_u64().unwrap_or(1) as u32,
+                spread_deg: p("MaxSpreadAngle").as_f64().unwrap_or(1.0) as f32,
+                velocity: p("ProjectileVelocity").as_f64().unwrap_or(6000.0) as f32,
+            }
+        } else if is("SCWeapon") {
+            ItemKind::Weapon(stats())
+        } else if is("SCTrap") {
+            ItemKind::Trap
+        } else if is("SCFirstAid") {
+            ItemKind::FirstAid
+        } else if is("SCNoiseMaker") {
+            ItemKind::Firecracker { throw_delay: p("ThrowDelayTime").as_f64().unwrap_or(0.8) as f32 }
+        } else if is("SCPocketKnife") {
+            ItemKind::PocketKnife
+        } else if is("SCWalkieTalkie") {
+            ItemKind::WalkieTalkie
+        } else if class.starts_with("Map") {
+            ItemKind::Map
+        } else {
+            ItemKind::Other
+        }
+    }
 }
 
 /// The item sits in this cabinet and can only be taken once the cabinet is open.
@@ -313,6 +392,8 @@ fn spawn_props(
                 name: classes.display_name(&actor.class),
                 large,
                 reach: interact.map_or(150.0, |c| reach(c, 150.0)),
+                kind: ItemKind::of(&classes, &actor.class),
+                hand_socket: classes.prop(&actor.class, "HandAttachSocket").as_str().filter(|s| *s != "None").unwrap_or("WeaponSocket").to_string(),
             });
             *item_classes.entry(actor.class.clone()).or_default() += 1;
             *counts.entry(if actor.kind == Some(SpawnKind::RepairPart) { "repair parts" } else { "items" }).or_default() += 1;

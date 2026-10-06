@@ -489,7 +489,9 @@ impl Rig {
                 continue;
             }
             let at = if self.action.as_ref().is_some_and(|(a, _)| a == name) {
-                self.action.as_ref().unwrap().1.min(len)
+                // Loop sections (a stun's middle) repeat; the rest hold their last frame.
+                let t = self.action.as_ref().unwrap().1;
+                if name.contains("_loop") || name.contains("_cycle") { t % len.max(1e-3) } else { t.min(len) }
             } else if synced(name) {
                 self.phase * len
             } else {

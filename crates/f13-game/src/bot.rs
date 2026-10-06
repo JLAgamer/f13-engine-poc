@@ -26,6 +26,9 @@ pub enum Goal {
     Door,
     /// Stand still and let Jason find, grab and kill the counselor.
     Jason,
+    /// Stand still and use the items she was given (--give) on Jason, and struggle when grabbed: passes when he is
+    /// stunned (or she breaks free) and recovers.
+    Fight,
 }
 
 pub struct BotPlugin(pub Goal);
@@ -188,7 +191,7 @@ fn run_bot(
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     (interaction, tuning): (Res<crate::interact::Interaction>, Res<crate::player::PlayerTuning>),
-    mut player: Single<(&mut Transform, &Player, Option<&Inventory>, Has<Driving>, Has<UsingItem>)>,
+    mut player: Single<(&mut Transform, &Player, Option<&Inventory>, Has<Driving>, Has<UsingItem>, (Has<crate::jason::Held>, Has<crate::items::ItemAction>, Has<crate::jason::Staggered>))>,
     mut camera: Single<&mut PlayerCamera>,
     items: Query<(Entity, &Item, &GlobalTransform, Option<&InCabinet>), Without<Carried>>,
     carried: Query<&Item, With<Carried>>,
@@ -217,13 +220,14 @@ fn run_bot(
     for k in [KeyCode::KeyW, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::KeyC, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD] {
         keys.release(k);
     }
-    let limit = if bot.goal == Goal::Jason { 600.0 } else { 240.0 };
+    let limit = if matches!(bot.goal, Goal::Jason | Goal::Fight) { 600.0 } else { 240.0 };
     if bot.total > limit && bot.step != Step::Done {
         error!("bot: gave up at {:?}", bot.step);
         exit.write(AppExit::error());
         return;
     }
-    let (ref mut pxf, p, inv, driving, using) = *player;
+    let (ref mut pxf, p, inv, driving, using, (held, acting, staggered)) = *player;
+    let busy = acting || staggered || held;
     match bot.step {
         Step::Start => {
             // Let the map finish loading (in real time: frames hitch while assets stream in, whatever --speed).
@@ -245,7 +249,7 @@ fn run_bot(
                 bot.timer = 0.0;
                 return;
             }
-            if bot.goal == Goal::Jason {
+            if matches!(bot.goal, Goal::Jason | Goal::Fight) {
                 match jasons.iter().next() {
                     Some((_, jxf)) => info!("bot: waiting for Jason, {:.0} m away", jxf.translation.distance(pxf.translation)),
                     None => {
@@ -553,6 +557,93 @@ fn run_bot(
                 _ => {}
             }
         }
+        Step::AwaitJason if bot.goal == Goal::Fight => {
+            use crate::jason::JasonState;
+            use crate::props::ItemKind;
+            let Some((j, jxf)) = jasons.iter().next() else { return };
+            let dist = jxf.translation.distance(pxf.translation);
+            if bot.timer >= 5.0 {
+                bot.timer = 0.0;
+                info!("bot: Jason {:?}, {:.1} m away; health {:.0}; hand {:?}", j.state, dist, p.counselor.health, inv.and_then(|i| i.hand).map(|e| carried.get(e).map(|i| i.kind.clone())));
+            }
+            keys.release(KeyCode::KeyA);
+            keys.release(KeyCode::KeyD);
+            keys.release(KeyCode::KeyM);
+            // Carrying the map: open it once (and photograph it).
+            let has_map = inv.is_some_and(|i| i.pockets.iter().any(|&e| carried.get(e).is_ok_and(|it| it.kind == ItemKind::Map)));
+            if has_map && !bot.jason_shots.contains(&"map") {
+                bot.jason_shots.push("map");
+                keys.press(KeyCode::KeyM);
+            } else if bot.jason_shots.contains(&"map") && !bot.jason_shots.contains(&"mapshot") && bot.timer > 1.0 {
+                bot.jason_shots.push("mapshot");
+                let path = std::env::temp_dir().join("f13-bot-map.png");
+                info!("bot: screenshot {}", path.display());
+                commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+            }
+            for k in [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3] {
+                keys.release(k);
+            }
+            if held {
+                // Struggle: alternate A and D.
+                bot.second_tap = !bot.second_tap;
+                keys.press(if bot.second_tap { KeyCode::KeyA } else { KeyCode::KeyD });
+            }
+            // Face him.
+            let d = jxf.translation - pxf.translation;
+            camera.yaw = (-d.x).atan2(-d.z);
+            // At his chest (the camera's eye is about 1.9 m over her feet).
+            camera.pitch = (d.y + 1.2 - 1.9).atan2(Vec2::new(d.x, d.z).length()).clamp(-1.0, 0.5);
+            if matches!(j.state, JasonState::Hunting) && !busy {
+                let kind = |e: Entity| carried.get(e).ok().map(|i| i.kind.clone());
+                let hand = inv.and_then(|i| i.hand).and_then(kind);
+                match hand {
+                    Some(ItemKind::Weapon(_)) if dist < 2.6 => {
+                        debug!("bot: swing at {dist:.2} m");
+                        mouse.press(MouseButton::Left);
+                    }
+                    Some(ItemKind::Gun { .. }) if dist < 10.0 => mouse.press(MouseButton::Left),
+                    Some(ItemKind::Trap) if dist < 14.0 && !bot.jason_shots.contains(&"trap") => {
+                        bot.jason_shots.push("trap");
+                        mouse.press(MouseButton::Left);
+                    }
+                    _ => {}
+                }
+                if let Some(slot) = inv.and_then(|i| i.pockets.iter().position(|&e| matches!(kind(e), Some(ItemKind::Firecracker { .. })))) {
+                    if dist < 11.0 && dist > 7.0 {
+                        keys.press([KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3][slot]);
+                    }
+                }
+            }
+            // After placing a trap, back away 2.5 m along his line so he walks over it to reach her.
+            keys.release(KeyCode::KeyS);
+            if bot.jason_shots.contains(&"trap") && !busy && !bot.jason_shots.contains(&"backed") {
+                let from = bot.dodge_from.get_or_insert((pxf.translation, 0.0)).0;
+                if from.distance(pxf.translation) < 2.5 {
+                    keys.press(KeyCode::KeyS);
+                } else {
+                    bot.jason_shots.push("backed");
+                }
+            }
+            if let JasonState::Stunned { t, stun } = j.state {
+                if !bot.jason_shots.contains(&"stun") && t > 1.0 {
+                    bot.jason_shots.push("stun");
+                    info!("bot: Jason stunned ({stun:?})");
+                    let path = std::env::temp_dir().join("f13-bot-fight-stun.png");
+                    info!("bot: screenshot {}", path.display());
+                    commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+                }
+            }
+            if bot.jason_shots.contains(&"stun") && matches!(j.state, JasonState::Hunting) {
+                info!("bot: Jason recovered after the stun ({:.1}s)", bot.total);
+                bot.step = Step::Done;
+                bot.timer = 0.0;
+            }
+            if !p.counselor.alive() {
+                info!("bot: Vanessa died ({:?})", j.state);
+                bot.step = Step::Done;
+                bot.timer = 0.0;
+            }
+        }
         Step::AwaitJason => {
             let Some((j, jxf)) = jasons.iter().next() else { return };
             if bot.timer >= 5.0 {
@@ -605,6 +696,7 @@ fn run_bot(
                     Goal::Dodge => bot.dodges_ok == 3,
                     Goal::Door => bot.door_ok,
                     Goal::Jason => !p.counselor.alive(),
+                    Goal::Fight => p.counselor.alive() && bot.jason_shots.contains(&"stun"),
                 };
                 exit.write(if ok { AppExit::Success } else { AppExit::error() });
             }
