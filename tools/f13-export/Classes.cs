@@ -220,7 +220,8 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
         if (type.Contains("CapsuleComponent")) { props["CapsuleRadius"] ??= 22f; props["CapsuleHalfHeight"] ??= 44f; }
         // Shapes that block counselors, as convex point sets in component space (cm). Shapes keeping their native
         // constructor's profile (not in the export) are taken as non-blocking (triggers, volumes).
-        if (Collision.ShapeComponent(t, FVector.OneVector) is { } hull && Collision.BlocksPawn(t, "OverlapAllDynamic"))
+        // Spacer capsules (doorways, windows, car seats) only block while an interaction pushes characters clear.
+        if (!type.Contains("SpacerCapsule") && Collision.ShapeComponent(t, FVector.OneVector) is { } hull && Collision.BlocksPawn(t, "OverlapAllDynamic"))
             j["Hull"] = new JArray(hull);
         foreach (var cls in t.GetOrDefault<FPackageIndex[]>("ActorList", [])) Add(cls);
         Add(t.GetOrDefault<FPackageIndex?>("ChildActorClass"));

@@ -209,8 +209,9 @@ fn spawn_props(
             }
         }
 
-        // Blocking shapes (a door's DoorCollision box, a car's body box): on the pivot when they hang off it.
-        for c in info.components.iter().filter(|c| c.hull.is_some()) {
+        // Blocking shapes (a door's DoorCollision box, a car's body box): on the pivot when they hang off it. Spacer
+        // capsules (in doorways, windows and car seats) only block while an interaction pushes characters clear.
+        for c in info.components.iter().filter(|c| c.hull.is_some() && !c.kind.contains("SpacerCapsule")) {
             let tris = crate::collision::hull_from_unreal(c.hull.as_deref().unwrap_or_default());
             if tris.is_empty() {
                 continue;
