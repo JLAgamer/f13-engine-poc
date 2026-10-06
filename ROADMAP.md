@@ -61,11 +61,12 @@ Host CLI (`f13-host`)
 Presentation
 - [x] Map, characters and car exported to glTF (`tools/f13-export`)
 - [x] Map loaded in Bevy with its cabin layouts (`f13-game`)
-- [x] Materials: cabins (Master_Blend_01 two-set vertex-alpha blend, tinted blends, curtains) and terrain layers (height-blended weight
+- [x] Materials: cabins (Master_Blend_01 two-set vertex-alpha blend, tinted blends, curtains), props/items/car (RMA),
+      foliage (RSS roughness, mask threshold) and terrain layers (height-blended weight
       maps), ported from the game's compiled shaders; per-placement material overrides; glass; invisible blockers
       hidden (f13-game materials.rs, shaders/); textures as the game's compressed DDS data with mips
 - [ ] Materials, remaining: water (first pass only: colour, gloss, panning ripples; no depth fade, foam or
-      reflections), POM parallax, prop RMA maps, emissive/light materials
+      reflections), POM parallax, emissive/light materials, foliage subsurface, the Chevette's paint mask
 - [x] Car, furniture, doors (frames and leaves), windows, barricades and items placed in the scene
 - [ ] Barricade plank: check its placement (not visible across the door in a screenshot)
 - [ ] Counselor model: Vanessa's outfit, hair and face attached to the head bone (now a capsule; her mesh is the bare

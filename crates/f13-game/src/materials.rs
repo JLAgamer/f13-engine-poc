@@ -5,6 +5,8 @@
 //!   ([`BlendMaterial`], shaders/blend.wgsl);
 //! - landscape materials (layers in `materials.json`): height-blended layers from the painted weight maps
 //!   ([`TerrainMaterial`], shaders/terrain.wgsl);
+//! - props with an RMA map (the `M_Prop_Master` family): roughness/metallic/AO from it ([`PropMaterial`],
+//!   shaders/prop.wgsl);
 //! - the lake (`M_Lake_Ripples_*`): a first-pass water surface ([`WaterMaterial`], shaders/water.wgsl).
 
 use bevy::asset::{embedded_asset, RenderAssetUsages};
@@ -21,6 +23,7 @@ use std::path::{Path, PathBuf};
 pub(crate) type BlendMaterial = ExtendedMaterial<StandardMaterial, BlendExt>;
 pub(crate) type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainExt>;
 pub(crate) type WaterMaterial = ExtendedMaterial<StandardMaterial, WaterExt>;
+pub(crate) type PropMaterial = ExtendedMaterial<StandardMaterial, PropExt>;
 
 const TERRAIN_LAYERS: usize = 6;
 const WATER_MASTER: &str = "M_Lake_Ripples";
@@ -34,6 +37,7 @@ impl Plugin for MaterialsPlugin {
         embedded_asset!(app, "shaders/blend.wgsl");
         embedded_asset!(app, "shaders/terrain.wgsl");
         embedded_asset!(app, "shaders/water.wgsl");
+        embedded_asset!(app, "shaders/prop.wgsl");
         let entries = std::fs::read_to_string(self.export.join("materials.json"))
             .ok()
             .and_then(|t| match serde_json::from_str(&t) {
@@ -54,6 +58,7 @@ impl Plugin for MaterialsPlugin {
                 MaterialPlugin::<BlendMaterial>::default(),
                 MaterialPlugin::<TerrainMaterial>::default(),
                 MaterialPlugin::<WaterMaterial>::default(),
+                MaterialPlugin::<PropMaterial>::default(),
             ))
             .add_systems(Update, (apply_materials, strip_vertex_colors).chain());
     }
@@ -120,6 +125,7 @@ enum Built {
     Blend(Handle<BlendMaterial>),
     Terrain(Handle<TerrainMaterial>),
     Water(Handle<WaterMaterial>),
+    Prop(Handle<PropMaterial>),
     /// Not drawn: translucent planes with no textures (rain fixes, bed and exit blockers, light planes), which the
     /// game draws invisible (M_rainFix_invisible's compiled shader outputs zero) or as faint effects.
     Hidden,
@@ -272,6 +278,7 @@ impl MaterialExtension for TerrainExt {
 pub(crate) struct PortedMaterials<'w> {
     blends: Res<'w, Assets<BlendMaterial>>,
     terrains: Res<'w, Assets<TerrainMaterial>>,
+    props: Res<'w, Assets<PropMaterial>>,
 }
 
 impl PortedMaterials<'_> {
@@ -287,7 +294,8 @@ impl PortedMaterials<'_> {
                 &e.r3, &e.r4, &e.r5,
             ]
         });
-        b.chain(t)
+        let p = self.props.iter().flat_map(|(_, m)| [m.base.base_color_texture.as_ref(), m.base.normal_map_texture.as_ref(), Some(&m.extension.rma)].into_iter().flatten());
+        b.chain(t).chain(p)
     }
 }
 
@@ -335,6 +343,42 @@ fn water_material(info: &MaterialInfo, loader: &Loader, fb: &Fallback) -> WaterM
             },
             ripples,
         },
+    }
+}
+
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
+pub(crate) struct PropExt {
+    #[uniform(100)]
+    params: PropParams,
+    #[texture(101)]
+    #[sampler(102)]
+    rma: Handle<Image>,
+}
+
+#[derive(ShaderType, Reflect, Debug, Clone)]
+struct PropParams {
+    mults: Vec4,
+    extra: Vec4,
+}
+
+/// The RMA/RSS map and parameters for prop and foliage masters (channel layouts read from M_Prop_Master's and
+/// M_Leaves_Master's compiled shaders), or None for other materials.
+fn prop_params(info: &MaterialInfo, loader: &Loader) -> Option<(Handle<Image>, PropParams)> {
+    // Same RMA sampling (R roughness, G metallic, B AO, times the mults) in M_Item_Master and the Chevette's exterior.
+    if info.master.starts_with("M_Prop_Master") || info.master == "M_Item_Master" || info.master == "M_Vehicle_Chevette_Exterior" {
+        let rma = loader.load(info.textures.get("RMA")?, Tex::Data)?;
+        let mults = Vec4::new(info.scalar("RoughnessMult", 1.0), info.scalar("MetalnessMult", 1.0), info.scalar("Spec", 0.5), 0.0);
+        return Some((rma, PropParams { mults, extra: Vec4::ZERO }));
+    }
+    let rss = ["RSS", "RSS Map"].iter().find_map(|k| info.textures.get(*k))?;
+    let rss = loader.load(rss, Tex::Data)?;
+    let mults = Vec4::new(info.scalar("RoughnessMultiplier", 1.0), 0.0, info.scalar("Specular", 0.5), 1.0);
+    Some((rss, PropParams { mults, extra: Vec4::new(info.scalar("RoughnessMin", 0.0), 0.0, 0.0, 0.0) }))
+}
+
+impl MaterialExtension for PropExt {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://f13_game/shaders/prop.wgsl".into()
     }
 }
 
@@ -407,6 +451,7 @@ fn apply_materials(
         ResMut<Assets<WaterMaterial>>,
         ResMut<Assets<Image>>,
     ),
+    mut props: ResMut<Assets<PropMaterial>>,
     assets: Res<AssetServer>,
 ) {
     let index = &mut *index;
@@ -441,6 +486,8 @@ fn apply_materials(
                 } else if let Some(kind) = blend_kind(&info.master) {
                     // (The POM variant's parallax is not ported: drawn flat.)
                     Built::Blend(blends.add(blend_material(info, kind, &loader, &fallback)))
+                } else if let Some((rma, params)) = prop_params(info, &loader) {
+                    Built::Prop(props.add(ExtendedMaterial { base: standard_material(&index.root, info, &loader), extension: PropExt { params, rma } }))
                 } else {
                     Built::Standard(standard.add(standard_material(&index.root, info, &loader)))
                 };
@@ -462,6 +509,9 @@ fn apply_materials(
             Built::Water(h) => {
                 e.remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(h));
             }
+            Built::Prop(h) => {
+                e.remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(h));
+            }
             Built::Hidden => {
                 e.insert(Visibility::Hidden);
             }
@@ -472,7 +522,8 @@ fn apply_materials(
 fn standard_material(root: &Path, info: &MaterialInfo, loader: &Loader) -> StandardMaterial {
     let mut m = StandardMaterial { perceptual_roughness: 0.8, ..default() };
     match info.blend.as_str() {
-        "BLEND_Masked" => m.alpha_mode = AlphaMode::Mask(0.33),
+        // The game's mask threshold (foliage masters expose it as "Opacity"; Unreal's default clip value is 0.3333).
+        "BLEND_Masked" => m.alpha_mode = AlphaMode::Mask(info.scalars.get("Opacity").copied().unwrap_or(0.3333)),
         "BLEND_Translucent" => m.alpha_mode = AlphaMode::Blend,
         "BLEND_Additive" => m.alpha_mode = AlphaMode::Add,
         _ => {}
