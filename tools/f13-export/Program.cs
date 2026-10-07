@@ -174,7 +174,7 @@ void ExportLevel(string mapPath, params string[] extra)
                         .ToList();
                 }
             }
-            if (actor.ExportType == "NavMeshBoundsVolume")
+            if (actor.ExportType is "NavMeshBoundsVolume" or "SCMiniMapVolume")
             {
                 var bs = root?.GetOrDefault<FPackageIndex?>("BrushBodySetup")?.Load() as CUE4Parse.UE4.Objects.PhysicsEngine.UBodySetup;
                 if (root != null && bs?.AggGeom != null)
@@ -1107,7 +1107,7 @@ class ActorInfo
     public List<Newtonsoft.Json.Linq.JObject>? Components;
     /// BlockingVolumes: their convex hulls as world-space point sets (cm).
     public List<float[]>? Hulls;
-    /// NavMeshBoundsVolumes: the world-space box their brush covers (cm: min x, y, z, max x, y, z).
+    /// NavMeshBoundsVolumes and the minimap volume: the world-space box their brush covers (cm: min x, y, z, max x, y, z).
     public float[]? Bounds;
 }
 class LandscapeInfo { public string Level = "", Actor = "", File = ""; }

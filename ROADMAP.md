@@ -212,7 +212,10 @@ Presentation
       and textures: timer, stamina ring (StaminaBarMaterial as a radial-fill UI material), inventory (item widgets
       with their ImageOn icons, key numbers), breath bars while hiding; the game has no health or fear meter (F3:
       debug text)
-- [ ] HUD, remaining: the minimap's map and icons, the noise meter, help texts, XP popups, ability widgets
+- [x] Minimap map: the level's SCMiniMapVolume (its MapTexture over its brush's area) in SC_MiniMap_Widget's circle,
+      on her, turned with the camera, the compass's N kept on north (DefaultMinimapZoom as the share of the map shown:
+      PLACEHOLDER); widgets' RenderTransforms (the view cone's flip)
+- [ ] HUD, remaining: the minimap's icons, the noise meter, help texts, XP popups, ability widgets
 - [x] Night lighting, fog, flashlight (lighting.rs): the map's point/spot lights (inverse-square lumens, or Unreal's
   falloff-exponent lights matched at a third of their radius; colour temperature; draw-distance fades), the moon and
   height fog of the clear-weather level (CLsm_RainOff), the post-process volume's fixed exposure and ambient cubemap,

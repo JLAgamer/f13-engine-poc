@@ -41,6 +41,11 @@ class WidgetExporter(IFileProvider provider, string outDir, Action<UObject> queu
         if (!File.Exists(file)) return 0;
         var names = System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(file), @"Texture2D'([^']+)'")
             .Select(m => m.Groups[1].Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // And the levels' minimap textures (SCMiniMapVolume's MapTexture).
+        var levels = Path.Combine(outDir, "levels");
+        foreach (var level in Directory.Exists(levels) ? Directory.GetFiles(levels, "*.json") : [])
+            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(level), "\"MapTexture\":\\s*\\{\\s*\"AssetPathName\":\\s*\"[^\"]*/([^/\".]+)\\."))
+                names.Add(m.Groups[1].Value);
         var index = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var key in provider.Files.Keys.Where(k => k.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase)))
         {

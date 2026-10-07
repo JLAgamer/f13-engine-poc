@@ -96,9 +96,10 @@ pub struct UiPlugin;
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shaders/radial_fill.wgsl");
-        app.add_plugins(UiMaterialPlugin::<RadialFill>::default())
+        embedded_asset!(app, "shaders/minimap.wgsl");
+        app.add_plugins((UiMaterialPlugin::<RadialFill>::default(), UiMaterialPlugin::<Minimap>::default()))
             .add_systems(Startup, load_hud)
-            .add_systems(Update, (build_hud, (stamina, timer, breath, dial), hide_for_jason).chain().run_if(resource_exists::<Hud>));
+            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap), hide_for_jason).chain().run_if(resource_exists::<Hud>));
     }
 }
 
@@ -123,6 +124,36 @@ impl UiMaterial for RadialFill {
     }
 }
 
+/// The minimap's map (see `shaders/minimap.wgsl`).
+#[derive(AsBindGroup, Asset, TypePath, Debug, Clone)]
+pub struct Minimap {
+    #[uniform(0)]
+    view: Vec4,
+    #[uniform(1)]
+    dir: Vec4,
+    #[texture(2)]
+    #[sampler(3)]
+    map: Handle<Image>,
+}
+
+impl UiMaterial for Minimap {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://f13_game/shaders/minimap.wgsl".into()
+    }
+}
+
+/// The level's minimap (its SCMiniMapVolume): the map texture (PNG), the area it covers (Unreal cm: min x, min y,
+/// max x, max y) and its DefaultMinimapZoom, taken as the share of the map across the minimap (PLACEHOLDER: the
+/// native widget's use of it isn't read).
+struct MapInfo {
+    file: String,
+    area: [f32; 4],
+    zoom: f32,
+}
+
+/// CircleMask's MinimapRadius (the RetainerBox's effect material).
+const MINIMAP_RADIUS: f32 = 0.39;
+
 /// The HUD's trees and what it was last built for.
 #[derive(Resource)]
 pub struct Hud {
@@ -140,6 +171,7 @@ pub struct Hud {
     root: Option<Entity>,
     /// "<user widget class>.<widget name>" -> entity.
     names: HashMap<String, Entity>,
+    map: Option<MapInfo>,
 }
 
 /// A progress bar's fill.
@@ -150,7 +182,7 @@ struct Progress {
     size: Vec2,
 }
 
-fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<AssetServer>) {
+fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<AssetServer>, level: Res<crate::Level>) {
     let dir = &export.0;
     let Some(mut hud) = Widget::load(dir, "CounselorHUDWidget") else {
         warn!("ui: no ui/CounselorHUDWidget.json (run f13-export ui): debug HUD only");
@@ -168,7 +200,12 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
     for tree in std::iter::once(&mut hud).chain(breath.as_mut()).chain(dial.as_mut()) {
         action_keys(tree);
     }
-    let textures = std::fs::read_to_string(dir.join("ui").join("textures.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let textures: HashMap<String, String> = std::fs::read_to_string(dir.join("ui").join("textures.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let map = level.layouts.iter().flat_map(|l| &l.actors).find(|a| a.class == "SCMiniMapVolume").and_then(|a| {
+        let name = a.props["MapTexture"]["AssetPathName"].as_str()?.rsplit('.').next()?.to_string();
+        let b = a.bounds?;
+        Some(MapInfo { file: textures.get(&name)?.clone(), area: [b[0], b[1], b[3], b[4]], zoom: a.props["DefaultMinimapZoom"].as_f64().unwrap_or(0.2) as f32 })
+    });
     commands.insert_resource(Hud {
         hud,
         breath,
@@ -182,6 +219,7 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         built: None,
         root: None,
         names: HashMap::new(),
+        map,
     });
 }
 
@@ -210,6 +248,7 @@ fn build_hud(
     items: Query<&Item>,
     assets: Res<AssetServer>,
     mut materials: ResMut<Assets<RadialFill>>,
+    mut maps: ResMut<Assets<Minimap>>,
 ) {
     let size = window.size();
     if size.x < 1.0 || size.y < 1.0 {
@@ -244,6 +283,11 @@ fn build_hud(
         let e = b.spawn(&laid, root, full, "SCInteractMinigame_Widget");
         b.commands.entity(e).insert(Visibility::Hidden);
         b.names.insert("SCInteractMinigame_Widget".into(), e);
+    }
+    // The map behind the minimap's icons and frame, in its RetainerBox.
+    if let (Some(map), Some((_, &e))) = (&hud.map, names.iter().find(|(k, _)| k.ends_with(".RetainerBox_0"))) {
+        let m = maps.add(Minimap { view: Vec4::new(0.5, 0.5, map.zoom, MINIMAP_RADIUS), dir: Vec4::new(0.0, -1.0, 0.0, 0.0), map: assets.load(map.file.clone()) });
+        commands.entity(e).insert(MaterialNode(m));
     }
     hud.names = names;
     hud.root = Some(root);
@@ -333,6 +377,13 @@ impl Builder<'_, '_, '_> {
         let e = self.commands.spawn((self.node(r, parent_rect), vis, Pickable::IGNORE, ChildOf(parent), Name::new(w.name.clone()))).id();
         self.names.insert(format!("{owner}.{}", w.name), e);
         let p = &w.props;
+        // Its RenderTransform: scale (a negative one mirrors: the minimap's view cone) and angle (degrees, clockwise).
+        let rt = &p["RenderTransform"];
+        if rt.is_object() {
+            let s = |k: &str| rt["Scale"][k].as_f64().unwrap_or(1.0) as f32;
+            let angle = rt["Angle"].as_f64().unwrap_or(0.0) as f32;
+            self.commands.entity(e).insert(UiTransform { scale: Vec2::new(s("X"), s("Y")), rotation: Rot2::degrees(angle), ..default() });
+        }
         match w.kind.as_str() {
             "Image" => self.brush(e, &p["Brush"], color(&p["ColorAndOpacity"], [1.0; 4])),
             "Border" => self.brush(e, &p["Background"], color(&p["BrushColor"], [1.0; 4])),
@@ -438,6 +489,34 @@ impl Builder<'_, '_, '_> {
             }
             None => {}
         }
+    }
+}
+
+/// Keeps the minimap on her: her place on the map, turned with the camera, the compass's N kept on north.
+fn minimap(
+    mut commands: Commands,
+    hud: Res<Hud>,
+    player: Option<Single<&Transform, With<Player>>>,
+    camera: Option<Single<&GlobalTransform, With<crate::player::PlayerCamera>>>,
+    nodes: Query<&MaterialNode<Minimap>>,
+    mut maps: ResMut<Assets<Minimap>>,
+) {
+    let (Some(map), Some(player), Some(camera)) = (&hud.map, player, camera) else { return };
+    let Some(&e) = hud.names.iter().find(|(k, _)| k.ends_with(".RetainerBox_0")).map(|(_, e)| e) else { return };
+    let Ok(node) = nodes.get(e) else { return };
+    let [x0, y0, x1, y1] = map.area;
+    // Unreal x, y (cm) from Bevy x, z (m).
+    let (x, y) = (player.translation.x * 100.0, player.translation.z * 100.0);
+    let uv = Vec2::new((x - x0) / (x1 - x0), (y - y0) / (y1 - y0));
+    let f = camera.forward();
+    let dir = Vec2::new(f.x, f.z).normalize_or(Vec2::NEG_Y);
+    if let Some(mut m) = maps.get_mut(&node.0) {
+        m.view = Vec4::new(uv.x, uv.y, map.zoom, MINIMAP_RADIUS);
+        m.dir = Vec4::new(dir.x, dir.y, 0.0, 0.0);
+    }
+    // North (the map's up) clockwise from the minimap's up.
+    if let Some((_, &compass)) = hud.names.iter().find(|(k, _)| k.ends_with(".ComapssPanel")) {
+        commands.entity(compass).insert(UiTransform { rotation: Rot2::radians((-dir.x).atan2(-dir.y)), ..default() });
     }
 }
 
