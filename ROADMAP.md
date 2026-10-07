@@ -50,7 +50,11 @@ Mechanics: counselor side
   DiveDamage); windows.rs
 - [x] Hiding: wardrobes, outhouses, beds, tents (hiding.rs: enter/idle/exit montages, hiding camera; Jason's search
   and hiding spot kills)
-- [ ] Hiding spots' own animation: the wardrobe and outhouse doors and the tent flaps (the door swing is a placeholder)
+- [x] Hiding spots placed in the level (the outhouses and tents: 15 more) are usable, their parts spawned at runtime
+      (they were drawn only, without their skeletal parts)
+- [x] Hiding spot doors (the wardrobe's two, swinging out now; the outhouse's): Armoire_C's DoorRotation timelines
+      (PLACEHOLDER: when they open and close within the move)
+- [ ] Hiding spots' own animation, remaining: the tent flaps
 - [x] Health, wounded, death, blocking damage, first aid (f13-core::health)
 - [x] Items against Jason (items.rs): weapon swings (stun chance, wear, breaking), flare gun, shotgun, firecrackers,
   bear traps, the map; stun times and animations from the game (swing reach/angle, throw speed and gun fire timing

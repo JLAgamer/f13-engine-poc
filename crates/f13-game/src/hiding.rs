@@ -24,8 +24,10 @@
 //! falloff) and learns her hiding spot (the game's Jason is a player who hears it). Holding her breath doesn't change
 //! her noise here: she's still while hidden, so it's 0 (BreathNoiseMod only lowers a moving counselor's).
 //!
-//! PLACEHOLDERS: the wardrobe doors swing open (100 deg) while someone goes in or out, searches or kills, instead of
-//! following the montage's door curve; the outhouse door and the tent flaps (skeletal animations) don't move.
+//! Doors (the wardrobe's two, the outhouse's): Armoire_C's timelines, opening along ExitOuthouseDoorTimeline's
+//! DoorRotation (0, 100 deg at 0.2 s, 120 at 0.3) and closing along CloseDoorTimeline's (120 to 0 over 0.7 s, eased).
+//! PLACEHOLDER: they open as someone goes in or out, searches or kills and close as that ends (its OpenCloseDoor /
+//! ExitHidingDriver window); the Blueprint's DoorDriver tick in between isn't read. The tent flaps don't move.
 //! The hidden counselor's model is hidden (the camera is inside the spot).
 
 use bevy::prelude::*;
@@ -54,8 +56,25 @@ pub(crate) struct BreathTuning(pub(crate) f13_core::breath::BreathTuning);
 /// Jason's weapon class: it picks the weapon-specific search and kill moves.
 pub const KILLER_WEAPON: &str = "PickAxe_C";
 /// Door swing (degrees) and speed (degrees per second). PLACEHOLDER (see the module docs).
-const DOOR_OPEN_DEG: f32 = 100.0;
-const DOOR_SPEED_DEG: f32 = 300.0;
+/// Armoire_C's DoorRotation timelines (degrees over seconds).
+fn door_opening(t: f32) -> f32 {
+    if t < 0.2 {
+        // A linear key to 100.
+        100.0 * (t / 0.2).max(0.0)
+    } else {
+        hermite(100.0, 497.67, 120.0, 0.0, 0.1, ((t - 0.2) / 0.1).min(1.0))
+    }
+}
+
+fn door_closing(t: f32) -> f32 {
+    hermite(120.0, 0.0, 0.0, -257.89, 0.7, (t / 0.7).clamp(0.0, 1.0))
+}
+
+/// An Unreal cubic curve segment: values, tangents (per second), its length and where in it (0..1).
+fn hermite(p0: f32, m0: f32, p1: f32, m1: f32, len: f32, s: f32) -> f32 {
+    let (s2, s3) = (s * s, s * s * s);
+    (2.0 * s3 - 3.0 * s2 + 1.0) * p0 + (s3 - 2.0 * s2 + s) * m0 * len + (-2.0 * s3 + 3.0 * s2) * p1 + (s3 - s2) * m1 * len
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpotKind {
@@ -101,6 +120,10 @@ pub struct HidingSpot {
     /// Game time until which the doors stand open.
     pub open_until: f32,
     door_angle: f32,
+    /// When the doors last started opening, the angle they close from, and whether they were open last frame.
+    opened_at: f32,
+    closing_from: f32,
+    was_open: bool,
 }
 
 /// The montage each hiding special move plays (its ContextMontage; for the counselor's enter moves, the female
@@ -190,6 +213,9 @@ impl HidingSpot {
             doors,
             open_until: 0.0,
             door_angle: 0.0,
+            opened_at: 0.0,
+            closing_from: 0.0,
+            was_open: false,
         })
     }
 
@@ -278,7 +304,8 @@ pub fn enter(
         p.counselor.stance = f13_core::counselor::Stance::Standing;
     }
     spot.occupant = Some(player);
-    spot.open_until = now + 2.6;
+    // Its OpenCloseDoor window (3.1 s), closed by its end (the close takes 0.7 s).
+    spot.open_until = now + 2.4;
     info!("Vanessa: hiding ({:?}, side {side})", spot.kind);
     commands.entity(player).insert((Hiding { spot: spot_entity, side, phase: HidePhase::Entering, t: 0.0, end, wants_exit: false }, PlayAction(s.enter_anim.into())));
 }
@@ -477,10 +504,17 @@ pub(crate) fn hiding_camera(
 
 fn swing_doors(time: Res<Time>, mut spots: Query<&mut HidingSpot>, mut transforms: Query<&mut Transform>) {
     let now = time.elapsed_secs();
-    let step = DOOR_SPEED_DEG * time.delta_secs();
     for mut s in &mut spots {
-        let target = if now < s.open_until { DOOR_OPEN_DEG } else { 0.0 };
-        let angle = s.door_angle + (target - s.door_angle).clamp(-step, step);
+        let open = now < s.open_until;
+        if open && !s.was_open {
+            s.opened_at = now;
+        }
+        s.was_open = open;
+        // Open: along the opening curve; then closed from wherever it got to.
+        let angle = if open { door_opening(now - s.opened_at) } else { door_closing(now - s.open_until) * s.closing_from / 120.0 };
+        if open {
+            s.closing_from = angle;
+        }
         if angle == s.door_angle {
             continue;
         }

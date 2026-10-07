@@ -512,12 +512,25 @@ fn is_grass(mesh: &str) -> bool {
     ["/Foliage/Grass/", "/Foliage/Flowers/"].iter().any(|s| mesh.contains(s))
 }
 
-fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResMut<Level>) {
+fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResMut<Level>, export: Res<ExportRoot>) {
     let mut scenes: HashMap<&str, Handle<WorldAsset>> = HashMap::new();
     let mut spawned = 0usize;
+    // Hiding spots placed in the level are runtime actors (props.rs): their parts are spawned there, not here.
+    let classes = f13_data::classes::ClassDb::load(&export.0.join("classes.json")).unwrap_or_default();
+    let runtime: std::collections::HashSet<(&str, &str)> = level
+        .layouts
+        .iter()
+        .flat_map(|l| &l.actors)
+        .filter(|a| props::is_level_runtime_actor(&classes, &a.class))
+        .map(|a| (a.level.as_str(), a.name.as_str()))
+        .collect();
+    let actor_of = |component: &str| component.split("PersistentLevel.").nth(1).and_then(|s| s.split('.').next()).map(str::to_string);
     for layout in &level.layouts {
         for p in &layout.placements {
             if p.hidden || (!level.grass && is_grass(&p.mesh)) || (!level.foliage && p.instances.is_some()) {
+                continue;
+            }
+            if actor_of(&p.component).is_some_and(|a| runtime.contains(&(p.level.as_str(), a.as_str()))) {
                 continue;
             }
             let scene = scenes

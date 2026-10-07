@@ -245,6 +245,11 @@ fn local(c: &f13_data::level::ComponentInfo) -> Transform {
     to_transform(&c.local.unwrap_or(Xform::IDENTITY))
 }
 
+/// A level-placed actor this module spawns as a runtime actor (its parts too): hiding spots (outhouses, tents).
+pub(crate) fn is_level_runtime_actor(classes: &ClassDb, class: &str) -> bool {
+    classes.is_child_of(class, "SCHidingSpot")
+}
+
 /// Builds the match world and spawns its runtime actors.
 fn spawn_props(
     mut commands: Commands,
@@ -273,7 +278,8 @@ fn spawn_props(
     let mut counts: HashMap<&'static str, usize> = HashMap::new();
     let mut item_classes: std::collections::BTreeMap<String, usize> = Default::default();
 
-    for (id, actor) in world.spawned_actors() {
+    let level_actors = world.actors.iter().enumerate().filter(|(_, a)| a.from_level && is_level_runtime_actor(&classes, &a.class));
+    for (id, actor) in world.spawned_actors().chain(level_actors) {
         let Some(info) = classes.get(&actor.class) else { continue };
         let root = commands.spawn((to_transform(&actor.transform), Visibility::default(), Name::new(actor.class.clone()))).id();
         entities.insert(id, root);
@@ -437,7 +443,13 @@ fn spawn_props(
         }
         if is_hiding_spot {
             // The left pivot opens one way, the right one the other.
-            let doors = spot_pivots.iter().map(|(n, &(e, t))| (e, t, if n.starts_with("Right") { -1.0 } else { 1.0 })).collect();
+            let mut doors: Vec<(Entity, Transform, f32)> = spot_pivots.iter().map(|(n, &(e, t))| (e, t, if n.starts_with("Right") { 1.0 } else { -1.0 })).collect();
+            // The outhouse's door is its skeletal mesh (turned on its origin, the hinge; out toward its front, +X).
+            if classes.prop(&actor.class, "HidingSpotType").as_str() == Some("ESCHidingSpotType::Outhouse") {
+                if let (Some(&e), Some(c)) = (parts.get("skeletalMesh"), info.components.iter().find(|c| c.name == "skeletalMesh")) {
+                    doors.push((e, local(c), -1.0));
+                }
+            }
             if let Some(spot) = crate::hiding::HidingSpot::new(&classes, &actor.class, local, doors) {
                 commands.entity(root).insert(spot);
                 *counts.entry("hiding spots").or_default() += 1;
