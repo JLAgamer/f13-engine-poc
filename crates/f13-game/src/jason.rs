@@ -46,7 +46,8 @@
 //! 4 s, StalkActiveTime, IdleStalkModifier, TeleportScreenTime; the map's SCKillerMorphPoints), once his abilities
 //! unlock and recharge. When he uses them is the AI's (PLACEHOLDERS): Shift when he sees her [`SHIFT_RANGE_M`] away,
 //! steering at her and grabbing her when she's in reach (the wind-up stands him still); Morph when the clue or hiding
-//! spot he's after is more than [`MORPH_MIN_M`] away; Stalk when he's closing on one within [`STALK_RANGE_M`]. The
+//! spot he's after is more than [`MORPH_MIN_M`] away, not in his first [`MORPH_GRACE_S`] and landing short of her;
+//! Stalk when he's closing on one within [`STALK_RANGE_M`] or as he arrives from a Morph. The
 //! teleport effect's fade hides him below half (the game dissolves his materials); Stalk silences nothing yet (no
 //! audio).
 
@@ -192,6 +193,12 @@ const BREAK_PHONE_BOX: &str = "AM_Break_Phone_Box_Machete";
 #[derive(Component)]
 pub struct ActionSounds(pub &'static str);
 const MORPH_MIN_M: f32 = 50.0;
+/// The AI's Morph (PLACEHOLDERS): not before he has hunted this long (s; Morph unlocks first, a second in), and aimed
+/// this far short of his goal on his side of it (m), landing no nearer her than [`MORPH_KEEP_OFF_M`]: he closes the
+/// distance, he doesn't drop onto her.
+const MORPH_GRACE_S: f32 = 60.0;
+const MORPH_SHORT_M: f32 = 35.0;
+const MORPH_KEEP_OFF_M: f32 = 25.0;
 const STALK_RANGE_M: f32 = 40.0;
 /// He starts a hiding spot's search or kill this close (m) to its spot.
 const SPECIAL_MOVE_REACH_M: f32 = 1.5;
@@ -408,6 +415,12 @@ pub struct Jason {
     unreachable: Option<(Vec3, f32)>,
     /// Next goal log (game time).
     next_log: f32,
+    /// Seconds spent hunting (the AI's Morph waits [`MORPH_GRACE_S`]).
+    hunted: f32,
+    /// Whether the Shift's sound is playing.
+    shift_sound: bool,
+    /// Just arrived from a Morph (the AI Stalks from there).
+    morphed: bool,
     pub stalk: Option<Stalk>,
     pub fade: TeleportFade,
     /// Knives and traps left; the knife cooldown; where his traps are.
@@ -435,6 +448,11 @@ impl Jason {
         self.replan = 0.0;
         self.vel_y = 0.0;
         self.progress = (Vec3::ZERO, 0.0);
+    }
+
+    /// As if he had hunted past the AI's wait before its first Morph (--bot-abilities).
+    pub(crate) fn skip_morph_grace(&mut self) {
+        self.hunted = MORPH_GRACE_S;
     }
 
     pub fn stalking(&self) -> bool {
@@ -814,6 +832,9 @@ fn spawn_jason(
                 last_gdist: f32::MAX,
                 unreachable: None,
                 next_log: 0.0,
+                hunted: 0.0,
+                shift_sound: false,
+                morphed: false,
                 stalk: None,
                 fade: TeleportFade::default(),
                 knives: tuning.num_knives,
@@ -1074,6 +1095,15 @@ pub(crate) fn update_jason(
                 j.stalk = None;
             }
         }
+        // The Shift's rush (a loop) lasts as long as the Shift, however it ends.
+        if j.shifting() != j.shift_sound {
+            j.shift_sound = j.shifting();
+            if j.shift_sound {
+                commands.trigger(crate::audio::ActorLoop { actor: je, prop: SHIFT_CUE });
+            } else {
+                commands.trigger(crate::audio::StopLoop { actor: je, prop: SHIFT_CUE });
+            }
+        }
         let effect = matches!(j.state, JasonState::Shifting { .. } | JasonState::Morphing { .. });
         j.fade.tick(dt, effect);
         let faded = j.fade.0 < 0.5;
@@ -1134,6 +1164,7 @@ pub(crate) fn update_jason(
                     continue;
                 }
                 j.cooldown -= dt;
+                j.hunted += dt;
                 // Her in a car that's (nearly) stopped, him at its driver door: he pulls her out into his grab
                 // (DriverGrab; the car door only works under MinUseCarDoorSpeed). The AI does it when he gets there,
                 // the player when they grab.
@@ -1171,7 +1202,6 @@ pub(crate) fn update_jason(
                             k.abilities.consume(Ability::Shift);
                         }
                         info!("Jason: Shift");
-                        commands.trigger(crate::audio::PlaySound { cue: SHIFT_CUE.into(), at: Some(xf.translation) });
                         j.state = JasonState::Shifting { shift: Shift::start() };
                         j.velocity = Vec2::ZERO;
                         continue;
@@ -1389,13 +1419,14 @@ pub(crate) fn update_jason(
                         k.abilities.consume(Ability::Shift);
                     }
                     info!("Jason: Shift ({dist:.0} m from her)");
-                    commands.trigger(crate::audio::PlaySound { cue: SHIFT_CUE.into(), at: Some(xf.translation) });
                     j.state = JasonState::Shifting { shift: Shift::start() };
                     j.velocity = Vec2::ZERO;
                     continue;
                 }
-                if after_clue && gdist > MORPH_MIN_M && ready(&know, Ability::Morph) {
-                    if let Some(to) = morph_points.as_ref().and_then(|m| m.pick(goal)) {
+                if after_clue && gdist > MORPH_MIN_M && j.hunted > MORPH_GRACE_S && ready(&know, Ability::Morph) {
+                    let short = goal + (xf.translation - goal).with_y(0.0).normalize_or_zero() * MORPH_SHORT_M;
+                    let to = morph_points.as_ref().and_then(|m| m.pick(short)).filter(|to| to.translation.distance(pxf.translation) > MORPH_KEEP_OFF_M);
+                    if let Some(to) = to {
                         if let Some(k) = know.as_mut() {
                             k.abilities.consume(Ability::Morph);
                         }
@@ -1405,7 +1436,9 @@ pub(crate) fn update_jason(
                         continue;
                     }
                 }
-                if after_clue && gdist < STALK_RANGE_M && j.stalk.is_none() && ready(&know, Ability::Stalk) {
+                // Stalk closing on a clue unseen, or straight out of a Morph (closing the rest of the way quietly).
+                let morphed = std::mem::take(&mut j.morphed);
+                if (after_clue && gdist < STALK_RANGE_M || morphed) && j.stalk.is_none() && ready(&know, Ability::Stalk) {
                     if let Some(k) = know.as_mut() {
                         k.abilities.consume(Ability::Stalk);
                     }
@@ -1620,6 +1653,7 @@ pub(crate) fn update_jason(
                     j.progress = (dest.translation, 0.0);
                     j.stall = 0.0;
                     j.last_gdist = f32::MAX;
+                    j.morphed = true;
                     j.state = JasonState::Hunting;
                 } else {
                     j.state = JasonState::Morphing { t: at, to: dest };

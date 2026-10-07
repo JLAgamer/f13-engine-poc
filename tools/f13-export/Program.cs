@@ -278,7 +278,8 @@ void AddClassByName(string name)
 // collision.json (see Collision.cs).
 // kill_cameras.json: each kill's camera spline (its SCCameraSplineComponent template's SplineCurves: Position, Rotation,
 // Scale (the handicam strength), FOVCurve, HoldTimeCurve, TimeToNextCurve as Unreal InterpCurve points; curves left at
-// their defaults are absent), by kill class.
+// their defaults are absent), by kill class. Each also keeps the spline component's RelativeLocation and RelativeRotation
+// (its place under the kill's root: a grab kill's spline is beside the kill, turned).
 void WriteKillCameras()
 {
     var all = new Newtonsoft.Json.Linq.JObject();
@@ -288,7 +289,13 @@ void WriteKillCameras()
         try
         {
             var spline = provider.LoadPackage(ToFile(path)).GetExports().FirstOrDefault(e => e.ExportType == "SCCameraSplineComponent");
-            var curves = spline == null ? null : Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(spline))["Properties"]?["SplineCurves"];
+            var props = spline == null ? null : Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(spline))["Properties"];
+            var curves = props?["SplineCurves"] as Newtonsoft.Json.Linq.JObject;
+            if (curves != null)
+            {
+                if (props["RelativeLocation"] != null) curves["RelativeLocation"] = props["RelativeLocation"];
+                if (props["RelativeRotation"] != null) curves["RelativeRotation"] = props["RelativeRotation"];
+            }
             if (curves == null)
             {
                 Console.WriteLine($"kill camera {name}: no spline");
@@ -416,6 +423,15 @@ static Xform Xf(FTransform t) => new()
 
 switch (rest[0])
 {
+    case "grep": // grep <text> [path substring]: packages whose bytes contain <text> (ASCII: the name map)
+    {
+        var needle = System.Text.Encoding.ASCII.GetBytes(rest[1]);
+        foreach (var f in provider.Files.Keys.Where(k => (k.EndsWith(".uasset") || k.EndsWith(".umap")) && (rest.Count < 3 || k.Contains(rest[2], StringComparison.OrdinalIgnoreCase))).Order())
+        {
+            try { if (provider.SaveAsset(f).AsSpan().IndexOf(needle) >= 0) Console.WriteLine(f); } catch { }
+        }
+        return 0;
+    }
     case "find": // find <substring>...: package paths containing every substring
         foreach (var f in provider.Files.Keys.Where(k => rest.Skip(1).All(q => k.Contains(q, StringComparison.OrdinalIgnoreCase))).Order())
             Console.WriteLine(f);

@@ -51,6 +51,8 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         public bool KeepRoot;
         /// The montage's notify states (e.g. AttackTraceNotify: when the weapon hits) and named notifies, seconds.
         public List<Window>? Windows;
+        /// The montage's float curves (its RawCurveData, e.g. "Barricade": how far the plank has swung), by name.
+        public SortedDictionary<string, List<CurveKey>>? Curves;
     }
 
     /// A RichCurve key: Interp "linear", "constant" or "cubic".
@@ -245,11 +247,13 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         foreach (var path in animations)
         {
             var windows = Windows(path);
+            var curves = MontageCurves(path);
             foreach (var seq in Sequences(path))
             {
                 if (info.Animations.ContainsKey(seq.Name)) continue;
                 var a = WriteSequence(seq, skeleton, dir, keepRoot.Contains(path));
                 a.Windows = windows;
+                a.Curves = curves;
                 info.Animations[seq.Name] = a;
             }
         }
@@ -476,6 +480,25 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
 
     /// A montage's notify states (those with a duration) and its named notifies (no notify object: events for the
     /// anim Blueprint, e.g. "shouldRagdoll" in the counselors' kill montages; zero length), by name.
+    /// A montage's float curves (RawCurveData.FloatCurves: FRichCurve keys, montage time), by curve name.
+    SortedDictionary<string, List<CurveKey>>? MontageCurves(string path)
+    {
+        var obj = provider.LoadPackageObject(path + "." + path.Split('/')[^1]);
+        var json = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(obj));
+        var result = new SortedDictionary<string, List<CurveKey>>();
+        foreach (var c in json["Properties"]?["RawCurveData"]?["FloatCurves"] as Newtonsoft.Json.Linq.JArray ?? [])
+        {
+            var name = c["Name"]?["DisplayName"]?.ToString();
+            if (string.IsNullOrEmpty(name)) continue;
+            result[name] = (c["FloatCurve"]?["Keys"] as Newtonsoft.Json.Linq.JArray ?? []).Select(k => new CurveKey
+            {
+                Time = (float)k["Time"]!, Value = (float)k["Value"]!, ArriveTangent = (float)(k["ArriveTangent"] ?? 0), LeaveTangent = (float)(k["LeaveTangent"] ?? 0),
+                Interp = k["InterpMode"]?.ToString() switch { "RCIM_Linear" => "linear", "RCIM_Constant" => "constant", _ => "cubic" },
+            }).ToList();
+        }
+        return result.Count > 0 ? result : null;
+    }
+
     List<Window>? Windows(string path)
     {
         var obj = provider.LoadPackageObject(path + "." + path.Split('/')[^1]);

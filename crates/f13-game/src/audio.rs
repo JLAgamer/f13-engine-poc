@@ -98,7 +98,8 @@ pub fn cue_name(v: &serde_json::Value) -> Option<String> {
     Some(rest.trim_end_matches('\'').to_string())
 }
 
-/// Keep playing the cue `actor`'s class names under `prop` on it (a car's engine): its voices follow the actor.
+/// Keep playing the cue `actor`'s class names under `prop` on it (a car's engine), or the cue `prop` itself when its
+/// class names none: its voices follow the actor.
 #[derive(Event, Clone, Copy, Debug)]
 pub struct ActorLoop {
     pub actor: Entity,
@@ -145,8 +146,9 @@ fn actor_loop(
     mut rng: ResMut<crate::GameRng>,
     actors: Query<&ClassSounds>,
 ) {
-    let (Some(mut sounds), Ok(s)) = (sounds, actors.get(ev.actor)) else { return };
-    let Some(cue) = s.0.get(ev.prop).and_then(|c| sounds.cue(c).cloned()) else { return };
+    let Some(mut sounds) = sounds else { return };
+    let name = actors.get(ev.actor).ok().and_then(|s| s.0.get(ev.prop).cloned()).unwrap_or_else(|| ev.prop.to_string());
+    let Some(cue) = sounds.cue(&name).cloned() else { return };
     trace!("loop {} on {}", ev.prop, ev.actor);
     let (voices, att) = cue.play(&mut || rng.0.frand());
     for v in voices {
@@ -247,9 +249,10 @@ fn action_line(take: &str) -> Option<&'static str> {
 }
 
 /// Her voice lines (her VoiceOverObjectClass's, as her class sounds) on what happens to her: Impact when she's hurt,
-/// Wounded as she becomes wounded, Choke when grabbed, Stumble, Died (a death outside a kill), and each action's line
-/// as it starts (swings, windows, kills: [`action_line`]). PLACEHOLDER: the game's voice component picks these on its
-/// own events, not read; the hiding lines are hiding.rs's.
+/// Wounded as she becomes wounded, Stumble, Died (a death outside a kill), and each action's line as it starts (swings,
+/// windows, kills: [`action_line`]). Not Choke on a grab: no code names that line (only the choke kills' Blueprints
+/// do), and it loops. PLACEHOLDER: the game's voice component picks these on its own events, not read; the hiding
+/// lines are hiding.rs's.
 #[allow(clippy::type_complexity)]
 fn voices(
     mut commands: Commands,
@@ -259,7 +262,7 @@ fn voices(
     let Ok((pe, p, action, held)) = players.single() else { return };
     let c = &p.counselor;
     let now = (c.health, c.wounded, held, action.map(|a| a.0.clone()), p.montage.clone(), c.alive());
-    let Some((health, wounded, was_held, was_action, was_montage, was_alive)) = last.replace(now.clone()) else { return };
+    let Some((health, wounded, _, was_action, was_montage, was_alive)) = last.replace(now.clone()) else { return };
     let mut say = |line: &'static str| commands.trigger(ActorSound { actor: pe, prop: line });
     let kill = |a: &Option<String>| a.as_deref().and_then(action_line).is_some_and(|l| l.ends_with("Kill"));
     let in_kill = kill(&now.3) || kill(&was_action);
@@ -270,9 +273,6 @@ fn voices(
     }
     if now.1 && !wounded && now.5 {
         say("VO:Wounded");
-    }
-    if now.2 && !was_held {
-        say("VO:Choke");
     }
     if now.4.as_deref().is_some_and(|m| m.contains("stumble")) && now.4 != was_montage {
         say("VO:Stumble");

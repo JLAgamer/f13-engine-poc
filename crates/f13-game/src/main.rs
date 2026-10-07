@@ -28,6 +28,7 @@ mod hiding;
 mod host;
 mod items;
 mod jason_player;
+mod interaction_camera;
 mod kill_camera;
 mod jason;
 mod lighting;
@@ -107,6 +108,7 @@ struct Args {
     no_jason: bool,
     /// Seconds before Jason starts hunting.
     jason_delay: f32,
+    unlit: bool,
     grass: bool,
     aerial: bool,
     fly: bool,
@@ -164,6 +166,7 @@ fn parse_args() -> Args {
     let mut give = Vec::new();
     let mut no_jason = false;
     let mut jason_delay = 0.0;
+    let mut unlit = false;
     let mut round_time = None;
     let mut flashlight = false;
     let mut grass = false;
@@ -244,6 +247,7 @@ fn parse_args() -> Args {
             "--flashlight" => flashlight = true,
             "--round-time" => round_time = it.next().and_then(|v| v.parse().ok()).map(|t: i32| t.max(1)),
             "--no-foliage" => foliage = false,
+            "--unlit" => unlit = true,
             "--screenshot" => screenshot = it.next().map(PathBuf::from),
             "--pose" => {
                 let v = it.next().unwrap_or_default();
@@ -267,7 +271,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight }
+    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight }
 }
 
 #[derive(Resource)]
@@ -387,7 +391,7 @@ fn main() {
             // Playing Jason, the bot playing her doesn't decide when the run ends.
             .add_plugins(match_flow::MatchPlugin { leave: !bot || args.play_jason })
             .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }, collision::CollisionPlugin, audio::AudioPlugin, water::WaterPlugin, power::PowerPlugin { cut: args.cut_power }, kill_camera::KillCameraPlugin, prop_anim::PropAnimPlugin, doors::DebrisPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin, navigation::NavigationPlugin { debug: args.nav_debug }))
-            .add_plugins((police::PolicePlugin, placed_kills::PlacedKillsPlugin));
+            .add_plugins((police::PolicePlugin, placed_kills::PlacedKillsPlugin, interaction_camera::InteractionCameraPlugin));
         // Playing Jason without a --bot-*: the escape bot plays her (the scripted Jason's test leaves her idle).
         if args.bot_escape || (args.play_jason && !bot && !args.play_jason_demo) {
             app.add_plugins(bot::BotPlugin(bot::Goal::Escape));
@@ -458,7 +462,7 @@ fn main() {
         .add_plugins((materials::MaterialsPlugin { export: args.export.clone() }, mipmaps::MipmapsPlugin))
         .insert_resource(ExportRoot(args.export.clone()))
         .add_plugins(props::PropsPlugin { seed, near_car: args.near_car && !(args.fly || args.aerial) })
-        .add_plugins(lighting::LightingPlugin { flashlight: args.flashlight })
+        .add_plugins(lighting::LightingPlugin { flashlight: args.flashlight, unlit: args.unlit })
         .add_systems(Startup, spawn_level)
         .add_systems(PostUpdate, apply_placed.before(bevy::camera::visibility::VisibilitySystems::CheckVisibility));
     // The HUD, hers or Jason's when he's played (embedded shader and UI material: after the asset and render plugins).

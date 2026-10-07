@@ -277,6 +277,20 @@ Setup
       hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold
       for a decision on that
 
+Decomp audit (nothing guessed: every rule read from the decomp or the game's data)
+- [ ] Check each PLACEHOLDER (31, `grep -rn PLACEHOLDER crates`) and each "guess"/"assumed"/"not read" note (about 10)
+      against the decomp and the export (Ghidra, MODLOG, f13-export `debug-json` / `pseudo` / `cdo` / `grep`); port
+      what the game does, or record in MODLOG why it can't be found. Most are in jason.rs, hiding.rs, audio.rs,
+      police.rs, doors.rs, items.rs, interact.rs. Jason's decisions stay ours (his AI was cut), marked as such.
+      Found so far: her "Choke" line on a grab (the game never plays it there: removed); the grab kills' camera
+      splines missed their component's place in the kill Blueprint (fixed); the barricade plank (one plank whose
+      pitch follows her "Barricade" curve: fixed); doors' interaction cameras (ported)
+- [ ] The counselor's cameras (Base_Counselor: Chase, Combat, Crouching, Driving, Grab, Indoor, Outdoor, Shooting,
+      Water spring arms, switched by its ChangeCamera graph): f13-rs's single follow camera is a guess
+- [ ] Special moves' look (ILLSpecialMove_MoveToward: her view turns to the move's spot, MODLOG)
+- [ ] Post-processing the map's volume asks for: the colour grading LUT (LutTestHorror at 0.25), the engine's filmic
+      tonemapper, SSAO and bloom (DefaultFeature.*); then compare against the game's own screenshots
+
 ## Milestone 2: more escapes
 Police, 4-seat car, boat, then the others, one at a time.
 

@@ -258,20 +258,41 @@ pub struct Flashlight {
 pub struct LightingPlugin {
     /// --flashlight: she starts with it on.
     pub flashlight: bool,
+    /// --unlit: no lights, shadows or fog, flat white ambient instead (for looking at things in test screenshots).
+    pub unlit: bool,
 }
+
+/// --unlit's flat ambient (cd/m^2 per unit albedo, before the 1/1.2 exposure).
+const UNLIT_AMBIENT: f32 = 1.2;
+/// --unlit's directional light (lux).
+const UNLIT_SUN_LUX: f32 = 2.0;
+
+#[derive(Resource)]
+struct Unlit;
 
 #[derive(Resource)]
 struct FlashlightAtStart(bool);
 
 impl Plugin for LightingPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(FlashlightAtStart(self.flashlight))
-            .add_systems(Startup, spawn_lights)
+        app.insert_resource(FlashlightAtStart(self.flashlight && !self.unlit));
+        if self.unlit {
+            app.insert_resource(Unlit);
+        }
+        app.add_systems(Startup, spawn_lights)
             .add_systems(Update, (setup_cameras, update_fog, fade_lights, add_flashlight, toggle_flashlight, aim_flashlight).chain());
     }
 }
 
-fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<crate::ExportRoot>) {
+fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<crate::ExportRoot>, unlit: Option<Res<Unlit>>) {
+    if unlit.is_some() {
+        info!("lighting: off (--unlit)");
+        commands.insert_resource(GlobalAmbientLight { color: Color::WHITE, brightness: UNLIT_AMBIENT, ..default() });
+        commands.insert_resource(ClearColor(Color::srgb(0.4, 0.45, 0.5)));
+        // And a soft light from above, so surfaces whose ambient occlusion reads 0 (BC5 RMA maps) still show.
+        commands.spawn((DirectionalLight { illuminance: UNLIT_SUN_LUX, shadow_maps_enabled: false, ..default() }, Transform::from_rotation(Quat::from_euler(EulerRot::YXZ, 0.6, -0.9, 0.0))));
+        return;
+    }
     let classes = match ClassDb::load(&export.0.join("classes.json")) {
         Ok(c) => c,
         Err(e) => {

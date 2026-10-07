@@ -21,8 +21,9 @@ impl Plugin for KillCameraPlugin {
     }
 }
 
+/// Each kill's camera spline, and its place under the kill's root (Unreal cm and rotation).
 #[derive(Resource, Default)]
-pub struct KillCameras(HashMap<String, CameraSpline>);
+pub struct KillCameras(HashMap<String, CameraSpline>, HashMap<String, (Vec3, Quat)>);
 
 /// The kill camera's BlendBackTime (the kills' special moves: 0.5 s): the camera eases from where the kill camera
 /// left it to the follow camera.
@@ -56,26 +57,32 @@ fn blend_back(mut commands: Commands, time: Res<Time>, blend: Option<ResMut<Blen
 pub struct KillCam {
     pub kill: String,
     pub origin: Transform,
+    /// Whether `origin` is the kill's root (a grab kill: the spline sits under it at its own place) rather than the
+    /// spline's own frame.
+    at_root: bool,
     pub t: f32,
     handicam: Handicam,
 }
 
 impl KillCam {
     pub fn new(kill: &str, jason: Transform) -> Self {
-        Self::at(kill, Transform::from_matrix(jason.to_matrix() * Transform::from_rotation(crate::character::FACING).to_matrix()))
+        let origin = Transform::from_matrix(jason.to_matrix() * Transform::from_rotation(crate::character::FACING).to_matrix());
+        KillCam { at_root: true, ..Self::at(kill, origin) }
     }
 
     /// From its camera spline's own frame (a placed kill's, under its ContextKillComponent).
     pub fn at(kill: &str, origin: Transform) -> Self {
-        KillCam { kill: kill.to_string(), origin, t: 0.0, handicam: Handicam::default() }
+        KillCam { kill: kill.to_string(), origin, at_root: false, t: 0.0, handicam: Handicam::default() }
     }
 }
 
 fn load(export: Res<crate::ExportRoot>, mut cameras: ResMut<KillCameras>) {
-    match f13_data::kill_camera::load(&export.0.join("kill_cameras.json")) {
+    let path = export.0.join("kill_cameras.json");
+    match f13_data::kill_camera::load(&path) {
         Ok(c) => cameras.0 = c,
         Err(e) => warn!("kill cameras: {e} (f13-export killcams): kills keep the follow camera"),
     }
+    cameras.1 = f13_data::kill_camera::load_frames(&path).unwrap_or_default();
 }
 
 pub(crate) fn kill_camera(
@@ -113,8 +120,12 @@ pub(crate) fn kill_camera(
     }
     let p = spline.at(k.t);
     let shake = k.handicam.tick(dt, HANDICAM_FREQUENCY, 0.0, 0.0, p.shake);
-    let r = quaternion(rotator(p.rotation) + shake);
-    let local = Xform { t: p.location.to_array(), r: r.to_array(), s: [1.0; 3] }.to_gltf_space();
+    let (mut at, mut r) = (p.location, quaternion(rotator(p.rotation) + shake));
+    // A grab kill's spline sits at its own place under the kill's root.
+    if let Some(&(t, q)) = k.at_root.then(|| cameras.1.get(k.kill.as_str())).flatten() {
+        (at, r) = (t + q * at, q * r);
+    }
+    let local = Xform { t: at.to_array(), r: r.to_array(), s: [1.0; 3] }.to_gltf_space();
     let local = Transform { translation: Vec3::from_array(local.translation), rotation: Quat::from_array(local.rotation), scale: Vec3::ONE };
     let world = k.origin.mul_transform(local);
     // The camera looks along Unreal +X (Bevy +X here); a Bevy camera looks along -Z.

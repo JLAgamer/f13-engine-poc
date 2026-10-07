@@ -308,6 +308,9 @@ fn spawn_props(
             commands.entity(root).insert(crate::audio::ClassSounds(sounds));
         }
         let mut drawer = None;
+        if let Some(cams) = crate::interaction_camera::InteractionCameras::new(&info.components) {
+            commands.entity(root).insert(cams);
+        }
         let is_door = classes.is_child_of(&actor.class, "SCDoor");
         let pivot = is_door.then(|| info.components.iter().find(|c| c.name == "Pivot")).flatten().map(|p| {
             let t = local(p);
@@ -471,14 +474,10 @@ fn spawn_props(
             }
         }
         if classes.is_child_of(&actor.class, "SCBarricade") {
-            // The plank across the door (`..._01_a`, horizontal) vs the one stood against the wall (`..._01_b`).
-            let get = |n: &str| parts.get(n).copied().into_iter().collect::<Vec<_>>();
-            commands.entity(root).insert(crate::windows::Barricade {
-                enabled: false,
-                door: None,
-                up: get("S_Interactive_Door_Barricade_01_b"),
-                down: get("Mesh"),
-            });
+            // "Mesh" (`..._01_b`) is the plank, stood on end beside the door; the component named
+            // `S_Interactive_Door_Barricade_01_b` (mesh `..._01_a`) is the wall brackets it drops into.
+            let plank = info.components.iter().find(|c| c.name == "Mesh").and_then(|c| Some((*parts.get("Mesh")?, c.local.unwrap_or(Xform::IDENTITY))));
+            commands.entity(root).insert(crate::windows::Barricade { enabled: false, door: None, plank });
             *counts.entry("barricades").or_default() += 1;
         }
         if classes.is_child_of(&actor.class, "SCWindow") {

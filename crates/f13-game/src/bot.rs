@@ -260,12 +260,12 @@ fn run_bot(
     carried: Query<&Item, With<Carried>>,
     cabinets: Query<(&Cabinet, &GlobalTransform)>,
     mut vehicles: Query<(Entity, &Vehicle, &GlobalTransform, &mut Transform), Without<Player>>,
-    (zones, mut doors, windows, mut barricades, jasons): (
+    (zones, mut doors, windows, mut barricades, mut jasons): (
         Query<(&EscapeZone, &GlobalTransform)>,
         Query<(Entity, &mut crate::doors::Door, &GlobalTransform)>,
         Query<(Entity, &crate::windows::Window, &GlobalTransform)>,
         Query<&mut crate::windows::Barricade>,
-        Query<(&crate::jason::Jason, &Transform), (Without<Player>, Without<Vehicle>)>,
+        Query<(&mut crate::jason::Jason, &Transform), (Without<Player>, Without<Vehicle>)>,
     ),
     (escaped, spots, mut knowledge, mut game, traps): (
         Option<Res<Escaped>>,
@@ -431,6 +431,10 @@ fn run_bot(
                     let a = &mut k.abilities;
                     a.unlocked = [true; 4];
                     a.recharge_timer = a.tuning.recharge_time;
+                }
+                // And past the AI's wait before its first Morph.
+                for (mut j, _) in &mut jasons {
+                    j.skip_morph_grace();
                 }
             }
             if bot.goal == Goal::PlacedKill {

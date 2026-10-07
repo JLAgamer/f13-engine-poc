@@ -11,13 +11,20 @@
 //! Barricades, from `SCBarricade`: a door's barricade replaces its lock. Holding interact on the door from inside
 //! toggles the barricade (`OnUsedBarricade`), only while the door is closed; a barricaded door doesn't open.
 //!
+//! The barricade's plank (its "Mesh", `S_Interactive_Door_Barricade_01_b`) stands on end beside the door, over the wall
+//! brackets (the `..._01_a` mesh). Its pitch is all that moves (SCBarricade, decompiled): during the counselor's
+//! montage, UseBarricadeDriverTick (0x140364d10) sets it to [`PLANK_PITCH`] x clamp(her "Barricade" curve, 0, 1) on
+//! the plank's own rotation; OnRep_Enabled (0x140352c40) sets it to [`PLANK_PITCH`] when barred, 0 when not.
+//!
 //! PLACEHOLDERS: the vault/dive/open animations are instant (the counselor is moved through the window, 1.2 m past
-//! it); which barricade mesh shows in which state, and linking a barricade to the nearest door, are guesses.
+//! it); linking a barricade to the nearest door is a guess.
 
 use bevy::prelude::*;
 
 /// How far past the window plane the counselor lands after a vault or dive.
 const THROUGH_M: f32 = 1.2;
+/// The plank's pitch across the door (DAT_142121618, degrees).
+pub const PLANK_PITCH: f32 = -90.0;
 
 #[derive(Component, Debug)]
 pub struct Window {
@@ -89,15 +96,36 @@ pub struct Barricade {
     pub enabled: bool,
     /// The door it bars (nearest door, linked after spawning).
     pub door: Option<Entity>,
-    /// Meshes shown when barring the door, and when not.
-    pub up: Vec<Entity>,
-    pub down: Vec<Entity>,
+    /// The plank and its relative transform (Unreal, in the barricade's space) as placed: stood on end.
+    pub plank: Option<(Entity, f13_data::level::Xform)>,
+}
+
+impl Barricade {
+    /// The plank and its transform at `pitch` (degrees), keeping its yaw and roll (SetRelativeRotation of its stored
+    /// rotation with the pitch replaced).
+    pub fn plank_at(&self, pitch: f32) -> Option<(Entity, Transform)> {
+        use f13_core::camera_spline::{quaternion, rotator};
+        let (e, placed) = self.plank?;
+        let mut r = rotator(Quat::from_array(placed.r));
+        r.x = pitch;
+        Some((e, crate::to_transform(&f13_data::level::Xform { r: quaternion(r).to_array(), ..placed })))
+    }
+}
+
+/// OnRep_Enabled: the plank across the door when barred, stood up when not.
+pub fn place_planks(barricades: Query<&Barricade, Changed<Barricade>>, mut transforms: Query<&mut Transform>) {
+    for b in &barricades {
+        if let Some((e, at)) = b.plank_at(if b.enabled { PLANK_PITCH } else { 0.0 }) {
+            if let Ok(mut t) = transforms.get_mut(e) {
+                *t = at;
+            }
+        }
+    }
 }
 
 /// Shows window panes and barricade meshes for their state.
 pub fn update_window_visuals(
     windows: Query<&Window, Changed<Window>>,
-    barricades: Query<&Barricade, Changed<Barricade>>,
     mut transforms: Query<&mut Transform>,
     mut visibility: Query<&mut Visibility>,
 ) {
@@ -114,14 +142,6 @@ pub fn update_window_visuals(
         }
         for &g in &w.glass {
             show(g, !w.destroyed);
-        }
-    }
-    for b in &barricades {
-        for &e in &b.up {
-            show(e, b.enabled);
-        }
-        for &e in &b.down {
-            show(e, !b.enabled);
         }
     }
 }
