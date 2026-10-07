@@ -1,4 +1,5 @@
-//! Skeletal props' own animations (`props/<mesh>.json` from `f13-export props`): the bear trap opening as it's armed
+//! Skeletal props' own animations (`props/<mesh>.json` from `f13-export props`): the tent's flaps as she goes in and
+//! out (hiding.rs); the bear trap opening as it's armed
 //! (BearTrap_C ArmedAnimation), snapping shut on a foot (TriggeredAnimation) and opening as she steps out
 //! (EscapedAnimation), shut (A_Trap_Bear_01_Close_Idle_01) while it lies about or is carried: the mesh's bind pose
 //! is the open trap. Each plays once and holds its last frame, sampled onto the prop's joints by bone name.
@@ -12,6 +13,9 @@ pub const TRAP_ARMED: &str = "A_Trap_Bear_01_Open_M";
 pub const TRAP_SPRUNG: &str = "A_Trap_Bear_01_Enter_01_Anim";
 pub const TRAP_ESCAPED: &str = "A_Trap_Bear_01_Exit_01_Anim";
 pub const TRAP_CLOSED: &str = "A_Trap_Bear_01_Close_Idle_01";
+/// The tent's, as she goes in and out of it.
+pub const TENT_ENTER: &str = "normal_stand_hidespot_tent_enter";
+pub const TENT_EXIT: &str = "normal_stand_hidespot_tent_exit";
 /// The bear trap items.
 const TRAP_CLASSES: &[&str] = &["BearTrap_C"];
 
@@ -41,17 +45,19 @@ impl PropAnim {
 }
 
 fn load(export: Res<crate::ExportRoot>, mut anims: ResMut<PropAnims>) {
-    let file = export.0.join("props").join("A_Trap_Bear_01.json");
-    let Some(index) = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str::<HashMap<String, AnimInfo>>(&t).ok()) else {
-        warn!("{}: missing (f13-export props): traps don't animate", file.display());
-        return;
-    };
-    for (name, info) in index {
-        match AnimData::load(&export.0.join(&info.file)) {
-            Ok(data) => {
-                anims.0.insert(name, (data, info.length));
+    for mesh in ["A_Trap_Bear_01", "A_Camp_Tent_Yellow_01_LOD0"] {
+        let file = export.0.join("props").join(format!("{mesh}.json"));
+        let Some(index) = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str::<HashMap<String, AnimInfo>>(&t).ok()) else {
+            warn!("{}: missing (f13-export props): {mesh} doesn't animate", file.display());
+            continue;
+        };
+        for (name, info) in index {
+            match AnimData::load(&export.0.join(&info.file)) {
+                Ok(data) => {
+                    anims.0.insert(name, (data, info.length));
+                }
+                Err(e) => warn!("{e}"),
             }
-            Err(e) => warn!("{e}"),
         }
     }
 }

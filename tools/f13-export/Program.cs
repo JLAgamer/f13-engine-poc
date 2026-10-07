@@ -522,7 +522,7 @@ switch (rest[0])
         AnimExporter.Write(provider, outDir, Mvp.Montages);
         new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims, Mvp.KeepRoot);
         new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, Mvp.KillerAnims, Mvp.KeepRoot);
-        new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TrapMesh, Mvp.TrapAnims);
+        new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TrapMesh, Mvp.TrapAnims); new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TentMesh, Mvp.TentAnims);
         WriteKillCameras();
         WriteWater();
         WriteCollision();
@@ -571,7 +571,7 @@ switch (rest[0])
         WriteKillCameras();
         break;
     case "props": // skeletal props' own animations (props/): the bear trap
-        new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TrapMesh, Mvp.TrapAnims);
+        new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TrapMesh, Mvp.TrapAnims); new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TentMesh, Mvp.TentAnims);
         break;
     case "anims":
         AnimExporter.Write(provider, outDir, Mvp.Montages);
@@ -954,6 +954,14 @@ static class Mvp
     ];
     // Jason_AnimBP's BS_Jason_Normal_Move (SpeedState 0 idle, 1 walk, 2 fast walk, 3 run), the pickaxe's combat idle,
     // attacks (PickAxe's NeutralAttack and ForwardAttack), the grab, and the grab kill.
+    /// The tent's own animations (its flaps as she goes in and out, and while she hides).
+    public const string TentMesh = "/Game/Props/SkeletalMeshes/Camp/A_Camp_Tent_Yellow_01_LOD0";
+    public static readonly string[] TentAnims =
+    [
+        "/Game/Props/SkeletalMeshes/Camp/Animation/normal_stand_hidespot_tent_enter",
+        "/Game/Props/SkeletalMeshes/Camp/Animation/normal_stand_hidespot_tent_exit",
+        "/Game/Props/SkeletalMeshes/Camp/Animation/cinematic_hidespot_tent_idle",
+    ];
     /// The bear trap's own animations (BearTrap_C ArmedAnimation, TriggeredAnimation, EscapedAnimation; its idles).
     public const string TrapMesh = "/Game/Props/SkeletalMeshes/Traps/A_Trap_Bear_01";
     public static readonly string[] TrapAnims =

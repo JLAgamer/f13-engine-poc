@@ -101,6 +101,8 @@ pub struct Side {
 #[derive(Component, Debug)]
 pub struct HidingSpot {
     pub kind: SpotKind,
+    /// Its own animated part (the tent), if any.
+    pub prop: Option<Entity>,
     pub sides: Vec<Side>,
     pub idle_anim: &'static str,
     /// The interact point (spot space) and its reach (cm).
@@ -212,6 +214,7 @@ impl HidingSpot {
             destroy_on_search: classes.prop(class, "bDestroyOnSearch").as_bool().unwrap_or(true),
             doors,
             open_until: 0.0,
+            prop: None,
             door_angle: 0.0,
             opened_at: 0.0,
             closing_from: 0.0,
@@ -306,6 +309,9 @@ pub fn enter(
     spot.occupant = Some(player);
     // Its OpenCloseDoor window (3.1 s), closed by its end (the close takes 0.7 s).
     spot.open_until = now + 2.4;
+    if let (SpotKind::Tent, Some(prop)) = (spot.kind, spot.prop) {
+        commands.entity(prop).insert(crate::prop_anim::PropAnim::new(crate::prop_anim::TENT_ENTER));
+    }
     info!("Vanessa: hiding ({:?}, side {side})", spot.kind);
     commands.entity(player).insert((Hiding { spot: spot_entity, side, phase: HidePhase::Entering, t: 0.0, end, wants_exit: false }, PlayAction(s.enter_anim.into())));
 }
@@ -449,6 +455,9 @@ fn update_hiding(
                 h.t = 0.0;
                 *vis = Visibility::Inherited;
                 spot.open_until = now + len(side.exit_anim);
+                if let (SpotKind::Tent, Some(prop)) = (spot.kind, spot.prop) {
+                    commands.entity(prop).insert(crate::prop_anim::PropAnim::new(crate::prop_anim::TENT_EXIT));
+                }
                 commands.entity(pe).insert(PlayAction(side.exit_anim.into()));
                 info!("Vanessa: leaving the hiding spot");
             }

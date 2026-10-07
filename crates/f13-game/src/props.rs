@@ -450,7 +450,10 @@ fn spawn_props(
                     doors.push((e, local(c), -1.0));
                 }
             }
-            if let Some(spot) = crate::hiding::HidingSpot::new(&classes, &actor.class, local, doors) {
+            if let Some(mut spot) = crate::hiding::HidingSpot::new(&classes, &actor.class, local, doors) {
+                if spot.kind == crate::hiding::SpotKind::Tent {
+                    spot.prop = parts.get("skeletalMesh").copied();
+                }
                 commands.entity(root).insert(spot);
                 *counts.entry("hiding spots").or_default() += 1;
             }

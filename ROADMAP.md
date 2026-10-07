@@ -54,7 +54,7 @@ Mechanics: counselor side
       (they were drawn only, without their skeletal parts)
 - [x] Hiding spot doors (the wardrobe's two, swinging out now; the outhouse's): Armoire_C's DoorRotation timelines
       (PLACEHOLDER: when they open and close within the move)
-- [ ] Hiding spots' own animation, remaining: the tent flaps
+- [x] The tent's flaps: its own enter and exit takes (normal_stand_hidespot_tent_enter/exit) as she goes in and out
 - [x] Health, wounded, death, blocking damage, first aid (f13-core::health)
 - [x] Items against Jason (items.rs): weapon swings (stun chance, wear, breaking), flare gun, shotgun, firecrackers,
   bear traps, the map; stun times and animations from the game (swing reach/angle, throw speed and gun fire timing
