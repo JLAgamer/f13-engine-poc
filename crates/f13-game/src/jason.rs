@@ -1715,7 +1715,7 @@ pub(crate) fn update_jason(
                         continue;
                     }
                     d.press(g, xf.translation);
-                    d.swing_seconds = swing_len;
+                    d.drive(killer.info.animations.get(anim).and_then(|a| a.curve("DoorRotation")), at, swing_at + swing_len);
                 }
                 if at >= killer.length(anim).unwrap_or(1.6) {
                     j.state = JasonState::Hunting;

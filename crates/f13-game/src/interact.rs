@@ -104,6 +104,8 @@ pub struct DoorMove {
     t: f32,
     /// The OpenCloseDoor window (s) and the montage's length.
     swing: (f32, f32),
+    /// Its DoorRotation curve (the leaf follows it in the window).
+    curve: Option<f13_core::curve::RichCurve>,
     length: f32,
     swung: bool,
     /// Played on its own root motion: where it plays from and where it leaves her.
@@ -397,7 +399,7 @@ fn door_moves(
             m.swung = true;
             if let Ok((mut door, gxf)) = doors.get_mut(m.door) {
                 let what = door.press(gxf, xf.translation);
-                door.swing_seconds = (m.swing.1 - m.swing.0).max(0.1);
+                door.drive(m.curve.clone(), m.t, m.swing.1);
                 info!("door {what}");
             }
         }
@@ -810,7 +812,7 @@ fn act(
                             player_xf.rotation = at.rotation;
                         }
                         commands.entity(player_entity).insert((
-                            DoorMove { door: d, t: 0.0, swing, length: t.length, swung: false, root },
+                            DoorMove { door: d, t: 0.0, swing, curve: t.curve("DoorRotation"), length: t.length, swung: false, root },
                             crate::character::PlayAction(anim.into()),
                         ));
                         // Its handler takes the camera (doors' open and close moves have bTakeCameraControl).

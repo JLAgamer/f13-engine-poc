@@ -16,8 +16,8 @@
 //! leaf always opens the same way, whoever opens it. DriverTick (0x140353cb0) sets the Pivot's relative yaw to
 //! start + (end - start) x clamp(the opener's DoorRotation curve, 0, 1); OpenCloseDoorCompleted (0x140353b20) snaps
 //! it to the end if the montage ends first.
-//! PLACEHOLDER: the leaf turns at a steady rate over the driver window (or [`SWING_SECONDS`] without one) instead of
-//! along the montage's DoorRotation curve (the montages' curves aren't loaded yet).
+//! Here the opener's move passes its take's DoorRotation curve and its montage time ([`Door::drive`]); without one
+//! (a press with no take) the leaf turns at a steady rate over [`SWING_SECONDS`].
 
 use bevy::prelude::*;
 
@@ -81,8 +81,11 @@ pub struct Door {
     /// broken: gone, open for good.
     pub health: f32,
     pub broken: bool,
-    /// How long the current swing takes (the opener's OpenCloseDoor driver window; [`SWING_SECONDS`] otherwise).
+    /// How long the current swing takes when no take drives it ([`SWING_SECONDS`]).
     pub swing_seconds: f32,
+    /// The opener's take driving the swing: its DoorRotation curve, its montage time, the driver window's end, and
+    /// the angle the swing started from.
+    pub driver: Option<(f13_core::curve::RichCurve, f32, f32, f32)>,
     /// `BaseDoorHealth`, and the Light / Medium / Heavy DestructionThreshold fractions of it.
     pub base_health: f32,
     pub damage_thresholds: [f32; 3],
@@ -224,6 +227,13 @@ impl Door {
         (press, hold)
     }
 
+    /// The opener's take drives the swing just started (OpenCloseDoorDriverBegin): `curve` its DoorRotation, `t`
+    /// its montage time now, `end` its OpenCloseDoor window's end.
+    pub fn drive(&mut self, curve: Option<f13_core::curve::RichCurve>, t: f32, end: f32) {
+        let from = if self.target > 0.0 { 0.0 } else { OPEN_DEGREES.to_radians() };
+        self.driver = curve.map(|c| (c, t, end, from));
+    }
+
     /// Press: open or close (or nothing when locked). Returns what happened, for the log. The leaf opens to the
     /// Pivot's -90 degree yaw (Unreal; +90 about Bevy's Y) from either side.
     pub fn press(&mut self, _door: &GlobalTransform, _opener: Vec3) -> &'static str {
@@ -303,15 +313,25 @@ impl Door {
     }
 }
 
-/// Swings leaves toward their target angle.
+/// Swings leaves toward their target angle: along the driving take's curve (SCDoor's driver tick: start + (end -
+/// start) x clamp(DoorRotation, 0, 1)), at its window's end the end pose (OpenCloseDoorCompleted's snap), else
+/// steadily.
 pub fn swing_doors(time: Res<Time>, mut doors: Query<&mut Door>, mut pivots: Query<&mut Transform>) {
+    let dt = time.delta_secs();
     for mut d in &mut doors {
-        if d.angle == d.target {
+        if let Some((curve, t, end, from)) = d.driver.take() {
+            let t = t + dt;
+            d.angle = if t >= end { d.target } else { from + (d.target - from) * curve.eval(t).clamp(0.0, 1.0) };
+            if t < end {
+                d.driver = Some((curve, t, end, from));
+            }
+        } else if d.angle != d.target {
+            let step = OPEN_DEGREES.to_radians() / d.swing_seconds.max(1e-3) * dt;
+            let delta = (d.target - d.angle).clamp(-step, step);
+            d.angle += delta;
+        } else {
             continue;
         }
-        let step = OPEN_DEGREES.to_radians() / d.swing_seconds.max(1e-3) * time.delta_secs();
-        let delta = (d.target - d.angle).clamp(-step, step);
-        d.angle += delta;
         if let Ok(mut t) = pivots.get_mut(d.pivot) {
             t.rotation = d.pivot_closed.rotation * Quat::from_rotation_y(d.angle);
         }
@@ -337,6 +357,7 @@ mod tests {
             health: 60.0,
             broken: false,
             swing_seconds: SWING_SECONDS,
+            driver: None,
             base_health: 60.0,
             damage_thresholds: [0.75, 0.5, 0.25],
             spots: Default::default(),

@@ -444,6 +444,7 @@ fn spawn_props(
                 health: classes.prop(&actor.class, "BaseDoorHealth").as_f64().map_or(100.0, |v| v as f32),
                 broken: false,
                 swing_seconds: crate::doors::SWING_SECONDS,
+                driver: None,
                 base_health: classes.prop(&actor.class, "BaseDoorHealth").as_f64().map_or(100.0, |v| v as f32),
                 damage_thresholds: [("Light", 0.75), ("Medium", 0.5), ("Heavy", 0.25)]
                     .map(|(k, d)| classes.prop(&actor.class, &format!("{k}DestructionThreshold")).as_f64().map_or(d, |v| v as f32)),

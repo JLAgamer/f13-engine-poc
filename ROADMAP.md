@@ -47,7 +47,7 @@ Mechanics: counselor side
       statically linked copy is stripped)
 - [x] Cabinets (drawers): search, items inside
 - [x] Doors: leaves exported and swinging on their pivot, open/close, lock/unlock by side (doors.rs; they open to the
-  pivot's -90 yaw from either side, SCDoor's driver; the swing's DoorRotation curve shape is still a placeholder)
+  pivot's -90 yaw from either side, along the opener's DoorRotation curve: SCDoor's driver)
 - [x] Barricades (replace the lock, only on a closed door) and windows: open, close, vault, dive (breaks the glass,
   DiveDamage); windows.rs
 - [x] Hiding: wardrobes, outhouses, beds, tents (hiding.rs: enter/idle/exit montages, hiding camera; Jason's search
@@ -292,7 +292,7 @@ Decomp audit (nothing guessed: every rule read from the decomp or the game's dat
       police volume's obstruction, stun spot search and phone box rule, melee sweeps, guns, the firecracker throw,
       placed kills' Interactable range test, no start/stop takes, Jason's eye and view angle, the minimap's scale,
       the brake skid (the handbrake's). Left as placeholders: APEX door chunks, the block idle's upper-body slot,
-      sweeps against Jason's physics bodies, the cabin doors' curve shape, the firecracker's spawn point
+      sweeps against Jason's physics bodies, the firecracker's spawn point
 - [ ] The counselor's cameras (Base_Counselor: Chase, Combat, Crouching, Driving, Grab, Indoor, Outdoor, Shooting,
       Water spring arms, switched by its ChangeCamera graph): f13-rs's single follow camera is a guess
 - [ ] Special moves' look (ILLSpecialMove_MoveToward: her view turns to the move's spot, MODLOG)
