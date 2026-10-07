@@ -111,7 +111,7 @@ Mechanics: Jason side
 - [x] Generators (power.rs): the fuse boxes and their power grids; a destroyed fuse box puts out the powered lights
       in its grid's box (and they stop lighting her: darkness fear) and lights its red power-out light; counselors
       repair it (hold E, 15 s, pips), Jason destroys it (the player's E)
-- [ ] Generators, remaining: the power curves, the blackout fear event, the computer Jason cutting the power
+- [ ] Generators, remaining: the blackout fear event, the computer Jason cutting the power
 - [x] Breaking walls (SCDestructibleWall in the cabin layouts): Jason breaks through a wall in his way (the player
       walking into it; the AI when it stands between him and her), the door break's montage and timing, his world
       damage against its BaseHealth 60; the section and its collision go
@@ -148,8 +148,10 @@ Presentation
       maps), ported from the game's compiled shaders; per-placement material overrides; glass; invisible blockers
       hidden (f13-game materials.rs, shaders/); textures as the game's compressed DDS data with mips
 - [x] Light fixtures' glow: M_Prop_Master_Lights' emissive (Diffuse.rgb * Diffuse.a * Glow, from its compiled base
-      pass)
-- [ ] Light fixtures' glow, remaining: seen in a screenshot; going dark in a power cut
+      pass); a powered light's fixture glows at 10 while its grid has power and goes dark in a cut (the light
+      component's OnVisibilityChanged), seen in screenshots. The fixtures hanging off powered light components were
+      exported at their offset from the light (piled near the map origin): now placed in the cabins
+- [ ] Power curves: the powered lights' flicker as power goes and comes back (a curve over intensity and Glow)
 - [ ] Materials, remaining: water (first pass only: colour, gloss, panning ripples; no depth fade, foam or
       reflections), POM parallax, the other emissive masters (signs, the CB tower, the phone box), foliage
       subsurface, the Chevette's paint mask

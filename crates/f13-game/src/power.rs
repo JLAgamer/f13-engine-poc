@@ -23,7 +23,9 @@ struct CutPower(bool);
 impl Plugin for PowerPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(CutPower(self.cut))
-            .init_resource::<PowerGrids>().add_systems(Startup, spawn_fuse_boxes).add_systems(Update, apply_power);
+            .init_resource::<PowerGrids>()
+            .add_systems(Startup, spawn_fuse_boxes)
+            .add_systems(Update, (find_fixtures, mark_fixtures, apply_power, dim_fixtures).chain());
     }
 }
 
@@ -133,6 +135,72 @@ fn spawn_fuse_boxes(mut commands: Commands, level: Res<crate::Level>, export: Re
         debug!("power: {} feeds {:?}", a.name, grid.map(|g| &grids.grids[g].name));
     }
     info!("power: {} grids, {n} fuse boxes", grids.grids.len());
+}
+
+/// A powered light's fixture: the glowing mesh (M_Prop_Master_Lights) hanging off it, with a material of its own.
+/// PoweredSpot/PointLightComponent gathers its child meshes' materials with a Glow parameter and, as its visibility
+/// changes, sets their Glow to 10 (on) or 0 (off) (OnVisibilityChanged FUN_1403537b0; 10.0 at 0x14207a21c). Here the
+/// fixture is the glowing mesh within reach of a powered light (the export has no attach parents for placements).
+#[derive(Component)]
+pub struct Fixture(pub usize);
+
+/// A glowing mesh this near a powered light is its fixture (m; the hanging bulbs' origins are 1.9 m off theirs).
+const FIXTURE_REACH_M: f32 = 2.5;
+
+/// A glowing mesh to look at once its place has settled (runtime actors' meshes take a few frames: frames left).
+#[derive(Component)]
+struct FixtureCandidate(u32);
+
+fn mark_fixtures(
+    mut commands: Commands,
+    meshes: Query<(Entity, &MeshMaterial3d<crate::materials::PropMaterial>), Added<MeshMaterial3d<crate::materials::PropMaterial>>>,
+    materials: Res<Assets<crate::materials::PropMaterial>>,
+) {
+    for (e, m) in &meshes {
+        if materials.get(&m.0).is_some_and(|m| m.extension.glow() > 0.0) {
+            commands.entity(e).insert(FixtureCandidate(30));
+        }
+    }
+}
+/// A fixture's Glow while its light is on.
+const FIXTURE_GLOW: f32 = 10.0;
+
+fn find_fixtures(
+    mut commands: Commands,
+    grids: Res<PowerGrids>,
+    mut meshes: Query<(Entity, &MeshMaterial3d<crate::materials::PropMaterial>, &GlobalTransform, &mut FixtureCandidate)>,
+    lights: Query<(&Powered, &GlobalTransform)>,
+    mut materials: ResMut<Assets<crate::materials::PropMaterial>>,
+) {
+    for (e, m, xf, mut wait) in &mut meshes {
+        if wait.0 > 0 {
+            wait.0 -= 1;
+            continue;
+        }
+        commands.entity(e).remove::<FixtureCandidate>();
+        let at = xf.translation();
+        let Some((p, _)) = lights.iter().filter(|(_, l)| l.translation().distance(at) < FIXTURE_REACH_M).min_by(|a, b| a.1.translation().distance(at).total_cmp(&b.1.translation().distance(at))) else { continue };
+        let Some(mut own) = materials.get(&m.0).cloned() else { continue };
+        if !grids.on(p.0) {
+            own.extension.set_glow(0.0);
+        }
+        debug!("power: fixture at ({:.0}, {:.0}, {:.0}) in grid {}", at.x, at.y, at.z, p.0);
+        commands.entity(e).insert((MeshMaterial3d(materials.add(own)), Fixture(p.0)));
+    }
+}
+
+fn dim_fixtures(grids: Res<PowerGrids>, fixtures: Query<(&Fixture, &MeshMaterial3d<crate::materials::PropMaterial>)>, mut materials: ResMut<Assets<crate::materials::PropMaterial>>) {
+    if !grids.is_changed() {
+        return;
+    }
+    for (f, m) in &fixtures {
+        let glow = if grids.on(f.0) { FIXTURE_GLOW } else { 0.0 };
+        if materials.get(&m.0).is_some_and(|mat| mat.extension.glow() != glow) {
+            if let Some(mut mat) = materials.get_mut(&m.0) {
+                mat.extension.set_glow(glow);
+            }
+        }
+    }
 }
 
 /// Lights follow their grid.

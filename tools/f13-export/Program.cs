@@ -237,7 +237,7 @@ void ExportLevel(string mapPath, params string[] extra)
                 CullDistance = new[] { smc.GetOrDefault("InstanceEndCullDistance", 0), (int)smc.GetOrDefault("LDMaxDrawDistance", 0f), (int)smc.GetOrDefault("CachedMaxDrawDistance", 0f) }
                     .Where(d => d > 0).DefaultIfEmpty(0).Min(),
             };
-            var world_ = smc.GetAbsoluteTransform();
+            var world_ = AbsoluteTransform(smc);
             if (smc is F13InstancedMeshComponent ism)
             {
                 p.Instances = ism.Instances.Select(x => Xf(x.TransformData * world_)).ToList();
@@ -378,6 +378,34 @@ static string? InstallProblem(string game)
 }
 
 static string OutPath(UStaticMesh mesh) => new StaticMeshExporter(mesh).SavePath + ".glb";
+
+// A component's world transform through its attach parents. CUE4Parse's GetAbsoluteTransform stops at a parent it
+// doesn't load as a scene component (the game's PoweredSpotLightComponent: the cabins' light fixtures hang off them),
+// so past one the chain is composed here, each relative transform read through the component's archetypes.
+static FTransform AbsoluteTransform(USceneComponent c)
+{
+    var parent = c.GetOrDefault<FPackageIndex?>("AttachParent")?.Load();
+    if (parent == null || parent is USceneComponent { } && Chain(parent).All(p => p is USceneComponent)) return c.GetAbsoluteTransform();
+    var t = RelativeTransform(c);
+    foreach (var p in Chain(parent)) t = t * RelativeTransform(p);
+    return t;
+
+    static IEnumerable<UObject> Chain(UObject? p)
+    {
+        for (var n = 0; p != null && n < 32; p = p.GetOrDefault<FPackageIndex?>("AttachParent")?.Load(), n++) yield return p;
+    }
+}
+
+static FTransform RelativeTransform(UObject c)
+{
+    T Get<T>(string name, T fallback)
+    {
+        for (UObject? a = c; a != null; a = a.Template?.Load())
+            if (a.TryGetValue(out T v, name)) return v;
+        return fallback;
+    }
+    return new FTransform(Get("RelativeRotation", FRotator.ZeroRotator).Quaternion(), Get("RelativeLocation", FVector.ZeroVector), Get("RelativeScale3D", FVector.OneVector));
+}
 
 static Xform Xf(FTransform t) => new()
 {

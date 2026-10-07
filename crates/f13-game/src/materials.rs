@@ -371,6 +371,17 @@ struct PropParams {
     extra: Vec4,
 }
 
+impl PropExt {
+    /// M_Prop_Master_Lights' Glow (0 for the other masters).
+    pub(crate) fn glow(&self) -> f32 {
+        self.params.extra.y
+    }
+
+    pub(crate) fn set_glow(&mut self, glow: f32) {
+        self.params.extra.y = glow;
+    }
+}
+
 /// The RMA/RSS map and parameters for prop and foliage masters (channel layouts read from M_Prop_Master's and
 /// M_Leaves_Master's compiled shaders), or None for other materials.
 fn prop_params(info: &MaterialInfo, loader: &Loader) -> Option<(Handle<Image>, PropParams)> {
