@@ -161,8 +161,10 @@ Presentation
       crouch, combat strafing (8 directions), dodges, stumbles, first aid
 - [ ] Animations, remaining: start/stop transitions, turn in place, foot-marker sync (now normalised time), limp
       movement, aim offsets, repairs, car enter/exit and sitting (she's hidden in the car), door/window montages
-- [ ] Special moves: door open/close/lock and window open/close/vault/dive montages (now a fixed 0.5 s, 90° door swing
-      and instant vault/dive)
+- [x] Door special moves: her open and close takes (inside or outside), the leaf swinging in the montage's
+      OpenCloseDoor driver window; she stands while they play
+- [ ] Special moves, remaining: door lock/unlock and window open/close/vault/dive montages (now instant), the
+      montages' root motion (she stays in place)
 - [x] Repair minigame dial UI: SCInteractMinigame_Widget (its progress circle filled clockwise, the needle turned, the
       pips as red arcs of its ring, the next pip's mouse button in the middle), for every hold interaction
 - [x] HUD (ui.rs): CounselorHUDWidget from its UMG tree (f13-data::umg lays it out as Slate does), the game's font

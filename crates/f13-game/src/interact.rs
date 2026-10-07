@@ -89,6 +89,51 @@ impl Interaction {
 #[derive(Component)]
 struct PromptText;
 
+/// The counselor opening or closing a door (its special move's montage: her `f_` take, timed by the shared montage's
+/// `m_` take): the leaf swings during the montage's OpenCloseDoor driver window; she stands while it plays.
+#[derive(Component)]
+pub struct DoorMove {
+    door: Entity,
+    t: f32,
+    /// The OpenCloseDoor window (s) and the montage's length.
+    swing: (f32, f32),
+    length: f32,
+    swung: bool,
+}
+
+/// Her take of a door montage: opening or closing, from inside or outside.
+fn door_anim(opening: bool, inside: bool) -> &'static str {
+    match (opening, inside) {
+        (true, true) => "f_normal_stand_door_open_inside_forward",
+        (true, false) => "f_normal_stand_door_open_outside_forward",
+        (false, true) => "f_normal_stand_door_close_inside_forward",
+        (false, false) => "f_normal_stand_door_close_outside_forward",
+    }
+}
+
+/// Swings the door at the montage's window, and lets her go at its end.
+fn door_moves(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut players: Query<(Entity, &mut DoorMove, &Transform), With<Player>>,
+    mut doors: Query<(&mut Door, &GlobalTransform)>,
+) {
+    for (pe, mut m, xf) in &mut players {
+        m.t += time.delta_secs();
+        if !m.swung && m.t >= m.swing.0 {
+            m.swung = true;
+            if let Ok((mut door, gxf)) = doors.get_mut(m.door) {
+                let what = door.press(gxf, xf.translation);
+                door.swing_seconds = (m.swing.1 - m.swing.0).max(0.1);
+                info!("door {what}");
+            }
+        }
+        if m.t >= m.length {
+            commands.entity(pe).remove::<(DoorMove, crate::character::PlayAction)>();
+        }
+    }
+}
+
 pub struct InteractPlugin;
 
 impl Plugin for InteractPlugin {
@@ -97,7 +142,7 @@ impl Plugin for InteractPlugin {
             .add_systems(Startup, spawn_prompt)
             .add_systems(
             Update,
-            (add_inventory, crate::windows::link_barricades, choose_target, act, drop_item, use_item, update_prompt)
+            (add_inventory, crate::windows::link_barricades, choose_target, act, door_moves, drop_item, use_item, update_prompt)
                 .chain()
                 .before(crate::doors::swing_doors),
         )
@@ -343,12 +388,28 @@ fn act(
             // Press = let go before the hold starts; hold = keep holding for the door's hold time.
             let started = interaction.hold.as_ref().is_some_and(|h| h.started);
             if keys.just_released(KeyCode::KeyE) && !started && press {
-                let what = door.press(gxf, player_xf.translation);
-                info!("door {what}");
-                if what == "locked" {
-                    commands.trigger(crate::audio::ActorSound { actor: d, prop: "LockedDoorSound" });
-                }
                 interaction.hold = None;
+                if door.locked {
+                    info!("door locked");
+                    commands.trigger(crate::audio::ActorSound { actor: d, prop: "LockedDoorSound" });
+                    return;
+                }
+                // Her open or close montage; the leaf moves in its driver window (DoorMove).
+                let anim = door_anim(!door.open, Door::is_inside(gxf, player_xf.translation));
+                let timing = model.as_ref().and_then(|m| m.info.animations.get(&anim.replacen("f_", "m_", 1)));
+                match timing {
+                    Some(t) => {
+                        let swing = t.window("Driver: OpenCloseDoor").unwrap_or((0.0, 0.5));
+                        commands.entity(player_entity).insert((
+                            DoorMove { door: d, t: 0.0, swing, length: t.length, swung: false },
+                            crate::character::PlayAction(anim.into()),
+                        ));
+                    }
+                    None => {
+                        let what = door.press(gxf, player_xf.translation);
+                        info!("door {what}");
+                    }
+                }
                 return;
             }
             if !keys.pressed(KeyCode::KeyE) || !hold {
