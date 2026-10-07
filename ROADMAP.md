@@ -128,7 +128,8 @@ Match
 Host CLI (`f13-host`; f13-game `--host`, host.rs: line commands on 127.0.0.1)
 - [x] Spawn items (`give <Class>`: one of the match's items of the class into her hands or pockets)
 - [x] Teleport players (`teleport counselor|jason x y z`)
-- [ ] Make a player Jason, live in game (`--play-jason` at start for now)
+- [x] Make a player Jason, live in game (`jason`: his controls and camera take over; the counselor is left
+      without a player)
 - [x] Force start and end matches (`start`, `end`), `status`
 - [x] Kick players (`kick`: single-player, so the game closes)
 

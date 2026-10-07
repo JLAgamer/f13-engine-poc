@@ -98,7 +98,7 @@ impl Plugin for UiPlugin {
         embedded_asset!(app, "shaders/radial_fill.wgsl");
         app.add_plugins(UiMaterialPlugin::<RadialFill>::default())
             .add_systems(Startup, load_hud)
-            .add_systems(Update, (build_hud, (stamina, timer, breath, dial)).chain().run_if(resource_exists::<Hud>));
+            .add_systems(Update, (build_hud, (stamina, timer, breath, dial), hide_for_jason).chain().run_if(resource_exists::<Hud>));
     }
 }
 
@@ -458,6 +458,15 @@ fn set_progress(commands: &mut Commands, fill: Entity, p: &Progress, percent: f3
         n.width = Val::Px(fw);
         n.height = Val::Px(fh);
     });
+}
+
+/// The player became Jason (the host's `jason`): her HUD goes.
+fn hide_for_jason(hud: Res<Hud>, play: Option<Res<crate::jason_player::PlayJason>>, mut vis: Query<&mut Visibility>) {
+    if let (Some(root), Some(_)) = (hud.root, play) {
+        if let Ok(mut v) = vis.get_mut(root) {
+            v.set_if_neq(Visibility::Hidden);
+        }
+    }
 }
 
 /// The stamina ring's fill: her stamina.

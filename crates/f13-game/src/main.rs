@@ -452,9 +452,10 @@ fn main() {
     if !(args.fly || args.aerial) && !args.play_jason {
         app.add_plugins(ui::UiPlugin);
     }
-    // Playing Jason (its input comes off the raw events, before the input plugin's systems).
-    if args.play_jason && !(args.fly || args.aerial) {
-        app.add_plugins(jason_player::PlayJasonPlugin { demo: args.play_jason_demo });
+    // Playing Jason (its input comes off the raw events, before the input plugin's systems): from the start, or once
+    // the host makes the player Jason.
+    if !(args.fly || args.aerial) {
+        app.add_plugins(jason_player::PlayJasonPlugin { active: args.play_jason, demo: args.play_jason_demo });
     }
     if let Some(port) = args.host.filter(|_| !(args.fly || args.aerial)) {
         app.add_plugins(host::HostPlugin { port });

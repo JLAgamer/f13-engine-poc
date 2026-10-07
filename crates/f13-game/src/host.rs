@@ -6,7 +6,7 @@
 //! - `teleport counselor|jason <x> <y> <z>`: moves them (Bevy metres; she's put on the floor under the point)
 //! - `start`: starts the match now (from waiting); `end`: ends it now (to the outro, with the end-of-match awards)
 //! - `kick`: the counselor leaves (the game closes; it's single-player)
-//! - `jason`: making the player Jason mid-match (not yet: start the game with `--play-jason`)
+//! - `jason`: makes the player Jason (his controls and camera; the counselor is left without a player)
 
 use crate::jason::Jason;
 use crate::player::{Player, Unsettled};
@@ -74,6 +74,7 @@ fn serve(
     mut players: Query<(Entity, &Player, &mut Transform), Without<Jason>>,
     mut jasons: Query<(&mut Jason, &mut Transform), Without<Player>>,
     mut exit: MessageWriter<AppExit>,
+    play: Option<Res<crate::jason_player::PlayJason>>,
 ) {
     let Ok(inbox) = inbox.0.lock() else { return };
     while let Ok((line, reply)) = inbox.try_recv() {
@@ -128,7 +129,14 @@ fn serve(
                 exit.write(AppExit::Success);
                 "kicked: the game closes".into()
             }
-            ["jason"] => "not yet mid-match: start the game with --play-jason".into(),
+            ["jason"] => match jasons.iter().next() {
+                Some((_, xf)) if play.is_none() => {
+                    crate::jason_player::become_jason(&mut commands, xf.rotation);
+                    "you're Jason now".into()
+                }
+                Some(_) => "already Jason".into(),
+                None => "no Jason in this match".into(),
+            },
             _ => "commands: status, give <Class>, teleport counselor|jason <x> <y> <z>, start, end, kick, jason".into(),
         };
         info!("host: {line} -> {answer}");

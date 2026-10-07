@@ -24,22 +24,34 @@ const CAMERA_HEIGHT_M: f32 = 2.3;
 pub struct PlayJason;
 
 pub struct PlayJasonPlugin {
+    /// The player is Jason from the start (`--play-jason`); else only once the host makes them Jason ([`become_jason`]).
+    pub active: bool,
     /// Scripted input (testing): look at her, walk up, a knife from range, a swing, then grabs.
     pub demo: bool,
 }
 
+/// Makes the player Jason mid-match (the host's `jason`): his controls take over the keyboard and mouse and the
+/// camera, looking where he faces; the counselor is left without a player.
+pub fn become_jason(commands: &mut Commands, jason_facing: Quat) {
+    let f = jason_facing * Vec3::Z;
+    commands.insert_resource(JasonControls { yaw: (-f.x).atan2(-f.z), pitch: -0.15, ..default() });
+    commands.insert_resource(PlayJason);
+}
+
 impl Plugin for PlayJasonPlugin {
     fn build(&self, app: &mut App) {
+        let on = resource_exists::<PlayJason>;
         if self.demo {
-            app.add_systems(PreUpdate, demo.after(capture).before(bevy::input::InputSystems));
+            app.add_systems(PreUpdate, demo.after(capture).before(bevy::input::InputSystems).run_if(on));
         }
-        app.insert_resource(PlayJason)
-            .init_resource::<JasonControls>()
-            .add_systems(PreUpdate, capture.before(bevy::input::InputSystems))
-            .add_systems(Update, (look, hud))
+        if self.active {
+            app.insert_resource(PlayJason).init_resource::<JasonControls>();
+        }
+        app.add_systems(PreUpdate, capture.before(bevy::input::InputSystems).run_if(on))
+            .add_systems(Update, (look, hud).run_if(on))
             .add_systems(
                 Update,
-                view.after(crate::player::follow_camera).after(crate::hiding::hiding_camera).before(crate::kill_camera::kill_camera),
+                view.after(crate::player::follow_camera).after(crate::hiding::hiding_camera).before(crate::kill_camera::kill_camera).run_if(on),
             )
             .add_systems(Startup, spawn_hud);
     }

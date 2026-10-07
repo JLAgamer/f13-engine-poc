@@ -215,7 +215,7 @@ Start the game with `--host` (`--host-port n`, default 7713; it listens on 127.0
 cargo run -p f13-host --release -- status
 ```
 
-Commands: `status`, `give <Class>` (one of the match's items into her hands or pockets), `teleport counselor|jason x y z` (metres, Bevy axes), `start`, `end`, `kick` (the game closes). Without a command, `f13-host` reads them from stdin, one per line.
+Commands: `status`, `give <Class>` (one of the match's items into her hands or pockets), `teleport counselor|jason x y z` (metres, Bevy axes), `start`, `end`, `kick` (the game closes), `jason` (you become Jason: his controls and camera; she's left without a player). Without a command, `f13-host` reads them from stdin, one per line.
 
 ## Tests
 ```
