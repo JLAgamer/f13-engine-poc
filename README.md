@@ -205,7 +205,7 @@ x,y,z,tx,ty,tz` (eye and look-at, relative to her feet), `--pose <animation>@<se
 
 ## Playing as Jason
 
-`--play-jason` puts you in Jason's boots (a bot plays the counselor: the escape bot unless a `--bot-*` is given): WASD walk, Shift run, mouse look; left click swing (and, holding her, kill), middle click heavy swing, right click grab, F throw a knife where you look, T set a trap, 1 Shift, 2 Morph (to the morph point nearest 30 m ahead), 3 Stalk, E destroy a fuse box (its grid's lights go out). Doors open or break as you walk into them. `--play-jason-demo` scripts the input (testing).
+`--play-jason` puts you in Jason's boots (a bot plays the counselor: the escape bot unless a `--bot-*` is given): WASD walk, Shift run, mouse look; left click swing (and, holding her, kill), middle click heavy swing, right click grab, F throw a knife where you look, T set a trap, 1 Shift, 2 Morph (to the morph point nearest 30 m ahead), 3 Stalk, E destroy a fuse box (its grid's lights go out). Doors open or break, and destructible walls break, as you walk into them. `--play-jason-demo` scripts the input (testing).
 
 ## Host commands
 

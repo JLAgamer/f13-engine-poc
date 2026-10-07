@@ -332,6 +332,7 @@ fn spawn_props(
 
         // Blocking shapes (a door's DoorCollision box, a car's body box): on the pivot when they hang off it. Spacer
         // capsules (in doorways, windows and car seats) only block while an interaction pushes characters clear.
+        let mut hulls: HashMap<&str, Entity> = HashMap::new();
         for c in info.components.iter().filter(|c| c.hull.is_some() && !c.kind.contains("SpacerCapsule")) {
             let tris = crate::collision::hull_from_unreal(c.hull.as_deref().unwrap_or_default());
             if tris.is_empty() {
@@ -365,9 +366,22 @@ fn spawn_props(
                     commands.spawn((rel, Visibility::default(), collider, crate::navigation::NotOnNavmesh, ChildOf(p)));
                 }
                 None => {
-                    commands.spawn((local(c), Visibility::default(), collider, ChildOf(root)));
+                    let e = commands.spawn((local(c), Visibility::default(), collider, ChildOf(root))).id();
+                    hulls.insert(c.name.as_str(), e);
                 }
             }
+        }
+        // A wall Jason can break through: its section (mesh and Collision box) goes when it gives way.
+        if classes.is_child_of(&actor.class, "SCDestructableWall") {
+            commands.entity(root).insert(crate::doors::Wall {
+                health: classes.prop(&actor.class, "BaseHealth").as_f64().map_or(60.0, |v| v as f32),
+                broken: false,
+                section: parts.get("DestructibleSection").copied(),
+                collision: hulls.get("Collision").copied(),
+            });
+            *counts.entry("walls").or_default() += 1;
+            let p = to_transform(&actor.transform);
+            debug!("wall at {:.1} facing {:.1}", p.translation, p.rotation * Vec3::X);
         }
 
         let interact = info.components.iter().find(|c| c.kind == "SCInteractComponent" && c.name.starts_with("Interact"));

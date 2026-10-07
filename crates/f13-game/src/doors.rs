@@ -21,6 +21,34 @@ const OPEN_DEGREES: f32 = 90.0;
 /// What an enabled barricade lets through of a hit (SCDoor's TakeDamage constant).
 const BARRICADE_DAMAGE_SCALE: f32 = 0.5;
 
+/// A destructible wall (SCDestructableWall): its health (BaseHealth), and the section that goes when it's broken
+/// through (its mesh and its Collision box; the frame stays).
+#[derive(Component)]
+pub struct Wall {
+    pub health: f32,
+    pub broken: bool,
+    pub section: Option<Entity>,
+    pub collision: Option<Entity>,
+}
+
+impl Wall {
+    /// A blow of `damage`: whether it broke through.
+    pub fn damage(&mut self, damage: f32, commands: &mut Commands) -> bool {
+        if self.broken {
+            return false;
+        }
+        self.health -= damage;
+        if self.health > 0.0 {
+            return false;
+        }
+        self.broken = true;
+        for e in [self.section, self.collision].into_iter().flatten() {
+            commands.entity(e).despawn();
+        }
+        true
+    }
+}
+
 #[derive(Component, Debug)]
 pub struct Door {
     pub open: bool,

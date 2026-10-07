@@ -255,6 +255,8 @@ pub enum JasonState {
     OpeningDoor { door: Entity, t: f32, anim: &'static str },
     /// Breaking down a locked or barricaded door: s into `section` of [`BREAK_DOOR`], and whether its hit landed.
     BreakingDoor { door: Entity, t: f32, section: usize, hit: bool },
+    /// Breaking through a destructible wall (the door break's montage: Start, Loops, Success; a blow per section).
+    BreakingWall { wall: Entity, t: f32, section: usize, hit: bool },
     /// Raged: bursting through a closed door (s into it).
     BurstingDoor { door: Entity, t: f32 },
     /// Reaching for a grab; it connects (or misses) when the startup ends.
@@ -866,6 +868,17 @@ fn place_held(
     true
 }
 
+/// A standing destructible wall within reach ahead of `wish` (its section's middle, 1.6 m up).
+fn wall_in_way(walls: &Query<(Entity, &mut crate::doors::Wall, &GlobalTransform)>, here: Vec3, wish: Vec2) -> Option<Entity> {
+    if wish == Vec2::ZERO {
+        return None;
+    }
+    walls.iter().filter(|(_, w, _)| !w.broken).find_map(|(e, _, g)| {
+        let to = Vec2::new(g.translation().x - here.x, g.translation().z - here.z);
+        (to.length() < DOOR_REACH_M && to.normalize_or_zero().dot(wish) > 0.3 && (g.translation().y - here.y).abs() < 2.0).then_some(e)
+    })
+}
+
 /// A closed door within reach ahead of `wish` (any, when `any_way`): what Jason does about it (burst through it
 /// raged, break it down when it's locked or barricaded, else open it) and its animation.
 fn door_in_way(
@@ -913,7 +926,7 @@ pub(crate) fn update_jason(
     ),
     mut players: Query<(Entity, &mut Player, &mut Transform, Has<crate::vehicle::Driving>, Option<&mut crate::hiding::Hiding>, Has<crate::items::Blocking>), Without<Jason>>,
     mut doors: Query<(Entity, &mut crate::doors::Door, &GlobalTransform)>,
-    mut barricades: Query<&mut crate::windows::Barricade>,
+    (mut barricades, mut walls): (Query<&mut crate::windows::Barricade>, Query<(Entity, &mut crate::doors::Wall, &GlobalTransform)>),
     (mut spots, cabinets): (Query<(Entity, &mut crate::hiding::HidingSpot, &GlobalTransform)>, Query<&GlobalTransform, With<crate::props::Cabinet>>),
     mut rigs: Query<(&mut Rig, &ChildOf, &Transform), (Without<Jason>, Without<Player>)>,
     (globals, navmesh, leaves, parents): (
@@ -1091,6 +1104,13 @@ pub(crate) fn update_jason(
                         continue;
                     }
                     let raged = know.as_ref().is_some_and(|k| k.abilities.rage_active);
+                    if let Some(we) = wall_in_way(&walls, xf.translation, i.movement) {
+                        info!("Jason: breaking through a wall");
+                        j.velocity = Vec2::ZERO;
+                        j.state = JasonState::BreakingWall { wall: we, t: 0.0, section: 0, hit: false };
+                        commands.entity(je).insert(PlayAction(BREAK_DOOR[0].into()));
+                        continue;
+                    }
                     if i.movement != Vec2::ZERO {
                         if let Some((state, anim)) = door_in_way(&doors, &barricades, xf.translation, i.movement, false, raged) {
                             j.velocity = Vec2::ZERO;
@@ -1285,6 +1305,16 @@ pub(crate) fn update_jason(
                     wish = Vec2::ZERO; // close enough for anything; don't walk into her
                 }
                 // A closed door ahead: open it, or break it down when it's locked or barred.
+                // A wall between him and her when he walks at her: through it.
+                if sees {
+                    if let Some(we) = wall_in_way(&walls, xf.translation, wish) {
+                        info!("Jason: breaking through a wall");
+                        j.velocity = Vec2::ZERO;
+                        j.state = JasonState::BreakingWall { wall: we, t: 0.0, section: 0, hit: false };
+                        commands.entity(je).insert(PlayAction(BREAK_DOOR[0].into()));
+                        continue;
+                    }
+                }
                 let raged = know.as_ref().is_some_and(|k| k.abilities.rage_active);
                 if let Some((state, anim)) = door_in_way(&doors, &barricades, xf.translation, wish, wish == Vec2::ZERO, raged) {
                     j.velocity = Vec2::ZERO;
@@ -1562,6 +1592,39 @@ pub(crate) fn update_jason(
                 }
                 commands.entity(je).insert(PlayAction(BREAK_DOOR[section].into()));
                 j.state = JasonState::BreakingDoor { door: de, t: at, section, hit };
+            }
+            JasonState::BreakingWall { wall: we, t: at, section, hit } => {
+                let Ok((_, mut w, g)) = walls.get_mut(we) else {
+                    j.state = JasonState::Hunting;
+                    continue;
+                };
+                let to_wall = Vec2::new(g.translation().x - xf.translation.x, g.translation().z - xf.translation.z);
+                walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(to_wall), dt, &t, &world);
+                let timing = break_timing(&killer);
+                let (mut at, mut section, mut hit) = (at + dt, section, hit);
+                if !hit && at >= timing.hits[section] {
+                    if section < 2 && w.health <= t.world_damage {
+                        // This blow goes through: on to the Success section.
+                        (at, section) = (0.0, 2);
+                    } else {
+                        hit = true;
+                        if w.damage(t.world_damage, &mut commands) {
+                            info!("Jason: broke through the wall");
+                        } else {
+                            info!("Jason: hit the wall ({:.0} left)", w.health);
+                        }
+                    }
+                }
+                if at >= timing.lengths[section] {
+                    if section == 2 {
+                        j.state = JasonState::Hunting;
+                        commands.entity(je).remove::<PlayAction>();
+                        continue;
+                    }
+                    (at, section, hit) = (at - timing.lengths[section], 1, false);
+                }
+                commands.entity(je).insert(PlayAction(BREAK_DOOR[section].into()));
+                j.state = JasonState::BreakingWall { wall: we, t: at, section, hit };
             }
             JasonState::Reaching { t: at } => {
                 let at = at + dt;

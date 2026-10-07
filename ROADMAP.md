@@ -103,7 +103,10 @@ Mechanics: Jason side
       in its grid's box (and they stop lighting her: darkness fear) and lights its red power-out light; counselors
       repair it (hold E, 15 s, pips), Jason destroys it (the player's E). Not yet: the power curves, the blackout fear
       event, the computer Jason cutting the power
-- [ ] Breaking walls (SCDestructibleWall in some cabin layouts)
+- [x] Breaking walls (SCDestructibleWall in the cabin layouts): Jason breaks through a wall in his way (the player
+      walking into it; the AI when it stands between him and her), the door break's montage and timing, his world
+      damage against its BaseHealth 60; the section and its collision go. Not yet: the destructible chunks, the wall
+      break montages, dust and sounds
 - [ ] Car interactions: stopping and grabbing out of the car
 
 Match
