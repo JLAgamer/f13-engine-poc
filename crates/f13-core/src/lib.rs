@@ -9,6 +9,7 @@ pub mod fear;
 pub mod game_mode;
 pub mod health;
 pub mod killer_abilities;
+pub mod killer_moves;
 pub mod light;
 pub mod minigame;
 pub mod movement;

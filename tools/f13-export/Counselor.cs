@@ -410,6 +410,11 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
                      ("MinBlipFrequencyTime", 0.5f), ("MaxBlipFrequencyTime", 2f), ("SenseDuration", 0f), ("RagedSenseDistanceModifier", 1f),
                      ("RageUnlockTime", 900f) })
             values[name] = ClassValue<float?>(cls, name) ?? fallback;
+        // Shift, Stalk and Morph (constructor: StalkActiveTime 20, IdleStalkModifier 0.1, TeleportScreenTime 1;
+        // ShiftSpeed and ShiftTime have no constructor value).
+        foreach (var (name, fallback) in new[] { ("ShiftSpeed", 0f), ("ShiftTime", 0f), ("StalkActiveTime", 20f), ("IdleStalkModifier", 0.1f),
+                     ("TeleportScreenTime", 1f) })
+            values[name] = ClassValue<float?>(cls, name) ?? fallback;
         // The sound blip actor's lifetime (InitialLifeSpan).
         if (ClassValue<FPackageIndex>(cls, "SoundBlipClass")?.Load<UStruct>() is { } blip)
             values["SoundBlipLifeSpan"] = ClassValue<float?>(blip, "InitialLifeSpan") ?? 0;

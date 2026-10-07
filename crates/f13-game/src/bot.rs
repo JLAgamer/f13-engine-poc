@@ -15,6 +15,9 @@
 //! (barred), and tell him where she is; passes when he breaks it down in a hit per 20 of its health (10 barred) and
 //! kills her; `--bot-raged-in`: a locked door with Jason raged, who bursts through it. Screenshots
 //! f13-bot-breakdown-*.png.
+//! `--bot-abilities`: Jason starts with every ability ready and hears where she stands, across the map: passes when
+//! he has Morphed near her, Stalked and Shifted at her, and killed her. Screenshot f13-bot-abilities-shift.png
+//! (mid-shift: he's faded out).
 //! With Jason (`--bot-jason`, `--bot-fight`, the hide bots), she steps out 10 m in front of him when he hasn't seen
 //! her for a while (he only knows what he sees, hears and senses).
 
@@ -45,6 +48,8 @@ pub enum Goal {
     HideSeen,
     /// Shut in behind a locked (or barricaded) door: he should break it down and kill her.
     LockedIn { barred: bool, raged: bool },
+    /// Jason with every ability ready, told where she is: he should Morph, Stalk and Shift, and kill her.
+    Abilities,
 }
 
 pub struct BotPlugin(pub Goal);
@@ -251,7 +256,7 @@ fn run_bot(
     for k in [KeyCode::KeyW, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::KeyC, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD] {
         keys.release(k);
     }
-    let with_jason = matches!(bot.goal, Goal::Jason | Goal::Fight | Goal::Hide | Goal::HideSeen | Goal::LockedIn { .. });
+    let with_jason = matches!(bot.goal, Goal::Jason | Goal::Fight | Goal::Hide | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities);
     let limit = if with_jason { 600.0 } else { 240.0 };
     if bot.total > limit && bot.step != Step::Done {
         error!("bot: gave up at {:?}", bot.step);
@@ -349,7 +354,14 @@ fn run_bot(
                 bot.timer = 0.0;
                 return;
             }
-            if matches!(bot.goal, Goal::Jason | Goal::Fight) {
+            if bot.goal == Goal::Abilities {
+                if let Some(mut k) = knowledge.iter_mut().next() {
+                    let a = &mut k.abilities;
+                    a.unlocked = [true; 4];
+                    a.recharge_timer = a.tuning.recharge_time;
+                }
+            }
+            if matches!(bot.goal, Goal::Jason | Goal::Fight | Goal::Abilities) {
                 match jasons.iter().next() {
                     Some((_, jxf)) => info!("bot: waiting for Jason, {:.0} m away", jxf.translation.distance(pxf.translation)),
                     None => {
@@ -746,6 +758,31 @@ fn run_bot(
         }
         Step::AwaitJason => {
             let Some((j, jxf)) = jasons.iter().next() else { return };
+            if bot.goal == Goal::Abilities {
+                if let Some(mut k) = knowledge.iter_mut().next() {
+                    if !k.sees {
+                        k.last_known = Some((pxf.translation, time.elapsed_secs(), crate::senses::Clue::Heard));
+                    }
+                }
+                let used = [
+                    (matches!(j.state, crate::jason::JasonState::Morphing { .. }), "morph"),
+                    (j.stalking(), "stalk"),
+                    (j.shifting(), "shift"),
+                ];
+                for (on, name) in used {
+                    if on && !bot.jason_shots.contains(&name) {
+                        bot.jason_shots.push(name);
+                        info!("bot: Jason used {name}, {:.1} m away", jxf.translation.distance(pxf.translation));
+                    }
+                }
+                if j.shifting() && j.fade.0 == 0.0 && !bot.jason_shots.contains(&"shift-shot") {
+                    bot.jason_shots.push("shift-shot");
+                    look_at(&mut camera, pxf, jxf.translation + Vec3::Y);
+                    let path = std::env::temp_dir().join("f13-bot-abilities-shift.png");
+                    info!("bot: screenshot {}", path.display());
+                    commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+                }
+            }
             if bot.timer >= 5.0 {
                 bot.timer = 0.0;
                 info!("bot: Jason {:?}, {:.1} m away; health {:.0}", j.state, jxf.translation.distance(pxf.translation), p.counselor.health);
@@ -994,6 +1031,7 @@ fn run_bot(
                     Goal::Dodge => bot.dodges_ok == 3,
                     Goal::Door => bot.door_ok,
                     Goal::Jason => !p.counselor.alive(),
+                    Goal::Abilities => !p.counselor.alive() && ["morph", "stalk", "shift"].iter().all(|a| bot.jason_shots.contains(a)),
                     Goal::Fight => p.counselor.alive() && bot.jason_shots.contains(&"stun"),
                     Goal::Hide => p.counselor.alive() && hiding.is_none() && bot.jason_shots.contains(&"inside"),
                     Goal::HideSeen => !p.counselor.alive() && bot.jason_shots.contains(&"kill"),
@@ -1034,7 +1072,7 @@ fn run_bot(
                     Goal::Door => &[&["BarricadeDoor"]],
                     Goal::Fight => &[&["StunJason", "StunJasonShotgun", "StunJasonFlare", "FirecrackerJasonStun", "EscapeJasonGrab", "Trapper"]],
                     // Her death ends the match.
-                    Goal::Jason | Goal::HideSeen | Goal::LockedIn { .. } => &[&["CompletedMatch"]],
+                    Goal::Jason | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities => &[&["CompletedMatch"]],
                     _ => &[],
                 };
                 let mut unscored = Vec::new();

@@ -30,11 +30,21 @@
 //! otherwise wanders between cabins (hiding spots and cabinets). He picks grab or swing with even odds and holds a
 //! grabbed counselor [`HOLD_BEFORE_KILL`] seconds before killing her. Paths come from f13-core::nav over the
 //! collision (the game uses Recast). The grabbed counselor is placed as SCCounselorCharacter::UpdateGrabTransform
-//! does (see [`place_held`]). No Shift, Morph or Stalk; no character-to-character collision.
+//! does (see [`place_held`]). No character-to-character collision.
+//!
+//! Shift, Morph and Stalk run as the game runs them (f13-core::killer_moves; J2's ShiftSpeed 1000 cm/s and ShiftTime
+//! 4 s, StalkActiveTime, IdleStalkModifier, TeleportScreenTime; the map's SCKillerMorphPoints), once his abilities
+//! unlock and recharge. When he uses them is the AI's (PLACEHOLDERS): Shift when he sees her [`SHIFT_RANGE_M`] away,
+//! steering at her and grabbing her when she's in reach (the wind-up stands him still); Morph when the clue or hiding
+//! spot he's after is more than [`MORPH_MIN_M`] away; Stalk when he's closing on one within [`STALK_RANGE_M`]. The
+//! teleport effect's fade hides him below half (the game dissolves his materials); Stalk silences nothing yet (no
+//! audio).
 
 use bevy::prelude::*;
 use f13_core::collision::{Capsule, WalkSettings};
 use f13_core::health::Hit;
+use f13_core::killer_abilities::{Ability, Blockers};
+use f13_core::killer_moves::{morph_point, Shift, ShiftPhase, Stalk, TeleportFade};
 use f13_core::movement::{calc_velocity, input_acceleration, MovementSettings};
 use f13_core::nav::NavGrid;
 use std::collections::HashMap;
@@ -96,6 +106,11 @@ const STALL_SECONDS: f32 = 1.5;
 /// How long, and how near, clues around one he couldn't reach are ignored.
 const UNREACHABLE_SECONDS: f32 = 15.0;
 const UNREACHABLE_RADIUS_M: f32 = 5.0;
+/// AI choices (not the game's): Shift at her from this far (m); Morph to a clue or hiding spot this far away (m);
+/// Stalk when closing on one this near (m).
+const SHIFT_RANGE_M: (f32, f32) = (6.0, 30.0);
+const MORPH_MIN_M: f32 = 50.0;
+const STALK_RANGE_M: f32 = 40.0;
 /// He starts a hiding spot's search or kill this close (m) to its spot.
 const SPECIAL_MOVE_REACH_M: f32 = 1.5;
 /// Losing her, he searches the hiding spots this close (m) to where she was last known.
@@ -145,6 +160,12 @@ pub struct KillerTuning {
     /// The swing's length and its AttackTraceNotify window (s).
     pub attack_length: f32,
     pub attack_window: (f32, f32),
+    /// Shift's max speed (cm/s) and length (s); Stalk's length and idle rate; Morph's delay (s).
+    pub shift_speed: f32,
+    pub shift_time: f32,
+    pub stalk_active_time: f32,
+    pub idle_stalk_modifier: f32,
+    pub teleport_screen_time: f32,
 }
 
 impl KillerTuning {
@@ -169,6 +190,11 @@ impl KillerTuning {
             world_damage: weapon * v("DamageWorldModifier", 1.0),
             attack_length: attack.map_or(1.0, |a| a.length),
             attack_window: attack.and_then(|a| a.window("AttackTraceNotify")).unwrap_or((0.2, 0.5)),
+            shift_speed: v("ShiftSpeed", 1000.0),
+            shift_time: v("ShiftTime", 4.0),
+            stalk_active_time: v("StalkActiveTime", 20.0),
+            idle_stalk_modifier: v("IdleStalkModifier", 0.1),
+            teleport_screen_time: v("TeleportScreenTime", 1.0),
         }
     }
 }
@@ -199,6 +225,10 @@ pub enum JasonState {
     HideKill { spot: Entity, t: f32, end: Transform, anim: &'static str, victim: &'static str },
     /// Hit without being stunned: a short flinch.
     Flinching { t: f32 },
+    /// Shifting (f13-core::killer_moves).
+    Shifting { shift: Shift },
+    /// Morphing: s into it, and where he'll be.
+    Morphing { t: f32, to: Transform },
     /// The counselor is dead.
     Done,
 }
@@ -238,6 +268,34 @@ pub struct Jason {
     unreachable: Option<(Vec3, f32)>,
     /// Next goal log (game time).
     next_log: f32,
+    pub stalk: Option<Stalk>,
+    pub fade: TeleportFade,
+    /// Hidden by the fade.
+    faded: bool,
+}
+
+impl Jason {
+    pub fn stalking(&self) -> bool {
+        self.stalk.is_some()
+    }
+
+    pub fn shifting(&self) -> bool {
+        matches!(self.state, JasonState::Shifting { .. })
+    }
+}
+
+/// The map's SCKillerMorphPoints: where each is (for picking one), and where Jason ends up (on the floor, facing its
+/// way).
+#[derive(Resource, Default)]
+pub struct MorphPoints(pub Vec<(Vec3, Transform)>);
+
+impl MorphPoints {
+    /// Morph's destination for a spot (f13-core::killer_moves::morph_point).
+    pub fn pick(&self, spot: Vec3) -> Option<Transform> {
+        let cm = |v: Vec3| [v.x * CM, v.z * CM, v.y * CM];
+        let points: Vec<[f32; 3]> = self.0.iter().map(|(p, _)| cm(*p)).collect();
+        morph_point(&points, cm(spot)).map(|i| self.0[i].1)
+    }
 }
 
 /// AM_normal_stand_door_break_axe's timing, per section of [`BREAK_DOOR`] (s into it): its length (where the next
@@ -386,10 +444,25 @@ fn spawn_jason(
         return;
     };
     let world = collision.with(&dynamic);
-    let feet = f13_core::collision::spawn_floor(&world, start.translation, 1.5, tuning.capsule.half_height * 2.0, &WALK).unwrap_or(start.translation);
     // Unreal actors face +X; characters here face +Z.
-    let (yaw, _, _) = start.rotation.to_euler(EulerRot::YXZ);
-    let rotation = Quat::from_rotation_y(yaw - std::f32::consts::FRAC_PI_2);
+    let stand = |at: &Transform| {
+        let feet = f13_core::collision::spawn_floor(&world, at.translation, 1.5, tuning.capsule.half_height * 2.0, &WALK).unwrap_or(at.translation);
+        let (yaw, _, _) = at.rotation.to_euler(EulerRot::YXZ);
+        Transform { translation: feet, rotation: Quat::from_rotation_y(yaw - std::f32::consts::FRAC_PI_2), ..default() }
+    };
+    let Transform { translation: feet, rotation, .. } = stand(&start);
+    let morph_points: Vec<(Vec3, Transform)> = level
+        .layouts
+        .iter()
+        .flat_map(|l| l.actors_of("SCKillerMorphPoint"))
+        .filter_map(|a| a.transform.as_ref())
+        .map(|x| {
+            let at = crate::to_transform(x);
+            (at.translation, stand(&at))
+        })
+        .collect();
+    info!("{} morph points", morph_points.len());
+    commands.insert_resource(MorphPoints(morph_points));
     info!("Jason at {feet} ({:?})", tuning);
     let jason = commands
         .spawn((
@@ -415,6 +488,9 @@ fn spawn_jason(
                 last_gdist: f32::MAX,
                 unreachable: None,
                 next_log: 0.0,
+                stalk: None,
+                fade: TeleportFade::default(),
+                faded: false,
             },
             Transform { translation: feet, rotation, ..default() },
             Visibility::default(),
@@ -567,7 +643,7 @@ pub(crate) fn update_jason(
     (killer, counselor_model): (Option<Res<KillerCharacter>>, Option<Res<crate::character::CounselorCharacter>>),
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
     (mut rng, mut struggle): (ResMut<crate::GameRng>, ResMut<Struggle>),
-    mut jasons: Query<(Entity, &mut Jason, &mut Transform, Option<&HitJason>, Option<&crate::senses::Knowledge>), Without<Player>>,
+    (mut jasons, morph_points): (Query<(Entity, &mut Jason, &mut Transform, Option<&HitJason>, Option<&mut crate::senses::Knowledge>), Without<Player>>, Option<Res<MorphPoints>>),
     (inventories, items): (Query<&crate::interact::Inventory>, Query<&crate::props::Item>),
     mut players: Query<(Entity, &mut Player, &mut Transform, Has<crate::vehicle::Driving>, Option<&mut crate::hiding::Hiding>), Without<Jason>>,
     mut doors: Query<(Entity, &mut crate::doors::Door, &GlobalTransform)>,
@@ -594,8 +670,23 @@ pub(crate) fn update_jason(
     let (grid, lists) = collision.without(&dynamic, |e| open_leaves.contains(&e));
     let world = (grid, lists.as_slice());
     let Ok((pe, mut p, mut pxf, driving, mut hiding)) = players.single_mut() else { return };
-    for (je, mut j, mut xf, hit, know) in &mut jasons {
+    for (je, mut j, mut xf, hit, mut know) in &mut jasons {
         j.stun_immune = (j.stun_immune - dt).max(0.0);
+        // Stalk runs down (slower standing still); the teleport effect fades him while he shifts or morphs.
+        let moving = j.velocity.length_squared() > 0.0;
+        if let Some(s) = j.stalk.as_mut() {
+            if !s.tick(dt, moving, t.idle_stalk_modifier) {
+                info!("Jason: Stalk over");
+                j.stalk = None;
+            }
+        }
+        let effect = matches!(j.state, JasonState::Shifting { .. } | JasonState::Morphing { .. });
+        j.fade.tick(dt, effect);
+        let faded = j.fade.0 < 0.5;
+        if faded != j.faded {
+            j.faded = faded;
+            commands.entity(je).insert(if faded { Visibility::Hidden } else { Visibility::Inherited });
+        }
         // A counselor's item hit him.
         if let Some(h) = hit {
             commands.entity(je).remove::<HitJason>();
@@ -615,6 +706,7 @@ pub(crate) fn update_jason(
                         | JasonState::OpeningDoor { .. }
                         | JasonState::BreakingDoor { .. }
                         | JasonState::BurstingDoor { .. }
+                        | JasonState::Shifting { .. }
                 );
             match h.stun {
                 Some(stun) if can_stun => {
@@ -655,13 +747,13 @@ pub(crate) fn update_jason(
                     continue;
                 }
                 j.cooldown -= dt;
-                let sees = know.is_none_or(|k| k.sees);
+                let sees = know.as_ref().is_none_or(|k| k.sees);
                 // Near the goal but not getting any closer: as good as there.
                 let stalled = j.stall > STALL_SECONDS;
                 // Where to go: her, if he sees her; else the hiding spot he's after, the last clue, or somewhere.
                 let mut goal = to;
                 if !sees {
-                    if let Some(s) = know.and_then(|k| k.hiding_spot).filter(|s| !j.searched.contains(s)) {
+                    if let Some(s) = know.as_ref().and_then(|k| k.hiding_spot).filter(|s| !j.searched.contains(s)) {
                         if j.target_spot != Some(s) {
                             j.target_side = None;
                         }
@@ -669,7 +761,7 @@ pub(crate) fn update_jason(
                     }
                     // Clues near one he couldn't get to don't count for a while (Sense keeps showing her there).
                     let unreachable = j.unreachable.filter(|u| now - u.1 < UNREACHABLE_SECONDS);
-                    let clue = know.and_then(|k| k.last_known).filter(|c| c.1 > j.clue_done && unreachable.is_none_or(|u| c.0.distance(u.0) > UNREACHABLE_RADIUS_M));
+                    let clue = know.as_ref().and_then(|k| k.last_known).filter(|c| c.1 > j.clue_done && unreachable.is_none_or(|u| c.0.distance(u.0) > UNREACHABLE_RADIUS_M));
                     if let Some(s) = j.target_spot {
                         match spots.get_mut(s) {
                             Ok((_, mut spot, g)) if !spot.destroyed || spot.occupant.is_some() => {
@@ -769,6 +861,36 @@ pub(crate) fn update_jason(
                     let door = doors.iter().map(|(_, d, g)| (g.translation().distance(xf.translation), d.open, d.locked, g.translation())).min_by(|a, b| a.0.total_cmp(&b.0));
                     debug!("Jason: going for {what}, {gdist:.1} m to go (at {:.1},{:.1},{:.1} -> {:.1},{:.1},{:.1}; path {:?}); nearest door {door:?}", xf.translation.x, xf.translation.y, xf.translation.z, goal.x, goal.y, goal.z, j.path);
                 }
+                // His abilities (when is the AI's choice; see the module docs).
+                let ready = |know: &Option<Mut<crate::senses::Knowledge>>, a: Ability| know.as_ref().is_some_and(|k| k.abilities.is_available(a, &Blockers::default()));
+                let after_clue = !sees && (j.target_spot.is_some() || j.wander.is_none_or(|(w, _)| goal != w));
+                if sees && !driving && (SHIFT_RANGE_M.0..SHIFT_RANGE_M.1).contains(&dist) && ready(&know, Ability::Shift) {
+                    if let Some(k) = know.as_mut() {
+                        k.abilities.consume(Ability::Shift);
+                    }
+                    info!("Jason: Shift ({dist:.0} m from her)");
+                    j.state = JasonState::Shifting { shift: Shift::start() };
+                    j.velocity = Vec2::ZERO;
+                    continue;
+                }
+                if after_clue && gdist > MORPH_MIN_M && ready(&know, Ability::Morph) {
+                    if let Some(to) = morph_points.as_ref().and_then(|m| m.pick(goal)) {
+                        if let Some(k) = know.as_mut() {
+                            k.abilities.consume(Ability::Morph);
+                        }
+                        info!("Jason: Morph ({gdist:.0} m to his goal; to a point {:.0} m from it)", Vec2::new(to.translation.x - goal.x, to.translation.z - goal.z).length());
+                        j.state = JasonState::Morphing { t: 0.0, to };
+                        j.velocity = Vec2::ZERO;
+                        continue;
+                    }
+                }
+                if after_clue && gdist < STALK_RANGE_M && j.stalk.is_none() && ready(&know, Ability::Stalk) {
+                    if let Some(k) = know.as_mut() {
+                        k.abilities.consume(Ability::Stalk);
+                    }
+                    info!("Jason: Stalk ({gdist:.0} m to his goal)");
+                    j.stalk = Some(Stalk::start(t.stalk_active_time));
+                }
                 if sees && !driving && j.cooldown <= 0.0 {
                     // Going for a grab, he swings instead when she's inside the grab's minimum distance (else he'd
                     // stand there); going for a swing, he closes to swing range.
@@ -805,7 +927,7 @@ pub(crate) fn update_jason(
                 if let Some((de, d, g)) = door_ahead.and_then(|de| doors.get(de).ok()) {
                     let barred = barricades.iter().any(|b| b.door == Some(de) && b.enabled);
                     j.velocity = Vec2::ZERO;
-                    if know.is_some_and(|k| k.abilities.rage_active) {
+                    if know.as_ref().is_some_and(|k| k.abilities.rage_active) {
                         info!("Jason: bursting through a door (raged)");
                         j.state = JasonState::BurstingDoor { door: de, t: 0.0 };
                         commands.entity(je).insert(PlayAction(DOOR_BURST.into()));
@@ -851,6 +973,48 @@ pub(crate) fn update_jason(
                         j.path.clear();
                     }
                     j.progress = (xf.translation, 0.0);
+                }
+            }
+            JasonState::Shifting { mut shift } => {
+                let phase = shift.tick(dt, t.shift_time);
+                let in_reach = alive && !driving && dist >= t.grab_min_m && dist <= t.grab_max_m && angle <= t.grab_angle_deg;
+                if phase == ShiftPhase::Over || !alive {
+                    info!("Jason: Shift over");
+                    j.state = JasonState::Hunting;
+                } else if in_reach && phase == ShiftPhase::Moving {
+                    // Grabbing ends the shift (CancelShift).
+                    info!("Jason: grab out of a Shift ({dist:.2} m, {angle:.0} deg)");
+                    j.state = JasonState::Reaching { t: 0.0 };
+                    commands.entity(je).insert(PlayAction(GRAB_STARTUP.into()));
+                } else {
+                    j.state = JasonState::Shifting { shift };
+                    let sees = know.as_ref().is_none_or(|k| k.sees);
+                    let goal = if sees { to } else { know.as_ref().and_then(|k| k.last_known).map_or(to, |c| c.0) };
+                    if phase == ShiftPhase::Moving {
+                        // The game pushes him along his facing at ShiftSpeed; he turns as he steers.
+                        let dir = if sees { flat.normalize_or_zero() } else { steer(&mut j, &mut nav.0, navmesh, &world, xf.translation, goal, dt) };
+                        turn_toward(&mut xf, dir, t.turn_rate_deg, dt);
+                        let yaw = yaw_of(xf.rotation);
+                        let fwd = Vec2::new(yaw.sin(), yaw.cos());
+                        walk(&mut j, &mut xf, fwd, t.shift_speed, Some(fwd), dt, &t, &world);
+                    } else {
+                        walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(flat), dt, &t, &world);
+                    }
+                }
+            }
+            JasonState::Morphing { t: at, to: dest } => {
+                let at = at + dt;
+                j.velocity = Vec2::ZERO;
+                if at >= t.teleport_screen_time {
+                    info!("Jason: morphed to ({:.0}, {:.0})", dest.translation.x, dest.translation.z);
+                    *xf = dest;
+                    j.path.clear();
+                    j.progress = (dest.translation, 0.0);
+                    j.stall = 0.0;
+                    j.last_gdist = f32::MAX;
+                    j.state = JasonState::Hunting;
+                } else {
+                    j.state = JasonState::Morphing { t: at, to: dest };
                 }
             }
             JasonState::Swinging { t: at, hit } => {

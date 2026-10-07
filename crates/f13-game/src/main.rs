@@ -1,9 +1,10 @@
 //! f13-game: currently a viewer for the MVP map (Crystal Lake, small) built from the player's own export.
 //!
-//!   cargo run -p f13-game --release -- --export <dir made by tools/f13-export> [--layout 1-4] [--seed n] [--near-car] [--bot-escape] [--bot-heal] [--bot-dodge] [--bot-door] [--grass]
+//!   cargo run -p f13-game --release -- --export <dir made by tools/f13-export> [--layout 1-4 (default: the game's random pick)] [--seed n] [--near-car] [--bot-escape] [--bot-heal] [--bot-dodge] [--bot-door] [--grass]
 //!       [--fly] [--capsule] [--demo] [--fear 0-100] [--health 1-100] [--speed x] [--tuning file] [--aerial] [--no-foliage] [--screenshot out.png [--screenshot-after s]]
 //!       [--pose <animation>@<seconds>]  (hold the counselor (and Jason) in one exported animation, for screenshots)
 //!       [--no-jason] [--jason-delay s] [--bot-jason]  (Jason hunts the counselor unless left out; counselor bots leave him out)
+//!       [--bot-abilities]  (Jason, every ability ready and told where she is, Morphs, Stalks and Shifts to her)
 //!       [--give Class,Class...] [--bot-fight]  (start with these items (testing); a bot that uses them on Jason)
 //!       [--nav-debug]  (draw the navmesh around the counselor)
 //!       [--bot-hide] [--bot-hide-seen]  (hide out of Jason's sight and come out; hide where he sees: he kills her)
@@ -50,7 +51,8 @@ const LAYOUTS: u32 = 4;
 
 struct Args {
     export: PathBuf,
-    layout: u32,
+    /// None: picked as the game picks it.
+    layout: Option<u32>,
     seed: Option<u64>,
     near_car: bool,
     bot_escape: bool,
@@ -58,6 +60,8 @@ struct Args {
     bot_dodge: bool,
     bot_door: bool,
     bot_jason: bool,
+    /// --bot-abilities: Jason Morphs, Stalks and Shifts to her.
+    bot_abilities: bool,
     bot_fight: bool,
     bot_hide: bool,
     nav_debug: bool,
@@ -98,7 +102,7 @@ struct Args {
 
 fn parse_args() -> Args {
     let mut export = None;
-    let mut layout = 1;
+    let mut layout = None;
     let mut seed = None;
     let mut near_car = false;
     let mut bot_escape = false;
@@ -106,6 +110,7 @@ fn parse_args() -> Args {
     let mut bot_dodge = false;
     let mut bot_door = false;
     let mut bot_jason = false;
+    let mut bot_abilities = false;
     let mut bot_fight = false;
     let mut bot_hide = false;
     let mut nav_debug = false;
@@ -136,7 +141,7 @@ fn parse_args() -> Args {
     while let Some(a) = it.next() {
         match a.as_str() {
             "--export" => export = it.next().map(PathBuf::from),
-            "--layout" => layout = it.next().and_then(|v| v.parse().ok()).unwrap_or(1),
+            "--layout" => layout = it.next().and_then(|v| v.parse::<u32>().ok()).map(|n| n.clamp(1, LAYOUTS)),
             "--seed" => seed = it.next().and_then(|v| v.parse().ok()),
             "--near-car" => near_car = true,
             "--bot-escape" => bot_escape = true,
@@ -144,6 +149,7 @@ fn parse_args() -> Args {
             "--bot-dodge" => bot_dodge = true,
             "--bot-door" => bot_door = true,
             "--bot-jason" => bot_jason = true,
+            "--bot-abilities" => bot_abilities = true,
             "--bot-fight" => bot_fight = true,
             "--bot-hide" => bot_hide = true,
             "--nav-debug" => nav_debug = true,
@@ -193,7 +199,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout: layout.clamp(1, LAYOUTS), seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight }
+    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_abilities, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight }
 }
 
 #[derive(Resource)]
@@ -255,12 +261,17 @@ fn main() {
             std::process::exit(1);
         })
     };
-    let layouts = vec![load(MAP), load(&format!("CLsm_Design_SL{}", args.layout))];
-    let spawn = counselor_start(&layouts);
-
     let seed = args.seed.unwrap_or_else(|| {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
     });
+    let main = load(MAP);
+    let layout = match args.layout {
+        Some(n) => format!("CLsm_Design_SL{n}"),
+        None => random_level(&main, seed).unwrap_or_else(|| "CLsm_Design_SL1".into()),
+    };
+    println!("cabin layout {layout}");
+    let layouts = vec![main, load(&layout)];
+    let spawn = counselor_start(&layouts);
     let mut app = App::new();
     // Gameplay randomness (stumbles, ...), separate from the match layout so both repeat with --seed.
     app.insert_resource(Anims::load(&args.export));
@@ -292,7 +303,7 @@ fn main() {
             rules.round_time = t;
         }
         app.insert_resource(match_flow::MatchTuning { rules, events: tuning.score_events.clone() });
-        let bot = args.bot_escape || args.bot_heal || args.bot_dodge || args.bot_door || args.bot_jason || args.bot_fight || args.bot_hide || args.bot_hide_seen || args.bot_locked_in.is_some();
+        let bot = args.bot_escape || args.bot_heal || args.bot_dodge || args.bot_door || args.bot_jason || args.bot_abilities || args.bot_fight || args.bot_hide || args.bot_hide_seen || args.bot_locked_in.is_some();
         app.insert_resource(player::PlayerTuning {
             counselor: tuning.counselor,
             movement: tuning.counselor_movement,
@@ -317,6 +328,8 @@ fn main() {
             app.add_plugins(bot::BotPlugin(bot::Goal::Door));
         } else if args.bot_jason {
             app.add_plugins(bot::BotPlugin(bot::Goal::Jason));
+        } else if args.bot_abilities {
+            app.add_plugins(bot::BotPlugin(bot::Goal::Abilities));
         } else if args.bot_fight {
             app.add_plugins(bot::BotPlugin(bot::Goal::Fight));
         } else if args.bot_hide {
@@ -382,6 +395,21 @@ pub(crate) fn to_transform(x: &Xform) -> Transform {
         rotation: Quat::from_array(g.rotation).normalize(),
         scale: Vec3::from_array(g.scale),
     }
+}
+
+/// The cabin layout, as SCWorldSettings picks it when the match's level loads: one of its RandomLevels, at
+/// `min((int)(n * rand() / RAND_MAX), n - 1)` (the game's `rand()`; here the match seed's).
+fn random_level(main: &LevelLayout, seed: u64) -> Option<String> {
+    let levels: Vec<&str> = main
+        .actors
+        .iter()
+        .filter(|a| a.class == "SCWorldSettings")
+        .find_map(|a| a.props.get("RandomLevels").and_then(|l| l.as_array()))?
+        .iter()
+        .filter_map(|l| l.as_str())
+        .collect();
+    let mut rng = f13_core::spawn::Rng::new(seed ^ 0x1a40_u64);
+    levels.get(rng.index(levels.len())).map(|l| l.to_string())
 }
 
 fn counselor_start(layouts: &[LevelLayout]) -> Vec3 {

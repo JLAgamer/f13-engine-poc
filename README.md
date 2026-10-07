@@ -9,6 +9,8 @@ shipped. They are passed in at runtime, and a loader will read them from the pla
 ## Crates
 - `f13-core`: engine-independent rules (no Bevy dependency), unit-tested
   - `killer_abilities`: Jason's ability unlock order and intervals, recharge, availability, rage
+  - `killer_moves`: Shift (wind-up, speed, length), Stalk (timer, slower standing still), Morph's destination, the
+    teleport fade
   - `fear`: counselor fear driven by fear events (delays, caps, auto-deactivate, throttled updates, cosmetic easing)
   - `stats`: counselor stats and stat-modified values (e.g. Composure scaling fear gain)
   - `counselor`: stance, walk/run/sprint rules, stamina, max speed, wounded state
@@ -72,10 +74,11 @@ dotnet run --project tools/f13-export -- --game "<path to F13Game>" --out "<expo
   setup). A stock install keeps it in `Content/Paks/*.pak`, which isn't a standard Unreal pak, so it can't be read
   yet; the tools detect this and say so.
 
-View the map (Crystal Lake, small; `--layout` picks one of its four cabin layouts):
+Play on the map (Crystal Lake, small). Each match gets one of its four cabin layouts, picked at random as the game
+picks it (`--seed n` repeats a match; `--layout 1-4` picks the layout yourself):
 
 ```
-cargo run -p f13-game --release -- --export "<export dir>" --layout 1
+cargo run -p f13-game --release -- --export "<export dir>"
 ```
 
 By default you play Vanessa, in her default outfit and animated (idle, walk/run/sprint, crouch, combat strafing,
@@ -113,11 +116,19 @@ He's a computer player that only knows what he perceives: what he sees (100 m, t
 the sound pings your noise puts on his screen (the game's formula: sprinting is heard far off, walking at average
 Stealth isn't, standing still is silent) and Sense (unlocked 46 s in; it reaches further with your fear and late in
 the match, and finds hiders only once he's enraged). Out of sight, he goes where he last saw, heard or sensed you and
-searches the hiding spots around there. He finds his way on a navmesh built at load time from the map's collision
+searches the hiding spots around there. His other abilities work as the game's:
+- Morph (ready 1 s in) puts him on the map's morph point nearest a far-off clue, a second after he vanishes.
+- Stalk (256 s in) lasts 20 s, ten times longer standing still. It has no effect yet (it silences his music).
+- Shift (136 s in) winds up for 0.7 s, then he rushes at you, unseen, at 10 m/s for up to 4 s, and grabs you
+  out of it.
+
+When he uses them is the computer player's choice. He finds his way on a navmesh built at load time from the map's collision
 with the game's own settings, like the game's runtime navmesh (about 4 s in the background; the HUD shows its
 progress, and `--nav-debug` draws it around you).
 `--no-jason` leaves him out, `--jason-delay s` gives you a head start, and `--bot-jason` waits to be killed
-(screenshots of the swing, grab and kill go to the temp folder). The counselor bots below leave him out.
+(screenshots of the swing, grab and kill go to the temp folder). `--bot-abilities` gives him every ability at the
+start and tells him where you are: he Morphs over, Stalks, Shifts at you and kills you. The counselor bots below leave
+him out.
 Hiding: E at a wardrobe, outhouse, bed or tent hides you (the game's enter, idle and exit animations; the view is
 the spot's hiding camera, turned with the mouse), E again leaves. If Jason watched you get in, or lost you nearby, he
 searches it: an empty spot breaks, an occupied one ends in its hiding spot kill. `--bot-hide` hides out of his sight

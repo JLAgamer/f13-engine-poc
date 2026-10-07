@@ -67,7 +67,11 @@ Mechanics: Jason side
   the polygon corners), border vertex removal
 - [ ] Jason AI, remaining: heavy attacks, the grabbed counselor on his grab socket, kill cameras; playing as Jason;
   holding breath while hiding
-- [ ] Shift, Morph, Stalk (Sense done)
+- [x] Shift, Morph, Stalk (f13-core::killer_moves, jason.rs): Shift's 0.7 s wind-up, ShiftSpeed and ShiftTime (J2:
+  1000 cm/s, 4 s), ending in a grab; Stalk's StalkActiveTimer (IdleStalkModifier standing still); Morph to the
+  nearest SCKillerMorphPoint within 30 m of the spot after TeleportScreenTime; the teleport fade (he's hidden below
+  half). When the computer Jason uses them is a placeholder. Not yet: the dissolve and screen effects, Stalk's and
+  Shift's sounds and music, Morph's excluded areas
 - [ ] More kills, throwing knives
 - [ ] Breaking walls, generators; traps
 - [ ] Car interactions: stopping and grabbing out of the car
@@ -77,7 +81,9 @@ Match
   escaped, or time out), outro wait, results with the score events' XP (awarded where the game does), leaving.
   Not yet: lobby, level intro and outro sequences, police and Tommy Jarvis timers, badges, Jason dying
 - [x] Item and car spawning, as the game mode does it (f13-core::spawn, f13-data::world)
-- [ ] How the game chooses one of the four cabin layouts per match
+- [x] How the game chooses one of the four cabin layouts per match: SCWorldSettings' RandomLevels, one picked at
+  random when the level loads (`--layout` overrides). Not yet: its rain roll (RainChance, the `rain=` option; the
+  rain level isn't used), the randomized pods
 
 Host CLI (`f13-host`)
 - [ ] Spawn items
