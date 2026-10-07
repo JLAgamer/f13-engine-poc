@@ -789,6 +789,24 @@ static class Mvp
         "/Game/UI/HUD/SC_WiggleMinigame_Widget",
         // Jason's, when he's played.
         "/Game/UI/HUD/Killer/KillerHUDWidget",
+        // The minimap's icons (the SCMinimapIconComponents' DefaultIcon, and Jason's KillerIcon).
+        "/Game/UI/HUD/Minimap/SC_Cabin_Widget",
+        "/Game/UI/HUD/Minimap/SC_Bathroom_Widget",
+        "/Game/UI/HUD/Minimap/SC_BoatHouse_Widget",
+        "/Game/UI/HUD/Minimap/SC_Garage_Widget",
+        "/Game/UI/HUD/Minimap/SC_Camp_Widget",
+        "/Game/UI/HUD/Minimap/SC_CarLoc_Widget",
+        "/Game/UI/HUD/Minimap/SC_PoliceRescue_Widget",
+        "/Game/UI/HUD/Minimap/SC_Killer_Cabin_Widget",
+        "/Game/UI/HUD/Minimap/SC_Killer_BathroomBlock_Widget",
+        "/Game/UI/HUD/Minimap/SC_Killer_BoatHouse_Widget",
+        "/Game/UI/HUD/Minimap/SC_Killer_Garage_Widget",
+        "/Game/UI/HUD/Minimap/SC_JasonShack_Killer_Widget",
+        "/Game/UI/HUD/Minimap/SC_Killer_Camp_Widget",
+        "/Game/UI/HUD/Minimap/SC_Killer_CarLoc_Widget",
+        "/Game/UI/HUD/Minimap/SC_PoliceRescue_killer_Widget",
+        "/Game/UI/HUD/Minimap/PhoneJunctionBox_Widget",
+        "/Game/UI/HUD/Minimap/PowerGridFuseBox_Widget",
     ];
     // Sounds f13-game plays besides the footsteps (SoundCues or SoundWaves).
     /// The map's ambient loops (CrystalLake_Sm_Audio's AmbientSounds).

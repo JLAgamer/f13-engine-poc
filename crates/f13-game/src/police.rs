@@ -273,6 +273,9 @@ fn spawn_car(commands: &mut Commands, export: &crate::ExportRoot, assets: &Asset
     };
     let sounds = info.components.iter().filter(|c| c.kind == "AudioComponent").filter_map(|c| Some((c.name.clone(), crate::audio::cue_name(&c.props["Sound"])?))).collect();
     let root = commands.spawn((at, Visibility::default(), Name::new(class.to_string()), crate::audio::ClassSounds(sounds), PoliceCar)).id();
+    if let Some(icon) = crate::ui::MapIcon::of(&classes, class) {
+        commands.entity(root).insert(icon);
+    }
     for c in info.components.iter().filter(|c| !c.hidden) {
         let Some(mesh) = &c.mesh else { continue };
         let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(mesh.clone()));

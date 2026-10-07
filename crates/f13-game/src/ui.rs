@@ -100,7 +100,7 @@ impl Plugin for UiPlugin {
         embedded_asset!(app, "shaders/minimap.wgsl");
         app.add_plugins((UiMaterialPlugin::<RadialFill>::default(), UiMaterialPlugin::<Minimap>::default()))
             .add_systems(Startup, load_hud)
-            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, jason_hud), hide_for_jason).chain().run_if(resource_exists::<Hud>));
+            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, jason_hud), hide_for_jason).chain().run_if(resource_exists::<Hud>));
     }
 }
 
@@ -567,6 +567,123 @@ fn minimap(
     if let Some((_, &compass)) = hud.names.iter().find(|(k, _)| k.ends_with(".ComapssPanel")) {
         commands.entity(compass).insert(UiTransform { rotation: Rot2::radians((-dir.x).atan2(-dir.y)), ..default() });
     }
+}
+
+/// Something the minimap shows (its class's SCMinimapIconComponent): the icon widget counselors see (DefaultIcon)
+/// and Jason's (KillerIcon); the minimap picks one by whose it is (its icon getter), none when that one is unset.
+/// Items' icons start hidden (SCItem's constructor turns its MinimapIcon off) and what shows them isn't read, so
+/// items get none; nor do icons not visible from the start (bStartVisible).
+#[derive(Component, Clone, Debug)]
+pub struct MapIcon {
+    pub counselor: Option<String>,
+    pub killer: Option<String>,
+}
+
+impl MapIcon {
+    pub fn of(classes: &ClassDb, class: &str) -> Option<MapIcon> {
+        if classes.is_child_of(class, "SCItem") {
+            return None;
+        }
+        let c = classes.get(class)?.components.iter().find(|c| classes.is_child_of(&c.kind, "ILLMinimapIconComponent") || c.kind == "SCMinimapIconComponent")?;
+        if c.props["bStartVisible"].as_bool() == Some(false) {
+            return None;
+        }
+        let widget = |k: &str| c.props[k].as_str().map(|s| s.trim_end_matches("_C").to_string());
+        let icon = MapIcon { counselor: widget("DefaultIcon"), killer: widget("KillerIcon") };
+        (icon.counselor.is_some() || icon.killer.is_some()).then_some(icon)
+    }
+}
+
+/// An icon drawn on the minimap, for the entity it shows.
+#[derive(Component)]
+struct MapIconNode;
+
+/// An icon widget's image and size (design units): its first Image, laid out about the icon's point.
+fn icon_image(dir: &std::path::Path, widget: &str) -> Option<(String, Vec2)> {
+    fn find<'a>(l: &'a f13_data::umg::Laid<'a>) -> Option<(String, Vec2)> {
+        if l.widget.kind == "Image" {
+            if let Some(file) = l.widget.props["Brush"]["ResourceObject"]["File"].as_str() {
+                return Some((file.to_string(), Vec2::new(l.rect.w, l.rect.h)));
+            }
+        }
+        l.children.iter().find_map(find)
+    }
+    let w = Widget::load(dir, widget)?;
+    let laid = w.layout(f13_data::umg::Rect::default());
+    find(&laid)
+}
+
+/// The minimap's icons: each MapIcon's widget where its place falls on the map (the shader's mapping turned
+/// around), hidden outside the map's circle.
+#[allow(clippy::too_many_arguments)]
+fn map_icons(
+    mut commands: Commands,
+    hud: Res<Hud>,
+    play: Option<Res<crate::jason_player::PlayJason>>,
+    window: Single<&Window, With<PrimaryWindow>>,
+    assets: Res<AssetServer>,
+    icons: Query<(Entity, &MapIcon, &GlobalTransform)>,
+    maps: Query<(&MaterialNode<Minimap>, &ComputedNode)>,
+    all_maps: Res<Assets<Minimap>>,
+    mut nodes: Query<(&mut Node, &mut Visibility), With<MapIconNode>>,
+    mut placed: Local<(Option<Entity>, HashMap<Entity, Entity>)>,
+    mut images: Local<HashMap<String, Option<(String, Vec2)>>>,
+) {
+    let Some(map) = &hud.map else { return };
+    let Some(&retainer) = hud.names.iter().find(|(k, _)| k.ends_with(".RetainerBox_0")).map(|(_, e)| e) else { return };
+    let Ok((node, computed)) = maps.get(retainer) else { return };
+    let Some(m) = all_maps.get(&node.0) else { return };
+    // A rebuilt HUD took the old icons with it.
+    if placed.0 != Some(retainer) {
+        *placed = (Some(retainer), HashMap::new());
+    }
+    let size = computed.size() * computed.inverse_scale_factor();
+    let scale = (window.size().x / DESIGN.x).min(window.size().y / DESIGN.y);
+    let [x0, y0, x1, y1] = map.area;
+    let f = m.dir.truncate().truncate().normalize_or(Vec2::NEG_Y);
+    let r = Vec2::new(-f.y, f.x);
+    let jason = play.is_some();
+    let dir = hud.export.clone();
+    for (e, icon, gxf) in &icons {
+        let Some(widget) = (if jason { &icon.killer } else { &icon.counselor }) else { continue };
+        let Some((file, isize)) = images.entry(widget.clone()).or_insert_with(|| icon_image(&dir, widget)).clone() else { continue };
+        let p = gxf.translation();
+        let uv = Vec2::new((p.x * 100.0 - x0) / (x1 - x0), (p.z * 100.0 - y0) / (y1 - y0));
+        let delta = (uv - m.view.truncate().truncate()) / m.view.z;
+        let d = Vec2::new(delta.dot(r), -delta.dot(f));
+        let shown = d.length() <= m.view.w;
+        let s = isize * scale;
+        let (left, top) = (Val::Px((0.5 + d.x) * size.x - s.x / 2.0), Val::Px((0.5 + d.y) * size.y - s.y / 2.0));
+        let vis = if shown { Visibility::Inherited } else { Visibility::Hidden };
+        match placed.1.get(&e).and_then(|&n| nodes.get_mut(n).ok()) {
+            Some((mut n, mut v)) => {
+                n.left = left;
+                n.top = top;
+                v.set_if_neq(vis);
+            }
+            None => {
+                let n = commands
+                    .spawn((
+                        Node { position_type: PositionType::Absolute, left, top, width: Val::Px(s.x), height: Val::Px(s.y), ..default() },
+                        ImageNode::new(assets.load(file)),
+                        vis,
+                        MapIconNode,
+                        Pickable::IGNORE,
+                        ChildOf(retainer),
+                    ))
+                    .id();
+                placed.1.insert(e, n);
+            }
+        }
+    }
+    // Icons whose thing is gone.
+    placed.1.retain(|&src, n| {
+        let keep = icons.contains(src);
+        if !keep {
+            commands.entity(*n).try_despawn();
+        }
+        keep
+    });
 }
 
 /// Sizes a progress bar's fill to `percent` along its fill type.

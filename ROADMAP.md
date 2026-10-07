@@ -147,7 +147,7 @@ Match
       opening, Jason turned back from it, escaping on foot (walking its ExitPath for its 6 s EscapeDelay); the HUD's
       police timer (ShowPoliceTimer, PoliceTimerText); Jason (played) breaking the phone box
       (AM_Break_Phone_Box_Machete, PhoneBoxImpact): the phone dead, a call cut off, until it's repaired (its own minigame)
-- [ ] Police, remaining: the escape's camera spline, the minimap icon, his police stun (combat_stand_stunned_police),
+- [ ] Police, remaining: the escape's camera spline, his police stun (combat_stand_stunned_police),
       the phone box's broken mesh and lights, the computer Jason breaking boxes
 - [ ] Match flow, remaining: lobby, level intro and outro sequences, the Tommy Jarvis timer, badges, Jason
       dying
@@ -233,7 +233,10 @@ Presentation
 - [x] Minimap map: the level's SCMiniMapVolume (its MapTexture over its brush's area) in SC_MiniMap_Widget's circle,
       on her, turned with the camera, the compass's N kept on north (DefaultMinimapZoom as the share of the map shown:
       PLACEHOLDER); widgets' RenderTransforms (the view cone's flip)
-- [ ] HUD, remaining: the minimap's icons, the noise meter, help texts, XP popups, ability widgets
+- [x] The minimap's icons (ui.rs MapIcon): each SCMinimapIconComponent's DefaultIcon widget (Jason's KillerIcon when
+      he's played) where its actor is: cabins, the cars, the police car
+- [ ] HUD, remaining: the items' minimap icons (they start hidden; what shows them isn't read), the noise meter, help
+      texts, XP popups, ability widgets
 - [x] Night lighting, fog, flashlight (lighting.rs): the map's point/spot lights (inverse-square lumens, or Unreal's
   falloff-exponent lights matched at a third of their radius; colour temperature; draw-distance fades), the moon and
   height fog of the clear-weather level (CLsm_RainOff), the post-process volume's fixed exposure and ambient cubemap,

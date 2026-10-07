@@ -608,6 +608,20 @@ fn spawn_props(
             }
         }
     }
+    // What the minimap shows: the runtime actors themselves (the cars), and markers for the level's (cabins).
+    let mut icons = 0;
+    for (id, a) in world.actors.iter().enumerate() {
+        let Some(icon) = crate::ui::MapIcon::of(&classes, &a.class) else { continue };
+        if let Some(&e) = entities.get(&id) {
+            commands.entity(e).insert(icon);
+        } else if a.from_level {
+            commands.spawn((to_transform(&a.transform), icon, Name::new(format!("{} map icon", a.class))));
+        } else {
+            continue;
+        }
+        icons += 1;
+    }
+    *counts.entry("map icons").or_default() += icons;
     // Escape zones (level actors).
     for layout in layouts {
         for a in layout.actors_of("SCEscapeVolume") {
