@@ -781,6 +781,9 @@ static class Mvp
         "/Game/Sounds/Environment/Lake_AmbienceCue.Lake_AmbienceCue",
         "/Game/Sounds/Environment/Mood_Tone_Ambience.Mood_Tone_Ambience",
         "/Game/Sounds/Environment/SoundWaves/main_campground_ambience_loop.main_campground_ambience_loop",
+        // Jason_Base's ShiftAudioCue and TeleportCueCounselorHears.
+        "/Game/Sounds/GamePlay/JasonShift/ShiftTunnelCue.ShiftTunnelCue",
+        "/Game/Sounds/GamePlay/VHS_SFXCue.VHS_SFXCue",
     ];
     // Animations f13-game plays on the counselor: Athlete_AnimBP's female overrides of Base_Counselor_AnimBP's
     // locomotion (BS_F_Normal_Move: idle, walk, run, sprint; BS_F_Combat strafing), crouch, wounded idle, and the

@@ -108,7 +108,9 @@ Mechanics: Jason side
   1000 cm/s, 4 s), ending in a grab; Stalk's StalkActiveTimer (IdleStalkModifier standing still); Morph to the
   nearest SCKillerMorphPoint within 30 m of the spot after TeleportScreenTime; the teleport fade (he's hidden below
   half). When the computer Jason uses them is a placeholder
-- [ ] Shift, Morph, Stalk, remaining: the dissolve and screen effects, Stalk's and Shift's sounds and music, Morph's
+- [x] Shift's rush (Jason_Base's ShiftAudioCue, on him) and the static a counselor hears as he Morphs in near her
+      (TeleportCueCounselorHears; PLACEHOLDER: near = his near music's reach)
+- [ ] Shift, Morph, Stalk, remaining: the dissolve and screen effects, their sound mixes (Shift's, Stalk's), Morph's
       excluded areas
 - [x] Throwing knives (J2's two, the knife's damage and cooldown, the throw montage and its ThrowKnife notify,
   SCJasonAIProperties' 5..25 m; placeholder knife speed) and Jason's traps (J2's seven KillerTraps, set in doorways

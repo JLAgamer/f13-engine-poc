@@ -76,6 +76,11 @@ const ATTACK: &str = "combat_stand_2h_attack_light";
 const HEAVY_ATTACK: &str = "combat_stand_2h_attack_heavy";
 const GRAB_STARTUP: &str = "normal_grab_startup";
 const GRAB_ENTER: &str = "normal_grab_enter_1";
+/// Jason_Base's ShiftAudioCue (the Shift's rush, on him) and TeleportCueCounselorHears (the static a counselor near his
+/// Morph hears; PLACEHOLDER: near = his near music's reach, as the stinger).
+const SHIFT_CUE: &str = "ShiftTunnelCue";
+const TELEPORT_HEARD_CUE: &str = "VHS_SFXCue";
+
 /// Stopping a car dead: his take (AM_normal_stand_car_stop_slam).
 const CAR_SLAM: &str = "normal_stand_car_stop_slam_01";
 
@@ -1141,6 +1146,7 @@ pub(crate) fn update_jason(
                             k.abilities.consume(Ability::Shift);
                         }
                         info!("Jason: Shift");
+                        commands.trigger(crate::audio::PlaySound { cue: SHIFT_CUE.into(), at: Some(xf.translation) });
                         j.state = JasonState::Shifting { shift: Shift::start() };
                         j.velocity = Vec2::ZERO;
                         continue;
@@ -1350,6 +1356,7 @@ pub(crate) fn update_jason(
                         k.abilities.consume(Ability::Shift);
                     }
                     info!("Jason: Shift ({dist:.0} m from her)");
+                    commands.trigger(crate::audio::PlaySound { cue: SHIFT_CUE.into(), at: Some(xf.translation) });
                     j.state = JasonState::Shifting { shift: Shift::start() };
                     j.velocity = Vec2::ZERO;
                     continue;
@@ -1567,6 +1574,10 @@ pub(crate) fn update_jason(
                     // Arriving within his near music's reach of her: her stinger.
                     if dest.translation.distance(pxf.translation) < NEAR_MUSIC_M {
                         commands.trigger(crate::audio::MusicStinger("JasonTeleportedNearStinger"));
+                        // And what counselors hear of it (TeleportCueCounselorHears), unless he's the one played.
+                        if player_input.is_none() {
+                            commands.trigger(crate::audio::PlaySound { cue: TELEPORT_HEARD_CUE.into(), at: None });
+                        }
                     }
                     j.path.clear();
                     j.progress = (dest.translation, 0.0);
