@@ -262,7 +262,8 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
 
     static bool IsComponent(UObject e) => e.ExportType.EndsWith("Component") || e is UActorComponent || e.ExportType is "SCSplineCamera";
     static bool IsScene(UObject e) => e is USceneComponent || e.GetOrDefault<FPackageIndex?>("AttachParent") != null
-        || e.ExportType.EndsWith("Component") && !e.ExportType.Contains("Movement") && !e.ExportType.Contains("Inventory");
+        || e.ExportType.EndsWith("Component") && !e.ExportType.Contains("Movement") && !e.ExportType.Contains("Inventory")
+        || e.ExportType == "SCSplineCamera"; // a CameraComponent (interaction and kill cameras)
 
     public static FTransform Relative(UObject t)
     {

@@ -72,24 +72,7 @@ impl CharacterInfo {
 
     /// A float curve, if the export has it.
     pub fn curve(&self, name: &str) -> Option<f13_core::curve::RichCurve> {
-        use f13_core::curve::{Interp, Key};
-        let keys = self
-            .curves
-            .get(name)?
-            .iter()
-            .map(|k| Key {
-                time: k.time,
-                value: k.value,
-                interp: match k.interp.as_str() {
-                    "linear" => Interp::Linear,
-                    "constant" => Interp::Constant,
-                    _ => Interp::Cubic,
-                },
-                arrive_tangent: k.arrive_tangent,
-                leave_tangent: k.leave_tangent,
-            })
-            .collect();
-        Some(f13_core::curve::RichCurve { keys })
+        self.curves.get(name).map(|k| rich_curve(k))
     }
 }
 
@@ -187,6 +170,9 @@ pub struct AnimInfo {
     /// length, e.g. `shouldRagdoll`), in seconds.
     #[serde(default, deserialize_with = "crate::level::null_as_empty")]
     pub windows: Vec<Window>,
+    /// The montage's float curves (e.g. "Barricade"), keyed in seconds into it.
+    #[serde(default, deserialize_with = "crate::level::null_as_empty")]
+    pub curves: BTreeMap<String, Vec<CurveKey>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -202,6 +188,31 @@ impl AnimInfo {
     pub fn window(&self, name: &str) -> Option<(f32, f32)> {
         self.windows.iter().find(|w| w.name == name).map(|w| (w.start, w.end))
     }
+
+    /// The montage's float curve called `name`.
+    pub fn curve(&self, name: &str) -> Option<f13_core::curve::RichCurve> {
+        self.curves.get(name).map(|k| rich_curve(k))
+    }
+}
+
+/// Exported RichCurve keys as an f13-core curve.
+fn rich_curve(keys: &[CurveKey]) -> f13_core::curve::RichCurve {
+    use f13_core::curve::{Interp, Key};
+    let keys = keys
+        .iter()
+        .map(|k| Key {
+            time: k.time,
+            value: k.value,
+            interp: match k.interp.as_str() {
+                "linear" => Interp::Linear,
+                "constant" => Interp::Constant,
+                _ => Interp::Cubic,
+            },
+            arrive_tangent: k.arrive_tangent,
+            leave_tangent: k.leave_tangent,
+        })
+        .collect();
+    f13_core::curve::RichCurve { keys }
 }
 
 impl CharacterInfo {

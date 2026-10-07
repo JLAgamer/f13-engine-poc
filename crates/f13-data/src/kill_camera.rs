@@ -47,6 +47,21 @@ pub fn parse(v: &Value) -> CameraSpline {
     }
 }
 
+/// Kill class -> its spline component's place under the kill's root (Unreal cm and rotation; identity when the export
+/// has none).
+pub fn load_frames(path: &Path) -> Result<HashMap<String, (Vec3, Quat)>, crate::LoadError> {
+    let text = std::fs::read_to_string(path).map_err(crate::LoadError::Io)?;
+    let v: Value = serde_json::from_str(&text).map_err(|e| crate::LoadError::Invalid(format!("{}: {e}", path.display())))?;
+    Ok(v.as_object().map_or(HashMap::new(), |o| o.iter().map(|(k, v)| (k.clone(), frame(v))).collect()))
+}
+
+/// A spline's RelativeLocation and RelativeRotation (a rotator, degrees).
+pub fn frame(v: &Value) -> (Vec3, Quat) {
+    let r = &v["RelativeRotation"];
+    let rotation = f13_core::camera_spline::quaternion(Vec3::new(f(&r["Pitch"]), f(&r["Yaw"]), f(&r["Roll"])));
+    (vec3(&v["RelativeLocation"]), rotation)
+}
+
 /// Kill class -> its camera spline.
 pub fn load(path: &Path) -> Result<HashMap<String, CameraSpline>, crate::LoadError> {
     let text = std::fs::read_to_string(path).map_err(crate::LoadError::Io)?;
@@ -78,5 +93,15 @@ mod tests {
         assert_eq!(s.at(6.2).location, Vec3::new(2.0, 2.0, 2.0));
         assert_eq!(s.rotation.0[0].out.z, -0.793354);
         assert!(s.fov.0.is_empty());
+        assert_eq!(frame(&v), (Vec3::ZERO, Quat::IDENTITY));
+    }
+
+    #[test]
+    fn frame_turns_and_moves_the_spline() {
+        let v = serde_json::json!({"RelativeLocation": {"X": 0.0, "Y": 400.0, "Z": 100.0}, "RelativeRotation": {"Pitch": 0.0, "Yaw": -90.0, "Roll": 0.0}});
+        let (t, r) = frame(&v);
+        assert_eq!(t, Vec3::new(0.0, 400.0, 100.0));
+        // Yaw -90: the spline's +X is the kill's -Y.
+        assert!((r * Vec3::X - Vec3::NEG_Y).length() < 1e-5);
     }
 }

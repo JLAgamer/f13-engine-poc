@@ -319,7 +319,10 @@ fn door_anim(opening: bool, inside: bool) -> &'static str {
 pub struct BarricadeMove {
     door: Entity,
     t: f32,
-    flip_at: f32,
+    /// The montage's UseBarricade driver window: the plank follows her "Barricade" curve in it, and the barricade
+    /// toggles at its end.
+    driver: (f32, f32),
+    curve: Option<f13_core::curve::RichCurve>,
     length: f32,
     flipped: bool,
 }
@@ -328,10 +331,27 @@ pub struct BarricadeMove {
 const BARRICADE_DOWN: &str = "f_normal_stand_barricade_pulldown";
 const BARRICADE_UP: &str = "f_normal_stand_barricade_pushup";
 
-fn barricade_moves(mut commands: Commands, time: Res<Time>, mut players: Query<(Entity, &mut BarricadeMove), With<Player>>, mut barricades: Query<&mut Barricade>) {
+fn barricade_moves(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut players: Query<(Entity, &mut BarricadeMove), With<Player>>,
+    mut barricades: Query<&mut Barricade>,
+    mut transforms: Query<&mut Transform, Without<Player>>,
+) {
     for (pe, mut m) in &mut players {
         m.t += time.delta_secs();
-        if !m.flipped && m.t >= m.flip_at {
+        // UseBarricadeDriverTick.
+        if let (Some(c), false) = (&m.curve, m.flipped) {
+            if (m.driver.0..m.driver.1).contains(&m.t) {
+                let plank = barricades.iter().find(|b| b.door == Some(m.door)).and_then(|b| b.plank_at(crate::windows::PLANK_PITCH * c.eval(m.t).clamp(0.0, 1.0)));
+                if let Some((e, at)) = plank {
+                    if let Ok(mut t) = transforms.get_mut(e) {
+                        *t = at;
+                    }
+                }
+            }
+        }
+        if !m.flipped && m.t >= m.driver.1 {
             m.flipped = true;
             if let Some(mut b) = barricades.iter_mut().find(|b| b.door == Some(m.door)) {
                 flip_barricade(&mut commands, &mut b);
@@ -383,11 +403,17 @@ fn door_moves(
     }
 }
 
+/// NativeSpecialComplete / NativeSpecialAborted: however her door move ends, the view goes back to her.
+fn door_move_ended(_: On<Remove, DoorMove>, mut commands: Commands) {
+    commands.trigger(crate::interaction_camera::StopInteractionCamera);
+}
+
 pub struct InteractPlugin;
 
 impl Plugin for InteractPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Interaction>()
+            .add_observer(door_move_ended)
             .add_systems(Startup, spawn_prompt)
             .add_systems(
             Update,
@@ -395,7 +421,7 @@ impl Plugin for InteractPlugin {
                 .chain()
                 .before(crate::doors::swing_doors),
         )
-        .add_systems(Update, (crate::doors::swing_doors, crate::windows::update_window_visuals));
+        .add_systems(Update, (crate::doors::swing_doors, crate::windows::update_window_visuals, crate::windows::place_planks));
     }
 }
 
@@ -759,10 +785,18 @@ fn act(
                     Some(t) => {
                         let swing = t.window("Driver: OpenCloseDoor").unwrap_or((0.0, 0.5));
                         let root = door_root(&door, gxf, player_xf.translation.y, anim, model.as_deref());
+                        // bMoveToward: she goes to the move's spot first (its camera is placed for her there).
+                        if let (None, Some(spot)) = (root, door.spots.get(door_spot(anim))) {
+                            let at = crate::hiding::HidingSpot::world(gxf, spot);
+                            player_xf.translation = at.translation.with_y(player_xf.translation.y);
+                            player_xf.rotation = at.rotation;
+                        }
                         commands.entity(player_entity).insert((
                             DoorMove { door: d, t: 0.0, swing, length: t.length, swung: false, root },
                             crate::character::PlayAction(anim.into()),
                         ));
+                        // Its handler takes the camera (doors' open and close moves have bTakeCameraControl).
+                        commands.trigger(crate::interaction_camera::PlayInteractionCamera { actor: d, handler: door_spot(anim) });
                     }
                     None => {
                         let what = door.press(gxf, player_xf.translation);
@@ -806,9 +840,9 @@ fn act(
                         let anim = if b.enabled { BARRICADE_UP } else { BARRICADE_DOWN };
                         match model.as_ref().and_then(|m| m.info.animations.get(anim)) {
                             Some(t) => {
-                                let flip_at = t.window("Driver: UseBarricade").map_or(t.length * 0.5, |w| w.1);
+                                let driver = t.window("Driver: UseBarricade").unwrap_or((t.length * 0.5, t.length * 0.5));
                                 commands.entity(player_entity).insert((
-                                    BarricadeMove { door: d, t: 0.0, flip_at, length: t.length, flipped: false },
+                                    BarricadeMove { door: d, t: 0.0, driver, curve: t.curve("Barricade"), length: t.length, flipped: false },
                                     crate::character::PlayAction(anim.into()),
                                 ));
                             }
