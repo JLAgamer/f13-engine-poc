@@ -101,7 +101,8 @@ Mechanics: Jason side
       camera; the escape bot plays the counselor
 - [x] Jason's HUD when he's played (KillerHUDWidget): his timer, knives and traps left, the abilities' unlock bars and
       ready glows, rage
-- [ ] Playing as Jason, remaining: Sense on demand, the map for Morph, choosing kills
+- [x] Sense on demand when Jason's played (4; the computer Jason uses it when ready and she's out of sight)
+- [ ] Playing as Jason, remaining: the map for Morph, choosing kills
 - [x] Shift, Morph, Stalk (f13-core::killer_moves, jason.rs): Shift's 0.7 s wind-up, ShiftSpeed and ShiftTime (J2:
   1000 cm/s, 4 s), ending in a grab; Stalk's StalkActiveTimer (IdleStalkModifier standing still); Morph to the
   nearest SCKillerMorphPoint within 30 m of the spot after TeleportScreenTime; the teleport fade (he's hidden below

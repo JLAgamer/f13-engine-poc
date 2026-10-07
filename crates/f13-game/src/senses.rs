@@ -155,8 +155,11 @@ fn perceive(
     mut jasons: Query<(&Jason, &Transform, &mut Knowledge)>,
     players: Query<(&Player, &Transform, Option<&Hiding>), Without<Jason>>,
     surroundings: Option<Res<crate::fear_events::Surroundings>>,
+    mut controls: Option<ResMut<crate::jason_player::JasonControls>>,
 ) {
     let Some(v) = values else { return };
+    // Played, he uses Sense when asked (4); the computer Jason when it's ready and she's out of sight.
+    let asked = controls.as_mut().map(|c| std::mem::take(&mut c.sense));
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
     let world = collision.with(&dynamic);
@@ -233,7 +236,7 @@ fn perceive(
         }
 
         // Sense: used when ready and she's out of sight.
-        if !k.sees && !k.sensing(now) && k.abilities.is_available(Ability::Sense, &blockers) {
+        if asked.unwrap_or(!k.sees) && !k.sensing(now) && k.abilities.is_available(Ability::Sense, &blockers) {
             k.abilities.consume(Ability::Sense);
             k.sense_until = now + v.sense.duration;
             info!("Jason: Sense ({:.0} s)", v.sense.duration);

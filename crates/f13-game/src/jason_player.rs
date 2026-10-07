@@ -5,7 +5,7 @@
 //! events before the engine sees them: the player's keys never reach her.
 //!
 //! Keys: WASD walk, Shift run, mouse look; left click swing, middle click heavy swing, right click grab, F throw a
-//! knife, T set a trap, left click again while holding her to kill her, 1 Shift, 2 Morph (to the morph point nearest 30 m ahead of where he looks), 3 Stalk. Doors in
+//! knife, T set a trap, left click again while holding her to kill her, 1 Shift, 2 Morph (to the morph point nearest 30 m ahead of where he looks), 3 Stalk, 4 Sense. Doors in
 //! his way open or break as he walks into them; E destroys a fuse box he's at (the power in its grid goes out). Esc frees the mouse, a click takes it again.
 
 use bevy::input::keyboard::KeyboardInput;
@@ -66,6 +66,8 @@ pub struct JasonControls {
     pub yaw: f32,
     pub pitch: f32,
     latched: Presses,
+    /// 4: Sense, asked for and not yet used (senses.rs takes it).
+    pub sense: bool,
 }
 
 #[derive(Clone, Copy, Default, Debug)]
@@ -153,6 +155,8 @@ fn capture(
     p.shift |= c.keys.just_pressed(KeyCode::Digit1);
     p.morph |= c.keys.just_pressed(KeyCode::Digit2);
     p.stalk |= c.keys.just_pressed(KeyCode::Digit3);
+    let sense = c.keys.just_pressed(KeyCode::Digit4);
+    c.sense |= sense;
     p.interact |= c.keys.just_pressed(KeyCode::KeyE);
 }
 
@@ -178,6 +182,8 @@ fn demo(
         controls.keys.release(KeyCode::KeyW);
     }
     controls.keys.press(KeyCode::ShiftLeft);
+    // Sense whenever it's ready while she's not close.
+    controls.sense |= dist > 20.0;
     let now = time.elapsed_secs();
     let (knife, swung, last) = &mut *done;
     debug!("jason demo: {:?} at {:.1}, {dist:.1} m from her, velocity {:.0}", j.state, jxf.translation, j.velocity);
@@ -246,7 +252,7 @@ fn spawn_hud(mut commands: Commands) {
 fn hud(jason: Query<(&crate::jason::Jason, Option<&crate::senses::Knowledge>)>, mut text: Single<&mut Text, With<JasonHud>>) {
     let Some((j, know)) = jason.iter().next() else { return };
     use f13_core::killer_abilities::{Ability, Blockers};
-    let ready: Vec<&str> = [(Ability::Shift, "1 Shift"), (Ability::Morph, "2 Morph"), (Ability::Stalk, "3 Stalk")]
+    let ready: Vec<&str> = [(Ability::Shift, "1 Shift"), (Ability::Morph, "2 Morph"), (Ability::Stalk, "3 Stalk"), (Ability::Sense, "4 Sense")]
         .iter()
         .filter(|(a, _)| know.is_some_and(|k| k.abilities.is_available(*a, &Blockers::default())))
         .map(|(_, n)| *n)
