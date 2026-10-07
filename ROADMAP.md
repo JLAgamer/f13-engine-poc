@@ -46,21 +46,22 @@ Mechanics: counselor side
       (reference: PhysX 3.4's published vehicle source, downloaded to F13-decomp/ref with the user's OK; the game's
       statically linked copy is stripped)
 - [x] Cabinets (drawers): search, items inside
-- [x] Doors: leaves exported and swinging on their pivot, open/close, lock/unlock by side (doors.rs; swing timing is a
-  placeholder for the special-move montages)
+- [x] Doors: leaves exported and swinging on their pivot, open/close, lock/unlock by side (doors.rs; they open to the
+  pivot's -90 yaw from either side, SCDoor's driver; the swing's DoorRotation curve shape is still a placeholder)
 - [x] Barricades (replace the lock, only on a closed door) and windows: open, close, vault, dive (breaks the glass,
   DiveDamage); windows.rs
 - [x] Hiding: wardrobes, outhouses, beds, tents (hiding.rs: enter/idle/exit montages, hiding camera; Jason's search
   and hiding spot kills)
 - [x] Hiding spots placed in the level (the outhouses and tents: 15 more) are usable, their parts spawned at runtime
       (they were drawn only, without their skeletal parts)
-- [x] Hiding spot doors (the wardrobe's two, swinging out now; the outhouse's): Armoire_C's DoorRotation timelines
-      (PLACEHOLDER: when they open and close within the move)
+- [x] Hiding spot doors (the wardrobe's two; the outhouse's): the enter montage's DoorRotation curve on the left door,
+      then Armoire_C / Outhouse_C's exit and close timelines (Jason's search and kill don't move them)
 - [x] The tent's flaps: its own enter and exit takes (normal_stand_hidespot_tent_enter/exit) as she goes in and out
 - [x] Health, wounded, death, blocking damage, first aid (f13-core::health)
 - [x] Items against Jason (items.rs): weapon swings (stun chance, wear, breaking), flare gun, shotgun, firecrackers,
-  bear traps, the map; stun times and animations from the game (swing reach/angle, throw speed and gun fire timing
-  are placeholders)
+  bear traps, the map; stun times and animations from the game; the swing sweeps the weapon's DamageVolume (against
+  Jason's capsule: his physics bodies aren't exported); guns fire at once, one shot, FireDistance; the firecracker's
+  level 500 cm/s throw
 - [x] Grab escape (wiggle, stat-scaled, 10/s cap) and the pocket knife
 - [x] Blocking with a weapon (items.rs): right mouse in combat stance; CanBlock's conditions; BlockingDamageMod and the
   weapon's BlockingWear on a blocked hit; the block idle and reaction animations (the idle replaces the combat idle
@@ -91,8 +92,8 @@ Mechanics: Jason side
   The cooked navmesh is exported (navmesh-<agent>.json) as a reference
 - [ ] Navmesh, remaining: detail meshes (heights come from the polygon corners), border vertex removal
 - [x] Holding breath while hiding (f13-core::breath, hiding.rs): the breath meter's drain, refill, threshold and wait;
-  her HoldBreath / HoldBreathEnd / KillerIsNearWhileHiding voice lines; Jason hears the last within its range
-  (placeholder distance and repeat delay)
+  her HoldBreath / HoldBreathEnd / KillerIsNearWhileHiding voice lines (3 m, then 20 s) and Screams (23 m); Jason
+  hears the hiding line within its range (AI choice)
 - [x] Kill cameras (f13-core::camera_spline, kill_camera.rs): SCSplineCamera riding the kill's camera spline
       (holds, times to the next point, Unreal InterpCurves, field of view, the handicam shake) in the kill's space
 - [x] Kill cameras' CameraTrace (SCSplineCamera's tick): something between the camera and what it looks at pulls the
@@ -213,8 +214,8 @@ Presentation
 - [x] Sitting in the car: her capsule at the driver's seat's AttachSocket (SeatSocketFL on the car mesh; the exporter
       writes skeletal meshes' sockets in component space), playing f_normal_sit_car_drive_forward; getting in and out,
       her enter and exit takes with their root motion (enter ends in the seat, exit starts there)
-- [x] Starting off and stopping: her forward start (walk, run, sprint) as she sets off ahead, her stop (by her
-      fastest gait, on the foot her last step left forward) as she halts; their footstep notifies (PLACEHOLDER rules)
+- [x] Starting off and stopping: none (the game's start/stop states need bUseStartStopTransitions, which nothing
+      sets: the counselor goes straight between idle and moving)
 - [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: their root doesn't turn, the body turns about it; how the actor turns with them is unread), foot-marker
       sync (now normalised time), aim offsets (Base_Counselor_AnimBP's AimOffsets, the Hunter's poses on the shared
       skeleton, by AimPitch while bIsAiming), BS_Run_Lean. Not in the game: turn-in-place takes, limp movement
@@ -285,6 +286,12 @@ Decomp audit (nothing guessed: every rule read from the decomp or the game's dat
       Found so far: her "Choke" line on a grab (the game never plays it there: removed); the grab kills' camera
       splines missed their component's place in the kill Blueprint (fixed); the barricade plank (one plank whose
       pitch follows her "Barricade" curve: fixed); doors' interaction cameras (ported)
+- [x] Audit of hiding.rs, doors.rs, police.rs, items.rs, placed_kills.rs, character.rs, senses.rs, ui.rs, vehicle.rs
+      (MODLOG "Decomp audit (worktree session)"): hiding voice lines and spot doors, the door's opening side, the
+      police volume's obstruction, stun spot search and phone box rule, melee sweeps, guns, the firecracker throw,
+      placed kills' Interactable range test, no start/stop takes, Jason's eye and view angle, the minimap's scale,
+      the brake skid (the handbrake's). Left as placeholders: APEX door chunks, the block idle's upper-body slot,
+      sweeps against Jason's physics bodies, the cabin doors' curve shape, the firecracker's spawn point
 - [ ] The counselor's cameras (Base_Counselor: Chase, Combat, Crouching, Driving, Grab, Indoor, Outdoor, Shooting,
       Water spring arms, switched by its ChangeCamera graph): f13-rs's single follow camera is a guess
 - [ ] Special moves' look (ILLSpecialMove_MoveToward: her view turns to the move's spot, MODLOG)
