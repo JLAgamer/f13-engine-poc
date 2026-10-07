@@ -101,6 +101,82 @@ pub struct DoorMove {
     swung: bool,
 }
 
+/// The counselor working a window (its special moves' montages, her takes): opening and closing move the pane in the
+/// montage's WindowMoveDriver window; climbing through and diving carry her from her side to the landing over the
+/// take (its root motion, here a straight line); a dive breaks the glass at its WindowBreakDriver and ends in the
+/// landing (f_normal_dive_land_01). She can't do anything else meanwhile.
+#[derive(Component)]
+pub struct WindowMove {
+    window: Entity,
+    kind: WindowMoveKind,
+    t: f32,
+    from: Vec3,
+    to: Vec3,
+    effect_done: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WindowMoveKind {
+    Open,
+    Close,
+    Vault,
+    Dive,
+    Land,
+}
+
+impl WindowMoveKind {
+    /// Her take, its length, and when its effect happens (the pane moving, the glass breaking).
+    fn take(self) -> (&'static str, f32, f32) {
+        match self {
+            WindowMoveKind::Open => ("f_normal_stand_window_up", 0.97, 0.2),
+            WindowMoveKind::Close => ("f_normal_stand_window_down", 0.97, 0.3),
+            WindowMoveKind::Vault => ("f_normal_stand_window_climb_01", 2.53, 0.0),
+            WindowMoveKind::Dive => ("f_normal_stand_window_dive", 0.57, 0.2),
+            WindowMoveKind::Land => ("f_normal_dive_land_01", 3.53, 0.0),
+        }
+    }
+}
+
+fn start_window_move(commands: &mut Commands, player: Entity, window: Entity, kind: WindowMoveKind, from: Vec3, to: Vec3) {
+    commands.entity(player).insert((WindowMove { window, kind, t: 0.0, from, to, effect_done: false }, crate::character::PlayAction(kind.take().0.into())));
+}
+
+fn window_moves(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut players: Query<(Entity, &mut WindowMove, &mut Transform), With<Player>>,
+    mut windows: Query<&mut Window>,
+) {
+    for (pe, mut m, mut xf) in &mut players {
+        m.t += time.delta_secs();
+        let (_, length, effect_at) = m.kind.take();
+        if matches!(m.kind, WindowMoveKind::Vault | WindowMoveKind::Dive) {
+            let a = (m.t / length).clamp(0.0, 1.0);
+            xf.translation = m.from.lerp(m.to, a);
+        }
+        if !m.effect_done && m.t >= effect_at {
+            m.effect_done = true;
+            if let Ok(mut w) = windows.get_mut(m.window) {
+                match m.kind {
+                    WindowMoveKind::Open => w.open = true,
+                    WindowMoveKind::Close => w.open = false,
+                    WindowMoveKind::Dive if !w.open => w.destroyed = true,
+                    _ => {}
+                }
+            }
+        }
+        if m.t >= length {
+            if m.kind == WindowMoveKind::Dive {
+                // On to the landing, where she came down.
+                let (w, to) = (m.window, m.to);
+                start_window_move(&mut commands, pe, w, WindowMoveKind::Land, to, to);
+            } else {
+                commands.entity(pe).remove::<(WindowMove, crate::character::PlayAction)>();
+            }
+        }
+    }
+}
+
 /// Her take of a door montage: opening or closing, from inside or outside.
 fn door_anim(opening: bool, inside: bool) -> &'static str {
     match (opening, inside) {
@@ -142,7 +218,7 @@ impl Plugin for InteractPlugin {
             .add_systems(Startup, spawn_prompt)
             .add_systems(
             Update,
-            (add_inventory, crate::windows::link_barricades, choose_target, act, door_moves, drop_item, use_item, update_prompt)
+            (add_inventory, crate::windows::link_barricades, choose_target, act, door_moves, window_moves, drop_item, use_item, update_prompt)
                 .chain()
                 .before(crate::doors::swing_doors),
         )
@@ -270,7 +346,7 @@ fn act(
     mut drawers: Query<(&Drawer, &mut Transform), Without<Player>>,
     mut vehicles: Query<&mut Vehicle>,
     mut doors: Query<(&mut Door, &GlobalTransform)>,
-    (mut windows, mut barricades): (Query<(&mut Window, &GlobalTransform)>, Query<&mut Barricade>),
+    (windows, mut barricades): (Query<(&mut Window, &GlobalTransform)>, Query<&mut Barricade>),
     (mut visibility, mut fuse_boxes, mut grids): (Query<&mut Visibility>, Query<&mut crate::power::FuseBox>, Option<ResMut<crate::power::PowerGrids>>),
 ) {
     let Some(target) = interaction.target else { return };
@@ -439,7 +515,7 @@ fn act(
             }
         }
         Target::Window(w) => {
-            let Ok((mut window, gxf)) = windows.get_mut(w) else { return };
+            let Ok((window, gxf)) = windows.get(w) else { return };
             if interaction.hold_done {
                 interaction.hold_done = keys.pressed(KeyCode::KeyE);
                 return;
@@ -449,14 +525,13 @@ fn act(
                 interaction.hold = None;
                 let action = window.press_action(p.counselor.sprinting, p.counselor.wounded);
                 match action {
-                    WindowAction::Open => window.open = true,
+                    WindowAction::Open => start_window_move(&mut commands, player_entity, w, WindowMoveKind::Open, player_xf.translation, player_xf.translation),
                     _ => {
-                        // Through the window (instantly, for now), taking any damage.
+                        // Through the window (her climb or dive take carries her over), taking any damage.
                         let damage = window.damage(action);
-                        if action == WindowAction::Dive && !window.open {
-                            window.destroyed = true;
-                        }
-                        player_xf.translation = Window::landing(gxf, window.interact, player_xf.translation);
+                        let landing = Window::landing(gxf, window.interact, player_xf.translation);
+                        let kind = if action == WindowAction::Dive { WindowMoveKind::Dive } else { WindowMoveKind::Vault };
+                        start_window_move(&mut commands, player_entity, w, kind, player_xf.translation, landing);
                         if damage > 0.0 {
                             p.counselor.take_damage(f13_core::health::Hit { amount: damage, ..Default::default() }, &tuning.counselor);
                         }
@@ -477,7 +552,7 @@ fn act(
             let mut events = Vec::new();
             h.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
             if events.contains(&MinigameEvent::Completed) {
-                window.open = false;
+                start_window_move(&mut commands, player_entity, w, WindowMoveKind::Close, player_xf.translation, player_xf.translation);
                 info!("window Close");
                 interaction.hold = None;
                 interaction.hold_done = true;
