@@ -1,6 +1,6 @@
 // Props and foliage, from the compiled shaders. Base colour, normal map and alpha come from the StandardMaterial part.
 // Mode 0, prop masters (RMA map): roughness = RMA.r * RoughnessMult, metallic = RMA.g * MetalnessMult, AO = RMA.b,
-//   specular = Spec.
+//   specular = Spec. M_Prop_Master_Lights also glows: emissive = Diffuse.rgb * Diffuse.a * Glow.
 // Mode 1, foliage masters (RSS map): roughness = max(RSS.r * RoughnessMultiplier, RoughnessMin). (RSS.b scales the
 //   subsurface colour, not ported.)
 #import bevy_pbr::{
@@ -12,7 +12,7 @@
 struct PropParams {
     // RoughnessMult, MetalnessMult, Spec, mode; foliage: RoughnessMultiplier, -, Spec, mode
     mults: vec4<f32>,
-    // foliage: RoughnessMin
+    // foliage: RoughnessMin; y: Glow (M_Prop_Master_Lights)
     extra: vec4<f32>,
 }
 
@@ -35,6 +35,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     }
 #endif
     pbr_input.material.reflectance = vec3(sqrt(0.5 * saturate(params.mults.z)));
+    if params.extra.y > 0.0 {
+        let c = pbr_input.material.base_color;
+        pbr_input.material.emissive = vec4(c.rgb * c.a * params.extra.y, 1.0);
+    }
     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);

@@ -378,7 +378,9 @@ fn prop_params(info: &MaterialInfo, loader: &Loader) -> Option<(Handle<Image>, P
     if info.master.starts_with("M_Prop_Master") || info.master == "M_Item_Master" || info.master == "M_Vehicle_Chevette_Exterior" {
         let rma = loader.load(info.textures.get("RMA")?, Tex::Data)?;
         let mults = Vec4::new(info.scalar("RoughnessMult", 1.0), info.scalar("MetalnessMult", 1.0), info.scalar("Spec", 0.5), 0.0);
-        return Some((rma, PropParams { mults, extra: Vec4::ZERO }));
+        // M_Prop_Master_Lights glows: emissive = Diffuse.rgb * Diffuse.a * Glow (its compiled base pass).
+        let glow = if info.master == "M_Prop_Master_Lights" { info.scalar("Glow", 1.0) } else { 0.0 };
+        return Some((rma, PropParams { mults, extra: Vec4::new(0.0, glow, 0.0, 0.0) }));
     }
     let rss = ["RSS", "RSS Map"].iter().find_map(|k| info.textures.get(*k))?;
     let rss = loader.load(rss, Tex::Data)?;

@@ -140,8 +140,11 @@ Presentation
       foliage (RSS roughness, mask threshold) and terrain layers (height-blended weight
       maps), ported from the game's compiled shaders; per-placement material overrides; glass; invisible blockers
       hidden (f13-game materials.rs, shaders/); textures as the game's compressed DDS data with mips
+- [x] Light fixtures' glow: M_Prop_Master_Lights' emissive (Diffuse.rgb * Diffuse.a * Glow, from its compiled base
+      pass); not yet seen in a screenshot, and it doesn't go dark in a power cut
 - [ ] Materials, remaining: water (first pass only: colour, gloss, panning ripples; no depth fade, foam or
-      reflections), POM parallax, emissive/light materials, foliage subsurface, the Chevette's paint mask
+      reflections), POM parallax, the other emissive masters (signs, the CB tower, the phone box), foliage
+      subsurface, the Chevette's paint mask
 - [x] Car, furniture, doors (frames and leaves), windows, barricades and items placed in the scene
 - [x] Each placement's CastShadow and cull distance (foliage InstanceEndCullDistance, max draw distance); sun shadows
       to 100 m in 3 cascades
