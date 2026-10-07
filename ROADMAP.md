@@ -205,8 +205,8 @@ Presentation
   ability-unlock warning (KiKiKiMaMaMa) and JasonTeleportedNearStinger; the animations' own sounds (their
   AnimNotify_PlaySound notifies, from each take's sequence and the montage segments playing it: anim_sounds.json):
   item use (first aid, flare, firecracker, trap), swings, dodges, doors, locks, windows, hiding spots, repairs,
-  Jason's swings, door breaking, knives, traps and kills. Remaining: the other stingers, scary sounds, the swim
-  cycles' notifies, voices, ambience (the car's horn, H, and brakes play their audio components' cues)
+  Jason's swings, door breaking, knives, traps and kills; the cycles' (the swim strokes) by their phase. Remaining: the
+  other stingers, scary sounds, voices, ambience (the car's horn, H, and brakes play their audio components' cues)
 
 Setup
 - [x] Tools refuse a packed (stock) install with a clear message; they need the content extracted to loose files

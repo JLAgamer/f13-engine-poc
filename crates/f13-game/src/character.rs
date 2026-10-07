@@ -535,6 +535,15 @@ pub(crate) fn animate(
         rig.prev_phase = after;
         if rig.action.is_none() && speed > 1.0 {
             let main = rig.weights.iter().filter(|(n, _)| synced(n)).max_by(|a, b| a.1.total_cmp(b.1)).map(|(n, _)| n.clone());
+            // The cycle's own sounds (the swim strokes), as its phase passes them.
+            if let (Some(name), Some(info)) = (&main, main.as_ref().and_then(|n| character.info.animations.get(n))) {
+                let len = info.length;
+                let spans: &[(f32, f32)] = if after >= before { &[(before, after)] } else { &[(before, 1.0), (-1.0, after)] };
+                for &(a, b) in spans {
+                    let from = if a < 0.0 { -1.0 } else { a * len };
+                    crate::audio::play_anim_sounds(&mut commands, anim_sounds.as_deref(), Some((name.as_str(), from, b * len)), xf.translation);
+                }
+            }
             if let Some(info) = main.and_then(|n| character.info.animations.get(&n)) {
                 for w in info.windows.iter().filter(|w| w.name == "Footstep_L" || w.name == "Footstep_R") {
                     let t = w.start / info.length.max(1e-3);
