@@ -420,7 +420,7 @@ fn main() {
             app.insert_resource(items::Give(args.give.clone()));
         }
         // The counselor bots test her alone; --bot-jason tests him.
-        let bot_alone = args.bot_escape || args.bot_heal || args.bot_dodge || args.bot_door || args.bot_trap || args.bot_police;
+        let bot_alone = args.bot_escape || args.bot_heal || args.bot_dodge || args.bot_door || args.bot_trap;
         if !args.no_jason && !bot_alone {
             app.add_plugins(jason::JasonPlugin { delay: args.jason_delay, kill: args.kill });
         }

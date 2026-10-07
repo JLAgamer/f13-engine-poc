@@ -477,6 +477,8 @@ pub enum Stun {
     GrabBreak,
     /// BearTrapLeftFootStun_C.
     BearTrap,
+    /// PoliceShootJasonStun_C: the police turned him back from their escape.
+    Police,
 }
 
 impl Stun {
@@ -485,7 +487,7 @@ impl Stun {
             Stun::Weapon { .. } | Stun::Flare => 5.0,
             Stun::Shotgun => 7.0,
             Stun::Firecracker => 4.0,
-            Stun::PocketKnife | Stun::GrabBreak => 6.0,
+            Stun::PocketKnife | Stun::GrabBreak | Stun::Police => 6.0,
             Stun::BearTrap => 10.0,
         }
     }
@@ -494,16 +496,18 @@ impl Stun {
     /// - the item's own: Shotgun's StunScoreEventClass, BP_Flare_Projectile's FlareStunScoreEventClass,
     ///   BP_Firecracker_Projectile's StunJasonScoreEventClass, BearTrap's TrapScoreEvent;
     /// - else the counselor's StunJasonScoreEvent;
-    /// - breaking his grab is her EscapeJasonGrabScoreEvent.
-    pub fn score_event(self) -> &'static str {
-        match self {
+    /// - breaking his grab is her EscapeJasonGrabScoreEvent;
+    /// - the police's isn't hers.
+    pub fn score_event(self) -> Option<&'static str> {
+        Some(match self {
             Stun::Weapon { .. } => "StunJason",
             Stun::Shotgun => "StunJasonShotgun",
             Stun::Flare => "StunJasonFlare",
             Stun::Firecracker => "FirecrackerJasonStun",
             Stun::BearTrap => "Trapper",
             Stun::PocketKnife | Stun::GrabBreak => "EscapeJasonGrab",
-        }
+            Stun::Police => return None,
+        })
     }
 
     /// The stun's minigame (bPlayMinigame), which he can wiggle out of early: TotalStunTime is [`Stun::seconds`],
@@ -512,7 +516,7 @@ impl Stun {
     pub fn minigame(self) -> Option<f13_core::stun::WiggleTuning> {
         let depletion_rate = match self {
             Stun::Weapon { .. } => 0.3,
-            Stun::Flare | Stun::Shotgun => 0.2,
+            Stun::Flare | Stun::Shotgun | Stun::Police => 0.2,
             Stun::BearTrap => 0.02,
             Stun::Firecracker | Stun::PocketKnife | Stun::GrabBreak => return None,
         };
@@ -527,6 +531,7 @@ impl Stun {
             Stun::Flare => ("combat_stand_stunned_back_enter_01", Some("combat_stand_stunned_back_loop_01"), Some("combat_stand_stunned_back_exit_01")),
             Stun::Shotgun => ("combat_stand_stunned_down_enter_01", Some("combat_stand_stunned_down_loop_01"), Some("combat_stand_stunned_down_exit_01")),
             Stun::Firecracker => ("combat_stand_stunned_firecracker_enter_01", Some("combat_stand_stunned_firecracker_loop_01"), Some("combat_stand_stunned_firecracker_exit_01")),
+            Stun::Police => ("combat_stand_stunned_police_02", Some("combat_stand_stunned_police_loop_01"), Some("combat_stand_stunned_police_exit_01")),
             Stun::PocketKnife => ("normal_stand_knife_pullout", None, None),
             Stun::GrabBreak => ("normal_grab_break", None, None),
             Stun::BearTrap => ("normal_stand_trap01_enter_lf", Some("normal_stand_trap01_cycle_lf"), Some("normal_stand_trap01_exit_lf")),
@@ -1077,8 +1082,10 @@ pub(crate) fn update_jason(
             match h.stun {
                 Some(stun) if can_stun => {
                     info!("Jason: stunned ({stun:?}, {:.0}s)", stun.seconds());
-                    commands.trigger(Score(stun.score_event()));
-                    commands.trigger(crate::audio::ActorSound { actor: pe, prop: "VO:JasonStun" });
+                    if let Some(event) = stun.score_event() {
+                        commands.trigger(Score(event));
+                        commands.trigger(crate::audio::ActorSound { actor: pe, prop: "VO:JasonStun" });
+                    }
                     if matches!(j.state, JasonState::Holding { .. }) {
                         release(&mut commands, pe, GRAB_BREAK, counselor_model.as_deref());
                     }
@@ -1879,7 +1886,7 @@ pub(crate) fn update_jason(
                 let input = struggle.input;
                 if struggle.wiggle.tick(dt, input, &grab_struggle(&p.counselor.stats)) {
                     info!("Vanessa: struggled free after {at:.1}s");
-                    commands.trigger(Score(Stun::GrabBreak.score_event()));
+                    commands.trigger(Score(Stun::GrabBreak.score_event().unwrap_or_default()));
                     release(&mut commands, pe, GRAB_BREAK, counselor_model.as_deref());
                     j.state = JasonState::Stunned { t: 0.0, stun: Stun::GrabBreak };
                     commands.entity(je).insert(PlayAction(Stun::GrabBreak.anims().0.into()));

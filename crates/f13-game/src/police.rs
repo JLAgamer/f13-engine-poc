@@ -19,8 +19,11 @@
 //! - **The level's blockers**: CrystalLake_Small_Design's Blueprint turns off the collision of the BlockingVolume in
 //!   front of the escape the police came to (its PoliceSpawnedEvent handlers: Police_Blocker_A for PoliceSPawner12,
 //!   Police_Blocker_B for PoliceSPawner2); until then it keeps counselors out.
-//! - **Jason** entering the active volume is turned back along the spawner's InterceptDirection
-//!   (JasonTriggerOnBeginOverlap); here he's set back on the volume's edge that way.
+//! - **Jason** entering the active volume (JasonTriggerOnBeginOverlap, then his `FUN_14040a940`): he's set back
+//!   outside it, on the line from its centre through him (toward the spawner's InterceptDirection when there's no
+//!   such line), its radius + his capsule's + 5 cm out, facing it, and the police shoot him
+//!   (PoliceShootJasonStun: a 6 s stun he can wiggle out of, AM_combat_police_stun). PLACEHOLDER: the game traces
+//!   for a free spot (PoliceStunTrace), turning the line PoliceStunIterationAngle at a time; this port doesn't.
 //!
 //! PLACEHOLDER: IsUnobstructed is an overlap query whose filter isn't read in full; here a volume is obstructed while
 //! Jason is inside it.
@@ -326,21 +329,33 @@ fn turn_lights(mut lights: Query<&mut Transform, With<SirenLight>>) {
     }
 }
 
-/// Jason doesn't get into the police's escape volume: he's set back on its edge, toward its InterceptDirection.
-fn turn_back_jason(arrived: Option<Res<PoliceArrived>>, zones: Query<(&EscapeZone, &GlobalTransform)>, spawners: Query<&PoliceSpawner>, names: Query<&Name>, mut jasons: Query<&mut Transform, With<crate::jason::Jason>>) {
+/// Jason doesn't get into the police's escape volume: he's set back outside it, facing it, and stunned.
+#[allow(clippy::type_complexity)]
+fn turn_back_jason(
+    mut commands: Commands,
+    arrived: Option<Res<PoliceArrived>>,
+    zones: Query<(&EscapeZone, &GlobalTransform)>,
+    spawners: Query<&PoliceSpawner>,
+    names: Query<&Name>,
+    tuning: Option<Res<crate::jason::KillerTuning>>,
+    mut jasons: Query<(Entity, &mut Transform), (With<crate::jason::Jason>, Without<crate::jason::HitJason>)>,
+) {
     let Some(a) = arrived else { return };
     let Ok((zone, zxf)) = zones.get(a.zone) else { return };
     let name = names.get(a.zone).map(|n| n.as_str().to_string()).unwrap_or_default();
     let Some(s) = spawners.iter().find(|s| s.zone == name) else { return };
     let center = zxf.translation();
-    for mut j in &mut jasons {
+    let out = zone.radius_m + tuning.map_or(0.4, |t| t.capsule.radius) + 0.05;
+    for (je, mut j) in &mut jasons {
         if j.translation.with_y(0.0).distance(center.with_y(0.0)) >= zone.radius_m {
             continue;
         }
-        let away = (s.intercept - center).with_y(0.0).normalize_or(Vec3::X);
-        let to = center + away * zone.radius_m;
-        info!("police: Jason turned back from the escape");
+        let away = (j.translation - center).with_y(0.0).try_normalize().unwrap_or_else(|| (s.intercept - center).with_y(0.0).normalize_or(Vec3::X));
+        let to = center + away * out;
+        info!("police: Jason turned back from the escape and shot");
         j.translation = Vec3::new(to.x, j.translation.y, to.z);
+        j.rotation = Quat::from_rotation_y((-away.x).atan2(-away.z));
+        commands.entity(je).insert(crate::jason::HitJason { stun: Some(crate::jason::Stun::Police), from: center });
     }
 }
 

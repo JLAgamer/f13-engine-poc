@@ -276,7 +276,7 @@ fn run_bot(
         Query<(Entity, &crate::power::FuseBox, &Transform), (Without<Player>, Without<Vehicle>)>,
         Option<Res<crate::power::PowerGrids>>,
     ),
-    (collision, dynamic, (mut phone_boxes, mut phones, arrived, police_cars)): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<Res<crate::police::PoliceArrived>>, Query<&Transform, (With<crate::police::PoliceCar>, Without<Player>, Without<Vehicle>)>)),
+    (collision, dynamic, (mut phone_boxes, mut phones, arrived, police_cars, jason_entities)): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<Res<crate::police::PoliceArrived>>, Query<&Transform, (With<crate::police::PoliceCar>, Without<Player>, Without<Vehicle>)>, Query<Entity, With<crate::jason::Jason>>)),
 ) {
     let world = collision.with(&dynamic);
     let dt = time.delta_secs();
@@ -1007,6 +1007,21 @@ fn run_bot(
                         return;
                     };
                     let Ok((zone, zxf)) = zones.get(a.zone) else { return };
+                    // Jason, if he's about, dropped in the middle of their volume: they should shoot him back out.
+                    if let (Some(je), Some((j, jxf))) = (jason_entities.iter().next(), jasons.iter().next()) {
+                        if !bot.jason_shots.contains(&"dropped") {
+                            bot.jason_shots.push("dropped");
+                            info!("bot: dropping Jason into the police's escape");
+                            commands.entity(je).insert(Transform { translation: zxf.translation() + Vec3::Y * 1.0, ..*jxf });
+                        }
+                        if matches!(j.state, crate::jason::JasonState::Stunned { stun: crate::jason::Stun::Police, .. }) && !bot.jason_shots.contains(&"police stun") {
+                            bot.jason_shots.push("police stun");
+                            info!("bot: Jason stunned by the police {:.1} m from their volume's centre (radius {:.1})", jxf.translation.distance(zxf.translation()), zone.radius_m);
+                        }
+                        if !bot.jason_shots.contains(&"police stun") {
+                            return;
+                        }
+                    }
                     // A look at the police car first (from 7 m behind it, on its road).
                     if !bot.jason_shots.contains(&"arrived") {
                         bot.jason_shots.push("arrived");
@@ -1433,7 +1448,9 @@ fn run_bot(
             }
             if bot.timer > if bot.goal == Goal::Jason { 4.0 } else { 2.0 } {
                 let ok = match bot.goal {
-                    Goal::Escape | Goal::Police => escaped.is_some(),
+                    Goal::Escape => escaped.is_some(),
+                    // With Jason about, the police must have shot him.
+                    Goal::Police => escaped.is_some() && (jasons.is_empty() || bot.jason_shots.contains(&"police stun")),
                     Goal::Heal => p.counselor.health >= 100.0,
                     Goal::Dodge => bot.dodges_ok == 3,
                     Goal::Door => bot.door_ok,

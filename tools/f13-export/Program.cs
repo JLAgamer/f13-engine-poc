@@ -1070,6 +1070,8 @@ static class Mvp
         $"{JasonStun}/Stun/AM_combat_stand_stun_back_01",
         $"{JasonStun}/Stun/AM_combat_stand_stunned_firecracker",
         $"{JasonStun}/Stun/AM_normal_stand_pocketKnife_Stun",
+        // The police shooting him back out of their escape (PoliceShootJasonStun).
+        $"{JasonStun}/Stun/AM_combat_police_stun",
         $"{JasonStun}/HitReaction/AM_combat_stand_hit_reaction_front",
         $"{JasonStun}/HitReaction/AM_combat_stand_hit_reaction_back",
         $"{JasonAnim}/Interaction/Beartrap/AM_Jason_BearTrap_LF",
