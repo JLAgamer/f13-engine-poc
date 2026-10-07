@@ -41,6 +41,9 @@ pub struct CharacterInfo {
     /// Float curves by property name.
     #[serde(default, deserialize_with = "crate::level::null_as_empty")]
     pub curves: HashMap<String, Vec<CurveKey>>,
+    /// Sounds by property name ("SoundCue'Name'" / "SoundWave'Name'").
+    #[serde(default, deserialize_with = "crate::level::null_as_empty")]
+    pub sounds: HashMap<String, String>,
 }
 
 /// A RichCurve key as the exporter writes it.

@@ -89,6 +89,8 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         public SortedDictionary<string, float[]>? Stats;
         /// Float curves the values refer to, by property name.
         public SortedDictionary<string, List<CurveKey>>? Curves;
+        /// Sounds by property name, as "SoundCue'Name'" / "SoundWave'Name'" (f13-export sounds exports them).
+        public SortedDictionary<string, string>? Sounds;
         /// The body mesh's physics asset (the ragdoll): one body per simulated bone, and the joints between them.
         public List<RagdollBody>? Ragdoll;
         public List<RagdollJoint>? Joints;
@@ -415,6 +417,13 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         foreach (var (name, fallback) in new[] { ("ShiftSpeed", 0f), ("ShiftTime", 0f), ("StalkActiveTime", 20f), ("IdleStalkModifier", 0.1f),
                      ("TeleportScreenTime", 1f) })
             values[name] = ClassValue<float?>(cls, name) ?? fallback;
+        // The music counselors hear near him (NearCounselorMusic: full volume within NearCounselorMusicMaxVolumeDistance,
+        // fading out over NearCounselorMusicDistance beyond it; constructor 300 and 4000).
+        foreach (var (name, fallback) in new[] { ("NearCounselorMusicDistance", 4000f), ("NearCounselorMusicMaxVolumeDistance", 300f) })
+            values[name] = ClassValue<float?>(cls, name) ?? fallback;
+        info.Sounds = new();
+        if (ClassValue<FPackageIndex>(cls, "NearCounselorMusic")?.Load<UObject>() is { } near)
+            info.Sounds["NearCounselorMusic"] = $"{near.ExportType}'{near.Name}'";
         // The sound blip actor's lifetime (InitialLifeSpan).
         if (ClassValue<FPackageIndex>(cls, "SoundBlipClass")?.Load<UStruct>() is { } blip)
             values["SoundBlipLifeSpan"] = ClassValue<float?>(blip, "InitialLifeSpan") ?? 0;

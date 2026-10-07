@@ -12,6 +12,11 @@
 //! DoorDestroySoundCue when it breaks), windows (WindowOpenSound / WindowCloseSound), barricades
 //! (EnableBarricadeAudio / DisableBarricadeAudio).
 //!
+//! Jason's music (SCMusicComponent's tick on the counselor): his NearCounselorMusic (J2: JasonNearPart2) loops
+//! unpanned; its volume heads for `1 - clamp((distance - NearCounselorMusicMaxVolumeDistance) /
+//! NearCounselorMusicDistance, 0.001, 1)` (full within 3 m, gone 43 m out) at 0.5 per second (FInterpTo_Constant),
+//! or for 0 while his music is silenced (Stalk). Not yet: the other music (tracks, stingers, warnings).
+//!
 //! PLACEHOLDERS: the listener is the camera; Delay and Concatenator nodes play their first child at once; actor sounds
 //! play 1 m above the actor's origin (the game plays them from the actor or its audio components).
 
@@ -36,7 +41,7 @@ pub struct AudioPlugin;
 impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_sounds)
-            .add_systems(Update, (add_listener, attenuate, actor_sounds))
+            .add_systems(Update, (add_listener, attenuate, actor_sounds, near_music))
             .add_observer(play_sound)
             .add_observer(footstep)
             .add_observer(actor_sound);
@@ -113,6 +118,57 @@ fn actor_sounds(
             }
         }
         last.insert(e, (b.enabled, 0.0, false));
+    }
+}
+
+/// Jason's music near the counselor: the looping player, its cue volume and its current volume.
+#[derive(Default)]
+struct NearMusic {
+    player: Option<(Entity, f32)>,
+    volume: f32,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn near_music(
+    mut commands: Commands,
+    time: Res<Time>,
+    assets: Res<AssetServer>,
+    mut music: Local<NearMusic>,
+    sounds: Option<ResMut<Sounds>>,
+    killer: Option<Res<crate::character::KillerCharacter>>,
+    mut rng: ResMut<crate::GameRng>,
+    jasons: Query<(&crate::jason::Jason, &GlobalTransform)>,
+    players: Query<(&Player, &GlobalTransform)>,
+    mut sinks: Query<&mut bevy::audio::AudioSink>,
+) {
+    let (Some(mut sounds), Some(killer)) = (sounds, killer) else { return };
+    let Some(cue) = killer.info.sounds.get("NearCounselorMusic").and_then(|s| cue_name(&serde_json::Value::String(s.clone()))) else { return };
+    let Some((jason, jxf)) = jasons.iter().next() else { return };
+    let Ok((p, pxf)) = players.single() else { return };
+    if music.player.is_none() {
+        let Some(c) = sounds.cue(&cue).cloned() else { return };
+        let (voices, _) = c.play(&mut || rng.0.frand());
+        let Some(v) = voices.into_iter().next() else { return };
+        let e = commands
+            .spawn((AudioPlayer::new(assets.load(format!("sounds/{}", v.file))), PlaybackSettings { volume: Volume::Linear(0.0), speed: v.pitch, ..PlaybackSettings::LOOP }))
+            .id();
+        music.player = Some((e, v.volume));
+    }
+    let v = |k: &str, d: f32| killer.info.values.get(k).copied().unwrap_or(d);
+    let distance = jxf.translation().distance(pxf.translation()) * 100.0;
+    let silenced = jason.stalking() || !p.counselor.alive() || matches!(jason.state, crate::jason::JasonState::Done);
+    let target = if silenced {
+        0.0
+    } else {
+        1.0 - ((distance - v("NearCounselorMusicMaxVolumeDistance", 300.0)) / v("NearCounselorMusicDistance", 4000.0)).clamp(0.001, 1.0)
+    };
+    let step = 0.5 * time.delta_secs();
+    music.volume += (target - music.volume).clamp(-step, step);
+    trace!("near music: {:.0} m, target {target:.2}, volume {:.2}", distance / 100.0, music.volume);
+    if let Some((e, base)) = music.player {
+        if let Ok(mut sink) = sinks.get_mut(e) {
+            bevy::audio::AudioSinkPlayback::set_volume(&mut *sink, Volume::Linear(base * music.volume));
+        }
     }
 }
 

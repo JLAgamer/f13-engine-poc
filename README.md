@@ -106,8 +106,9 @@ on, darkness doesn't scare you. `--flashlight` starts with it on.
 
 Sound: your footsteps are the game's, by what you step on (dirt, grass, leaves, gravel, rock, wooden floors...) and
 whether you walk or run, panned and fading with distance as the game sets them; doors (opening, closing, locked,
-Jason's blows, breaking), windows and barricades play their own cues. Music, Jason, items and the car aren't heard
-yet.
+Jason's blows, breaking), windows and barricades play their own cues. Jason's music swells as he closes in (full
+within 3 m, gone beyond 43 m) and falls silent while he stalks. The other music, Jason's own sounds, items and the
+car aren't heard yet.
 
 Not yet:
 - Enlighten's bounce light;

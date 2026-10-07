@@ -129,9 +129,12 @@ class SoundExporter(IFileProvider provider, string outDir, Func<string, string> 
     /// only asset names, so each is looked up among the game's packages (preferring /Sounds/).
     public List<string> ClassSounds()
     {
-        var file = Path.Combine(outDir, "classes.json");
-        if (!File.Exists(file)) return [];
-        var names = System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(file), @"Sound(?:Cue|Wave)'([^']+)'")
+        // classes.json, and the characters' exports (their Sounds).
+        var files = new[] { Path.Combine(outDir, "classes.json") }
+            .Concat(new[] { "counselors", "killers" }.Select(d => Path.Combine(outDir, d)).Where(Directory.Exists).SelectMany(d => Directory.GetFiles(d, "*.json")))
+            .Where(File.Exists);
+        var text = string.Join('\n', files.Select(File.ReadAllText));
+        var names = System.Text.RegularExpressions.Regex.Matches(text, @"Sound(?:Cue|Wave)'([^']+)'")
             .Select(m => m.Groups[1].Value).Distinct(StringComparer.OrdinalIgnoreCase).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var found = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var key in provider.Files.Keys.Where(k => k.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase)))
