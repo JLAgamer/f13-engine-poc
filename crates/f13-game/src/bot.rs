@@ -859,7 +859,8 @@ fn run_bot(
             let last = bot.last_health;
             if health < last {
                 info!("bot: hit for {:.1} ({}blocking)", last - health, if blocking { "" } else { "not " });
-                if blocking && last - health < 19.0 && !bot.jason_shots.contains(&"blocked") {
+                // Less than his full 20: blocked (a heavy swing ends the block in the same tick).
+                if last - health < 19.0 && !bot.jason_shots.contains(&"blocked") {
                     bot.jason_shots.push("blocked");
                     let path = std::env::temp_dir().join("f13-bot-block.png");
                     info!("bot: screenshot {}", path.display());

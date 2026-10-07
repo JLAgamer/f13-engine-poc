@@ -63,6 +63,8 @@ const IDLE: &str = "normal_stand_idle_01";
 const MOVE: [&str; 3] = ["normal_stand_walk_forward", "normal_stand_walk_forward_fast", "normal_stand_run_forward_02"];
 const COMBAT_IDLE: &str = "combat_stand_idle_2h";
 const ATTACK: &str = "combat_stand_2h_attack_light";
+/// The pickaxe's ForwardAttack: his heavy attack (it ends a counselor's block).
+const HEAVY_ATTACK: &str = "combat_stand_2h_attack_heavy";
 const GRAB_STARTUP: &str = "normal_grab_startup";
 const GRAB_ENTER: &str = "normal_grab_enter_1";
 const GRAB_IDLE: &str = "normal_grab_idle";
@@ -162,6 +164,9 @@ pub struct KillerTuning {
     /// The swing's length and its AttackTraceNotify window (s).
     pub attack_length: f32,
     pub attack_window: (f32, f32),
+    /// The heavy swing's (ForwardAttack) length and AttackTraceNotify window.
+    pub heavy_length: f32,
+    pub heavy_window: (f32, f32),
     /// Shift's max speed (cm/s) and length (s); Stalk's length and idle rate; Morph's delay (s).
     pub shift_speed: f32,
     pub shift_time: f32,
@@ -192,6 +197,8 @@ impl KillerTuning {
             world_damage: weapon * v("DamageWorldModifier", 1.0),
             attack_length: attack.map_or(1.0, |a| a.length),
             attack_window: attack.and_then(|a| a.window("AttackTraceNotify")).unwrap_or((0.2, 0.5)),
+            heavy_length: info.animations.get(HEAVY_ATTACK).map_or(1.2, |a| a.length),
+            heavy_window: info.animations.get(HEAVY_ATTACK).and_then(|a| a.window("AttackTraceNotify")).unwrap_or((0.3, 0.6)),
             shift_speed: v("ShiftSpeed", 1000.0),
             shift_time: v("ShiftTime", 4.0),
             stalk_active_time: v("StalkActiveTime", 20.0),
@@ -207,7 +214,7 @@ pub enum JasonState {
     Waiting(f32),
     Hunting,
     /// A pickaxe swing at the counselor.
-    Swinging { t: f32, hit: bool },
+    Swinging { t: f32, hit: bool, heavy: bool },
     /// Opening a closed door in his way (s into the montage).
     OpeningDoor { door: Entity, t: f32, anim: &'static str },
     /// Breaking down a locked or barricaded door: s into `section` of [`BREAK_DOOR`], and whether its hit landed.
@@ -926,9 +933,11 @@ pub(crate) fn update_jason(
                         continue;
                     }
                     if can_swing && (!j.wants_grab || dist < t.grab_min_m) {
-                        info!("Jason: swing ({dist:.2} m, {angle:.0} deg)");
-                        j.state = JasonState::Swinging { t: 0.0, hit: false };
-                        commands.entity(je).insert(PlayAction(ATTACK.into()));
+                        // At a raised guard, the heavy swing (AI choice).
+                        let heavy = blocking && killer.info.animations.contains_key(HEAVY_ATTACK);
+                        info!("Jason: {}swing ({dist:.2} m, {angle:.0} deg)", if heavy { "heavy " } else { "" });
+                        j.state = JasonState::Swinging { t: 0.0, hit: false, heavy };
+                        commands.entity(je).insert(PlayAction(if heavy { HEAVY_ATTACK } else { ATTACK }.into()));
                         continue;
                     }
                 }
@@ -1040,16 +1049,22 @@ pub(crate) fn update_jason(
                     j.state = JasonState::Morphing { t: at, to: dest };
                 }
             }
-            JasonState::Swinging { t: at, hit } => {
+            JasonState::Swinging { t: at, hit, heavy } => {
                 let at = at + dt;
                 walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(flat), dt, &t, &world);
                 let mut hit = hit;
-                if !hit && at >= t.attack_window.0 && at <= t.attack_window.1 && alive && dist <= t.attack_range_m && angle_to(xf.rotation, flat) <= t.attack_angle_deg {
+                let (window, length) = if heavy { (t.heavy_window, t.heavy_length) } else { (t.attack_window, t.attack_length) };
+                if !hit && at >= window.0 && at <= window.1 && alive && dist <= t.attack_range_m && angle_to(xf.rotation, flat) <= t.attack_angle_deg {
                     hit = true;
                     let r = p.counselor.take_damage(Hit { amount: t.damage, blocked_with_weapon: blocking }, &ptuning.counselor);
                     info!("Jason: hit Vanessa for {:.0}{} (health {:.0})", r.dealt, if blocking { ", blocked" } else { "" }, p.counselor.health);
                     if blocking {
                         commands.trigger(crate::items::BlockedHit);
+                        // A heavy attack ends the block (after its blocked damage).
+                        if heavy {
+                            info!("Jason: his heavy swing broke her block");
+                            commands.entity(pe).remove::<crate::items::Blocking>();
+                        }
                     }
                     if r.died {
                         info!("Vanessa: killed by Jason's swing");
@@ -1061,13 +1076,13 @@ pub(crate) fn update_jason(
                         p.velocity = Vec2::ZERO;
                     }
                 }
-                if at >= t.attack_length {
+                if at >= length {
                     j.state = JasonState::Hunting;
                     j.cooldown = t.attack_delay;
                     j.wants_grab = rng.0.frand() < GRAB_ODDS;
                     commands.entity(je).remove::<PlayAction>();
                 } else {
-                    j.state = JasonState::Swinging { t: at, hit };
+                    j.state = JasonState::Swinging { t: at, hit, heavy };
                 }
             }
             JasonState::OpeningDoor { door: de, t: at, anim } => {

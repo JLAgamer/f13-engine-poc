@@ -55,7 +55,8 @@ Mechanics: counselor side
   now: the larger of time and a wiggle meter that drains)
 - [x] Jason shaking off stuns: the stuns with a minigame (weapon, flare, shotgun, bear trap; their DepletionRate) run
   f13-core::stun for him too, the computer Jason mashing at the most the game counts (10 a second)
-- [ ] Combat, remaining: a heavy attack ending a block, the trap's own animations
+- [x] Jason's heavy attack (the pickaxe's ForwardAttack), used at a raised guard: it ends the block
+- [ ] Combat, remaining: the trap's own animations (sprung, opened)
 - [x] Ragdoll on death (f13-core::ragdoll, the physics asset's bodies against the world collision); in kills at the
   counselor montage's shouldRagdoll notify
 
@@ -73,7 +74,7 @@ Mechanics: Jason side
   polygon count), tiles on the game's grid; paths pulled taut and shortened along the mesh; the HUD shows the build.
   The cooked navmesh is exported (navmesh-<agent>.json) as a reference. Not ported: detail meshes (heights come from
   the polygon corners), border vertex removal
-- [ ] Jason AI, remaining: heavy attacks, the grabbed counselor on his grab socket, kill cameras; playing as Jason;
+- [ ] Jason AI, remaining: the grabbed counselor on his grab socket, kill cameras; playing as Jason;
   holding breath while hiding
 - [x] Shift, Morph, Stalk (f13-core::killer_moves, jason.rs): Shift's 0.7 s wind-up, ShiftSpeed and ShiftTime (J2:
   1000 cm/s, 4 s), ending in a grab; Stalk's StalkActiveTimer (IdleStalkModifier standing still); Morph to the

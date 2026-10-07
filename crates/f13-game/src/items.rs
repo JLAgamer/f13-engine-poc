@@ -10,7 +10,7 @@
 //! in hand, alive, not attacking, stunned or interacting, and lasts while the button is held. A hit taken while
 //! blocking is scaled by her BlockingDamageMod (f13-core::health) and wears the weapon by its BlockingWear (a weapon
 //! worn out breaks); she plays the block reaction (AM_F_Combat_Stand_Block_React) instead of a hit reaction. A
-//! killer's heavy attack ends the block (Jason doesn't heavy attack yet). BlockStaminaCost isn't read by the game's
+//! killer's heavy attack (his weapon's ForwardAttack) ends the block. BlockStaminaCost isn't read by the game's
 //! code. PLACEHOLDER: the block idle replaces the combat idle (the game plays it in an upper-body slot).
 //!
 //! From the game's data: WeaponStats (Damage, StunChance, Durability, AttackingWear), the swings' AttackTraceNotify
