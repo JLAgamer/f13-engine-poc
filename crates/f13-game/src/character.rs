@@ -424,6 +424,7 @@ pub(crate) fn animate(
     killer: Option<Res<KillerCharacter>>,
     tuning: Res<PlayerTuning>,
     forced: Option<Res<ForcedPose>>,
+    anim_sounds: Option<Res<crate::audio::AnimSounds>>,
     players: Query<(&Player, &Transform, Option<&crate::interact::UsingItem>, Option<&PlayAction>, Has<crate::items::Blocking>)>,
     mut rigs: Query<(&ChildOf, &mut Rig, &mut AnimationPlayer), Without<crate::ragdoll::Ragdolled>>,
 ) {
@@ -470,6 +471,7 @@ pub(crate) fn animate(
         };
         rig.last_speed = speed;
         rig.set_action(action.or(transition), dt);
+        crate::audio::play_anim_sounds(&mut commands, anim_sounds.as_deref(), rig.action_span(dt), xf.translation);
 
         let mut targets: HashMap<&str, f32> = HashMap::new();
         if rig.action.as_ref().is_some_and(|(a, _)| !character.clips.contains_key(a.as_str())) {
@@ -599,6 +601,11 @@ impl Rig {
             }
         }
         self.transition
+    }
+
+    /// The action and the span of its time this frame (from: negative on its first frame), for its sounds.
+    pub fn action_span(&self, dt: f32) -> Option<(&str, f32, f32)> {
+        self.action.as_ref().map(|(a, at)| (a.as_str(), if *at == 0.0 { -1.0 } else { at - dt }, *at))
     }
 
     /// Starts, continues or ends the full-body action.

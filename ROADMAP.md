@@ -202,8 +202,11 @@ Presentation
   footsteps (Jason_AnimBP's tables, a step each half of his locomotion cycle); her landing (GetLandingSound, down
   from a fall) and wading steps (GetFootstepInWater: shallow or deep); items put down (DroppedSoundCue); the car's
   key turning and engine running (EngineStartCue, EngineCue, on the car); walls' hit and break cues; the
-  ability-unlock warning (KiKiKiMaMaMa) and JasonTeleportedNearStinger. Remaining: the other stingers, scary
-  sounds, item use sounds, voices, ambience (the car's horn, H, and brakes play their audio components' cues)
+  ability-unlock warning (KiKiKiMaMaMa) and JasonTeleportedNearStinger; the animations' own sounds (their
+  AnimNotify_PlaySound notifies, from each take's sequence and the montage segments playing it: anim_sounds.json):
+  item use (first aid, flare, firecracker, trap), swings, dodges, doors, locks, windows, hiding spots, repairs,
+  Jason's swings, door breaking, knives, traps and kills. Remaining: the other stingers, scary sounds, the swim
+  cycles' notifies, voices, ambience (the car's horn, H, and brakes play their audio components' cues)
 
 Setup
 - [x] Tools refuse a packed (stock) install with a clear message; they need the content extracted to loose files

@@ -60,6 +60,14 @@ provider.Initialize();
 provider.Mount();
 Console.WriteLine($"{provider.Files.Count} files");
 Collision.LoadProfiles(game);
+// The animations' PlaySound notifies (anim_sounds.json); returns their cues for the sound export.
+List<string> WriteAnimSounds()
+{
+    var (json, cues) = AnimSounds.Collect(provider, Mvp.CounselorAnims.Concat(Mvp.KillerAnims));
+    File.WriteAllText(Path.Combine(outDir, "anim_sounds.json"), json.ToString(Newtonsoft.Json.Formatting.Indented));
+    Console.WriteLine($"anim sounds: {json.Count} animations, {cues.Distinct().Count()} cues");
+    return cues;
+}
 // Simple collision of every exported static mesh, by glTF path (collision.json).
 var meshCollision = new SortedDictionary<string, Collision.MeshShapes>(StringComparer.OrdinalIgnoreCase);
 
@@ -492,7 +500,7 @@ switch (rest[0])
         WriteCollision();
         {
             var sx = new SoundExporter(provider, outDir, ToFile);
-            sx.Export(sx.FootstepTables().Concat(Mvp.Sounds).Concat(sx.ClassSounds()));
+            sx.Export(sx.FootstepTables().Concat(Mvp.Sounds).Concat(sx.ClassSounds()).Concat(WriteAnimSounds()));
         }
         {
             var wx = new WidgetExporter(provider, outDir, Queue, ToFile);
@@ -501,10 +509,10 @@ switch (rest[0])
             wx.Fonts(game!);
         }
         break;
-    case "sounds": // the sounds f13-game plays (sounds/): the counselor's footsteps, the classes' cues, Mvp.Sounds
+    case "sounds": // the sounds f13-game plays (sounds/): the counselor's footsteps, the classes' cues, the animations' (anim_sounds.json), Mvp.Sounds
     {
         var sx = new SoundExporter(provider, outDir, ToFile);
-        var n = sx.Export(sx.FootstepTables().Concat(Mvp.Sounds).Concat(sx.ClassSounds()));
+        var n = sx.Export(sx.FootstepTables().Concat(Mvp.Sounds).Concat(sx.ClassSounds()).Concat(WriteAnimSounds()));
         Console.WriteLine($"sounds: {n} cues");
         return 0;
     }

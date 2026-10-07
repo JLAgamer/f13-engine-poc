@@ -67,6 +67,25 @@ pub struct PlaySound {
     pub at: Option<Vec3>,
 }
 
+/// The sounds animations play (their AnimNotify_PlaySound notifies, anim_sounds.json): take -> [(time s, cue)].
+#[derive(Resource, Default, Debug)]
+pub struct AnimSounds(HashMap<String, Vec<(f32, String)>>);
+
+impl AnimSounds {
+    /// The cues `take` plays after `from` (s; negative from its start), up to `to`.
+    pub fn passed<'a>(&'a self, take: &str, from: f32, to: f32) -> impl Iterator<Item = &'a str> + 'a {
+        self.0.get(take).into_iter().flatten().filter(move |(t, _)| from < *t && *t <= to).map(|(_, c)| c.as_str())
+    }
+}
+
+/// Plays the cues a character's action passed this frame, where it stands.
+pub fn play_anim_sounds(commands: &mut Commands, sounds: Option<&AnimSounds>, span: Option<(&str, f32, f32)>, at: Vec3) {
+    let (Some(sounds), Some((take, from, to))) = (sounds, span) else { return };
+    for cue in sounds.passed(take, from, to) {
+        commands.trigger(PlaySound { cue: cue.to_string(), at: Some(at) });
+    }
+}
+
 /// The cues an actor's class names: property name -> cue.
 #[derive(Component, Clone, Debug, Default)]
 pub struct ClassSounds(pub HashMap<String, String>);
@@ -142,8 +161,11 @@ fn actor_sounds(
     doors: Query<(Entity, &crate::doors::Door), With<ClassSounds>>,
     windows: Query<(Entity, &crate::windows::Window), With<ClassSounds>>,
     barricades: Query<(Entity, &crate::windows::Barricade), With<ClassSounds>>,
+    rigs: Query<&crate::character::Rig>,
 ) {
     let mut play = |actor: Entity, prop: &'static str| commands.trigger(ActorSound { actor, prop });
+    // A character's door take plays the door's sounds itself (its notifies: anim_sounds.json). PLACEHOLDER rule.
+    let door_take = rigs.iter().any(|r| r.action.as_ref().is_some_and(|(a, _)| a.contains("_door_open_") || a.contains("_door_close_")));
     for (e, d) in &doors {
         let now = (d.open, d.health, d.broken);
         if let Some(&(open, health, broken)) = last.get(&e) {
@@ -151,7 +173,7 @@ fn actor_sounds(
                 play(e, "DoorDestroySoundCue");
             } else if d.health < health {
                 play(e, "DoorHitSoundCue");
-            } else if d.open != open && !d.broken {
+            } else if d.open != open && !d.broken && !door_take {
                 play(e, if d.open { "OpenDoorSound" } else { "CloseDoorSound" });
             }
         }
@@ -524,6 +546,12 @@ fn load_sounds(mut commands: Commands, export: Res<crate::ExportRoot>, level: Re
     let dir = export.0.join("sounds");
     let footsteps = Footsteps::load(&dir).map_err(|e| warn!("no footstep sounds ({e}): re-export with tools/f13-export sounds")).ok();
     let jason_footsteps = Footsteps::load_file(&dir, "footsteps_jason.json").ok();
+    let anim = std::fs::read_to_string(export.0.join("anim_sounds.json"))
+        .map_err(|e| e.to_string())
+        .and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))
+        .map_err(|e| warn!("no animation sounds ({e}): re-export with tools/f13-export sounds"))
+        .unwrap_or_default();
+    commands.insert_resource(AnimSounds(anim));
     commands.insert_resource(Sounds { dir, cues: HashMap::new(), footsteps, jason_footsteps, terrain: load_terrain(&export.0, &level) });
 }
 

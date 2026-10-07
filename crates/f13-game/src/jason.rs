@@ -1960,6 +1960,7 @@ fn animate_jason(
     players: Query<&Transform, With<Player>>,
     owners: Query<&Transform, With<Jason>>,
     mut rigs: Query<(&ChildOf, &mut Rig, &mut AnimationPlayer)>,
+    anim_sounds: Option<Res<crate::audio::AnimSounds>>,
 ) {
     let (Some(killer), Some(t)) = (killer, tuning) else { return };
     let dt = time.delta_secs();
@@ -1969,6 +1970,9 @@ fn animate_jason(
         }
         let Ok((j, action)) = jasons.get(parent.parent()) else { continue };
         rig.set_action(action.map(|a| a.0.as_str()), dt);
+        if let Ok(at) = owners.get(parent.parent()) {
+            crate::audio::play_anim_sounds(&mut commands, anim_sounds.as_deref(), rig.action_span(dt), at.translation);
+        }
         // BS_Jason_Normal_Move's SpeedState: 0 idle, 1 walk, 2 fast walk, 3 run.
         let speed = j.velocity.length();
         let marks = [0.0, t.walk_speed, 0.5 * (t.walk_speed + t.run_speed), t.run_speed];
