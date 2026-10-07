@@ -162,7 +162,7 @@ impl Plugin for JasonPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(JasonConfig { delay: self.delay })
             .add_systems(Startup, spawn_jason)
-            .add_systems(FixedUpdate, (update_jason, recover_counselor, fly_knives))
+            .add_systems(FixedUpdate, (update_jason, recover_counselor, fly_knives, pick_up_knives))
             .add_observer(spawn_knife)
             .add_systems(Update, (tag_jason_parts, animate_jason));
     }
@@ -453,6 +453,25 @@ impl Stun {
             Stun::PocketKnife => ("normal_stand_knife_pullout", None, None),
             Stun::GrabBreak => ("normal_grab_break", None, None),
             Stun::BearTrap => ("normal_stand_trap01_enter_lf", Some("normal_stand_trap01_cycle_lf"), Some("normal_stand_trap01_exit_lf")),
+        }
+    }
+}
+
+/// Jason takes the throwing knives he passes within reach of (SCKillerCharacter::AddKnives: NumKnives += the pickup's
+/// StackSize, no cap). The game has him press to pick them up (a special move); here he takes them in passing, and
+/// the computer Jason doesn't go looking for them.
+fn pick_up_knives(mut commands: Commands, mut jasons: Query<(&mut Jason, &Transform)>, pickups: Query<(Entity, &crate::props::KnifePickup, &GlobalTransform)>) {
+    for (mut j, xf) in &mut jasons {
+        if !matches!(j.state, JasonState::Hunting) {
+            continue;
+        }
+        for (e, p, gxf) in &pickups {
+            let d = gxf.translation() - xf.translation;
+            if Vec2::new(d.x, d.z).length() * 100.0 <= p.reach && d.y.abs() < 2.0 {
+                j.knives += p.count;
+                info!("Jason picked up {} throwing knife(s) ({} now)", p.count, j.knives);
+                commands.entity(e).despawn();
+            }
         }
     }
 }

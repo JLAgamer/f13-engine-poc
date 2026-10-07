@@ -101,6 +101,14 @@ impl ItemKind {
     }
 }
 
+/// Throwing knives lying about for Jason (SCThrowingKnifePickup: StackSize knives; counselors can't take them).
+#[derive(Component)]
+pub struct KnifePickup {
+    pub count: u32,
+    /// Interaction range, cm.
+    pub reach: f32,
+}
+
 /// The item sits in this cabinet and can only be taken once the cabinet is open.
 #[derive(Component)]
 pub struct InCabinet(pub Entity);
@@ -458,6 +466,12 @@ fn spawn_props(
                 let p = to_transform(&actor.transform).translation;
                 info!("{} at ({:.0}, {:.0}, {:.0})", actor.class, p.x, p.y, p.z);
             }
+        } else if classes.is_child_of(&actor.class, "SCThrowingKnifePickup") {
+            let count = classes.prop(&actor.class, "StackSize").as_f64().unwrap_or(1.0).max(1.0) as u32;
+            commands.entity(root).insert(KnifePickup { count, reach: interact.map_or(150.0, |c| reach(c, 150.0)) });
+            *counts.entry("knife pickups").or_default() += 1;
+            let p = to_transform(&actor.transform).translation;
+            debug!("{} at ({:.1}, {:.1}, {:.1})", actor.class, p.x, p.y, p.z);
         } else if classes.is_child_of(&actor.class, "SCCabinet") {
             commands.entity(root).insert(Cabinet {
                 open: false,
