@@ -143,6 +143,8 @@ pub struct RepairPoint {
     pub hold_time: Option<f32>,
     /// The interactable has pips (the skill-check minigame).
     pub has_pips: bool,
+    /// Her take of its CounselorInteractAnim montage, without the section (`f_normal_stand_car_repair_gascan`).
+    pub anim: Option<String>,
 }
 
 #[derive(Component, Debug)]
@@ -518,6 +520,18 @@ fn spawn_props(
                     done: false,
                     hold_time: c.props["HoldTimeLimit"].as_f64().map(|v| v as f32),
                     has_pips: c.props["Pips"].as_array().is_some_and(|p| !p.is_empty()),
+                    // Its CounselorInteractAnim (unset on the cars' repairs: AM_normal_stand_car_repair_<part> by the part).
+                    anim: c.props["CounselorInteractAnim"].as_str().and_then(|s| s.split('\'').nth(1)).and_then(|m| m.strip_prefix("AM_")).map(|m| format!("f_{m}")).or_else(|| {
+                        let parts = f13_data::level::str_list(&c.props["RequiredPartClasses"]);
+                        let has = |w: &str| parts.iter().any(|p| p.contains(w));
+                        if has("GasCan") {
+                            Some("f_normal_stand_car_repair_gascan".into())
+                        } else if has("Battery") {
+                            Some("f_normal_stand_car_repair_battery".into())
+                        } else {
+                            None
+                        }
+                    }),
                 })
                 .collect();
             let seat = info.components.iter().find(|c| c.name == "DriverSeat");

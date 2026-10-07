@@ -162,8 +162,10 @@ Presentation
 - [x] Animations: female sequences retargeted as Unreal does (rotations from the animation, translations only on the
       skeleton's "Animation" bones), blended like Athlete_AnimBP's blendspaces: idle/walk/run/sprint, wounded idle,
       crouch, combat strafing (8 directions), dodges, stumbles, first aid
+- [x] Repair animations: her takes of the car repairs' montages (gas can, battery): start, cycle while she works,
+      stop when done, cancel when she lets go
 - [ ] Animations, remaining: start/stop transitions, turn in place, foot-marker sync (now normalised time), limp
-      movement, aim offsets, repairs, car enter/exit and sitting (she's hidden in the car), door/window montages
+      movement, aim offsets, car enter/exit and sitting (she's hidden in the car)
 - [x] Door special moves: her open and close takes (inside or outside), the leaf swinging in the montage's
       OpenCloseDoor driver window; she stands while they play
 - [x] Window special moves: her open and close takes (the pane moving in the montage's WindowMoveDriver window),

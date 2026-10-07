@@ -177,6 +177,47 @@ fn window_moves(
     }
 }
 
+/// She's repairing (her take of the repair's montage): its start, then its cycle while she works, then its stop
+/// (done) or cancel (let go).
+#[derive(Component)]
+pub struct RepairAnim {
+    base: String,
+    part: &'static str,
+    t: f32,
+}
+
+fn repair_anims(
+    mut commands: Commands,
+    time: Res<Time>,
+    model: Option<Res<crate::character::CounselorCharacter>>,
+    mut players: Query<(Entity, &mut RepairAnim), With<Player>>,
+) {
+    let len = |n: &str| model.as_ref().and_then(|m| m.length(n)).unwrap_or(1.0);
+    for (pe, mut r) in &mut players {
+        r.t += time.delta_secs();
+        let name = format!("{}_{}", r.base, r.part);
+        let over = r.t >= len(&name);
+        match r.part {
+            "start" if over => {
+                r.part = "cycle";
+                r.t = 0.0;
+                commands.entity(pe).insert(crate::character::PlayAction(format!("{}_cycle", r.base)));
+            }
+            "stop" | "cancel" if over => {
+                commands.entity(pe).remove::<(RepairAnim, crate::character::PlayAction)>();
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Ends her repair take: its stop (done) or cancel (let go).
+fn end_repair_anim(commands: &mut Commands, player: Entity, base: Option<&String>, done: bool) {
+    let Some(base) = base else { return };
+    let part = if done { "stop" } else { "cancel" };
+    commands.entity(player).insert((RepairAnim { base: base.clone(), part, t: 0.0 }, crate::character::PlayAction(format!("{base}_{part}"))));
+}
+
 /// She's playing a door's lock or unlock take while she holds E on it.
 #[derive(Component)]
 pub struct LockAnim;
@@ -222,7 +263,7 @@ impl Plugin for InteractPlugin {
             .add_systems(Startup, spawn_prompt)
             .add_systems(
             Update,
-            (add_inventory, crate::windows::link_barricades, choose_target, act, door_moves, window_moves, drop_item, use_item, update_prompt)
+            (add_inventory, crate::windows::link_barricades, choose_target, act, door_moves, window_moves, repair_anims, drop_item, use_item, update_prompt)
                 .chain()
                 .before(crate::doors::swing_doors),
         )
@@ -386,13 +427,14 @@ fn act(
             interaction.target = None;
         }
         Target::Repair(v, i) => {
+            let Ok(mut vehicle) = vehicles.get_mut(v) else { return };
             if !keys.pressed(KeyCode::KeyE) {
                 if interaction.hold.take().is_some_and(|h| h.started) {
                     info!("repair cancelled");
+                    end_repair_anim(&mut commands, player_entity, vehicle.repairs[i].anim.as_ref(), false);
                 }
                 return;
             }
-            let Ok(mut vehicle) = vehicles.get_mut(v) else { return };
             let r = &vehicle.repairs[i];
             let hold = interaction.hold.get_or_insert_with(|| HoldInteraction::new(r.hold_time.unwrap_or(tuning.repair_hold_time), r.has_pips));
             let mut events = Vec::new();
@@ -405,7 +447,12 @@ fn act(
             let mut completed = false;
             for e in events {
                 match e {
-                    MinigameEvent::Started => info!("repair started: {} pips, {:.1}s at x{:.2}", hold.pips.len(), hold.hold_time, tuning.minigame.speed_mod.value(&p.counselor.stats, false)),
+                    MinigameEvent::Started => {
+                        info!("repair started: {} pips, {:.1}s at x{:.2}", hold.pips.len(), hold.hold_time, tuning.minigame.speed_mod.value(&p.counselor.stats, false));
+                        if let Some(base) = &r.anim {
+                            commands.entity(player_entity).insert((RepairAnim { base: base.clone(), part: "start", t: 0.0 }, crate::character::PlayAction(format!("{base}_start"))));
+                        }
+                    }
                     MinigameEvent::Hit => info!("pip hit (bonus x{:.1})", hold.bonus),
                     MinigameEvent::Missed => info!("pip missed"),
                     MinigameEvent::NotifyKiller => warn!("repair failed noisily: Jason would be notified"),
@@ -419,6 +466,7 @@ fn act(
             let Some(used) = take_part(inv, &items, &parts) else { return };
             commands.entity(used).despawn();
             vehicle.repairs[i].done = true;
+            end_repair_anim(&mut commands, player_entity, vehicle.repairs[i].anim.as_ref(), true);
             info!("{}: {} installed", vehicle.class, vehicle.repairs[i].name);
             commands.trigger(ClassScore::new(&vehicle.class, "PartRepairedScoreEvent"));
             if vehicle.repairs.iter().all(|r| r.done) {
