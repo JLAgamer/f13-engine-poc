@@ -194,8 +194,10 @@ Presentation
 
 Setup
 - [x] Tools refuse a packed (stock) install with a clear message; they need the content extracted to loose files
-- [ ] Read the stock pak directly (it has a custom footer and a protected index; work out the format from the game's
-      pak loader), so users don't need to extract it first. Do this with the host CLI's first-run setup
+- [ ] Read the stock pak directly, so users don't need to extract it first (with the host CLI's first-run setup).
+      Its footer is known (an encrypted-index flag, magics 'Atae' and 'kcid', version 5, index offset and size,
+      hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold
+      for a decision on that
 
 ## Milestone 2: more escapes
 Police, 4-seat car, boat, then the others, one at a time.
