@@ -47,7 +47,10 @@ Mechanics: counselor side
   bear traps, the map; stun times and animations from the game (swing reach/angle, throw speed and gun fire timing
   are placeholders)
 - [x] Grab escape (wiggle, stat-scaled, 10/s cap) and the pocket knife
-- [ ] Combat, remaining: blocking with a weapon, counselors caught in placed traps, Jason shaking off stuns
+- [x] Blocking with a weapon (items.rs): right mouse in combat stance; CanBlock's conditions; BlockingDamageMod and the
+  weapon's BlockingWear on a blocked hit; the block idle and reaction animations (the idle replaces the combat idle
+  rather than playing in an upper-body slot)
+- [ ] Combat, remaining: counselors caught in placed traps, Jason shaking off stuns, a heavy attack ending a block
 - [x] Ragdoll on death (f13-core::ragdoll, the physics asset's bodies against the world collision); in kills at the
   counselor montage's shouldRagdoll notify
 

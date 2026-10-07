@@ -6,6 +6,7 @@
 //!       [--no-jason] [--jason-delay s] [--bot-jason]  (Jason hunts the counselor unless left out; counselor bots leave him out)
 //!       [--bot-abilities]  (Jason, every ability ready and told where she is, Morphs, Stalks and Shifts to her)
 //!       [--give Class,Class...] [--bot-fight]  (start with these items (testing); a bot that uses them on Jason)
+//!       [--bot-block]  (block Jason's swings with the weapon given)
 //!       [--nav-debug]  (draw the navmesh around the counselor)
 //!       [--bot-hide] [--bot-hide-seen]  (hide out of Jason's sight and come out; hide where he sees: he kills her)
 //!       [--bot-locked-in] [--bot-barred-in] [--bot-raged-in]  (behind a locked / barricaded door: he breaks it down,
@@ -62,6 +63,8 @@ struct Args {
     bot_jason: bool,
     /// --bot-abilities: Jason Morphs, Stalks and Shifts to her.
     bot_abilities: bool,
+    /// --bot-block: block Jason's swings.
+    bot_block: bool,
     bot_fight: bool,
     bot_hide: bool,
     nav_debug: bool,
@@ -111,6 +114,7 @@ fn parse_args() -> Args {
     let mut bot_door = false;
     let mut bot_jason = false;
     let mut bot_abilities = false;
+    let mut bot_block = false;
     let mut bot_fight = false;
     let mut bot_hide = false;
     let mut nav_debug = false;
@@ -150,6 +154,7 @@ fn parse_args() -> Args {
             "--bot-door" => bot_door = true,
             "--bot-jason" => bot_jason = true,
             "--bot-abilities" => bot_abilities = true,
+            "--bot-block" => bot_block = true,
             "--bot-fight" => bot_fight = true,
             "--bot-hide" => bot_hide = true,
             "--nav-debug" => nav_debug = true,
@@ -199,7 +204,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_abilities, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight }
+    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight }
 }
 
 #[derive(Resource)]
@@ -303,7 +308,7 @@ fn main() {
             rules.round_time = t;
         }
         app.insert_resource(match_flow::MatchTuning { rules, events: tuning.score_events.clone() });
-        let bot = args.bot_escape || args.bot_heal || args.bot_dodge || args.bot_door || args.bot_jason || args.bot_abilities || args.bot_fight || args.bot_hide || args.bot_hide_seen || args.bot_locked_in.is_some();
+        let bot = args.bot_escape || args.bot_heal || args.bot_dodge || args.bot_door || args.bot_jason || args.bot_abilities || args.bot_block || args.bot_fight || args.bot_hide || args.bot_hide_seen || args.bot_locked_in.is_some();
         app.insert_resource(player::PlayerTuning {
             counselor: tuning.counselor,
             movement: tuning.counselor_movement,
@@ -330,6 +335,8 @@ fn main() {
             app.add_plugins(bot::BotPlugin(bot::Goal::Jason));
         } else if args.bot_abilities {
             app.add_plugins(bot::BotPlugin(bot::Goal::Abilities));
+        } else if args.bot_block {
+            app.add_plugins(bot::BotPlugin(bot::Goal::Block));
         } else if args.bot_fight {
             app.add_plugins(bot::BotPlugin(bot::Goal::Fight));
         } else if args.bot_hide {

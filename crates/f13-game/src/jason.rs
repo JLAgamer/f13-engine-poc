@@ -71,6 +71,8 @@ const KILL: &str = "cinematic_pickaxe_throathack";
 const HIT_BACK: &str = "f_normal_stand_hitreaction_back_01";
 const HIT_LEFT: &str = "f_normal_stand_hitreaction_left_01";
 const HIT_RIGHT: &str = "f_normal_stand_hitreaction_right_01";
+/// AM_F_Combat_Stand_Block_React.
+const BLOCK_REACT: &str = "f_combat_stand_2h_attack_block";
 const DEATH: &str = "f_normal_stand_death_01";
 const GRABBED_ENTER: &str = "f_normal_grab_enter";
 const GRABBED_IDLE: &str = "f_normal_grab_idle";
@@ -645,7 +647,7 @@ pub(crate) fn update_jason(
     (mut rng, mut struggle): (ResMut<crate::GameRng>, ResMut<Struggle>),
     (mut jasons, morph_points): (Query<(Entity, &mut Jason, &mut Transform, Option<&HitJason>, Option<&mut crate::senses::Knowledge>), Without<Player>>, Option<Res<MorphPoints>>),
     (inventories, items): (Query<&crate::interact::Inventory>, Query<&crate::props::Item>),
-    mut players: Query<(Entity, &mut Player, &mut Transform, Has<crate::vehicle::Driving>, Option<&mut crate::hiding::Hiding>), Without<Jason>>,
+    mut players: Query<(Entity, &mut Player, &mut Transform, Has<crate::vehicle::Driving>, Option<&mut crate::hiding::Hiding>, Has<crate::items::Blocking>), Without<Jason>>,
     mut doors: Query<(Entity, &mut crate::doors::Door, &GlobalTransform)>,
     mut barricades: Query<&mut crate::windows::Barricade>,
     (mut spots, cabinets): (Query<(Entity, &mut crate::hiding::HidingSpot, &GlobalTransform)>, Query<&GlobalTransform, With<crate::props::Cabinet>>),
@@ -669,7 +671,7 @@ pub(crate) fn update_jason(
         .collect();
     let (grid, lists) = collision.without(&dynamic, |e| open_leaves.contains(&e));
     let world = (grid, lists.as_slice());
-    let Ok((pe, mut p, mut pxf, driving, mut hiding)) = players.single_mut() else { return };
+    let Ok((pe, mut p, mut pxf, driving, mut hiding, blocking)) = players.single_mut() else { return };
     for (je, mut j, mut xf, hit, mut know) in &mut jasons {
         j.stun_immune = (j.stun_immune - dt).max(0.0);
         // Stalk runs down (slower standing still); the teleport effect fades him while he shifts or morphs.
@@ -752,6 +754,8 @@ pub(crate) fn update_jason(
                 let stalled = j.stall > STALL_SECONDS;
                 // Where to go: her, if he sees her; else the hiding spot he's after, the last clue, or somewhere.
                 let mut goal = to;
+                // Going for a hiding spot or a clue (not her, not wandering).
+                let mut following = false;
                 if !sees {
                     if let Some(s) = know.as_ref().and_then(|k| k.hiding_spot).filter(|s| !j.searched.contains(s)) {
                         if j.target_spot != Some(s) {
@@ -768,6 +772,7 @@ pub(crate) fn update_jason(
                                 let side = *j.target_side.get_or_insert_with(|| spot.nearest_side(g, xf.translation));
                                 let at = crate::hiding::HidingSpot::world(g, &spot.sides[side].search);
                                 goal = at.translation;
+                                following = true;
                                 // Close to the special move's spot: it puts him on it (the game moves him there too).
                                 if stalled || Vec2::new(at.translation.x - xf.translation.x, at.translation.z - xf.translation.z).length() < SPECIAL_MOVE_REACH_M {
                                     j.stall = 0.0;
@@ -811,6 +816,7 @@ pub(crate) fn update_jason(
                         }
                     } else if let Some((at, when, how)) = clue {
                         goal = at;
+                        following = true;
                         if stalled || Vec2::new(at.x - xf.translation.x, at.z - xf.translation.z).length() < 1.5 {
                             if stalled && !j.path_reaches {
                                 info!("Jason: can't get to the clue ({:.0} m away)", Vec2::new(at.x - xf.translation.x, at.z - xf.translation.z).length());
@@ -863,7 +869,7 @@ pub(crate) fn update_jason(
                 }
                 // His abilities (when is the AI's choice; see the module docs).
                 let ready = |know: &Option<Mut<crate::senses::Knowledge>>, a: Ability| know.as_ref().is_some_and(|k| k.abilities.is_available(a, &Blockers::default()));
-                let after_clue = !sees && (j.target_spot.is_some() || j.wander.is_none_or(|(w, _)| goal != w));
+                let after_clue = !sees && following;
                 if sees && !driving && (SHIFT_RANGE_M.0..SHIFT_RANGE_M.1).contains(&dist) && ready(&know, Ability::Shift) {
                     if let Some(k) = know.as_mut() {
                         k.abilities.consume(Ability::Shift);
@@ -1023,13 +1029,16 @@ pub(crate) fn update_jason(
                 let mut hit = hit;
                 if !hit && at >= t.attack_window.0 && at <= t.attack_window.1 && alive && dist <= t.attack_range_m && angle_to(xf.rotation, flat) <= t.attack_angle_deg {
                     hit = true;
-                    let r = p.counselor.take_damage(Hit { amount: t.damage, blocked_with_weapon: false }, &ptuning.counselor);
-                    info!("Jason: hit Vanessa for {:.0} (health {:.0})", r.dealt, p.counselor.health);
+                    let r = p.counselor.take_damage(Hit { amount: t.damage, blocked_with_weapon: blocking }, &ptuning.counselor);
+                    info!("Jason: hit Vanessa for {:.0}{} (health {:.0})", r.dealt, if blocking { ", blocked" } else { "" }, p.counselor.health);
+                    if blocking {
+                        commands.trigger(crate::items::BlockedHit);
+                    }
                     if r.died {
                         info!("Vanessa: killed by Jason's swing");
                         commands.entity(pe).insert(PlayAction(DEATH.into())).remove::<(Staggered, crate::items::ItemAction)>();
                     } else if r.dealt > 0.0 {
-                        let reaction = hit_reaction(&pxf, xf.translation);
+                        let reaction = if blocking { BLOCK_REACT } else { hit_reaction(&pxf, xf.translation) };
                         let len = counselor_model.as_ref().and_then(|c| c.length(reaction)).unwrap_or(0.67);
                         commands.entity(pe).insert((PlayAction(reaction.into()), Staggered(len))).remove::<crate::items::ItemAction>();
                         p.velocity = Vec2::ZERO;

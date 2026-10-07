@@ -649,6 +649,9 @@ static class Mvp
         $"{Female}/Grab/f_normal_grab_enter",
         $"{Female}/Grab/f_normal_grab_idle",
         $"{Female}/Grab/f_normal_grab_struggle",
+        // Blocking: the block idle and the reaction when a blocked hit lands.
+        $"{Female}/Combat/Block/AM_F_Combat_Stand_Block_Idle",
+        $"{Female}/Combat/Block/AM_F_Combat_Stand_Block_React",
         // Items: weapon swings (each weapon's female NeutralAttack and ForwardAttack), throwing a firecracker, firing
         // the flare gun and the shotgun, placing a bear trap, breaking a grab (struggle, pocket knife).
         $"{Female}/Combat/Swings/AM_F_combat_stand_1h_attack_light",

@@ -49,6 +49,7 @@ pub struct WeaponStats {
     pub damage: f32,
     pub durability: f32,
     pub attacking_wear: f32,
+    pub blocking_wear: f32,
     /// Percent.
     pub stun_chance: f32,
     pub stun: String,
@@ -65,6 +66,7 @@ impl ItemKind {
                 damage: f("Damage", 10.0),
                 durability: f("Durability", 30.0),
                 attacking_wear: f("AttackingWear", 5.0),
+                blocking_wear: f("BlockingWear", 2.0),
                 stun_chance: f("StunChance", 0.0),
                 stun: w["WeaponStunClass"].as_str().unwrap_or("BaseWeaponStun_C").to_string(),
                 two_handed: p("bIsTwoHanded").as_bool().unwrap_or(false),

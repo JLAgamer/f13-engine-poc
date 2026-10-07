@@ -15,6 +15,8 @@
 //! (barred), and tell him where she is; passes when he breaks it down in a hit per 20 of its health (10 barred) and
 //! kills her; `--bot-raged-in`: a locked door with Jason raged, who bursts through it. Screenshots
 //! f13-bot-breakdown-*.png.
+//! `--bot-block`: with a weapon (`--give BaseballBat_C`), in combat stance, block Jason's swings: passes when a
+//! blocked hit has done less than a full one and he has killed her.
 //! `--bot-abilities`: Jason starts with every ability ready and hears where she stands, across the map: passes when
 //! he has Morphed near her, Stalked and Shifted at her, and killed her. Screenshot f13-bot-abilities-shift.png
 //! (mid-shift: he's faded out).
@@ -50,6 +52,8 @@ pub enum Goal {
     LockedIn { barred: bool, raged: bool },
     /// Jason with every ability ready, told where she is: he should Morph, Stalk and Shift, and kill her.
     Abilities,
+    /// Block his swings with the weapon she was given.
+    Block,
 }
 
 pub struct BotPlugin(pub Goal);
@@ -113,11 +117,13 @@ struct Bot {
     door_hits: Vec<(f32, f32)>,
     /// Fear events that have been active (fear_events.rs).
     fear_seen: Vec<String>,
+    /// Her health last frame (--bot-block).
+    last_health: f32,
 }
 
 impl Default for Bot {
     fn default() -> Self {
-        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false, hold_e: false, fixtures: [None; 3], door_ok: false, jason_shots: Vec::new(), door_hits: Vec::new(), fear_seen: Vec::new() }
+        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false, hold_e: false, fixtures: [None; 3], door_ok: false, jason_shots: Vec::new(), door_hits: Vec::new(), fear_seen: Vec::new(), last_health: 100.0 }
     }
 }
 
@@ -222,7 +228,7 @@ fn run_bot(
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     (interaction, tuning): (Res<crate::interact::Interaction>, Res<crate::player::PlayerTuning>),
-    mut player: Single<(&mut Transform, &Player, Option<&Inventory>, Has<Driving>, Has<UsingItem>, (Has<crate::jason::Held>, Has<crate::items::ItemAction>, Has<crate::jason::Staggered>), Option<&mut crate::hiding::Hiding>)>,
+    mut player: Single<(&mut Transform, &Player, Option<&Inventory>, Has<Driving>, Has<UsingItem>, (Has<crate::jason::Held>, Has<crate::items::ItemAction>, Has<crate::jason::Staggered>, Has<crate::items::Blocking>), Option<&mut crate::hiding::Hiding>)>,
     mut camera: Single<&mut PlayerCamera>,
     items: Query<(Entity, &Item, &GlobalTransform, Option<&InCabinet>), Without<Carried>>,
     carried: Query<&Item, With<Carried>>,
@@ -256,18 +262,18 @@ fn run_bot(
     for k in [KeyCode::KeyW, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::KeyC, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD] {
         keys.release(k);
     }
-    let with_jason = matches!(bot.goal, Goal::Jason | Goal::Fight | Goal::Hide | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities);
+    let with_jason = matches!(bot.goal, Goal::Jason | Goal::Fight | Goal::Hide | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities | Goal::Block);
     let limit = if with_jason { 600.0 } else { 240.0 };
     if bot.total > limit && bot.step != Step::Done {
         error!("bot: gave up at {:?}", bot.step);
         exit.write(AppExit::error());
         return;
     }
-    let (ref mut pxf, p, inv, driving, using, (held, acting, staggered), ref mut hiding) = *player;
+    let (ref mut pxf, p, inv, driving, using, (held, acting, staggered, blocking), ref mut hiding) = *player;
     let busy = acting || staggered || held;
     let sees = knowledge.iter().next().is_some_and(|k| k.sees);
     // Jason only knows what he perceives: when he hasn't seen her for a while, step out 10 m in front of him.
-    if matches!(bot.goal, Goal::Jason | Goal::Fight | Goal::HideSeen) && matches!(bot.step, Step::AwaitJason | Step::Hide(0)) && hiding.is_none() && p.counselor.alive() && !held {
+    if matches!(bot.goal, Goal::Jason | Goal::Fight | Goal::HideSeen | Goal::Block) && matches!(bot.step, Step::AwaitJason | Step::Hide(0)) && hiding.is_none() && p.counselor.alive() && !held {
         if sees {
             bot.dodge_from = Some((Vec3::ZERO, bot.total));
         }
@@ -361,7 +367,7 @@ fn run_bot(
                     a.recharge_timer = a.tuning.recharge_time;
                 }
             }
-            if matches!(bot.goal, Goal::Jason | Goal::Fight | Goal::Abilities) {
+            if matches!(bot.goal, Goal::Jason | Goal::Fight | Goal::Abilities | Goal::Block) {
                 match jasons.iter().next() {
                     Some((_, jxf)) => info!("bot: waiting for Jason, {:.0} m away", jxf.translation.distance(pxf.translation)),
                     None => {
@@ -756,6 +762,42 @@ fn run_bot(
                 bot.timer = 0.0;
             }
         }
+        Step::AwaitJason if bot.goal == Goal::Block => {
+            let Some((j, jxf)) = jasons.iter().next() else { return };
+            if bot.timer >= 5.0 {
+                bot.timer = 0.0;
+                info!("bot: Jason {:?}, {:.1} m away; health {:.0}; blocking {blocking}", j.state, jxf.translation.distance(pxf.translation), p.counselor.health);
+            }
+            // Face him in combat stance, the block held.
+            let d = jxf.translation - pxf.translation;
+            camera.yaw = (-d.x).atan2(-d.z);
+            if p.counselor.stance != f13_core::counselor::Stance::Combat {
+                if !bot.second_tap {
+                    keys.press(KeyCode::KeyC);
+                }
+                bot.second_tap = !bot.second_tap;
+            } else if p.counselor.alive() && !held {
+                mouse.press(MouseButton::Right);
+            }
+            // A hit taken while blocking.
+            let health = p.counselor.health;
+            let last = bot.last_health;
+            if health < last {
+                info!("bot: hit for {:.1} ({}blocking)", last - health, if blocking { "" } else { "not " });
+                if blocking && last - health < 19.0 && !bot.jason_shots.contains(&"blocked") {
+                    bot.jason_shots.push("blocked");
+                    let path = std::env::temp_dir().join("f13-bot-block.png");
+                    info!("bot: screenshot {}", path.display());
+                    commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+                }
+            }
+            bot.last_health = health;
+            if !p.counselor.alive() {
+                info!("bot: Vanessa died ({:?})", j.state);
+                bot.step = Step::Done;
+                bot.timer = 0.0;
+            }
+        }
         Step::AwaitJason => {
             let Some((j, jxf)) = jasons.iter().next() else { return };
             if bot.goal == Goal::Abilities {
@@ -1032,6 +1074,7 @@ fn run_bot(
                     Goal::Door => bot.door_ok,
                     Goal::Jason => !p.counselor.alive(),
                     Goal::Abilities => !p.counselor.alive() && ["morph", "stalk", "shift"].iter().all(|a| bot.jason_shots.contains(a)),
+                    Goal::Block => !p.counselor.alive() && bot.jason_shots.contains(&"blocked"),
                     Goal::Fight => p.counselor.alive() && bot.jason_shots.contains(&"stun"),
                     Goal::Hide => p.counselor.alive() && hiding.is_none() && bot.jason_shots.contains(&"inside"),
                     Goal::HideSeen => !p.counselor.alive() && bot.jason_shots.contains(&"kill"),
@@ -1072,7 +1115,7 @@ fn run_bot(
                     Goal::Door => &[&["BarricadeDoor"]],
                     Goal::Fight => &[&["StunJason", "StunJasonShotgun", "StunJasonFlare", "FirecrackerJasonStun", "EscapeJasonGrab", "Trapper"]],
                     // Her death ends the match.
-                    Goal::Jason | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities => &[&["CompletedMatch"]],
+                    Goal::Jason | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities | Goal::Block => &[&["CompletedMatch"]],
                     _ => &[],
                 };
                 let mut unscored = Vec::new();

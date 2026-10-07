@@ -37,6 +37,8 @@ const MOVE: [&str; 3] = ["F_normal_stand_walk_forward", "F_normal_stand_run_forw
 const CROUCH_IDLE: &str = "f_normal_crouch_idle_01";
 const CROUCH_WALK: &str = "f_normal_crouch_walk_forward";
 const COMBAT_IDLE: &str = "f_combat_stand_idle_1h";
+/// AM_F_Combat_Stand_Block_Idle.
+const BLOCK_IDLE: &str = "F_combat_stand_block_idle";
 /// BS_F_Combat's walk samples by direction (degrees, + is right).
 const COMBAT_WALK: [(f32, &str); 9] = [
     (-180.0, "F_normal_stand_walk_back"),
@@ -391,7 +393,7 @@ pub(crate) fn animate(
     killer: Option<Res<KillerCharacter>>,
     tuning: Res<PlayerTuning>,
     forced: Option<Res<ForcedPose>>,
-    players: Query<(&Player, &Transform, Option<&crate::interact::UsingItem>, Option<&PlayAction>)>,
+    players: Query<(&Player, &Transform, Option<&crate::interact::UsingItem>, Option<&PlayAction>, Has<crate::items::Blocking>)>,
     mut rigs: Query<(&ChildOf, &mut Rig, &mut AnimationPlayer), Without<crate::ragdoll::Ragdolled>>,
 ) {
     let Some(character) = character else { return };
@@ -411,7 +413,7 @@ pub(crate) fn animate(
         return;
     }
     for (parent, mut rig, mut anim) in &mut rigs {
-        let Ok((p, xf, using, scripted)) = players.get(parent.parent()) else { continue };
+        let Ok((p, xf, using, scripted, blocking)) = players.get(parent.parent()) else { continue };
         let c = &p.counselor;
         let t = &tuning.counselor;
         let speed = p.velocity.length();
@@ -438,7 +440,8 @@ pub(crate) fn animate(
                 }
                 Stance::Combat => {
                     let s = (speed / t.max_combat_speed.max(1.0)).clamp(0.0, 1.0);
-                    targets.insert(COMBAT_IDLE, 1.0 - s);
+                    let idle = if blocking && character.clips.contains_key(BLOCK_IDLE) { BLOCK_IDLE } else { COMBAT_IDLE };
+                    targets.insert(idle, 1.0 - s);
                     // Direction of travel relative to facing, + to the right (Unreal's CalculateDirection).
                     let (yaw, _, _) = xf.rotation.to_euler(EulerRot::YXZ);
                     let fwd = Vec2::new(yaw.sin(), yaw.cos());

@@ -3,7 +3,15 @@
 //! off its hand socket. The map shows the camp from above, with a dot where she is.
 //!
 //! Controls: left mouse uses the item in the hands (swing; moving forward swings the heavy ForwardAttack), 1-3 the
-//! pocket items (first aid in interact.rs, firecrackers here), M the map (when carried).
+//! pocket items (first aid in interact.rs, firecrackers here), M the map (when carried). In combat stance, right
+//! mouse blocks with a weapon in the hands.
+//!
+//! Blocking (SCCharacter::OnStartBlock / CanBlock / SCCounselorCharacter::TakeDamage): it starts only with a weapon
+//! in hand, alive, not attacking, stunned or interacting, and lasts while the button is held. A hit taken while
+//! blocking is scaled by her BlockingDamageMod (f13-core::health) and wears the weapon by its BlockingWear (a weapon
+//! worn out breaks); she plays the block reaction (AM_F_Combat_Stand_Block_React) instead of a hit reaction. A
+//! killer's heavy attack ends the block (Jason doesn't heavy attack yet). BlockStaminaCost isn't read by the game's
+//! code. PLACEHOLDER: the block idle replaces the combat idle (the game plays it in an upper-body slot).
 //!
 //! From the game's data: WeaponStats (Damage, StunChance, Durability, AttackingWear), the swings' AttackTraceNotify
 //! windows, the stun classes' times (jason.rs), the firecracker's ThrowDelayTime, BP_Firecracker_Projectile's
@@ -13,7 +21,7 @@
 //! PLACEHOLDERS (not from the game): a swing connects with Jason within [`SWING_REACH_M`] and [`SWING_ANGLE_DEG`] of
 //! her facing (the game traces the weapon mesh); the firecracker's throw speed (its VelocityPitchCurve isn't
 //! exported); when the gun fires in its animation; the shotgun's range; guns hold one shot. Counselors don't step in
-//! their own traps; weapons don't block.
+//! their own traps.
 
 use bevy::prelude::*;
 use f13_core::collision::surface_below;
@@ -54,7 +62,8 @@ pub struct ItemsPlugin;
 impl Plugin for ItemsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(PostUpdate, give_items)
-            .add_systems(Update, (hold_in_hand, start_action, toggle_map, follow_map).chain())
+            .add_systems(Update, (hold_in_hand, start_action, block, toggle_map, follow_map).chain())
+            .add_observer(wear_on_block)
             .add_systems(FixedUpdate, (tick_action, fly, spring_traps).chain().after(crate::player::move_player));
     }
 }
@@ -121,6 +130,69 @@ pub struct ItemAction {
 #[derive(Component)]
 struct Wear(f32);
 
+/// The counselor is blocking.
+#[derive(Component)]
+pub struct Blocking;
+
+/// A hit landed on her block: it wears her weapon.
+#[derive(Event)]
+pub struct BlockedHit;
+
+/// Wears the weapon in her hands by `amount`; true when it broke (it's gone from her hands).
+fn wear_weapon(commands: &mut Commands, wear: &mut Query<Option<&mut Wear>>, inv: &mut Inventory, weapon: Entity, durability: f32, amount: f32, name: &str) -> bool {
+    let left = match wear.get_mut(weapon) {
+        Ok(Some(mut w)) => {
+            w.0 -= amount;
+            w.0
+        }
+        _ => {
+            let w = durability - amount;
+            commands.entity(weapon).insert(Wear(w));
+            w
+        }
+    };
+    if left > 0.0 {
+        return false;
+    }
+    info!("the {name} broke");
+    inv.hand = None;
+    commands.entity(weapon).despawn();
+    true
+}
+
+/// Right mouse in combat stance: block, while held, with a weapon in her hands.
+#[allow(clippy::type_complexity)]
+fn block(
+    mut commands: Commands,
+    mouse: Res<ButtonInput<MouseButton>>,
+    interaction: Res<crate::interact::Interaction>,
+    player: Query<(Entity, &Player, &Inventory, Has<Blocking>, Has<ItemAction>, Has<crate::jason::Staggered>, Has<crate::jason::Held>), Without<crate::vehicle::Driving>>,
+    items: Query<&Item>,
+) {
+    let Ok((pe, p, inv, blocking, acting, staggered, held)) = player.single() else { return };
+    let c = &p.counselor;
+    let weapon = inv.hand.and_then(|h| items.get(h).ok()).is_some_and(|i| matches!(i.kind, ItemKind::Weapon(_) | ItemKind::Gun { .. }));
+    let combat = c.stance == f13_core::counselor::Stance::Combat;
+    if blocking {
+        if !mouse.pressed(MouseButton::Right) || !combat || !weapon || !c.alive() || held {
+            info!("block ends");
+            commands.entity(pe).remove::<Blocking>();
+        }
+    } else if mouse.just_pressed(MouseButton::Right) && combat && weapon && c.alive() && !acting && !staggered && !held && !interaction.busy() && !c.dodging() && p.root_motion.is_none() {
+        info!("blocking");
+        commands.entity(pe).insert(Blocking);
+    }
+}
+
+/// A blocked hit wears the weapon in her hands by its BlockingWear.
+fn wear_on_block(_: On<BlockedHit>, mut commands: Commands, mut player: Query<&mut Inventory, With<Player>>, items: Query<&Item>, mut wear: Query<Option<&mut Wear>>) {
+    let Ok(mut inv) = player.single_mut() else { return };
+    let Some(hand) = inv.hand else { return };
+    let Ok(Item { kind: ItemKind::Weapon(stats) | ItemKind::Gun { stats, .. }, name, .. }) = items.get(hand) else { return };
+    let (durability, amount, name) = (stats.durability, stats.blocking_wear, name.clone());
+    wear_weapon(&mut commands, &mut wear, &mut inv, hand, durability, amount, &name);
+}
+
 #[derive(Component)]
 struct Firecracker {
     vel: Vec3,
@@ -175,7 +247,7 @@ fn start_action(
     camera: Single<&PlayerCamera>,
     mut player: Query<
         (Entity, &Player, &Inventory, &mut Transform),
-        (Without<ItemAction>, Without<crate::interact::UsingItem>, Without<crate::jason::Held>, Without<crate::jason::Staggered>, Without<crate::vehicle::Driving>),
+        (Without<ItemAction>, Without<crate::interact::UsingItem>, Without<crate::jason::Held>, Without<crate::jason::Staggered>, Without<crate::vehicle::Driving>, Without<Blocking>),
     >,
     items: Query<&Item>,
 ) {
@@ -262,22 +334,8 @@ fn tick_action(
                             let left = Vec2::new(-to.x, -to.z).perp_dot(Vec2::new(jfwd.x, jfwd.z)) < 0.0;
                             info!("hit Jason ({:.0} damage, {:.0}% stun chance: {})", stats.damage, stats.stun_chance, if stun { "stunned" } else { "no stun" });
                             commands.entity(je).insert(HitJason { stun: stun.then_some(Stun::Weapon { left }), from: xf.translation });
-                            let left_wear = match wear.get_mut(a.item) {
-                                Ok(Some(mut w)) => {
-                                    w.0 -= stats.attacking_wear;
-                                    w.0
-                                }
-                                _ => {
-                                    let w = stats.durability - stats.attacking_wear;
-                                    commands.entity(a.item).insert(Wear(w));
-                                    w
-                                }
-                            };
-                            if left_wear <= 0.0 {
-                                info!("the {} broke", items.get(a.item).map_or("weapon", |i| i.name.as_str()));
-                                inv.hand = None;
-                                commands.entity(a.item).despawn();
-                            }
+                            let name = items.get(a.item).map_or("weapon".to_string(), |i| i.name.clone());
+                            wear_weapon(&mut commands, &mut wear, &mut inv, a.item, stats.durability, stats.attacking_wear, &name);
                         }
                     }
                 } else {
