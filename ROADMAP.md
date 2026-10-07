@@ -284,7 +284,8 @@ Decomp audit (nothing guessed: every rule read from the decomp or the game's dat
       police.rs, doors.rs, items.rs, interact.rs. Jason's decisions stay ours (his AI was cut), marked as such.
       Found so far: her "Choke" line on a grab (the game never plays it there: removed); the grab kills' camera
       splines missed their component's place in the kill Blueprint (fixed); the barricade plank (one plank whose
-      pitch follows her "Barricade" curve: fixed); doors' interaction cameras (ported)
+      pitch follows her "Barricade" curve: fixed); doors' interaction cameras (ported); which interactable she uses
+      (the interactable manager's score: ported; its range test's yaw/pitch limits and occlusion still to export)
 - [ ] The counselor's cameras (Base_Counselor: Chase, Combat, Crouching, Driving, Grab, Indoor, Outdoor, Shooting,
       Water spring arms, switched by its ChangeCamera graph): f13-rs's single follow camera is a guess
 - [ ] Special moves' look (ILLSpecialMove_MoveToward: her view turns to the move's spot, MODLOG)

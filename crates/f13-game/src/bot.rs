@@ -1660,6 +1660,11 @@ fn go_fetch(
             place(pxf, stand);
         }
         look_at(camera, pxf, at);
+        // Face it as well (the game's interactable score weighs her facing too).
+        let to = (at - pxf.translation).with_y(0.0);
+        if to.length_squared() > 1e-6 {
+            pxf.rotation = Quat::from_rotation_y(to.x.atan2(to.z));
+        }
         if bot.timer > 0.3 {
             info!("bot: picking up {} ({e:?}) at ({:.1}, {:.1}, {:.1}), standing {:.2} m away", item.name, at.x, at.y, at.z, pxf.translation.distance(at));
             keys.press(KeyCode::KeyE);

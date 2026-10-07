@@ -19,10 +19,14 @@ use f13_core::minigame::{HoldInteraction, MinigameEvent};
 
 /// Counselor `MaxSmallItems` default (constructor).
 pub const MAX_SMALL_ITEMS: usize = 3;
-/// Interaction ranges are measured from the counselor's capsule surface, roughly.
-const CAPSULE_RADIUS_CM: f32 = 34.0;
 /// Interaction distance is measured from about chest height.
 pub(crate) const CHEST_M: f32 = 1.0;
+/// ILLInteractableManagerComponent's constructor (0x1402524a0): its scoring weights (choose_target).
+const DISTANCE_WEIGHT: f32 = 0.9;
+const VIEW_WEIGHT: f32 = 0.7;
+const CHARACTER_ROTATION_WEIGHT: f32 = 0.5;
+const MOVEMENT_DIRECTION_WEIGHT: f32 = 0.8;
+const BEST_INTERACTABLE_STABILITY_SCORE: f32 = 0.1;
 
 #[derive(Component, Default, Debug)]
 pub struct Inventory {
@@ -445,11 +449,15 @@ fn has_part(inv: &Inventory, carried: &Query<&Item, With<Carried>>, parts: &[Str
     inv.hand.iter().chain(inv.pockets.iter()).filter_map(|&e| carried.get(e).ok()).any(|i| parts.contains(&i.class))
 }
 
-/// Picks what the counselor interacts with: in reach, preferring what the camera looks at, then what's close
-/// (score = distance x (1 + 2 x view angle / pi)). PLACEHOLDER weighting: the game's interactable manager
-/// also ranks by view, but its exact formula isn't ported.
+/// ILLInteractableManagerComponent's tick (FUN_140279100; weights from its constructor 0x1402524a0): of the
+/// interactables in range (3D distance from her capsule's centre to the interaction point within its DistanceLimit),
+/// the highest score = ViewWeight x (view . dir) + DistanceWeight x (1 - flat distance / DistanceLimit) +
+/// CharacterRotationWeight x (facing . dir) + MovementDirectionWeight x (moving direction . dir, when moving), plus
+/// BestInteractableStabilityScore for the current one; dir is flat from her to the point
+/// (bIgnoreHeightInDistanceComparison). PLACEHOLDER: the range test's MaxYawOffset / MaxPitchOffset and occlusion
+/// (FUN_14022e940) aren't exported, so aren't applied.
 fn choose_target(
-    player: Single<(&Transform, &Inventory), (With<Player>, Without<Driving>, Without<crate::hiding::Hiding>)>,
+    player: Single<(&Transform, &Inventory, &Player), (Without<Driving>, Without<crate::hiding::Hiding>)>,
     camera: Single<&PlayerCamera>,
     items: Query<(Entity, &Item, &GlobalTransform, Option<&InCabinet>), Without<Carried>>,
     carried: Query<&Item, With<Carried>>,
@@ -465,18 +473,28 @@ fn choose_target(
     if interaction.busy() {
         return; // keep the target while repairing
     }
-    let (xf, inv) = *player;
-    let chest = xf.translation + Vec3::Y * CHEST_M;
+    let (xf, inv, p) = *player;
+    let centre = xf.translation + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M;
     let look = camera.look();
+    let facing = xf.rotation * Vec3::Z;
+    // Her velocity is in Bevy's XZ plane.
+    let moving = (p.velocity.length_squared() > 0.0).then(|| Vec3::new(p.velocity.x, 0.0, p.velocity.y).normalize_or_zero());
+    let current = interaction.target;
     let mut best: Option<(f32, Target)> = None;
     let mut consider = |point: Vec3, reach_cm: f32, t: Target| {
-        let d = point.distance(chest) * 100.0;
-        if d > reach_cm + CAPSULE_RADIUS_CM {
+        if point.distance(centre) * 100.0 > reach_cm {
             return;
         }
-        let angle = (point - chest).try_normalize().map_or(0.0, |dir| dir.angle_between(look));
-        let score = d * (1.0 + 2.0 * angle / std::f32::consts::PI);
-        if best.is_none_or(|(bs, _)| score < bs) {
+        let flat = (point - centre).with_y(0.0);
+        let dir = flat.normalize_or_zero();
+        let mut score = VIEW_WEIGHT * look.dot(dir)
+            + DISTANCE_WEIGHT * (1.0 - flat.length() * 100.0 / reach_cm.max(1.0))
+            + CHARACTER_ROTATION_WEIGHT * facing.dot(dir)
+            + moving.map_or(0.0, |m| MOVEMENT_DIRECTION_WEIGHT * m.dot(dir));
+        if current == Some(t) {
+            score += BEST_INTERACTABLE_STABILITY_SCORE;
+        }
+        if best.is_none_or(|(bs, _)| score > bs) {
             best = Some((score, t));
         }
     };
