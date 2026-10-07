@@ -41,7 +41,35 @@ pub struct Driving {
     pub vehicle: Entity,
     /// Holding the ignition (the starter interaction).
     pub starting: Option<HoldInteraction>,
+    /// Getting in or out: her take carrying her between the door and the seat.
+    pub seat_move: Option<SeatMove>,
 }
+
+impl Driving {
+    /// Getting into `vehicle`'s driver's seat (her enter take).
+    pub fn enter(vehicle: Entity) -> Self {
+        Driving { vehicle, starting: None, seat_move: Some(SeatMove { exiting: false, t: 0.0 }) }
+    }
+}
+
+/// Her take getting in (f_normal_stand_car_enter_left: its root motion ends in the seat) or out
+/// (f_normal_sit_car_exit_left: it starts there), played in the car's space.
+#[derive(Clone, Copy, Debug)]
+pub struct SeatMove {
+    pub exiting: bool,
+    t: f32,
+}
+
+impl SeatMove {
+    pub fn take(self) -> &'static str {
+        if self.exiting { EXIT_TAKE } else { ENTER_TAKE }
+    }
+}
+
+const ENTER_TAKE: &str = "f_normal_stand_car_enter_left";
+const EXIT_TAKE: &str = "f_normal_sit_car_exit_left";
+/// Her take while she drives.
+pub const DRIVE_TAKE: &str = "f_normal_sit_car_drive_forward";
 
 /// The counselor has escaped; the match is over for them.
 #[derive(Resource)]
@@ -75,6 +103,9 @@ fn drive(
 ) {
     let dt = time.delta_secs();
     let (ref mut player, ref mut inv, p) = *player;
+    if player.seat_move.is_some() {
+        return;
+    }
     let Ok((mut v, mut xf)) = vehicles.get_mut(player.vehicle) else { return };
     if !v.started {
         let has_keys = inv.hand.iter().chain(inv.pockets.iter()).any(|&e| items.get(e).is_ok_and(|i| v.ignition.contains(&i.class)));
@@ -190,40 +221,70 @@ fn drive(
 }
 
 /// She sits in the driver's seat: her capsule at its socket (her feet a capsule half-height below), facing the car's
-/// forward (its +X; her model faces +Z).
-fn follow_vehicle(mut player: Single<(&Driving, &mut Transform), With<Player>>, vehicles: Query<(&Vehicle, &Transform), Without<Player>>) {
-    let (d, ref mut xf) = *player;
-    if let Ok((v, vxf)) = vehicles.get(d.vehicle) {
-        **xf = *vxf * v.sitting * Transform::from_xyz(0.0, -crate::player::CAPSULE_HALF_HEIGHT_M, 0.0).with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2));
+/// forward (its +X; her model faces +Z). Getting in, her enter take plays from where its root motion ends in the seat;
+/// getting out, her exit take from the seat, leaving her where it ends.
+fn follow_vehicle(
+    mut commands: Commands,
+    time: Res<Time>,
+    model: Option<Res<crate::character::CounselorCharacter>>,
+    mut player: Single<(Entity, &mut Driving, &mut Transform), With<Player>>,
+    vehicles: Query<(&Vehicle, &Transform), Without<Player>>,
+) {
+    let (pe, ref mut d, ref mut xf) = *player;
+    let Ok((v, vxf)) = vehicles.get(d.vehicle) else { return };
+    let seat = *vxf * v.sitting * Transform::from_xyz(0.0, -crate::player::CAPSULE_HALF_HEIGHT_M, 0.0).with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2));
+    let Some(m) = d.seat_move.as_mut() else {
+        **xf = seat;
+        return;
+    };
+    m.t += time.delta_secs();
+    let take = m.take();
+    let roots = model.as_ref().and_then(|c| c.root_motion(take));
+    let len = model.as_ref().and_then(|c| c.length(take)).unwrap_or(0.0);
+    // Where the take plays from: its last frame in the seat (in), its first (out).
+    let origin = match (roots, m.exiting) {
+        (Some((_, last)), false) => Transform::from_matrix(seat.to_matrix() * last.to_matrix().inverse()),
+        (Some((first, _)), true) => Transform::from_matrix(seat.to_matrix() * first.to_matrix().inverse()),
+        (None, _) => seat,
+    };
+    if m.t < len {
+        **xf = origin;
+        return;
+    }
+    if m.exiting {
+        // Standing where the take leaves her, upright.
+        let end = roots.map_or(seat, |(_, last)| Transform::from_matrix(origin.to_matrix() * last.to_matrix()));
+        let (yaw, _, _) = end.rotation.to_euler(EulerRot::YXZ);
+        **xf = Transform::from_translation(end.translation).with_rotation(Quat::from_rotation_y(yaw));
+        commands.entity(pe).remove::<(Driving, crate::character::PlayAction)>();
+        info!("got out of the car");
+    } else {
+        d.seat_move = None;
+        **xf = seat;
+        commands.entity(pe).insert(crate::character::PlayAction(DRIVE_TAKE.into()));
     }
 }
 
+/// F: out through the driver's door (her exit take), once the car has (nearly) stopped.
 fn exit_vehicle(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
     escaped: Option<Res<Escaped>>,
-    mut player: Single<(Entity, &Driving, &mut Transform, &mut Visibility), With<Player>>,
-    vehicles: Query<(&Vehicle, &GlobalTransform)>,
+    mut player: Single<(Entity, &mut Driving), With<Player>>,
+    vehicles: Query<&Vehicle>,
 ) {
     if escaped.is_some() || !keys.just_pressed(KeyCode::KeyF) {
         return;
     }
-    let (entity, d, ref mut xf, ref mut vis) = *player;
-    let Ok((v, gxf)) = vehicles.get(d.vehicle) else { return };
-    if v.speed.abs() > 100.0 {
+    let (entity, ref mut d) = *player;
+    let Ok(v) = vehicles.get(d.vehicle) else { return };
+    if v.speed.abs() > 100.0 || d.seat_move.is_some() {
         return;
     }
-    // Out through the driver's door: a metre further out from the seat.
-    let seat = v.driver_seat;
-    let outward = Vec3::new(seat.x, 0.0, seat.z).normalize_or_zero();
-    let mut at = gxf.transform_point(seat + outward * 1.0);
-    at.y = gxf.translation().y;
-    xf.translation = at;
-    **vis = Visibility::Inherited;
-    // Facing out of the door, upright.
-    let (yaw, _, _) = gxf.rotation().to_euler(EulerRot::YXZ);
-    xf.rotation = Quat::from_rotation_y(yaw + outward.x.atan2(outward.z));
-    commands.entity(entity).remove::<(Driving, crate::character::PlayAction)>();
+    let m = SeatMove { exiting: true, t: 0.0 };
+    d.seat_move = Some(m);
+    d.starting = None;
+    commands.entity(entity).insert(crate::character::PlayAction(m.take().into()));
 }
 
 fn check_escape(

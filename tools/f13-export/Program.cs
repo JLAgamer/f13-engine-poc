@@ -883,8 +883,10 @@ static class Mvp
     static string[] JasonKills => [.. PickaxeKills.Select(k => $"{JasonAnim}/Cinematic/AM_cinematic_{k}")];
     const string JasonStun = $"{JasonAnim}/Deaths_HitReacts_Stuns";
     public static string[] PairedKills => [.. CounselorKills, .. JasonKills];
-    /// Animations that keep their root translation (played from a fixed spot: paired kills, hiding spots).
-    public static string[] KeepRoot => [.. PairedKills, .. CounselorHiding, .. JasonHiding];
+    /// Getting in and out of the driver's seat (played from the seat's socket).
+    static string[] CarSeat => ["/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_stand_car_enter_left", "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_exit_left"];
+    /// Animations that keep their root translation (played from a fixed spot: paired kills, hiding spots, car seats).
+    public static string[] KeepRoot => [.. PairedKills, .. CounselorHiding, .. JasonHiding, .. CarSeat];
     public const string Killer = "/Game/Characters/Killers/Jason/J2/Jason_SackHead";
     /// The kills whose cameras f13-game plays (kill_cameras.json).
     public static readonly string[] KillCameras =

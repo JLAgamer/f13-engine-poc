@@ -165,9 +165,10 @@ Presentation
 - [x] Repair animations: her takes of the car repairs' montages (gas can, battery): start, cycle while she works,
       stop when done, cancel when she lets go
 - [x] Sitting in the car: her capsule at the driver's seat's AttachSocket (SeatSocketFL on the car mesh; the exporter
-      writes skeletal meshes' sockets in component space), playing f_normal_sit_car_drive_forward
+      writes skeletal meshes' sockets in component space), playing f_normal_sit_car_drive_forward; getting in and out,
+      her enter and exit takes with their root motion (enter ends in the seat, exit starts there)
 - [ ] Animations, remaining: start/stop transitions, turn in place, foot-marker sync (now normalised time), limp
-      movement, aim offsets, car enter/exit takes (root motion: she snaps in and out)
+      movement, aim offsets
 - [x] Door special moves: her open and close takes (inside or outside), the leaf swinging in the montage's
       OpenCloseDoor driver window; she stands while they play
 - [x] Window special moves: her open and close takes (the pane moving in the montage's WindowMoveDriver window),
