@@ -771,6 +771,8 @@ static class Mvp
         "/Game/UI/HUD/Counselor/SCBreathWidget",
         "/Game/UI/Interact/SCInteractMinigame_Widget",
         "/Game/UI/HUD/SC_WiggleMinigame_Widget",
+        // Jason's, when he's played.
+        "/Game/UI/HUD/Killer/KillerHUDWidget",
     ];
     // Sounds f13-game plays besides the footsteps (SoundCues or SoundWaves).
     /// The map's ambient loops (CrystalLake_Sm_Audio's AmbientSounds).

@@ -99,7 +99,7 @@ impl Plugin for UiPlugin {
         embedded_asset!(app, "shaders/minimap.wgsl");
         app.add_plugins((UiMaterialPlugin::<RadialFill>::default(), UiMaterialPlugin::<Minimap>::default()))
             .add_systems(Startup, load_hud)
-            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap), hide_for_jason).chain().run_if(resource_exists::<Hud>));
+            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, jason_hud), hide_for_jason).chain().run_if(resource_exists::<Hud>));
     }
 }
 
@@ -158,6 +158,8 @@ const MINIMAP_RADIUS: f32 = 0.39;
 #[derive(Resource)]
 pub struct Hud {
     hud: Widget,
+    /// Jason's (KillerHUDWidget), shown instead when he's played.
+    killer: Option<Widget>,
     breath: Option<Widget>,
     dial: Option<Widget>,
     item: Option<Widget>,
@@ -167,7 +169,7 @@ pub struct Hud {
     textures: HashMap<String, String>,
     regular: Handle<Font>,
     bold: Handle<Font>,
-    built: Option<(Vec2, Vec<String>)>,
+    built: Option<(Vec2, Vec<String>, bool)>,
     root: Option<Entity>,
     /// "<user widget class>.<widget name>" -> entity.
     names: HashMap<String, Entity>,
@@ -206,8 +208,41 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         let b = a.bounds?;
         Some(MapInfo { file: textures.get(&name)?.clone(), area: [b[0], b[1], b[3], b[4]], zoom: a.props["DefaultMinimapZoom"].as_f64().unwrap_or(0.2) as f32 })
     });
+    let mut killer = Widget::load(dir, "KillerHUDWidget");
+    if let Some(k) = killer.as_mut() {
+        // Shown by things not ported: the Morph map, the rage overlay, help texts, XP.
+        for name in [
+            "Map_Overylay",
+            "RageBorder",
+            "KillerHelpTextWidget",
+            "XPDisplayWidget_81",
+            "Reticle",
+            "SaveGameThreadActiveIcon_0",
+            "HUDLaggingIconWidget",
+            "HUDActiveMicWidget",
+            "WalkieSpeakingPlayerListWidget",
+            "HUDChatNotificationOverlayWidget",
+        ] {
+            if let Some(w) = k.find_mut(name) {
+                w.set_visibility(Vis::Collapsed);
+            }
+        }
+        // Faded in by his HUD's Blueprint as the match starts: shown.
+        for name in ["KillerAbilityWidget_521", "KillerKnifeWidget_77", "KillerTrapWidget_184", "RageWidget_190", "ClockBorder", "txtTimer"] {
+            if let Some(w) = k.find_mut(name) {
+                let c = &mut w.props["ColorAndOpacity"];
+                if c["SpecifiedColor"].is_object() {
+                    c["SpecifiedColor"]["A"] = json!(1.0);
+                } else {
+                    c["A"] = json!(1.0);
+                }
+            }
+        }
+        action_keys(k);
+    }
     commands.insert_resource(Hud {
         hud,
+        killer,
         breath,
         dial,
         item: Widget::load(dir, "SC_InventoryItem_Widget"),
@@ -249,13 +284,15 @@ fn build_hud(
     assets: Res<AssetServer>,
     mut materials: ResMut<Assets<RadialFill>>,
     mut maps: ResMut<Assets<Minimap>>,
+    play: Option<Res<crate::jason_player::PlayJason>>,
 ) {
     let size = window.size();
+    let jason = play.is_some() && hud.killer.is_some();
     if size.x < 1.0 || size.y < 1.0 {
         return;
     }
     let pockets: Vec<String> = player.as_ref().and_then(|p| **p).map_or(vec![], |inv| inv.pockets.iter().filter_map(|&e| items.get(e).ok()).map(|i| i.class.clone()).collect());
-    if hud.built.as_ref().is_some_and(|(s, p)| *s == size && *p == pockets) {
+    if hud.built.as_ref().is_some_and(|(s, p, j)| *s == size && *p == pockets && *j == jason) {
         return;
     }
     if let Some(root) = hud.root.take() {
@@ -264,14 +301,16 @@ fn build_hud(
     // The window in design units: scaled to fit 1920×1080, the rest added along the longer side.
     let scale = (size.x / DESIGN.x).min(size.y / DESIGN.y);
     let virt = size / scale;
-    let mut tree = hud.hud.clone();
-    fill_inventory(&hud, &mut tree, &pockets);
+    let mut tree = if jason { hud.killer.clone().unwrap_or_else(|| hud.hud.clone()) } else { hud.hud.clone() };
+    if !jason {
+        fill_inventory(&hud, &mut tree, &pockets);
+    }
     let root = commands.spawn((Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, Pickable::IGNORE)).id();
     let mut names = HashMap::new();
     let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, names: &mut names };
     let full = Rect { x: 0.0, y: 0.0, w: virt.x, h: virt.y };
     let laid = tree.layout(full);
-    b.spawn(&laid, root, full, "CounselorHUDWidget");
+    b.spawn(&laid, root, full, if jason { "KillerHUDWidget" } else { "CounselorHUDWidget" });
     if let Some(breath) = &hud.breath {
         let laid = breath.layout(full);
         let e = b.spawn(&laid, root, full, "SCBreathWidget");
@@ -291,7 +330,7 @@ fn build_hud(
     }
     hud.names = names;
     hud.root = Some(root);
-    hud.built = Some((size, pockets));
+    hud.built = Some((size, pockets, jason));
 }
 
 /// Puts an item widget in the inventory's Grid for each pocket item (SCInventory_Widget does it as items are
@@ -541,7 +580,8 @@ fn set_progress(commands: &mut Commands, fill: Entity, p: &Progress, percent: f3
 
 /// The player became Jason (the host's `jason`): her HUD goes.
 fn hide_for_jason(hud: Res<Hud>, play: Option<Res<crate::jason_player::PlayJason>>, mut vis: Query<&mut Visibility>) {
-    if let (Some(root), Some(_)) = (hud.root, play) {
+    // Without his HUD exported, none.
+    if let (Some(root), Some(_), None) = (hud.root, play, &hud.killer) {
         if let Ok(mut v) = vis.get_mut(root) {
             v.set_if_neq(Visibility::Hidden);
         }
@@ -569,13 +609,59 @@ fn stamina(
 
 /// The match timer (mm:ss left).
 fn timer(hud: Res<Hud>, game: Res<crate::match_flow::GameMatch>, mut texts: Query<&mut Text>) {
-    let Some(&e) = hud.names.get("SCCounselorTimerWidget.txtTimer") else { return };
+    let Some(&e) = hud.names.get("SCCounselorTimerWidget.txtTimer").or_else(|| hud.names.get("SCKillerTimerWidget.txtTimer")) else { return };
     let Ok(mut text) = texts.get_mut(e) else { return };
     let left = game.state.remaining_time.max(0);
     let s = format!("{:02}:{:02}", left / 60, left % 60);
     if text.0 != s {
         text.0 = s;
     }
+}
+
+/// Jason's HUD: his knives and traps left, each ability's unlock bar filling and its icon's glow while it's ready
+/// (its charge bar as it recharges), and his rage building.
+#[allow(clippy::type_complexity)]
+fn jason_hud(
+    mut commands: Commands,
+    hud: Res<Hud>,
+    play: Option<Res<crate::jason_player::PlayJason>>,
+    jasons: Query<(&crate::jason::Jason, Option<&crate::senses::Knowledge>)>,
+    mut texts: Query<&mut Text>,
+    bars: Query<&Progress>,
+    mut vis: Query<&mut Visibility>,
+) {
+    use f13_core::killer_abilities::{Ability, Blockers};
+    if play.is_none() || hud.built.as_ref().is_none_or(|b| !b.2) {
+        return;
+    }
+    let Some((j, know)) = jasons.iter().next() else { return };
+    let mut set_text = |name: &str, s: String| {
+        if let Some(mut t) = hud.names.get(name).and_then(|&e| texts.get_mut(e).ok()) {
+            if t.0 != s {
+                t.0 = s;
+            }
+        }
+    };
+    set_text("KillerKnifeWidget.TextBlock_1", format!("{:02}", j.knives));
+    set_text("KillerTrapWidget.TextBlock_1", format!("{:02}", j.traps));
+    let Some(k) = know else { return };
+    let a = &k.abilities;
+    let mut bar = |name: &str, percent: f32| {
+        if let Some(p) = hud.names.get(name).and_then(|&e| bars.get(e).ok()) {
+            set_progress(&mut commands, p.fill, p, percent);
+        }
+    };
+    for ability in Ability::ALL {
+        let n = format!("{ability:?}");
+        bar(&format!("KillerAbilityWidget.{n}UnlockBar"), a.unlock_fraction(ability));
+        bar(&format!("KillerAbilityWidget.{n}Bar"), if a.is_unlocked(ability) { a.recharge_fraction(ability) } else { 0.0 });
+        let ready = a.is_available(ability, &Blockers::default());
+        if let Some(mut v) = hud.names.get(&format!("KillerAbilityWidget.Icon{n}_Glow")).and_then(|&e| vis.get_mut(e).ok()) {
+            v.set_if_neq(if ready { Visibility::Inherited } else { Visibility::Hidden });
+        }
+    }
+    let rage = if a.rage_active { 1.0 } else { (a.rage_timer / a.tuning.rage_unlock_time.max(1.0)).clamp(0.0, 1.0) };
+    bar("RageWidget.ProgressBar_41", rage);
 }
 
 /// The breath widget while she hides: both bars at her breath.

@@ -448,8 +448,8 @@ fn main() {
         .add_plugins(lighting::LightingPlugin { flashlight: args.flashlight })
         .add_systems(Startup, spawn_level)
         .add_systems(PostUpdate, apply_placed.before(bevy::camera::visibility::VisibilitySystems::CheckVisibility));
-    // The counselor's HUD (embedded shader and UI material: after the asset and render plugins).
-    if !(args.fly || args.aerial) && !args.play_jason {
+    // The HUD, hers or Jason's when he's played (embedded shader and UI material: after the asset and render plugins).
+    if !(args.fly || args.aerial) {
         app.add_plugins(ui::UiPlugin);
     }
     // Playing Jason (its input comes off the raw events, before the input plugin's systems): from the start, or once
