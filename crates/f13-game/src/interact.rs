@@ -404,28 +404,6 @@ fn act(
     }
 }
 
-/// The minigame dial as text: `=` done, `R`/`L` pips by key (lower case once hit), `|` the needle.
-fn dial(h: &HoldInteraction, t: &f13_core::minigame::MinigameTuning) -> String {
-    const CELLS: usize = 72; // 5 degrees each
-    let needle = ((h.progress(t) * CELLS as f32) as usize).min(CELLS - 1);
-    (0..CELLS)
-        .map(|c| {
-            let deg = c as f32 * 5.0 + 2.5;
-            let pip = h.pips.iter().find(|p| deg >= p.position && deg <= p.position + p.width);
-            if c == needle {
-                '|'
-            } else if let Some(p) = pip {
-                let ch = if p.key == 0 { 'R' } else { 'L' };
-                if p.state == f13_core::minigame::PipState::Hit { ch.to_ascii_lowercase() } else { ch }
-            } else if c < needle {
-                '='
-            } else {
-                '.'
-            }
-        })
-        .collect()
-}
-
 fn barricade_of(barricades: &Query<&Barricade>, door: Entity) -> Option<bool> {
     barricades.iter().find(|b| b.door == Some(door)).map(|b| b.enabled)
 }
@@ -535,8 +513,8 @@ fn update_prompt(
                 if let Ok(v) = vehicles.get(v) {
                     match &interaction.hold {
                         Some(h) if h.started => {
-                            lines.push(format!("Repairing {}: {:.0}%  (RMB/LMB when the needle | is in a pip)", v.repairs[i].name, h.progress(&tuning.minigame) * 100.0));
-                            lines.push(dial(h, &tuning.minigame));
+                            // The dial is on the HUD (ui.rs).
+                            lines.push(format!("Repairing {}: {:.0}%  (RMB/LMB when the needle is in a pip)", v.repairs[i].name, h.progress(&tuning.minigame) * 100.0));
                         }
                         _ => lines.push(format!("[Hold E] Repair: {}", v.repairs[i].name)),
                     }

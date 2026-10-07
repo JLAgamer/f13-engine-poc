@@ -1,5 +1,7 @@
-// The stamina ring (StaminaBarMaterial; its graph is cooked away): the ring texture where the ring gradient (rising
-// around the ring from its left end) is below the fill amount, in the widget's color.
+// A ring filled part way, for UI materials whose graphs are cooked away: the ring texture where the gradient is in
+// [fill.y, fill.x), in the widget's color. The stamina ring (StaminaBarMaterial) uses its gradient texture (rising
+// around the ring from its left end); with fill.z set the gradient is the angle clockwise from 12 o'clock (the
+// interaction dial's ProgressCircle and its pips).
 #import bevy_ui::ui_vertex_output::UiVertexOutput
 
 @group(1) @binding(0) var<uniform> color: vec4<f32>;
@@ -12,7 +14,9 @@
 @fragment
 fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
     let r = textureSample(ring, ring_sampler, in.uv);
-    let g = textureSample(gradient, gradient_sampler, in.uv).r;
-    let shown = select(0.0, 1.0, g < fill.x);
+    let d = in.uv - vec2<f32>(0.5, 0.5);
+    let angle = fract(atan2(d.x, -d.y) / 6.2831853 + 1.0);
+    let g = select(textureSample(gradient, gradient_sampler, in.uv).r, angle, fill.z > 0.5);
+    let shown = select(0.0, 1.0, g >= fill.y && g < fill.x);
     return vec4<f32>(r.rgb * color.rgb, r.a * color.a * shown);
 }

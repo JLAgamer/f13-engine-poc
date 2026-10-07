@@ -486,6 +486,13 @@ fn run_bot(
                         mouse.press(if p.key == 0 { MouseButton::Right } else { MouseButton::Left });
                     }
                 }
+                // The dial, once, past halfway.
+                if h.progress(&tuning.minigame) > 0.55 && !bot.jason_shots.contains(&"repair") {
+                    bot.jason_shots.push("repair");
+                    let path = std::env::temp_dir().join("f13-bot-repair.png");
+                    info!("bot: screenshot {}", path.display());
+                    commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+                }
             }
             if bot.timer > 60.0 {
                 error!("bot: install {} not progressing", v.repairs[i].name);

@@ -174,7 +174,7 @@ item, 1-3 use the small item in that pocket. Doors: E opens/closes, hold E from 
 unlock it, or to put up / take down its barricade (from outside, hold E unlocks a locked one). Windows: E opens a
 closed window or climbs through an open or broken one; sprint + E dives through (breaking the glass, 20 damage);
 hold E closes an open one (first aid heals after its 2 s animation). Repairs are the game's skill check: hold E
-and, when the needle reaches a pip on the dial in the HUD, press its mouse button (R = right, L = left); hits speed
+and, when the needle reaches a pip on the dial (the game's interaction dial), press its mouse button (R = right, L = left); hits speed
 the repair up, misses roll it back. Escape by car: install the gas
 can and the battery, get in the driver's seat (E), hold E to start with the keys in your pockets (about 5 s), drive (WASD) into
 a car escape zone; F gets out. `--near-car` starts you next to a car. `--bot-escape` plays the whole escape

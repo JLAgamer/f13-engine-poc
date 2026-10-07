@@ -136,7 +136,8 @@ Presentation
       movement, aim offsets, repairs, car enter/exit and sitting (she's hidden in the car), door/window montages
 - [ ] Special moves: door open/close/lock and window open/close/vault/dive montages (now a fixed 0.5 s, 90° door swing
       and instant vault/dive)
-- [ ] Repair minigame dial UI (now a text dial in the HUD)
+- [x] Repair minigame dial UI: SCInteractMinigame_Widget (its progress circle filled clockwise, the needle turned, the
+      pips as red arcs of its ring, the next pip's mouse button in the middle), for every hold interaction
 - [x] HUD (ui.rs): CounselorHUDWidget from its UMG tree (f13-data::umg lays it out as Slate does), the game's font
       and textures: timer, stamina ring (StaminaBarMaterial as a radial-fill UI material), inventory (item widgets
       with their ImageOn icons, key numbers), breath bars while hiding; the game has no health or fear meter (F3:

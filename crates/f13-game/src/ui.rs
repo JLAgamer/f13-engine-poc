@@ -4,8 +4,9 @@
 //!
 //! What the game's code does at runtime is redone here by name: the visibilities it sets before anything shows
 //! (`RUNTIME_VISIBILITY`), the timer's text, the stamina ring's fill (StaminaBarMaterial, `shaders/radial_fill.wgsl`),
-//! the inventory's item widgets (SC_InventoryItem_Widget, the items' ImageOn icons) and the breath bars. The HUD is
-//! rebuilt when the window's size or her pockets change.
+//! the inventory's item widgets (SC_InventoryItem_Widget, the items' ImageOn icons), the breath bars and the
+//! interaction dial (SCInteractMinigame_Widget: the progress circle, the needle, the pips as arcs of the ring, the
+//! mouse button of the next pip). The HUD is rebuilt when the window's size or her pockets change.
 //!
 //! The counselor HUD has no health or fear meter (the game shows them on her: the limp, the screen's fear effects).
 //! F3 shows the debug text instead (player.rs).
@@ -47,15 +48,30 @@ const RUNTIME_VISIBILITY: &[(&str, Vis)] = &[
     ("ControllerUse2", Vis::Collapsed),
     ("ControllerUse3", Vis::Collapsed),
     ("WalkieTalkie", Vis::Collapsed),
+    // The dial's pip template (the pips are drawn as arcs).
+    ("Image_0", Vis::Collapsed),
 ];
+
+/// The pips' colors: waiting (the template pip's tint), hit, missed.
+const PIP_WAITING: [f32; 4] = [0.854993, 0.030713, 0.017642, 1.0];
+const PIP_HIT: [f32; 4] = [0.552012, 0.527115, 0.434154, 1.0];
+const PIP_MISSED: [f32; 4] = [0.854993, 0.030713, 0.017642, 0.2];
 
 /// The keys ActionMapWidgets show (the game picks a key glyph or name from the input settings); the others (gamepad
 /// item cycling) are hidden.
-const ACTION_KEYS: &[(&str, &str)] = &[("ItemOneActionMap", "1"), ("ItemTwoActionMap", "2"), ("ItemThreeActionMap", "3"), ("ActionMapWidget_103", "Space")];
+const ACTION_KEYS: &[(&str, &str)] = &[
+    ("ItemOneActionMap", "1"),
+    ("ItemTwoActionMap", "2"),
+    ("ItemThreeActionMap", "3"),
+    ("ActionMapWidget_103", "Space"),
+    // The dial's pip keys (pip key 0 / 1).
+    ("Interact1", "RMB"),
+    ("Interact2", "LMB"),
+];
 
 /// Shows `key` on an ActionMapWidget (its TextWidget; no glyph image), or hides the widget.
 fn action_keys(w: &mut Widget) {
-    if w.class.as_deref() == Some("ActionMapWidget") {
+    if matches!(w.class.as_deref(), Some("ActionMapWidget" | "MinigameActionMapWidget")) {
         match ACTION_KEYS.iter().find(|(n, _)| *n == w.name) {
             Some((_, key)) => {
                 if let Some(t) = w.find_mut("TextWidget") {
@@ -82,7 +98,7 @@ impl Plugin for UiPlugin {
         embedded_asset!(app, "shaders/radial_fill.wgsl");
         app.add_plugins(UiMaterialPlugin::<RadialFill>::default())
             .add_systems(Startup, load_hud)
-            .add_systems(Update, (build_hud, (stamina, timer, breath)).chain().run_if(resource_exists::<Hud>));
+            .add_systems(Update, (build_hud, (stamina, timer, breath, dial)).chain().run_if(resource_exists::<Hud>));
     }
 }
 
@@ -112,6 +128,7 @@ impl UiMaterial for RadialFill {
 pub struct Hud {
     hud: Widget,
     breath: Option<Widget>,
+    dial: Option<Widget>,
     item: Option<Widget>,
     export: PathBuf,
     classes: ClassDb,
@@ -140,21 +157,22 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         return;
     };
     let mut breath = Widget::load(dir, "SCBreathWidget");
+    let mut dial = Widget::load(dir, "SCInteractMinigame_Widget");
     for (name, vis) in RUNTIME_VISIBILITY {
-        for tree in std::iter::once(&mut hud).chain(breath.as_mut()) {
+        for tree in std::iter::once(&mut hud).chain(breath.as_mut()).chain(dial.as_mut()) {
             if let Some(w) = tree.find_mut(name) {
                 w.set_visibility(*vis);
             }
         }
     }
-    action_keys(&mut hud);
-    if let Some(b) = breath.as_mut() {
-        action_keys(b);
+    for tree in std::iter::once(&mut hud).chain(breath.as_mut()).chain(dial.as_mut()) {
+        action_keys(tree);
     }
     let textures = std::fs::read_to_string(dir.join("ui").join("textures.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     commands.insert_resource(Hud {
         hud,
         breath,
+        dial,
         item: Widget::load(dir, "SC_InventoryItem_Widget"),
         export: dir.clone(),
         classes: ClassDb::load(&dir.join("classes.json")).unwrap_or_default(),
@@ -219,7 +237,13 @@ fn build_hud(
         let laid = breath.layout(full);
         let e = b.spawn(&laid, root, full, "SCBreathWidget");
         b.commands.entity(e).insert(Visibility::Hidden);
-        names.insert("SCBreathWidget".into(), e);
+        b.names.insert("SCBreathWidget".into(), e);
+    }
+    if let Some(dial) = &hud.dial {
+        let laid = dial.layout(full);
+        let e = b.spawn(&laid, root, full, "SCInteractMinigame_Widget");
+        b.commands.entity(e).insert(Visibility::Hidden);
+        b.names.insert("SCInteractMinigame_Widget".into(), e);
     }
     hud.names = names;
     hud.root = Some(root);
@@ -377,6 +401,13 @@ impl Builder<'_, '_, '_> {
         }
         let res = &b["ResourceObject"];
         let textures: Vec<&str> = res["Textures"].as_array().map_or(vec![], |t| t.iter().filter_map(|t| t.as_str()).collect());
+        if res["Parent"].as_str() == Some("ProgressCircle") && !textures.is_empty() {
+            // The dial's progress circle: its ring filled clockwise from the top.
+            let ring: Handle<Image> = self.assets.load(textures[0].to_string());
+            let m = self.materials.add(RadialFill { color: LinearRgba::from(linear(c)), fill: Vec4::new(0.0, 0.0, 1.0, 0.0), ring: ring.clone(), gradient: ring });
+            self.commands.entity(e).insert(MaterialNode(m));
+            return;
+        }
         if textures.len() == 2 && res["Scalars"]["Alpha"].is_number() {
             let v = res["Vectors"]["Color"].as_array().map_or([1.0; 4], |a| [0, 1, 2, 3].map(|i| a.get(i).and_then(|x| x.as_f64()).unwrap_or(1.0) as f32));
             let m = self.materials.add(RadialFill {
@@ -482,3 +513,109 @@ fn breath(
         }
     }
 }
+
+/// The dial's pip arcs (on its Root canvas), for the pips they were made for.
+#[derive(Component)]
+struct DialPips {
+    pips: Vec<(f32, f32)>,
+    arcs: Vec<Entity>,
+}
+
+/// The interaction dial while a hold interaction runs (repairs; doors and windows have no pips): progress, the
+/// needle, the pips by state, the next pip's mouse button.
+fn dial(
+    mut commands: Commands,
+    hud: Res<Hud>,
+    interaction: Option<Res<crate::interact::Interaction>>,
+    tuning: Res<crate::player::PlayerTuning>,
+    mut vis: Query<&mut Visibility>,
+    mut transforms: Query<&mut UiTransform>,
+    nodes: Query<&MaterialNode<RadialFill>>,
+    pips: Query<&DialPips>,
+    mut materials: ResMut<Assets<RadialFill>>,
+    assets: Res<AssetServer>,
+) {
+    use f13_core::minigame::PipState;
+    let Some(&root) = hud.names.get("SCInteractMinigame_Widget") else { return };
+    let hold = interaction.as_ref().and_then(|i| i.hold.as_ref()).filter(|h| h.started);
+    if let Ok(mut v) = vis.get_mut(root) {
+        v.set_if_neq(if hold.is_some() { Visibility::Inherited } else { Visibility::Hidden });
+    }
+    let Some(h) = hold else { return };
+    let progress = h.progress(&tuning.minigame).clamp(0.0, 1.0);
+    let name = |n: &str| hud.names.get(&format!("SCInteractMinigame_Widget.{n}")).copied();
+    // The progress circle.
+    if let Some(m) = name("Progress_Image").and_then(|e| nodes.get(e).ok()) {
+        if materials.get(&m.0).is_some_and(|m| (m.fill.x - progress).abs() > 1e-3) {
+            if let Some(mut m) = materials.get_mut(&m.0) {
+                m.fill.x = progress;
+            }
+        }
+    }
+    // The needle: the tick at 12 o'clock turned with the progress.
+    if let Some(e) = name("ProgressTick") {
+        let rotation = Rot2::degrees(progress * 360.0);
+        match transforms.get_mut(e) {
+            Ok(mut t) => t.rotation = rotation,
+            Err(_) => {
+                commands.entity(e).insert(UiTransform { rotation, ..default() });
+            }
+        }
+    }
+    // The pips: arcs of the ring, made again when the layout changes.
+    let Some(canvas) = name("Root") else { return };
+    let layout: Vec<(f32, f32)> = h.pips.iter().map(|p| (p.position / 360.0, (p.position + p.width) / 360.0)).collect();
+    let current = pips.get(canvas).ok().filter(|d| d.pips == layout).map(|d| d.arcs.clone());
+    let arcs = match current {
+        Some(arcs) => arcs,
+        None => {
+            if let Ok(old) = pips.get(canvas) {
+                for &a in &old.arcs {
+                    commands.entity(a).despawn();
+                }
+            }
+            let ring = hud.dial.as_ref().and_then(|d| d.find("Background")).and_then(|b| b.props["Brush"]["ResourceObject"]["File"].as_str()).map(String::from);
+            let Some(ring) = ring else { return };
+            let ring: Handle<Image> = assets.load(ring);
+            let arcs: Vec<Entity> = layout
+                .iter()
+                .map(|&(start, end)| {
+                    let m = materials.add(RadialFill { color: LinearRgba::from(linear(PIP_WAITING)), fill: Vec4::new(end, start, 1.0, 0.0), ring: ring.clone(), gradient: ring.clone() });
+                    commands
+                        .spawn((
+                            Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
+                            MaterialNode(m),
+                            Pickable::IGNORE,
+                            ChildOf(canvas),
+                        ))
+                        .id()
+                })
+                .collect();
+            commands.entity(canvas).insert(DialPips { pips: layout, arcs: arcs.clone() });
+            return;
+        }
+    };
+    for (p, &a) in h.pips.iter().zip(&arcs) {
+        let c = match p.state {
+            PipState::Hit => PIP_HIT,
+            PipState::Missed => PIP_MISSED,
+            _ => PIP_WAITING,
+        };
+        let c = LinearRgba::from(linear(c));
+        if let Some(m) = nodes.get(a).ok().map(|n| n.0.clone()) {
+            if materials.get(&m).is_some_and(|m| m.color != c) {
+                if let Some(mut m) = materials.get_mut(&m) {
+                    m.color = c;
+                }
+            }
+        }
+    }
+    // The next pip's button in the middle.
+    let next = h.pips.iter().find(|p| matches!(p.state, PipState::Waiting | PipState::Active)).map(|p| p.key);
+    for (n, key) in [("Interact1", 0u8), ("Interact2", 1u8)] {
+        if let Some(mut v) = name(n).and_then(|e| vis.get_mut(e).ok()) {
+            v.set_if_neq(if next == Some(key) { Visibility::Inherited } else { Visibility::Hidden });
+        }
+    }
+}
+
