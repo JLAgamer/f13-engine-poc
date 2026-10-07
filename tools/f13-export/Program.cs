@@ -652,6 +652,16 @@ static class Mvp
         // Blocking: the block idle and the reaction when a blocked hit lands.
         $"{Female}/Combat/Block/AM_F_Combat_Stand_Block_Idle",
         $"{Female}/Combat/Block/AM_F_Combat_Stand_Block_React",
+        // Caught in a bear trap (the trap's CounselorLeft/RightFootCaught(Sprinting) montages, female): stepping in walking
+        // or running, the struggle's cycle, getting free.
+        $"{Female}/Interaction/Traps/f_normal_stand_trap_walk_enter_lf",
+        $"{Female}/Interaction/Traps/f_normal_stand_trap_walk_enter_rf",
+        $"{Female}/Interaction/Traps/f_normal_stand_trap_run_enter_lf",
+        $"{Female}/Interaction/Traps/f_normal_stand_trap_run_enter_rf",
+        $"{Female}/Interaction/Traps/f_normal_stand_trap_cycle_lf",
+        $"{Female}/Interaction/Traps/f_normal_stand_trap_cycle_rf",
+        $"{Female}/Interaction/Traps/f_normal_stand_trap_exit_lf",
+        $"{Female}/Interaction/Traps/f_normal_stand_trap_exit_rf",
         // Items: weapon swings (each weapon's female NeutralAttack and ForwardAttack), throwing a firecracker, firing
         // the flare gun and the shotgun, placing a bear trap, breaking a grab (struggle, pocket knife).
         $"{Female}/Combat/Swings/AM_F_combat_stand_1h_attack_light",

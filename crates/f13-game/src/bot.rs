@@ -15,6 +15,8 @@
 //! (barred), and tell him where she is; passes when he breaks it down in a hit per 20 of its health (10 barred) and
 //! kills her; `--bot-raged-in`: a locked door with Jason raged, who bursts through it. Screenshots
 //! f13-bot-breakdown-*.png.
+//! `--bot-trap`: with a bear trap (`--give BearTrap_C`), place it, step back and walk into it, then wiggle free:
+//! passes when it caught her (50 damage) and she got out. Screenshot f13-bot-trap.png.
 //! `--bot-block`: with a weapon (`--give BaseballBat_C`), in combat stance, block Jason's swings: passes when a
 //! blocked hit has done less than a full one and he has killed her.
 //! `--bot-abilities`: Jason starts with every ability ready and hears where she stands, across the map: passes when
@@ -54,6 +56,8 @@ pub enum Goal {
     Abilities,
     /// Block his swings with the weapon she was given.
     Block,
+    /// Walk into her own bear trap and wiggle free.
+    Trap,
 }
 
 pub struct BotPlugin(pub Goal);
@@ -89,6 +93,8 @@ enum Step {
     Hide(u8),
     /// Behind the door, waiting for Jason.
     LockedIn,
+    /// Bear trap test stage.
+    Trap(u8),
     Done,
 }
 
@@ -228,7 +234,7 @@ fn run_bot(
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     (interaction, tuning): (Res<crate::interact::Interaction>, Res<crate::player::PlayerTuning>),
-    mut player: Single<(&mut Transform, &Player, Option<&Inventory>, Has<Driving>, Has<UsingItem>, (Has<crate::jason::Held>, Has<crate::items::ItemAction>, Has<crate::jason::Staggered>, Has<crate::items::Blocking>), Option<&mut crate::hiding::Hiding>)>,
+    mut player: Single<(&mut Transform, &Player, Option<&Inventory>, Has<Driving>, Has<UsingItem>, (Has<crate::jason::Held>, Has<crate::items::ItemAction>, Has<crate::jason::Staggered>, Has<crate::items::Blocking>, Has<crate::items::Trapped>), Option<&mut crate::hiding::Hiding>)>,
     mut camera: Single<&mut PlayerCamera>,
     items: Query<(Entity, &Item, &GlobalTransform, Option<&InCabinet>), Without<Carried>>,
     carried: Query<&Item, With<Carried>>,
@@ -241,11 +247,12 @@ fn run_bot(
         Query<&mut crate::windows::Barricade>,
         Query<(&crate::jason::Jason, &Transform), (Without<Player>, Without<Vehicle>)>,
     ),
-    (escaped, spots, mut knowledge, game): (
+    (escaped, spots, mut knowledge, game, traps): (
         Option<Res<Escaped>>,
         Query<(Entity, &crate::hiding::HidingSpot, &GlobalTransform)>,
         Query<&mut crate::senses::Knowledge>,
         Option<Res<crate::match_flow::GameMatch>>,
+        Query<&Transform, (With<crate::items::ArmedTrap>, Without<Player>, Without<Vehicle>)>,
     ),
     mut exit: MessageWriter<AppExit>,
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
@@ -269,7 +276,7 @@ fn run_bot(
         exit.write(AppExit::error());
         return;
     }
-    let (ref mut pxf, p, inv, driving, using, (held, acting, staggered, blocking), ref mut hiding) = *player;
+    let (ref mut pxf, p, inv, driving, using, (held, acting, staggered, blocking, trapped), ref mut hiding) = *player;
     let busy = acting || staggered || held;
     let sees = knowledge.iter().next().is_some_and(|k| k.sees);
     // Jason only knows what he perceives: when he hasn't seen her for a while, step out 10 m in front of him.
@@ -357,6 +364,11 @@ fn run_bot(
             if matches!(bot.goal, Goal::Hide | Goal::HideSeen) {
                 info!("bot: {} hiding spots", spots.iter().count());
                 bot.step = Step::Hide(0);
+                bot.timer = 0.0;
+                return;
+            }
+            if bot.goal == Goal::Trap {
+                bot.step = Step::Trap(0);
                 bot.timer = 0.0;
                 return;
             }
@@ -762,6 +774,69 @@ fn run_bot(
                 bot.timer = 0.0;
             }
         }
+        Step::Trap(stage) => {
+            let trap = traps.iter().next().map(|t| t.translation);
+            match stage {
+                // Place it.
+                0 => {
+                    if bot.timer > 1.0 && !acting {
+                        if trap.is_some() {
+                            info!("bot: trap placed");
+                            bot.step = Step::Trap(1);
+                            bot.timer = 0.0;
+                        } else if bot.timer < 1.2 {
+                            mouse.press(MouseButton::Left);
+                        }
+                    }
+                }
+                // Stand 2 m back from it, facing it, then walk in.
+                1 => {
+                    if trapped {
+                        info!("bot: caught, health {:.0}", p.counselor.health);
+                        bot.jason_shots.push("caught");
+                        bot.last_health = p.counselor.health;
+                        bot.step = Step::Trap(2);
+                        bot.timer = 0.0;
+                        return;
+                    }
+                    let Some(at) = trap else { return };
+                    if bot.timer < 0.1 {
+                        let back = pxf.translation - at;
+                        let back = Vec3::new(back.x, 0.0, back.z).normalize_or(Vec3::Z);
+                        if let Some(spot) = stand_spot(&world, at + back * 2.0 + Vec3::Y, 1.5) {
+                            place(pxf, spot);
+                        }
+                    }
+                    look_at(&mut camera, pxf, at);
+                    camera.pitch = -0.2;
+                    if bot.timer > 0.5 {
+                        keys.press(KeyCode::KeyW);
+                    }
+                    if bot.timer > 8.0 {
+                        error!("bot: never stepped in the trap");
+                        bot.step = Step::Done;
+                    }
+                }
+                // Wiggle free (A / D alternating).
+                _ => {
+                    if trapped {
+                        bot.second_tap = !bot.second_tap;
+                        keys.press(if bot.second_tap { KeyCode::KeyA } else { KeyCode::KeyD });
+                        if bot.timer > 0.8 && !bot.jason_shots.contains(&"trapshot") {
+                            bot.jason_shots.push("trapshot");
+                            let path = std::env::temp_dir().join("f13-bot-trap.png");
+                            info!("bot: screenshot {}", path.display());
+                            commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+                        }
+                    } else {
+                        info!("bot: out of the trap after {:.1}s", bot.timer);
+                        bot.jason_shots.push("free");
+                        bot.step = Step::Done;
+                        bot.timer = 0.0;
+                    }
+                }
+            }
+        }
         Step::AwaitJason if bot.goal == Goal::Block => {
             let Some((j, jxf)) = jasons.iter().next() else { return };
             if bot.timer >= 5.0 {
@@ -1075,6 +1150,7 @@ fn run_bot(
                     Goal::Jason => !p.counselor.alive(),
                     Goal::Abilities => !p.counselor.alive() && ["morph", "stalk", "shift"].iter().all(|a| bot.jason_shots.contains(a)),
                     Goal::Block => !p.counselor.alive() && bot.jason_shots.contains(&"blocked"),
+                    Goal::Trap => p.counselor.alive() && bot.last_health == 50.0 && bot.jason_shots.contains(&"free"),
                     Goal::Fight => p.counselor.alive() && bot.jason_shots.contains(&"stun"),
                     Goal::Hide => p.counselor.alive() && hiding.is_none() && bot.jason_shots.contains(&"inside"),
                     Goal::HideSeen => !p.counselor.alive() && bot.jason_shots.contains(&"kill"),

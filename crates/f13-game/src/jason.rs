@@ -135,9 +135,8 @@ impl Plugin for JasonPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(JasonConfig { delay: self.delay })
             .add_systems(Startup, spawn_jason)
-            .init_resource::<Struggle>()
             .add_systems(FixedUpdate, (update_jason, recover_counselor))
-            .add_systems(Update, (tag_jason_parts, animate_jason, read_struggle));
+            .add_systems(Update, (tag_jason_parts, animate_jason));
     }
 }
 
@@ -394,15 +393,12 @@ pub struct HitJason {
     pub from: Vec3,
 }
 
-/// Grab struggle input: the counselor's wiggles (A/D presses) since the grab.
+/// The counselor's wiggle axis (A -1, D +1: GLB_Wiggle) and her grab struggle's minigame (f13-core::stun).
 #[derive(Resource, Default)]
 pub struct Struggle {
-    pub wiggles: u32,
-    last: f32,
+    pub input: f32,
+    pub wiggle: f13_core::stun::Wiggle,
 }
-
-/// SCCharacter MaxWigglesPerSecond (constructor).
-const MAX_WIGGLES_PER_SECOND: f32 = 10.0;
 /// SCCharacter InvulnerableStunDuration (constructor): no new stun this long after one ends.
 const STUN_IMMUNE_SECONDS: f32 = 3.0;
 const FLINCH_FRONT: &str = "combat_stand_hit_reaction_front";
@@ -1186,7 +1182,9 @@ pub(crate) fn update_jason(
                         continue;
                     }
                     info!("Jason: grabbed Vanessa");
-                    struggle.wiggles = 0;
+                    struggle.wiggle = default();
+                    // Out of a trap, into his hands.
+                    commands.entity(pe).remove::<crate::items::Trapped>();
                     j.state = JasonState::Holding { t: 0.0 };
                     j.velocity = Vec2::ZERO;
                     commands.entity(je).insert(PlayAction(GRAB_ENTER.into()));
@@ -1229,8 +1227,9 @@ pub(crate) fn update_jason(
                 if at >= counselor_model.as_ref().and_then(|c| c.length(GRABBED_ENTER)).unwrap_or(2.0) {
                     commands.entity(pe).insert(PlayAction(GRABBED_IDLE.into()));
                 }
-                if struggle_progress(&p.counselor.stats, at, struggle.wiggles) >= 1.0 {
-                    info!("Vanessa: struggled free after {at:.1}s ({} wiggles)", struggle.wiggles);
+                let input = struggle.input;
+                if struggle.wiggle.tick(dt, input, &grab_struggle(&p.counselor.stats)) {
+                    info!("Vanessa: struggled free after {at:.1}s");
                     commands.trigger(Score(Stun::GrabBreak.score_event()));
                     release(&mut commands, pe, GRAB_BREAK, counselor_model.as_deref());
                     j.state = JasonState::Stunned { t: 0.0, stun: Stun::GrabBreak };
@@ -1368,29 +1367,21 @@ fn snap_rig(rigs: &mut Query<(&mut Rig, &ChildOf, &Transform), (Without<Jason>, 
 }
 
 /// A/D presses while held are wiggles, at most MaxWigglesPerSecond.
-fn read_struggle(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, held: Query<(), (With<Player>, With<Held>)>, mut s: ResMut<Struggle>) {
-    if held.is_empty() {
-        s.wiggles = 0;
-        return;
-    }
-    let now = time.elapsed_secs();
-    if (keys.just_pressed(KeyCode::KeyA) || keys.just_pressed(KeyCode::KeyD)) && now - s.last >= 1.0 / MAX_WIGGLES_PER_SECOND {
-        s.wiggles += 1;
-        s.last = now;
-    }
+/// The wiggle axis: A -1, D +1 (both or neither: 0).
+pub(crate) fn read_struggle(keys: Res<ButtonInput<KeyCode>>, mut s: ResMut<Struggle>) {
+    s.input = keys.pressed(KeyCode::KeyD) as i32 as f32 - keys.pressed(KeyCode::KeyA) as i32 as f32;
 }
 
-/// CounselorGrabStun_C: the grab is a stun on the counselor that she wiggles out of. Progress per wiggle
-/// (PercentPerWiggle 4.5% x Composure 60) and its total time (TotalStunTime 15 s, lower with Strength 15 and
-/// Composure 60); she is free when time and wiggles add up to the whole.
-fn struggle_progress(stats: &f13_core::stats::Stats, held_for: f32, wiggles: u32) -> f32 {
+/// CounselorGrabStun_C: the grab is a stun she wiggles out of: TotalStunTime 15 s (lower with Strength 15 and
+/// Composure 60), PercentPerWiggle 4.5 (more with Composure 60), DepletionRate 0.
+pub fn grab_struggle(stats: &f13_core::stats::Stats) -> f13_core::stun::WiggleTuning {
     use f13_core::stats::{Stat, StatModifiedValue};
     let mut total = StatModifiedValue::constant(15.0);
     total.modifiers[Stat::Strength as usize] = 15.0;
     total.modifiers[Stat::Composure as usize] = 60.0;
     let mut per = StatModifiedValue::constant(4.5);
     per.modifiers[Stat::Composure as usize] = 60.0;
-    held_for / total.value(stats, true).max(1.0) + wiggles as f32 * per.value(stats, false) / 100.0
+    f13_core::stun::WiggleTuning { total_time: total.value(stats, true).max(1.0), percent_per_wiggle: per.value(stats, false), depletion_rate: 0.0 }
 }
 
 /// Lets the counselor go: she plays `anim` (and can't move until it ends).

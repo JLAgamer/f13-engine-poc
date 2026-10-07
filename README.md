@@ -164,7 +164,8 @@ and durability are the game's), fires the flare gun or shotgun at what the middl
 places a bear trap in front of you; 1-3 throw firecrackers from that pocket (they go off 1.5 s later and stun him if
 he comes within 2 m). In combat stance, hold right mouse to block with a weapon: his blow does a fraction of its
 damage (the game's BlockingDamageMod: a fifth, less with more Strength and Luck) and wears the weapon; a grab goes
-through a block (`--bot-block` checks it). A pocket knife frees you the moment he grabs you; otherwise mash A / D to struggle free. M opens
+through a block (`--bot-block` checks it). Step into an armed bear trap (yours too) and it bites for 50 damage and holds you: mash A / D to open it, as the
+game's stun minigame runs (`--bot-trap`). A pocket knife frees you the moment he grabs you; otherwise mash A / D to struggle free. M opens
 the map (when you carry one). The walkie-talkie only matters with other players. A dead counselor goes limp (a
 ragdoll from her physics asset; in a kill, where the kill animation hands her over, as in the game). `--give Class,Class` starts with items (e.g. `--give BaseballBat_C,BP_PocketKnife_C`);
 `--bot-fight` uses them on Jason and passes once he's been stunned and recovers.

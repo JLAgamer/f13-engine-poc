@@ -21,7 +21,14 @@
 //! PLACEHOLDERS (not from the game): a swing connects with Jason within [`SWING_REACH_M`] and [`SWING_ANGLE_DEG`] of
 //! her facing (the game traces the weapon mesh); the firecracker's throw speed (its VelocityPitchCurve isn't
 //! exported); when the gun fires in its animation; the shotgun's range; guns hold one shot. Counselors don't step in
-//! their own traps.
+//!
+//! Bear traps (SCTrap::OnBeginOverlap and its trigger): an armed trap catches whoever steps into it, its armer too
+//! (bCanArmerTrigger, constructor), but not someone already standing in it when it was armed (it's an overlap's
+//! begin). A caught counselor takes TrapDamage (50, constructor) and is stunned by the foot's stun class
+//! (BearTrapLeft/RightFootStun(Sprinting)_C): she plays the caught montage for that foot, walking or running, and
+//! wiggles free with A / D (f13-core::stun: TotalStunTime 10, PercentPerWiggle 5 and DepletionRate 0.02 from the
+//! constructor), then steps out. The sprung trap stays shut and can't be picked up (bCanPickUp false). Trapper is
+//! scored only when the armer or the one caught is the killer.
 
 use bevy::prelude::*;
 use f13_core::collision::surface_below;
@@ -61,10 +68,13 @@ pub struct ItemsPlugin;
 
 impl Plugin for ItemsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PostUpdate, give_items)
+        // The wiggle axis, for her grab struggle (jason.rs) and trap struggle.
+        app.init_resource::<crate::jason::Struggle>()
+            .add_systems(PreUpdate, crate::jason::read_struggle.after(bevy::input::InputSystems))
+            .add_systems(PostUpdate, give_items)
             .add_systems(Update, (hold_in_hand, start_action, block, toggle_map, follow_map).chain())
             .add_observer(wear_on_block)
-            .add_systems(FixedUpdate, (tick_action, fly, spring_traps).chain().after(crate::player::move_player));
+            .add_systems(FixedUpdate, (tick_action, fly, spring_traps, struggle_in_trap).chain().after(crate::player::move_player));
     }
 }
 
@@ -166,7 +176,7 @@ fn block(
     mut commands: Commands,
     mouse: Res<ButtonInput<MouseButton>>,
     interaction: Res<crate::interact::Interaction>,
-    player: Query<(Entity, &Player, &Inventory, Has<Blocking>, Has<ItemAction>, Has<crate::jason::Staggered>, Has<crate::jason::Held>), Without<crate::vehicle::Driving>>,
+    player: Query<(Entity, &Player, &Inventory, Has<Blocking>, Has<ItemAction>, Has<crate::jason::Staggered>, Has<crate::jason::Held>), (Without<crate::vehicle::Driving>, Without<Trapped>)>,
     items: Query<&Item>,
 ) {
     let Ok((pe, p, inv, blocking, acting, staggered, held)) = player.single() else { return };
@@ -207,8 +217,33 @@ struct Flare {
     hit: bool,
 }
 
+/// An armed bear trap; `clear` once the counselor isn't standing in it (she was when it was armed).
 #[derive(Component)]
-pub struct ArmedTrap;
+pub struct ArmedTrap {
+    clear: bool,
+}
+
+/// The counselor is caught in a bear trap.
+#[derive(Component)]
+pub struct Trapped {
+    left: bool,
+    enter: &'static str,
+    t: f32,
+    wiggle: f13_core::stun::Wiggle,
+    /// Seconds into stepping out, once free.
+    out: Option<f32>,
+}
+
+/// SCTrap: TrapDamage (constructor); the bear trap stun's minigame (TotalStunTime 10; PercentPerWiggle and
+/// DepletionRate from SCStunDamageType's constructor).
+const TRAP_DAMAGE: f32 = 50.0;
+const TRAP_STRUGGLE: f13_core::stun::WiggleTuning = f13_core::stun::WiggleTuning { total_time: 10.0, percent_per_wiggle: 5.0, depletion_rate: 0.02 };
+/// Her animations caught by the left / right foot: stepping in walking, running; the struggle; stepping out.
+const TRAP_WALK: [&str; 2] = ["f_normal_stand_trap_walk_enter_lf", "f_normal_stand_trap_walk_enter_rf"];
+const TRAP_RUN: [&str; 2] = ["f_normal_stand_trap_run_enter_lf", "f_normal_stand_trap_run_enter_rf"];
+const TRAP_CYCLE: [&str; 2] = ["f_normal_stand_trap_cycle_lf", "f_normal_stand_trap_cycle_rf"];
+const TRAP_EXIT: [&str; 2] = ["f_normal_stand_trap_exit_lf", "f_normal_stand_trap_exit_rf"];
+const DEATH: &str = "f_normal_stand_death_01";
 
 fn hold_in_hand(
     mut commands: Commands,
@@ -247,7 +282,7 @@ fn start_action(
     camera: Single<&PlayerCamera>,
     mut player: Query<
         (Entity, &Player, &Inventory, &mut Transform),
-        (Without<ItemAction>, Without<crate::interact::UsingItem>, Without<crate::jason::Held>, Without<crate::jason::Staggered>, Without<crate::vehicle::Driving>, Without<Blocking>),
+        (Without<ItemAction>, Without<crate::interact::UsingItem>, Without<crate::jason::Held>, Without<crate::jason::Staggered>, Without<crate::vehicle::Driving>, Without<Blocking>, Without<Trapped>),
     >,
     items: Query<&Item>,
 ) {
@@ -399,7 +434,7 @@ fn tick_action(
                 commands
                     .entity(a.item)
                     .remove::<(Carried, ChildOf, InHand, Item)>()
-                    .insert((ArmedTrap, Transform::from_translation(Vec3::new(at.x, y, at.z)).with_rotation(xf.rotation), Visibility::Inherited));
+                    .insert((ArmedTrap { clear: false }, Transform::from_translation(Vec3::new(at.x, y, at.z)).with_rotation(xf.rotation), Visibility::Inherited));
                 info!("bear trap armed at ({:.1}, {:.1}, {:.1})", at.x, y, at.z);
                 if let Ok(item) = items.get(a.item) {
                     commands.trigger(ClassScore::new(&item.class, "PlaceTrapScoreEvent"));
@@ -518,12 +553,43 @@ fn segment_hits_capsule(a: Vec3, b: Vec3, feet: Vec3) -> bool {
 }
 
 /// Jason stepping on an armed trap is caught (BearTrapLeftFootStun_C); the trap stays shut.
-fn spring_traps(mut commands: Commands, traps: Query<(Entity, &Transform), With<ArmedTrap>>, jasons: Query<(Entity, &Transform, &Jason)>, player: Query<&Transform, With<Player>>) {
-    for (te, txf) in &traps {
+#[allow(clippy::type_complexity)]
+fn spring_traps(
+    mut commands: Commands,
+    tuning: Res<crate::player::PlayerTuning>,
+    mut traps: Query<(Entity, &Transform, &mut ArmedTrap)>,
+    jasons: Query<(Entity, &Transform, &Jason)>,
+    mut player: Query<(Entity, &Transform, &mut Player, Has<Trapped>, Has<crate::jason::Held>, Has<crate::vehicle::Driving>, Option<&crate::hiding::Hiding>)>,
+) {
+    for (te, txf, mut trap) in &mut traps {
+        // Her stepping in.
+        if let Ok((pe, pxf, mut p, trapped, held, driving, hiding)) = player.single_mut() {
+            let d = Vec2::new(pxf.translation.x - txf.translation.x, pxf.translation.z - txf.translation.z);
+            let on = d.length() <= TRAP_RADIUS_M && (pxf.translation.y - txf.translation.y).abs() < 0.6;
+            if !on {
+                trap.clear = true;
+            } else if trap.clear && !trapped && !held && !driving && hiding.is_none() && p.counselor.alive() {
+                // Which foot: the side of her the trap is on.
+                let fwd = pxf.rotation * Vec3::Z;
+                let left = Vec2::new(fwd.x, fwd.z).perp_dot(-d) > 0.0;
+                let foot = if left { 0 } else { 1 };
+                let enter = if p.counselor.sprinting { TRAP_RUN[foot] } else { TRAP_WALK[foot] };
+                let r = p.counselor.take_damage(f13_core::health::Hit { amount: TRAP_DAMAGE, blocked_with_weapon: false }, &tuning.counselor);
+                info!("Vanessa stepped in a bear trap ({} foot): {:.0} damage (health {:.0})", if left { "left" } else { "right" }, r.dealt, p.counselor.health);
+                commands.entity(te).remove::<ArmedTrap>();
+                p.velocity = Vec2::ZERO;
+                if r.died {
+                    commands.entity(pe).insert(PlayAction(DEATH.into())).remove::<(Blocking, ItemAction)>();
+                } else {
+                    commands.entity(pe).insert((Trapped { left, enter, t: 0.0, wiggle: default(), out: None }, PlayAction(enter.into()))).remove::<(Blocking, ItemAction)>();
+                }
+                continue;
+            }
+        }
         for (je, jxf, j) in &jasons {
             let d = Vec2::new(jxf.translation.x - txf.translation.x, jxf.translation.z - txf.translation.z).length();
             if d < 2.0 {
-                trace!("trap: Jason {d:.2} m away ({:?}, dy {:.2}); she is {:.2} m from it", j.state, jxf.translation.y - txf.translation.y, player.iter().next().map_or(0.0, |p| p.translation.distance(txf.translation)));
+                trace!("trap: Jason {d:.2} m away ({:?}, dy {:.2}); she is {:.2} m from it", j.state, jxf.translation.y - txf.translation.y, player.iter().next().map_or(0.0, |p| p.1.translation.distance(txf.translation)));
             }
             if d <= TRAP_RADIUS_M && (jxf.translation.y - txf.translation.y).abs() < 0.6 && matches!(j.state, crate::jason::JasonState::Hunting) {
                 info!("Jason stepped in a bear trap");
@@ -531,6 +597,42 @@ fn spring_traps(mut commands: Commands, traps: Query<(Entity, &Transform), With<
                 commands.entity(te).remove::<ArmedTrap>();
             }
         }
+    }
+}
+
+/// Caught in a trap: the struggle's cycle while she wiggles (f13-core::stun), then stepping out.
+fn struggle_in_trap(
+    mut commands: Commands,
+    time: Res<Time>,
+    character: Option<Res<CounselorCharacter>>,
+    struggle: Res<crate::jason::Struggle>,
+    mut player: Query<(Entity, &mut Trapped, &Player)>,
+) {
+    let Ok((pe, mut tr, p)) = player.single_mut() else { return };
+    let dt = time.delta_secs();
+    let foot = if tr.left { 0 } else { 1 };
+    let len = |n: &str| character.as_ref().and_then(|c| c.length(n)).unwrap_or(2.0);
+    if !p.counselor.alive() {
+        commands.entity(pe).remove::<Trapped>();
+        return;
+    }
+    if let Some(out) = tr.out.as_mut() {
+        *out += dt;
+        if *out >= len(TRAP_EXIT[foot]) {
+            commands.entity(pe).remove::<(Trapped, PlayAction)>();
+        }
+        return;
+    }
+    let before = tr.t;
+    tr.t += dt;
+    let enter_len = len(tr.enter);
+    if before < enter_len && tr.t >= enter_len {
+        commands.entity(pe).insert(PlayAction(TRAP_CYCLE[foot].into()));
+    }
+    if tr.wiggle.tick(dt, struggle.input, &TRAP_STRUGGLE) {
+        info!("Vanessa: free of the trap after {:.1}s", tr.t);
+        tr.out = Some(0.0);
+        commands.entity(pe).insert(PlayAction(TRAP_EXIT[foot].into()));
     }
 }
 

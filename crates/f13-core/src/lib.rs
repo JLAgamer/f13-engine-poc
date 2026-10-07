@@ -21,6 +21,7 @@ pub mod recast;
 pub mod spawn;
 pub mod stats;
 pub mod stumble;
+pub mod stun;
 
 /// An animation montage the rules time an action by. `name` keys its root motion in the export's anims.json.
 #[derive(Clone, Debug, Default, PartialEq)]

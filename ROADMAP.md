@@ -50,7 +50,10 @@ Mechanics: counselor side
 - [x] Blocking with a weapon (items.rs): right mouse in combat stance; CanBlock's conditions; BlockingDamageMod and the
   weapon's BlockingWear on a blocked hit; the block idle and reaction animations (the idle replaces the combat idle
   rather than playing in an upper-body slot)
-- [ ] Combat, remaining: counselors caught in placed traps, Jason shaking off stuns, a heavy attack ending a block
+- [x] Counselors caught in armed bear traps (items.rs; their own too, as bCanArmerTrigger allows): TrapDamage, the
+  caught/struggle/exit animations by foot and gait, the game's stun minigame (f13-core::stun, also the grab struggle
+  now: the larger of time and a wiggle meter that drains)
+- [ ] Combat, remaining: Jason shaking off stuns, a heavy attack ending a block, the trap's own animations
 - [x] Ragdoll on death (f13-core::ragdoll, the physics asset's bodies against the world collision); in kills at the
   counselor montage's shouldRagdoll notify
 
