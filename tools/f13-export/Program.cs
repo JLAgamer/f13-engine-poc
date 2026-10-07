@@ -806,6 +806,8 @@ static class Mvp
         "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Doors/f_normal_stand_door_open_outside_forward",
         "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Doors/f_normal_stand_door_close_inside_forward",
         "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Doors/f_normal_stand_door_close_outside_forward",
+        "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Doors/f_normal_stand_door_lock",
+        "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Doors/f_normal_stand_door_unlock",
         $"{Shared}/Interaction/Doors/AM_OpenDoorInside",
         $"{Shared}/Interaction/Doors/AM_OpenDoorOutside",
         $"{Shared}/Interaction/Doors/AM_CloseDoorInsideForward",

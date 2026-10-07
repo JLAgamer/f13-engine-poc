@@ -177,6 +177,10 @@ fn window_moves(
     }
 }
 
+/// She's playing a door's lock or unlock take while she holds E on it.
+#[derive(Component)]
+pub struct LockAnim;
+
 /// Her take of a door montage: opening or closing, from inside or outside.
 fn door_anim(opening: bool, inside: bool) -> &'static str {
     match (opening, inside) {
@@ -488,14 +492,23 @@ fn act(
                 }
                 return;
             }
+            let barricaded_door = barricades.iter().any(|b| b.door == Some(d));
             if !keys.pressed(KeyCode::KeyE) || !hold {
-                interaction.hold = None;
+                if interaction.hold.take().is_some_and(|h| h.started) && !barricaded_door {
+                    commands.entity(player_entity).remove::<(LockAnim, crate::character::PlayAction)>();
+                }
                 return;
             }
             let h = interaction.hold.get_or_insert_with(|| HoldInteraction::new(door.hold_time, false));
             let mut events = Vec::new();
             h.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
+            // Locking or unlocking (not a barricade): her take while she holds.
+            if events.contains(&MinigameEvent::Started) && !barricaded_door {
+                let anim = if door.locked { "f_normal_stand_door_unlock" } else { "f_normal_stand_door_lock" };
+                commands.entity(player_entity).insert((LockAnim, crate::character::PlayAction(anim.into())));
+            }
             if events.contains(&MinigameEvent::Completed) {
+                commands.entity(player_entity).remove::<(LockAnim, crate::character::PlayAction)>();
                 let what = match barricades.iter_mut().find(|b| b.door == Some(d)) {
                     // A barricade only moves while the door is shut (OnUsedBarricade).
                     Some(mut b) if !door.open => {

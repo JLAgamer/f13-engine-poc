@@ -169,8 +169,9 @@ Presentation
 - [x] Window special moves: her open and close takes (the pane moving in the montage's WindowMoveDriver window),
       climbing through and diving (her take carries her across; a dive breaks the glass at its WindowBreakDriver
       and ends in the dive landing)
-- [ ] Special moves, remaining: door lock/unlock montages, the montages' own root motion (she's moved in a line
-      or stays in place)
+- [x] Door lock and unlock: her takes while she holds E
+- [ ] Special moves, remaining: the montages' own root motion (she's moved in a line or stays in place), the
+      barricade's
 - [x] Repair minigame dial UI: SCInteractMinigame_Widget (its progress circle filled clockwise, the needle turned, the
       pips as red arcs of its ring, the next pip's mouse button in the middle), for every hold interaction
 - [x] HUD (ui.rs): CounselorHUDWidget from its UMG tree (f13-data::umg lays it out as Slate does), the game's font
