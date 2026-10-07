@@ -203,9 +203,10 @@ impl HidingSpot {
             .unwrap_or(0)
     }
 
-    /// A component-space transform placed in the world (kept upright: characters stand on these).
+    /// A special move component's transform as a character's in the world: kept upright, and turned so the
+    /// character faces the component's forward (Unreal +X, Bevy +X; characters here face +Z).
     pub fn world(spot: &GlobalTransform, t: &Transform) -> Transform {
-        flat(spot.mul_transform(*t).compute_transform())
+        flat(spot.mul_transform(*t * Transform::from_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2))).compute_transform())
     }
 
     pub fn usable(&self) -> bool {

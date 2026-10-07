@@ -54,6 +54,8 @@ pub(crate) fn kill_camera(
     mut camera: Single<(&mut Transform, &mut Projection), With<PlayerCamera>>,
     windows: Query<&Window>,
     mut normal_fov: Local<Option<f32>>,
+    her: Query<&Transform, (With<crate::player::Player>, Without<PlayerCamera>)>,
+    (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
 ) {
     let (ref mut xf, ref mut proj) = *camera;
     let Projection::Perspective(persp) = &mut **proj else { return };
@@ -83,9 +85,26 @@ pub(crate) fn kill_camera(
     let local = Transform { translation: Vec3::from_array(local.translation), rotation: Quat::from_array(local.rotation), scale: Vec3::ONE };
     let world = k.origin.mul_transform(local);
     // The camera looks along Unreal +X (Bevy +X here); a Bevy camera looks along -Z.
-    xf.translation = world.translation;
     xf.rotation = world.rotation * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
+    let mut fov = p.fov;
+    xf.translation = match her.iter().next() {
+        Some(h) => trace(&collision.with(&dynamic), world.translation, world.rotation * Vec3::X, h.translation + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M, &mut fov),
+        None => world.translation,
+    };
     // Unreal's FieldOfView is horizontal.
     let aspect = windows.iter().next().map_or(16.0 / 9.0, |w| w.width() / w.height().max(1.0));
-    persp.fov = 2.0 * ((p.fov.to_radians() / 2.0).tan() / aspect).atan();
+    persp.fov = 2.0 * ((fov.to_radians() / 2.0).tan() / aspect).atan();
+}
+
+/// SCSplineCamera's CameraTrace (its tick, 0x140362f40): from the point it looks at, as far ahead as its focus (here
+/// the counselor) is, back to the camera; something in between pulls the camera to it (5 cm off the surface) and
+/// widens the field of view by the distance squared over the trace's length (cm), kept in 30..120 degrees.
+fn trace(world: &(impl f13_core::collision::TriSource + ?Sized), cam: Vec3, forward: Vec3, focus: Vec3, fov: &mut f32) -> Vec3 {
+    let len = cam.distance(focus);
+    let ahead = cam + forward * len;
+    let Some(f) = f13_core::collision::segment_hit(world, ahead, cam, 1.0) else { return cam };
+    let hit = ahead + (cam - ahead) * f;
+    let d = cam.distance(hit) * 100.0;
+    *fov = (*fov + d * d / (len * 100.0).max(1.0)).clamp(30.0, 120.0);
+    hit + forward * 0.05
 }

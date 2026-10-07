@@ -145,6 +145,8 @@ pub struct RepairPoint {
     pub has_pips: bool,
     /// Her take of its CounselorInteractAnim montage, without the section (`f_normal_stand_car_repair_gascan`).
     pub anim: Option<String>,
+    /// Where she stands for it (its SCSpecialMoveComponent, Bevy local; she faces its forward).
+    pub stand: Option<Transform>,
 }
 
 #[derive(Component, Debug)]
@@ -522,6 +524,7 @@ fn spawn_props(
                     done: false,
                     hold_time: c.props["HoldTimeLimit"].as_f64().map(|v| v as f32),
                     has_pips: c.props["Pips"].as_array().is_some_and(|p| !p.is_empty()),
+                    stand: info.components.iter().find(|s| s.parent.as_deref() == Some(c.name.as_str()) && classes.is_child_of(&s.kind, "SCSpecialMoveComponent")).map(local),
                     // Its CounselorInteractAnim (unset on the cars' repairs: AM_normal_stand_car_repair_<part> by the part).
                     anim: c.props["CounselorInteractAnim"].as_str().and_then(|s| s.split('\'').nth(1)).and_then(|m| m.strip_prefix("AM_")).map(|m| format!("f_{m}")).or_else(|| {
                         let parts = f13_data::level::str_list(&c.props["RequiredPartClasses"]);

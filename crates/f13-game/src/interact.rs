@@ -392,7 +392,7 @@ fn act(
     mut vehicles: Query<&mut Vehicle>,
     mut doors: Query<(&mut Door, &GlobalTransform)>,
     (windows, mut barricades): (Query<(&mut Window, &GlobalTransform)>, Query<&mut Barricade>),
-    (mut visibility, mut fuse_boxes, mut grids): (Query<&mut Visibility>, Query<&mut crate::power::FuseBox>, Option<ResMut<crate::power::PowerGrids>>),
+    (mut visibility, mut fuse_boxes, mut grids, vehicle_xfs): (Query<&mut Visibility>, Query<&mut crate::power::FuseBox>, Option<ResMut<crate::power::PowerGrids>>, Query<&GlobalTransform, With<Vehicle>>),
 ) {
     let Some(target) = interaction.target else { return };
     let (player_entity, ref mut player_xf, ref mut inv, ref mut p) = *player;
@@ -449,6 +449,13 @@ fn act(
                 match e {
                     MinigameEvent::Started => {
                         info!("repair started: {} pips, {:.1}s at x{:.2}", hold.pips.len(), hold.hold_time, tuning.minigame.speed_mod.value(&p.counselor.stats, false));
+                        // On its special move's spot, facing its forward (Unreal +X; she faces +Z), on her floor.
+                        if let (Some(stand), Ok(vxf)) = (r.stand, vehicle_xfs.get(v)) {
+                            let at = vxf.mul_transform(stand).compute_transform();
+                            let (yaw, _, _) = at.rotation.to_euler(EulerRot::YXZ);
+                            player_xf.translation = Vec3::new(at.translation.x, player_xf.translation.y, at.translation.z);
+                            player_xf.rotation = Quat::from_rotation_y(yaw + std::f32::consts::FRAC_PI_2);
+                        }
                         if let Some(base) = &r.anim {
                             commands.entity(player_entity).insert((RepairAnim { base: base.clone(), part: "start", t: 0.0 }, crate::character::PlayAction(format!("{base}_start"))));
                         }
