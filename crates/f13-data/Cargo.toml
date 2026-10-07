@@ -7,5 +7,6 @@ description = "Loads tuning.json (produced by tools/extract_tuning.py from your 
 
 [dependencies]
 f13-core = { path = "../f13-core" }
+glam = "0.32"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

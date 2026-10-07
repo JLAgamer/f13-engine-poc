@@ -268,6 +268,35 @@ void AddClassByName(string name)
 }
 
 // collision.json (see Collision.cs).
+// kill_cameras.json: each kill's camera spline (its SCCameraSplineComponent template's SplineCurves: Position, Rotation,
+// Scale (the handicam strength), FOVCurve, HoldTimeCurve, TimeToNextCurve as Unreal InterpCurve points; curves left at
+// their defaults are absent), by kill class.
+void WriteKillCameras()
+{
+    var all = new Newtonsoft.Json.Linq.JObject();
+    foreach (var path in Mvp.KillCameras)
+    {
+        var name = path.Split('/')[^1];
+        try
+        {
+            var spline = provider.LoadPackage(ToFile(path)).GetExports().FirstOrDefault(e => e.ExportType == "SCCameraSplineComponent");
+            var curves = spline == null ? null : Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(spline))["Properties"]?["SplineCurves"];
+            if (curves == null)
+            {
+                Console.WriteLine($"kill camera {name}: no spline");
+                continue;
+            }
+            all[name] = curves;
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine($"kill camera {name}: {e.Message}");
+        }
+    }
+    File.WriteAllText(Path.Combine(outDir!, "kill_cameras.json"), all.ToString(Newtonsoft.Json.Formatting.Indented));
+    Console.WriteLine($"kill_cameras.json: {all.Count} kills");
+}
+
 void WriteCollision()
 {
     var path = Path.Combine(outDir!, "collision.json");
@@ -433,6 +462,7 @@ switch (rest[0])
         new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims, Mvp.KeepRoot);
         new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, Mvp.KillerAnims, Mvp.KeepRoot);
         new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TrapMesh, Mvp.TrapAnims);
+        WriteKillCameras();
         WriteCollision();
         {
             var sx = new SoundExporter(provider, outDir, ToFile);
@@ -471,6 +501,9 @@ switch (rest[0])
     }
     case "killer": // the MVP Jason's parts, weapon and animations (and the meshes they need)
         new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, Mvp.KillerAnims, Mvp.KeepRoot);
+        break;
+    case "killcams": // the kills' camera splines (kill_cameras.json)
+        WriteKillCameras();
         break;
     case "props": // skeletal props' own animations (props/): the bear trap
         new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TrapMesh, Mvp.TrapAnims);
@@ -783,6 +816,8 @@ static class Mvp
     /// Animations that keep their root translation (played from a fixed spot: paired kills, hiding spots).
     public static string[] KeepRoot => [.. PairedKills, .. CounselorHiding, .. JasonHiding];
     public const string Killer = "/Game/Characters/Killers/Jason/J2/Jason_SackHead";
+    /// The kills whose cameras f13-game plays (kill_cameras.json).
+    public static readonly string[] KillCameras = ["/Game/Blueprints/ContextKills/Pickaxe_ThroatHack_GrabKill"];
     // Jason_AnimBP's BS_Jason_Normal_Move (SpeedState 0 idle, 1 walk, 2 fast walk, 3 run), the pickaxe's combat idle,
     // attacks (PickAxe's NeutralAttack and ForwardAttack), the grab, and the grab kill.
     /// The bear trap's own animations (BearTrap_C ArmedAnimation, TriggeredAnimation, EscapedAnimation; its idles).

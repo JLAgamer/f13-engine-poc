@@ -74,6 +74,8 @@ dotnet run --project tools/f13-export -- --game "<path to F13Game>" --out "<expo
   minigame widgets) as JSON (each widget's properties, slot and children; their textures as PNG; UI materials' texture
   samples and parameters), `textures.json` (the item icons the classes name) and the game's font (`fonts/`, its loose
   .ufont files). `tools/f13-export ... ui` writes just these.
+- `kill_cameras.json`: each kill's camera spline (its SCCameraSplineComponent's curves). `tools/f13-export ...
+  killcams` writes just this.
 - `props/`: skeletal props' own animations (the bear trap's), as `.anim` with an index per mesh. `tools/f13-export ...
   props` writes just these.
 - `anims.json`: length and root motion of the montages the rules use (dodges, stumbles); dodges and stumbles move

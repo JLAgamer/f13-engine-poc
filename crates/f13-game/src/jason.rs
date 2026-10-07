@@ -1518,7 +1518,7 @@ pub(crate) fn update_jason(
                 } else if at >= HOLD_BEFORE_KILL {
                     info!("Jason: Pickaxe Throat Hack");
                     j.state = JasonState::Killing { t: 0.0 };
-                    commands.entity(je).insert(PlayAction(KILL.into()));
+                    commands.entity(je).insert((PlayAction(KILL.into()), crate::kill_camera::KillCam::new(crate::kill_camera::KILL_CLASS, *xf)));
                     commands.entity(pe).insert(PlayAction(COUNSELOR_KILL.into()));
                 } else {
                     j.state = JasonState::Holding { t: at };

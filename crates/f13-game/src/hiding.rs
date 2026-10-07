@@ -446,7 +446,7 @@ fn update_hiding(
 }
 
 /// Inside: the spot's hiding camera, turned by the mouse within its limits.
-fn hiding_camera(
+pub(crate) fn hiding_camera(
     players: Query<&Hiding>,
     spots: Query<(&HidingSpot, &GlobalTransform)>,
     mut camera: Single<(&mut PlayerCamera, &mut Transform, &mut Projection), Without<Player>>,

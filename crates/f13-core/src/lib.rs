@@ -2,6 +2,7 @@
 //! loaded at runtime from the player's own install.
 
 pub mod breath;
+pub mod camera_spline;
 pub mod collision;
 pub mod counselor;
 pub mod curve;
