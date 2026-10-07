@@ -37,6 +37,7 @@ mod player;
 mod props;
 mod ragdoll;
 mod senses;
+mod ui;
 mod windows;
 mod vehicle;
 
@@ -393,6 +394,10 @@ fn main() {
         .add_plugins(lighting::LightingPlugin { flashlight: args.flashlight })
         .add_systems(Startup, spawn_level)
         .add_systems(PostUpdate, apply_placed.before(bevy::camera::visibility::VisibilitySystems::CheckVisibility));
+    // The counselor's HUD (embedded shader and UI material: after the asset and render plugins).
+    if !(args.fly || args.aerial) {
+        app.add_plugins(ui::UiPlugin);
+    }
     if args.perf {
         app.add_plugins(perf::PerfPlugin);
     }

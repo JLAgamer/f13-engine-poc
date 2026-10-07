@@ -137,7 +137,10 @@ Presentation
 - [ ] Special moves: door open/close/lock and window open/close/vault/dive montages (now a fixed 0.5 s, 90° door swing
       and instant vault/dive)
 - [ ] Repair minigame dial UI (now a text dial in the HUD)
-- [ ] HUD: health, stamina, fear and inventory (now debug text)
+- [x] HUD (ui.rs): CounselorHUDWidget from its UMG tree (f13-data::umg lays it out as Slate does), the game's font
+      and textures: timer, stamina ring (StaminaBarMaterial as a radial-fill UI material), inventory (item widgets
+      with their ImageOn icons, key numbers), breath bars while hiding; the game has no health or fear meter (F3:
+      debug text). Not yet: the minimap's map and icons, the noise meter, help texts, XP popups, ability widgets
 - [x] Night lighting, fog, flashlight (lighting.rs): the map's point/spot lights (inverse-square lumens, or Unreal's
   falloff-exponent lights matched at a third of their radius; colour temperature; draw-distance fades), the moon and
   height fog of the clear-weather level (CLsm_RainOff), the post-process volume's fixed exposure and ambient cubemap,

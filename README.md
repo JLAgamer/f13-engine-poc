@@ -70,6 +70,10 @@ dotnet run --project tools/f13-export -- --game "<path to F13Game>" --out "<expo
 - `sounds/`: the SoundCues f13-game plays (footsteps, and every cue the exported classes name) as node graphs (random, modulator, mixer, looping, attenuation...) with their
   waves decoded (Ogg Vorbis), and `footsteps.json`, the counselor's footstep sounds by surface, decoded from her
   animation Blueprint's script. `tools/f13-export ... sounds` writes just these.
+- `ui/`: the HUD's UMG widget trees (CounselorHUDWidget and the user widgets in it, the breath, inventory item and
+  minigame widgets) as JSON (each widget's properties, slot and children; their textures as PNG; UI materials' texture
+  samples and parameters), `textures.json` (the item icons the classes name) and the game's font (`fonts/`, its loose
+  .ufont files). `tools/f13-export ... ui` writes just these.
 - `anims.json`: length and root motion of the montages the rules use (dodges, stumbles); dodges and stumbles move
   the counselor by it, as the game's root motion does.
 - `classes.json`: Blueprint classes the match can spawn (cabinets, items, cars, doors...): parents, defaults and
@@ -89,7 +93,9 @@ cargo run -p f13-game --release -- --export "<export dir>"
 By default you play Vanessa, in her default outfit and animated (idle, walk/run/sprint, crouch, combat strafing,
 dodges, stumbles, first aid; `--capsule` for the old placeholder): WASD move (running by default), Shift sprint, Caps Lock toggle walk, Ctrl crouch, C combat stance (double-tap
 A/D/S to dodge), click to capture the mouse,
-Esc to release. The HUD shows health, stamina, fear and speed. `--demo` sprints in a straight line and logs stamina every second.
+Esc to release. The HUD is the game's own (its UMG widgets laid out as Slate does, in its textures and font): the
+match timer, the stamina ring, the pocket items and, while hiding, the breath bars; like the game it has no health or
+fear meter. F3 shows debug text instead (health, stamina, fear, speed, Jason's state). `--demo` sprints in a straight line and logs stamina every second.
 Counselors stumble as in the game (by fear, stamina and wounds). Fear comes from the game's fear events: darkness
 (out of reach of the map's lamps and cabin lights), being outdoors and alone, wounded, Jason near (by distance), Jason
 in view, grabbed, hiding (calms her) and holding a weapon; it raises stumbles and lets Jason's Sense reach further.

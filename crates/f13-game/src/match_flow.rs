@@ -254,9 +254,11 @@ fn update_hud(
     mut popups: Single<&mut Text, (With<ScorePopups>, Without<MatchClock>, Without<MatchOverlayText>)>,
     mut overlay: Single<(&mut Visibility, &mut BackgroundColor), With<MatchOverlay>>,
     mut overlay_text: Single<&mut Text, (With<MatchOverlayText>, Without<MatchClock>, Without<ScorePopups>)>,
+    game_hud: Option<Res<crate::ui::Hud>>,
 ) {
     let m = &game.state;
-    let clock_text = if m.state == MatchState::InProgress { format!("{}:{:02}", m.remaining_time / 60, m.remaining_time % 60) } else { String::new() };
+    // The game's HUD has its own timer (ui.rs).
+    let clock_text = if m.state == MatchState::InProgress && game_hud.is_none() { format!("{}:{:02}", m.remaining_time / 60, m.remaining_time % 60) } else { String::new() };
     if clock.0 != clock_text {
         clock.0 = clock_text;
     }

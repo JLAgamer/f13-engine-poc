@@ -49,7 +49,7 @@ pub struct Breathing {
 }
 
 #[derive(Resource)]
-struct BreathTuning(f13_core::breath::BreathTuning);
+pub(crate) struct BreathTuning(pub(crate) f13_core::breath::BreathTuning);
 
 /// Jason's weapon class: it picks the weapon-specific search and kill moves.
 pub const KILLER_WEAPON: &str = "PickAxe_C";

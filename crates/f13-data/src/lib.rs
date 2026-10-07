@@ -5,6 +5,7 @@ pub mod classes;
 pub mod collision;
 pub mod level;
 pub mod sound;
+pub mod umg;
 mod native_classes;
 pub mod world;
 

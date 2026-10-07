@@ -107,7 +107,8 @@ fn spawn_prompt(mut commands: Commands) {
     commands.spawn((
         Text::new(""),
         TextFont { font_size: FontSize::Px(18.0), ..default() },
-        Node { position_type: PositionType::Absolute, bottom: Val::Px(16.0), left: Val::Px(12.0), ..default() },
+        // Under the HUD's timer (the inventory takes the bottom left).
+        Node { position_type: PositionType::Absolute, top: Val::Percent(20.0), left: Val::Px(12.0), ..default() },
         PromptText,
     ));
 }

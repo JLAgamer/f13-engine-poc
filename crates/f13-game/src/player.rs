@@ -145,7 +145,7 @@ impl Plugin for PlayerPlugin {
             // that runs several fixed steps (low frame rate, --speed) doesn't repeat a key press.
             .add_systems(RunFixedMainLoop, read_intent.in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop))
             .add_systems(FixedUpdate, (update_counselor, move_player).chain())
-            .add_systems(Update, (tag_player_parts, grab_cursor, aim_demo, follow_camera, update_hud).chain());
+            .add_systems(Update, (tag_player_parts, grab_cursor, aim_demo, follow_camera, update_hud, toggle_debug_hud).chain());
     }
 }
 
@@ -194,6 +194,9 @@ fn spawn_player(
         Text::new(""),
         TextFont { font_size: FontSize::Px(18.0), ..default() },
         Node { position_type: PositionType::Absolute, top: Val::Px(12.0), left: Val::Px(12.0), ..default() },
+        // The game's HUD (ui.rs) shows; F3 shows this instead.
+        Visibility::Hidden,
+        GlobalZIndex(5),
         Hud,
     ));
 }
@@ -525,6 +528,14 @@ pub(crate) fn follow_camera(
         .map_or(max_distance, |(_, hit)| (hit.distance - 0.2).clamp(0.3, max_distance));
     xf.translation = target + back * distance;
     xf.look_at(target, Vec3::Y);
+}
+
+/// F3: the debug text (it shows when the game's HUD is missing).
+fn toggle_debug_hud(keys: Res<ButtonInput<KeyCode>>, game_hud: Option<Res<crate::ui::Hud>>, mut hud: Single<&mut Visibility, With<Hud>>) {
+    if keys.just_pressed(KeyCode::F3) || game_hud.is_none() {
+        let v = if game_hud.is_none() || **hud == Visibility::Hidden { Visibility::Inherited } else { Visibility::Hidden };
+        hud.set_if_neq(v);
+    }
 }
 
 fn update_hud(

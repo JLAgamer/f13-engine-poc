@@ -437,6 +437,12 @@ switch (rest[0])
             var sx = new SoundExporter(provider, outDir, ToFile);
             sx.Export(sx.FootstepTables().Concat(Mvp.Sounds).Concat(sx.ClassSounds()));
         }
+        {
+            var wx = new WidgetExporter(provider, outDir, Queue, ToFile);
+            foreach (var w in Mvp.Widgets) wx.Export(w);
+            wx.ClassTextures();
+            wx.Fonts(game!);
+        }
         break;
     case "sounds": // the sounds f13-game plays (sounds/): the counselor's footsteps, the classes' cues, Mvp.Sounds
     {
@@ -454,6 +460,14 @@ switch (rest[0])
     case "counselor": // the MVP counselor's parts and animations (and the meshes they need)
         new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims, Mvp.KeepRoot);
         break;
+    case "ui": // ui [widget...]: widget trees and their textures (default: Mvp.Widgets)
+    {
+        var wx = new WidgetExporter(provider, outDir, Queue, ToFile);
+        var n = 0;
+        foreach (var w in rest.Count > 1 ? rest.Skip(1) : Mvp.Widgets) n += wx.Export(w);
+        Console.WriteLine($"ui: {n} widgets, {wx.ClassTextures()} class textures, {wx.Fonts(game!)} fonts");
+        break;
+    }
     case "killer": // the MVP Jason's parts, weapon and animations (and the meshes they need)
         new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, Mvp.KillerAnims, Mvp.KeepRoot);
         break;
@@ -645,6 +659,16 @@ static class Mvp
         "/Game/Characters/Killers/Jason/Base/Animation/Abilities/AM_Jason_uber_stand_wall_smash_02",
     ];
     public const string Counselor = "/Game/Characters/Counselors/Athlete/Athlete_Counselor";
+    // Widgets f13-game draws: the counselor's HUD (with the widgets it nests) and the repair and struggle minigames.
+    public static readonly string[] Widgets =
+    [
+        "/Game/UI/HUD/Counselor/CounselorHUDWidget",
+        // Created at runtime: an inventory slot, the breath bar while hiding.
+        "/Game/UI/HUD/Counselor/SC_InventoryItem_Widget",
+        "/Game/UI/HUD/Counselor/SCBreathWidget",
+        "/Game/UI/Interact/SCInteractMinigame_Widget",
+        "/Game/UI/HUD/SC_WiggleMinigame_Widget",
+    ];
     // Sounds f13-game plays besides the footsteps (SoundCues or SoundWaves).
     public static readonly string[] Sounds = [];
     // Animations f13-game plays on the counselor: Athlete_AnimBP's female overrides of Base_Counselor_AnimBP's
