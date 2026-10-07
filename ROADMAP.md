@@ -43,8 +43,8 @@ Mechanics: counselor side
       Unreal's defaults (mass, final ratio, brakes, drag, steering curve); a reduced model of the PhysX vehicle (no
       sliding, grip-capped drive, revs follow the wheels)
 - [ ] Car handling, remaining: suspension, sliding, collisions' impulses
-      (the PhysX vehicle SDK is statically linked and stripped: its tire and drivetrain code wasn't found in the
-      binary; PhysX 3.4's published source would be the reference, pending a decision on downloading it)
+      (reference: PhysX 3.4's published vehicle source, downloaded to F13-decomp/ref with the user's OK; the game's
+      statically linked copy is stripped)
 - [x] Cabinets (drawers): search, items inside
 - [x] Doors: leaves exported and swinging on their pivot, open/close, lock/unlock by side (doors.rs; swing timing is a
   placeholder for the special-move montages)
@@ -156,7 +156,8 @@ Match
       (AM_Break_Phone_Box_Machete, PhoneBoxImpact): the phone dead, a call cut off, until it's repaired (its own minigame)
 - [ ] Police, remaining: the escape's camera spline, the phone box's broken mesh and lights, the computer Jason breaking
       boxes, the free-spot traces when he's turned back (PoliceStunTrace)
-- [ ] Match flow, remaining: lobby, level intro and outro sequences, the Tommy Jarvis timer, badges, Jason
+- [ ] Match flow, remaining: lobby, level intro and outro sequences, the Tommy Jarvis timer, badges (award sites and
+      classes read, see MODLOG; to show on the results), Jason
       dying
 - [x] Item and car spawning, as the game mode does it (f13-core::spawn, f13-data::world)
 - [x] How the game chooses one of the four cabin layouts per match: SCWorldSettings' RandomLevels, one picked at
