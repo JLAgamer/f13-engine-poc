@@ -34,6 +34,7 @@ mod navigation;
 mod perf;
 mod mipmaps;
 mod player;
+mod prop_anim;
 mod props;
 mod ragdoll;
 mod senses;
@@ -329,7 +330,7 @@ fn main() {
             .add_plugins(player::PlayerPlugin { spawn, capsule: args.capsule, camera: args.camera, demo: args.demo, fear: args.fear.unwrap_or(0.0), health: args.health })
             .add_plugins(fear_events::FearEventsPlugin { locked: args.fear })
             .add_plugins(match_flow::MatchPlugin { leave: !bot })
-            .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }, collision::CollisionPlugin, audio::AudioPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin, navigation::NavigationPlugin { debug: args.nav_debug }));
+            .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }, collision::CollisionPlugin, audio::AudioPlugin, prop_anim::PropAnimPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin, navigation::NavigationPlugin { debug: args.nav_debug }));
         if args.bot_escape {
             app.add_plugins(bot::BotPlugin(bot::Goal::Escape));
         } else if args.bot_heal {

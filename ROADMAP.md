@@ -56,7 +56,8 @@ Mechanics: counselor side
 - [x] Jason shaking off stuns: the stuns with a minigame (weapon, flare, shotgun, bear trap; their DepletionRate) run
   f13-core::stun for him too, the computer Jason wiggling every SCCharacterAIProperties' 0.15..0.2 s
 - [x] Jason's heavy attack (the pickaxe's ForwardAttack), used at a raised guard: it ends the block
-- [ ] Combat, remaining: the trap's own animations (sprung, opened)
+- [x] The bear trap's own animations (prop_anim.rs): shut while lying about or carried, opening as it's armed
+      (ArmedAnimation), snapping shut on a foot (TriggeredAnimation), opening as she steps out (EscapedAnimation)
 - [x] Ragdoll on death (f13-core::ragdoll, the physics asset's bodies against the world collision); in kills at the
   counselor montage's shouldRagdoll notify
 
@@ -77,7 +78,7 @@ Mechanics: Jason side
 - [x] Holding breath while hiding (f13-core::breath, hiding.rs): the breath meter's drain, refill, threshold and wait;
   her HoldBreath / HoldBreathEnd / KillerIsNearWhileHiding voice lines; Jason hears the last within its range
   (placeholder distance and repeat delay)
-- [ ] Jason AI, remaining: the grabbed counselor on his grab socket, kill cameras; playing as Jason
+- [ ] Jason AI, remaining: kill cameras; playing as Jason
 - [x] Shift, Morph, Stalk (f13-core::killer_moves, jason.rs): Shift's 0.7 s wind-up, ShiftSpeed and ShiftTime (J2:
   1000 cm/s, 4 s), ending in a grab; Stalk's StalkActiveTimer (IdleStalkModifier standing still); Morph to the
   nearest SCKillerMorphPoint within 30 m of the spot after TeleportScreenTime; the teleport fade (he's hidden below

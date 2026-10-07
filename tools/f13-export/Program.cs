@@ -432,6 +432,7 @@ switch (rest[0])
         AnimExporter.Write(provider, outDir, Mvp.Montages);
         new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims, Mvp.KeepRoot);
         new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, Mvp.KillerAnims, Mvp.KeepRoot);
+        new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TrapMesh, Mvp.TrapAnims);
         WriteCollision();
         {
             var sx = new SoundExporter(provider, outDir, ToFile);
@@ -470,6 +471,9 @@ switch (rest[0])
     }
     case "killer": // the MVP Jason's parts, weapon and animations (and the meshes they need)
         new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, Mvp.KillerAnims, Mvp.KeepRoot);
+        break;
+    case "props": // skeletal props' own animations (props/): the bear trap
+        new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TrapMesh, Mvp.TrapAnims);
         break;
     case "anims":
         AnimExporter.Write(provider, outDir, Mvp.Montages);
@@ -781,6 +785,17 @@ static class Mvp
     public const string Killer = "/Game/Characters/Killers/Jason/J2/Jason_SackHead";
     // Jason_AnimBP's BS_Jason_Normal_Move (SpeedState 0 idle, 1 walk, 2 fast walk, 3 run), the pickaxe's combat idle,
     // attacks (PickAxe's NeutralAttack and ForwardAttack), the grab, and the grab kill.
+    /// The bear trap's own animations (BearTrap_C ArmedAnimation, TriggeredAnimation, EscapedAnimation; its idles).
+    public const string TrapMesh = "/Game/Props/SkeletalMeshes/Traps/A_Trap_Bear_01";
+    public static readonly string[] TrapAnims =
+    [
+        "/Game/Props/SkeletalMeshes/Traps/Animation/A_Trap_Bear_01_Open_M",
+        "/Game/Props/SkeletalMeshes/Traps/Animation/A_Trap_Bear_01_Enter_01_Anim",
+        "/Game/Props/SkeletalMeshes/Traps/Animation/A_Trap_Bear_01_Exit_01_Anim",
+        "/Game/Props/SkeletalMeshes/Traps/Animation/A_Trap_Bear_01_Idle_01_Anim",
+        "/Game/Props/SkeletalMeshes/Traps/Animation/A_Trap_Bear_01_Close_Idle_01",
+    ];
+
     public static readonly string[] KillerAnims =
     [
         $"{JasonAnim}/normal_stand_idle_01",

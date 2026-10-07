@@ -236,6 +236,7 @@ const TRAP_MESH: &str = "SummerCamp/Content/Props/SkeletalMeshes/Traps/A_Trap_Be
 fn set_killer_trap(ev: On<SetKillerTrap>, mut commands: Commands, assets: Res<AssetServer>) {
     commands.spawn((
         ArmedTrap { clear: true, killer: true },
+        crate::prop_anim::PropAnim::new(crate::prop_anim::TRAP_ARMED),
         ev.0,
         Visibility::Inherited,
         bevy::world_serialization::WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(TRAP_MESH))),
@@ -245,6 +246,8 @@ fn set_killer_trap(ev: On<SetKillerTrap>, mut commands: Commands, assets: Res<As
 /// The counselor is caught in a bear trap.
 #[derive(Component)]
 pub struct Trapped {
+    /// The trap she's in (it opens as she steps out).
+    trap: Entity,
     left: bool,
     enter: &'static str,
     t: f32,
@@ -453,7 +456,7 @@ fn tick_action(
                 commands
                     .entity(a.item)
                     .remove::<(Carried, ChildOf, InHand, Item)>()
-                    .insert((ArmedTrap { clear: false, killer: false }, Transform::from_translation(Vec3::new(at.x, y, at.z)).with_rotation(xf.rotation), Visibility::Inherited));
+                    .insert((ArmedTrap { clear: false, killer: false }, crate::prop_anim::PropAnim::new(crate::prop_anim::TRAP_ARMED), Transform::from_translation(Vec3::new(at.x, y, at.z)).with_rotation(xf.rotation), Visibility::Inherited));
                 info!("bear trap armed at ({:.1}, {:.1}, {:.1})", at.x, y, at.z);
                 if let Ok(item) = items.get(a.item) {
                     commands.trigger(ClassScore::new(&item.class, "PlaceTrapScoreEvent"));
@@ -595,12 +598,12 @@ fn spring_traps(
                 let enter = if p.counselor.sprinting { TRAP_RUN[foot] } else { TRAP_WALK[foot] };
                 let r = p.counselor.take_damage(f13_core::health::Hit { amount: TRAP_DAMAGE, blocked_with_weapon: false }, &tuning.counselor);
                 info!("Vanessa stepped in a bear trap ({} foot): {:.0} damage (health {:.0})", if left { "left" } else { "right" }, r.dealt, p.counselor.health);
-                commands.entity(te).remove::<ArmedTrap>();
+                commands.entity(te).remove::<ArmedTrap>().insert(crate::prop_anim::PropAnim::new(crate::prop_anim::TRAP_SPRUNG));
                 p.velocity = Vec2::ZERO;
                 if r.died {
                     commands.entity(pe).insert(PlayAction(DEATH.into())).remove::<(Blocking, ItemAction)>();
                 } else {
-                    commands.entity(pe).insert((Trapped { left, enter, t: 0.0, wiggle: default(), out: None }, PlayAction(enter.into()))).remove::<(Blocking, ItemAction)>();
+                    commands.entity(pe).insert((Trapped { trap: te, left, enter, t: 0.0, wiggle: default(), out: None }, PlayAction(enter.into()))).remove::<(Blocking, ItemAction)>();
                 }
                 continue;
             }
@@ -613,7 +616,7 @@ fn spring_traps(
             if d <= TRAP_RADIUS_M && (jxf.translation.y - txf.translation.y).abs() < 0.6 && matches!(j.state, crate::jason::JasonState::Hunting) {
                 info!("Jason stepped in a bear trap");
                 commands.entity(je).insert(HitJason { stun: Some(Stun::BearTrap), from: txf.translation });
-                commands.entity(te).remove::<ArmedTrap>();
+                commands.entity(te).remove::<ArmedTrap>().insert(crate::prop_anim::PropAnim::new(crate::prop_anim::TRAP_SPRUNG));
             }
         }
     }
@@ -652,6 +655,9 @@ fn struggle_in_trap(
         info!("Vanessa: free of the trap after {:.1}s", tr.t);
         tr.out = Some(0.0);
         commands.entity(pe).insert(PlayAction(TRAP_EXIT[foot].into()));
+        if let Ok(mut t) = commands.get_entity(tr.trap) {
+            t.insert(crate::prop_anim::PropAnim::new(crate::prop_anim::TRAP_ESCAPED));
+        }
     }
 }
 
