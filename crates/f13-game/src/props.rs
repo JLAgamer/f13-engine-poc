@@ -21,6 +21,8 @@ pub struct Item {
     pub kind: ItemKind,
     /// The counselor's socket it's held by (`HandAttachSocket`, else SCItem's WeaponSocket).
     pub hand_socket: String,
+    /// The cue it makes when put down (DroppedSoundCue).
+    pub drop_cue: Option<String>,
 }
 
 /// What an item does (by its native class).
@@ -476,6 +478,8 @@ fn spawn_props(
                 reach: interact.map_or(150.0, |c| reach(c, 150.0)),
                 kind: ItemKind::of(&classes, &actor.class),
                 hand_socket: classes.prop(&actor.class, "HandAttachSocket").as_str().filter(|s| *s != "None").unwrap_or("WeaponSocket").to_string(),
+                // A soft reference: "/Game/Sounds/ItemDrops/Name.Name".
+                drop_cue: classes.prop(&actor.class, "DroppedSoundCue")["AssetPathName"].as_str().and_then(|p| p.rsplit('.').next()).map(String::from),
             });
             *item_classes.entry(actor.class.clone()).or_default() += 1;
             *counts.entry(if actor.kind == Some(SpawnKind::RepairPart) { "repair parts" } else { "items" }).or_default() += 1;

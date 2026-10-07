@@ -187,7 +187,8 @@ Presentation
   Jason's near music (NearCounselorMusic by distance, silenced by Stalk); the counselor's music (MusicCounselor:
   MatchStart, CounselorIdle after each track, the two-minute warning, death and survival music; fades); Jason's
   footsteps (Jason_AnimBP's tables, a step each half of his locomotion cycle); her landing (GetLandingSound, down
-  from a fall) and wading steps (GetFootstepInWater: shallow or deep). Remaining: stingers, the ability-unlock warning, scary sounds, items, car,
+  from a fall) and wading steps (GetFootstepInWater: shallow or deep); items put down (DroppedSoundCue); the car's
+  key turning and engine running (EngineStartCue, EngineCue, on the car). Remaining: stingers, the ability-unlock warning, scary sounds, items, car,
   voices, ambience
 
 Setup

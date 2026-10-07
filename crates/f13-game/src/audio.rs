@@ -51,7 +51,9 @@ impl Plugin for AudioPlugin {
             .add_systems(Update, (add_listener, attenuate, actor_sounds, counselor_music, near_music, fades).chain())
             .add_observer(play_sound)
             .add_observer(footstep)
-            .add_observer(actor_sound);
+            .add_observer(actor_sound)
+            .add_observer(actor_loop)
+            .add_observer(dropped);
     }
 }
 
@@ -71,6 +73,48 @@ pub fn cue_name(v: &serde_json::Value) -> Option<String> {
     let s = v.as_str()?;
     let rest = s.strip_prefix("SoundCue'").or_else(|| s.strip_prefix("SoundWave'"))?;
     Some(rest.trim_end_matches('\'').to_string())
+}
+
+/// Keep playing the cue `actor`'s class names under `prop` on it (a car's engine): its voices follow the actor.
+#[derive(Event, Clone, Copy, Debug)]
+pub struct ActorLoop {
+    pub actor: Entity,
+    pub prop: &'static str,
+}
+
+/// An item put down (its class's DroppedSoundCue, where it lands).
+#[derive(Event, Clone, Copy, Debug)]
+pub struct Dropped {
+    pub item: Entity,
+    pub at: Vec3,
+}
+
+fn dropped(ev: On<Dropped>, mut commands: Commands, items: Query<&crate::props::Item>) {
+    if let Some(cue) = items.get(ev.item).ok().and_then(|i| i.drop_cue.clone()) {
+        commands.trigger(PlaySound { cue, at: Some(ev.at) });
+    }
+}
+
+fn actor_loop(
+    ev: On<ActorLoop>,
+    mut commands: Commands,
+    assets: Res<AssetServer>,
+    sounds: Option<ResMut<Sounds>>,
+    mut rng: ResMut<crate::GameRng>,
+    actors: Query<&ClassSounds>,
+) {
+    let (Some(mut sounds), Ok(s)) = (sounds, actors.get(ev.actor)) else { return };
+    let Some(cue) = s.0.get(ev.prop).and_then(|c| sounds.cue(c).cloned()) else { return };
+    trace!("loop {} on {}", ev.prop, ev.actor);
+    let (voices, att) = cue.play(&mut || rng.0.frand());
+    for v in voices {
+        let settings = PlaybackSettings { mode: PlaybackMode::Loop, speed: v.pitch, volume: Volume::Linear(v.volume), ..PlaybackSettings::LOOP };
+        let source = AudioPlayer::new(assets.load(format!("sounds/{}", v.file)));
+        let mut e = commands.spawn((source, settings, Transform::from_translation(Vec3::Y), ChildOf(ev.actor)));
+        if let Some(att) = att.clone().filter(|a| a.attenuate || a.spatialize) {
+            e.insert((PlaybackSettings { spatial: att.spatialize, spatial_scale: Some(SpatialScale::new(SPATIAL_SCALE)), ..settings }, Emitter { volume: v.volume, attenuation: att }));
+        }
+    }
 }
 
 /// Play the cue `actor`'s class names under `prop`, at the actor.
@@ -485,6 +529,7 @@ fn play_sound(
 ) {
     let Some(mut sounds) = sounds else { return };
     let Some(cue) = sounds.cue(&ev.cue).cloned() else { return };
+    trace!("play {} at {:?}", ev.cue, ev.at);
     let (voices, att) = cue.play(&mut || rng.0.frand());
     let ear = listener_position(&listener);
     for v in voices {

@@ -586,6 +586,7 @@ fn drop_at(commands: &mut Commands, visibility: &mut Query<&mut Visibility>, ite
     let forward = player.rotation * Vec3::Z;
     let at = player.translation + forward * 0.5 + Vec3::Y * 0.05;
     commands.entity(item).remove::<(Carried, ChildOf, crate::items::InHand)>().insert(Transform::from_translation(at));
+    commands.trigger(crate::audio::Dropped { item, at });
     if let Ok(mut v) = visibility.get_mut(item) {
         *v = Visibility::Inherited;
     }

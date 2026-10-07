@@ -93,6 +93,9 @@ fn drive(
             }
             v.started = true;
             info!("{} started after holding {:.1}s", v.class, hold.timer);
+            // The key turning, then the engine running (EngineStartCue, EngineCue).
+            commands.trigger(crate::audio::ActorSound { actor: player.vehicle, prop: "EngineStartCue" });
+            commands.trigger(crate::audio::ActorLoop { actor: player.vehicle, prop: "EngineCue" });
         }
         return;
     }
