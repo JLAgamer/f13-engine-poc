@@ -112,6 +112,8 @@ const NECK_GRAB_SOCKET: &str = "NeckGrabSocket";
 const GRAB_HOLD_M: f32 = 0.65;
 /// Seconds Jason holds a grabbed counselor before the kill (a player's choice in the game).
 const HOLD_BEFORE_KILL: f32 = 4.0;
+/// NearCounselorMusicDistance + its max-volume distance (m): how near a Morph must land for her stinger.
+const NEAR_MUSIC_M: f32 = 43.0;
 /// SCDriveableVehicle constructor: MinUseCarDoorSpeed (cm/s).
 const MIN_USE_CAR_DOOR_SPEED: f32 = 50.0;
 /// How near the driver door he pulls her out (m; the special move moves him onto its spot).
@@ -1478,6 +1480,10 @@ pub(crate) fn update_jason(
                 if at >= t.teleport_screen_time {
                     info!("Jason: morphed to ({:.0}, {:.0})", dest.translation.x, dest.translation.z);
                     *xf = dest;
+                    // Arriving within his near music's reach of her: her stinger.
+                    if dest.translation.distance(pxf.translation) < NEAR_MUSIC_M {
+                        commands.trigger(crate::audio::MusicStinger("JasonTeleportedNearStinger"));
+                    }
                     j.path.clear();
                     j.progress = (dest.translation, 0.0);
                     j.stall = 0.0;
@@ -1654,8 +1660,10 @@ pub(crate) fn update_jason(
                         hit = true;
                         if w.damage(t.world_damage, &mut commands) {
                             info!("Jason: broke through the wall");
+                            commands.trigger(crate::audio::ActorSound { actor: we, prop: "WallDestroySoundCue" });
                         } else {
                             info!("Jason: hit the wall ({:.0} left)", w.health);
+                            commands.trigger(crate::audio::ActorSound { actor: we, prop: "WallHitSoundCue" });
                         }
                     }
                 }

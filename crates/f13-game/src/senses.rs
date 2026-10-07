@@ -147,6 +147,7 @@ fn blocked(world: &(impl f13_core::collision::TriSource + ?Sized), a: Vec3, b: V
 
 #[allow(clippy::too_many_arguments)]
 fn perceive(
+    mut commands: Commands,
     time: Res<Time>,
     values: Option<Res<SenseValues>>,
     mut rng: ResMut<crate::GameRng>,
@@ -167,7 +168,11 @@ fn perceive(
         k.abilities.update(dt, true, &blockers, &mut events);
         for e in events {
             match e {
-                AbilityEvent::Unlocked(a) => info!("Jason: {a:?} unlocked"),
+                AbilityEvent::Unlocked(a) => {
+                    info!("Jason: {a:?} unlocked");
+                    // Counselors hear it (their music object's JasonAbilityUnlockWarning).
+                    commands.trigger(crate::audio::MusicStinger("JasonAbilityUnlockWarning"));
+                }
                 AbilityEvent::RageActivated => info!("Jason: rage"),
                 AbilityEvent::RequestRageFromServer => {}
             }

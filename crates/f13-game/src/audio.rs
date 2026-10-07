@@ -20,8 +20,10 @@
 //! The counselor's music (SCMusicComponent::PlayMusic with Athlete's MusicObjectClass, MusicCounselor): a track starts
 //! at once, or fades the playing one out over its FadeOutTime and fades in over FadeInTime; a finished track is
 //! followed by CounselorIdle after MinIdleMusicTime..MaxIdleMusicTime. MatchStart plays when the match starts; the
-//! TwoMinuteWarningMusic at two minutes left; DeathMusic when she dies, SurviveMusic when she escapes. Not yet:
-//! stingers, the ability-unlock warning, scary sounds.
+//! TwoMinuteWarningMusic at two minutes left; DeathMusic when she dies, SurviveMusic when she escapes. Stingers
+//! ([`MusicStinger`]: a STINGER entry's cue over the music): JasonTeleportedNearStinger when he Morphs in within his
+//! near music's reach (NearCounselorMusicDistance; PLACEHOLDER rule). JasonAbilityUnlockWarning when he unlocks an
+//! ability. Not yet: the other stingers' triggers (OpenDoorStinger, SeeCounselorDeadBody), scary sounds.
 //!
 //! PLACEHOLDERS: the listener is the camera; Delay and Concatenator nodes play their first child at once; actor sounds
 //! play 1 m above the actor's origin (the game plays them from the actor or its audio components).
@@ -53,6 +55,7 @@ impl Plugin for AudioPlugin {
             .add_observer(footstep)
             .add_observer(actor_sound)
             .add_observer(actor_loop)
+            .add_observer(music_stinger)
             .add_observer(dropped);
     }
 }
@@ -202,6 +205,29 @@ fn fades(mut commands: Commands, time: Res<Time>, mut players: Query<(Entity, &m
         if f.despawn && f.level <= 0.0 {
             commands.entity(e).despawn();
         }
+    }
+}
+
+/// A music event for the counselor: a STINGER entry of her MusicData (its cue played over the music), or one of her
+/// music object's own cues (`JasonAbilityUnlockWarning`).
+#[derive(Event, Clone, Copy, Debug)]
+pub struct MusicStinger(pub &'static str);
+
+fn music_stinger(
+    ev: On<MusicStinger>,
+    mut commands: Commands,
+    assets: Res<AssetServer>,
+    sounds: Option<ResMut<Sounds>>,
+    counselor: Option<Res<crate::character::CounselorCharacter>>,
+    mut rng: ResMut<crate::GameRng>,
+) {
+    let (Some(mut sounds), Some(counselor)) = (sounds, counselor) else { return };
+    let music = &counselor.info.music;
+    let entry = music["MusicData"].as_array().into_iter().flatten().find(|d| d["EventName"] == ev.0);
+    let cue = entry.map_or_else(|| cue_name(&music[ev.0]), |e| cue_name(&e["MusicTrack"]));
+    if let Some(cue) = cue {
+        spawn_2d(&mut commands, &assets, &mut sounds, &mut rng, &cue, false, 1.0);
+        info!("music: {}", ev.0);
     }
 }
 

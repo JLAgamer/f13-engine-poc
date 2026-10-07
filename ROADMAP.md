@@ -188,8 +188,9 @@ Presentation
   MatchStart, CounselorIdle after each track, the two-minute warning, death and survival music; fades); Jason's
   footsteps (Jason_AnimBP's tables, a step each half of his locomotion cycle); her landing (GetLandingSound, down
   from a fall) and wading steps (GetFootstepInWater: shallow or deep); items put down (DroppedSoundCue); the car's
-  key turning and engine running (EngineStartCue, EngineCue, on the car). Remaining: stingers, the ability-unlock warning, scary sounds, items, car,
-  voices, ambience
+  key turning and engine running (EngineStartCue, EngineCue, on the car); walls' hit and break cues; the
+  ability-unlock warning (KiKiKiMaMaMa) and JasonTeleportedNearStinger. Remaining: the other stingers, scary
+  sounds, item use sounds, the car's brakes and horn, voices, ambience
 
 Setup
 - [x] Tools refuse a packed (stock) install with a clear message; they need the content extracted to loose files
