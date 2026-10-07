@@ -431,6 +431,12 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         foreach (var (name, fallback) in new[] { ("ShiftSpeed", 0f), ("ShiftTime", 0f), ("StalkActiveTime", 20f), ("IdleStalkModifier", 0.1f),
                      ("TeleportScreenTime", 1f) })
             values[name] = ClassValue<float?>(cls, name) ?? fallback;
+        // His kit (constructor: NumKnives none, InitialTrapCount 5, TrapPlacementDistance 75, ThrowingKnifeCooldown
+        // 3.5); the knife's WeaponStats.Damage.
+        foreach (var (name, fallback) in new[] { ("NumKnives", 0f), ("InitialTrapCount", 5f), ("TrapPlacementDistance", 75f), ("ThrowingKnifeCooldown", 3.5f) })
+            values[name] = ClassValue<object>(cls, name) switch { int i => i, float f => f, _ => fallback };
+        if (ClassValue<FPackageIndex>(cls, "ThrowingKnifeClass")?.Load<UStruct>() is { } knife)
+            values["ThrowingKnifeDamage"] = ClassValue<FStructFallback>(knife, "WeaponStats")?.GetOrDefault<float>("Damage") ?? 0;
         // The music counselors hear near him (NearCounselorMusic: full volume within NearCounselorMusicMaxVolumeDistance,
         // fading out over NearCounselorMusicDistance beyond it; constructor 300 and 4000).
         foreach (var (name, fallback) in new[] { ("NearCounselorMusicDistance", 4000f), ("NearCounselorMusicMaxVolumeDistance", 300f) })

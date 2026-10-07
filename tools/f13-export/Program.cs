@@ -783,6 +783,9 @@ static class Mvp
         $"{JasonStun}/HitReaction/AM_combat_stand_hit_reaction_front",
         $"{JasonStun}/HitReaction/AM_combat_stand_hit_reaction_back",
         $"{JasonAnim}/Interaction/Beartrap/AM_Jason_BearTrap_LF",
+        // His kit: throwing a knife (ThrowKnife) and setting a trap (PlaceTrapMontage).
+        $"{JasonAnim}/Interaction/AM_normal_stand_knife_throw",
+        $"{JasonAnim}/Interaction/AM_normal_stand_trap_set",
         // Doors: Jason_OpenDoorInside / Jason_OpenDoorOutside, and the pickaxe's break down (Jason_BreakDoor_Axe:
         // Enter, Loop, Success, Abort sections).
         $"{JasonAnim}/Interaction/Doors/AM_normal_stand_door_open_inside",

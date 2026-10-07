@@ -54,7 +54,7 @@ Mechanics: counselor side
   caught/struggle/exit animations by foot and gait, the game's stun minigame (f13-core::stun, also the grab struggle
   now: the larger of time and a wiggle meter that drains)
 - [x] Jason shaking off stuns: the stuns with a minigame (weapon, flare, shotgun, bear trap; their DepletionRate) run
-  f13-core::stun for him too, the computer Jason mashing at the most the game counts (10 a second)
+  f13-core::stun for him too, the computer Jason wiggling every SCCharacterAIProperties' 0.15..0.2 s
 - [x] Jason's heavy attack (the pickaxe's ForwardAttack), used at a raised guard: it ends the block
 - [ ] Combat, remaining: the trap's own animations (sprung, opened)
 - [x] Ragdoll on death (f13-core::ragdoll, the physics asset's bodies against the world collision); in kills at the
@@ -83,8 +83,11 @@ Mechanics: Jason side
   nearest SCKillerMorphPoint within 30 m of the spot after TeleportScreenTime; the teleport fade (he's hidden below
   half). When the computer Jason uses them is a placeholder. Not yet: the dissolve and screen effects, Stalk's and
   Shift's sounds and music, Morph's excluded areas
-- [ ] More kills, throwing knives
-- [ ] Breaking walls, generators; traps
+- [x] Throwing knives (J2's two, the knife's damage and cooldown, the throw montage and its ThrowKnife notify,
+  SCJasonAIProperties' 5..25 m; placeholder knife speed) and Jason's traps (J2's seven KillerTraps, set in doorways
+  he opens; they catch counselors, not him; his trap's own mesh isn't exported)
+- [ ] More kills; knife pickups
+- [ ] Breaking walls, generators
 - [ ] Car interactions: stopping and grabbing out of the car
 
 Match

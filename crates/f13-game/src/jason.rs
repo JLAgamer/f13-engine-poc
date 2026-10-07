@@ -31,7 +31,16 @@
 //! grabbed counselor [`HOLD_BEFORE_KILL`] seconds before killing her. Paths come from f13-core::nav over the
 //! collision (the game uses Recast). The grabbed counselor is placed as SCCounselorCharacter::UpdateGrabTransform
 //! does (see [`place_held`]). No character-to-character collision. Stuns with a minigame (weapon, flare, shotgun,
-//! bear trap) he shakes off with f13-core::stun, mashing at the most the game counts.
+//! bear trap) he shakes off with f13-core::stun, wiggling every SCCharacterAIProperties' Min..MaxWiggleInterval.
+//!
+//! His kit: throwing knives (J2's NumKnives 2; the knife's 30 damage; ThrowingKnifeCooldown 3.5 s; the
+//! AM_normal_stand_knife_throw montage's select, aim and throw sections, the knife leaving at its ThrowKnife notify;
+//! SCJasonAIProperties' Min/MaxThrowingKnifeDistance 5..25 m for when the computer Jason throws) and traps (J2's
+//! InitialTrapCount 7; KillerTrap_C: armed at once, not triggered by him, not picked up; set TrapPlacementDistance
+//! 75 cm in front of him with AM_normal_stand_trap_set). PLACEHOLDERS: the knife's speed ([`KNIFE_SPEED`]; the
+//! knife Blueprint sets it) with its ProjectileGravityScale 8, aimed to arc onto her chest; how long he aims
+//! ([`KNIFE_AIM_SECONDS`]); he sets a trap in a doorway he has just opened when he isn't after her and has none of his
+//! within [`TRAP_SPACING_M`]; his trap looks like the counselors' bear trap (A_Trap_Jason isn't exported).
 //!
 //! Shift, Morph and Stalk run as the game runs them (f13-core::killer_moves; J2's ShiftSpeed 1000 cm/s and ShiftTime
 //! 4 s, StalkActiveTime, IdleStalkModifier, TeleportScreenTime; the map's SCKillerMorphPoints), once his abilities
@@ -114,6 +123,21 @@ const UNREACHABLE_RADIUS_M: f32 = 5.0;
 /// AI choices (not the game's): Shift at her from this far (m); Morph to a clue or hiding spot this far away (m);
 /// Stalk when closing on one this near (m).
 const SHIFT_RANGE_M: (f32, f32) = (6.0, 30.0);
+/// SCJasonAIProperties (constructor): Min/MaxThrowingKnifeDistance (m).
+const KNIFE_RANGE_M: (f32, f32) = (5.0, 25.0);
+/// PLACEHOLDERS (see the module docs): the knife's speed (m/s), how long he aims, his traps' spacing (m).
+const KNIFE_SPEED: f32 = 40.0;
+const KNIFE_AIM_SECONDS: f32 = 0.6;
+const TRAP_SPACING_M: f32 = 10.0;
+/// ThrowingKnife_C's ProjectileGravityScale; SCThrowable's TimeToDestroy (s).
+const KNIFE_GRAVITY: f32 = 9.8 * 8.0;
+const KNIFE_LIFE: f32 = 5.0;
+/// AM_normal_stand_knife_throw's sections; when the knife leaves (s into the throw section: its ThrowKnife notify).
+const KNIFE_SELECT: &str = "normal_stand_knife_select_01";
+const KNIFE_AIM: &str = "normal_stand_knife_aim_01";
+const KNIFE_THROW: &str = "normal_stand_knife_throw_01";
+/// AM_normal_stand_trap_set.
+const TRAP_SET: &str = "normal_stand_trap_set";
 const MORPH_MIN_M: f32 = 50.0;
 const STALK_RANGE_M: f32 = 40.0;
 /// He starts a hiding spot's search or kill this close (m) to its spot.
@@ -138,7 +162,8 @@ impl Plugin for JasonPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(JasonConfig { delay: self.delay })
             .add_systems(Startup, spawn_jason)
-            .add_systems(FixedUpdate, (update_jason, recover_counselor))
+            .add_systems(FixedUpdate, (update_jason, recover_counselor, fly_knives))
+            .add_observer(spawn_knife)
             .add_systems(Update, (tag_jason_parts, animate_jason));
     }
 }
@@ -167,6 +192,12 @@ pub struct KillerTuning {
     /// The heavy swing's (ForwardAttack) length and AttackTraceNotify window.
     pub heavy_length: f32,
     pub heavy_window: (f32, f32),
+    /// Knives he starts with, their cooldown (s) and damage; traps he starts with, set this far in front (m).
+    pub num_knives: u32,
+    pub knife_cooldown: f32,
+    pub knife_damage: f32,
+    pub trap_count: u32,
+    pub trap_placement_m: f32,
     /// Shift's max speed (cm/s) and length (s); Stalk's length and idle rate; Morph's delay (s).
     pub shift_speed: f32,
     pub shift_time: f32,
@@ -199,6 +230,11 @@ impl KillerTuning {
             attack_window: attack.and_then(|a| a.window("AttackTraceNotify")).unwrap_or((0.2, 0.5)),
             heavy_length: info.animations.get(HEAVY_ATTACK).map_or(1.2, |a| a.length),
             heavy_window: info.animations.get(HEAVY_ATTACK).and_then(|a| a.window("AttackTraceNotify")).unwrap_or((0.3, 0.6)),
+            num_knives: v("NumKnives", 0.0) as u32,
+            knife_cooldown: v("ThrowingKnifeCooldown", 3.5),
+            knife_damage: v("ThrowingKnifeDamage", 30.0),
+            trap_count: v("InitialTrapCount", 5.0) as u32,
+            trap_placement_m: v("TrapPlacementDistance", 75.0) / CM,
             shift_speed: v("ShiftSpeed", 1000.0),
             shift_time: v("ShiftTime", 4.0),
             stalk_active_time: v("StalkActiveTime", 20.0),
@@ -238,6 +274,10 @@ pub enum JasonState {
     Shifting { shift: Shift },
     /// Morphing: s into it, and where he'll be.
     Morphing { t: f32, to: Transform },
+    /// Throwing a knife: s into it, and whether it has left his hand.
+    Throwing { t: f32, thrown: bool },
+    /// Setting a trap: s into it.
+    PlacingTrap { t: f32 },
     /// The counselor is dead.
     Done,
 }
@@ -279,11 +319,18 @@ pub struct Jason {
     next_log: f32,
     pub stalk: Option<Stalk>,
     pub fade: TeleportFade,
+    /// Knives and traps left; the knife cooldown; where his traps are.
+    pub knives: u32,
+    pub traps: u32,
+    knife_cooldown: f32,
+    trap_spots: Vec<Vec3>,
     /// Hidden by the fade.
     faded: bool,
     /// The stun minigame, and when he got out of it (s into the stun).
     stun_wiggle: f13_core::stun::Wiggle,
     stun_done: Option<f32>,
+    /// The AI's wiggle axis and when it flips next (s into the stun).
+    next_wiggle: (f32, f32),
 }
 
 impl Jason {
@@ -410,6 +457,134 @@ impl Stun {
     }
 }
 
+/// A knife leaves Jason's hand (`fly_knives` takes it from there).
+#[derive(Event, Clone, Copy, Debug)]
+pub struct ThrowKnife {
+    pub from: Vec3,
+    pub vel: Vec3,
+    pub damage: f32,
+}
+
+/// A thrown knife: its velocity, age, damage; stuck once it hits something.
+#[derive(Component)]
+struct Knife {
+    vel: Vec3,
+    age: f32,
+    damage: f32,
+    stuck: bool,
+}
+
+/// The velocity that arcs a knife from `from` onto `to` at [`KNIFE_SPEED`] under its gravity (the low arc); straight
+/// at it when it's out of reach.
+fn knife_velocity(from: Vec3, to: Vec3) -> Vec3 {
+    let d = to - from;
+    let flat = Vec2::new(d.x, d.z);
+    let x = flat.length().max(1e-3);
+    let (v, g, y) = (KNIFE_SPEED, KNIFE_GRAVITY, d.y);
+    let disc = v.powi(4) - g * (g * x * x + 2.0 * y * v * v);
+    if disc < 0.0 {
+        return d.normalize_or_zero() * v;
+    }
+    let angle = ((v * v - disc.sqrt()) / (g * x)).atan();
+    let h = flat / x * v * angle.cos();
+    Vec3::new(h.x, v * angle.sin(), h.y)
+}
+
+fn spawn_knife(ev: On<ThrowKnife>, mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+    // PLACEHOLDER look: a thin blade (the knife's mesh isn't exported).
+    let mesh = meshes.add(Cuboid::new(0.03, 0.01, 0.3));
+    let material = materials.add(StandardMaterial { base_color: Color::srgb(0.55, 0.55, 0.6), metallic: 0.8, perceptual_roughness: 0.3, ..default() });
+    commands.spawn((
+        Mesh3d(mesh),
+        MeshMaterial3d(material),
+        Transform::from_translation(ev.from).looking_to(ev.vel.normalize_or(Vec3::Z), Vec3::Y),
+        Knife { vel: ev.vel, age: 0.0, damage: ev.damage, stuck: false },
+    ));
+}
+
+/// Knives fly (ProjectileGravityScale 8), hit her (its damage, a hit reaction) or stick in what they hit, and go after
+/// TimeToDestroy.
+#[allow(clippy::type_complexity)]
+fn fly_knives(
+    mut commands: Commands,
+    time: Res<Time>,
+    ptuning: Res<PlayerTuning>,
+    counselor_model: Option<Res<crate::character::CounselorCharacter>>,
+    (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
+    mut knives: Query<(Entity, &mut Knife, &mut Transform), Without<Player>>,
+    mut players: Query<(Entity, &mut Player, &Transform)>,
+) {
+    let dt = time.delta_secs();
+    let world = collision.with(&dynamic);
+    for (ke, mut k, mut xf) in &mut knives {
+        k.age += dt;
+        if k.age >= KNIFE_LIFE {
+            commands.entity(ke).despawn();
+            continue;
+        }
+        if k.stuck {
+            continue;
+        }
+        k.vel.y -= KNIFE_GRAVITY * dt;
+        let from = xf.translation;
+        let to = from + k.vel * dt;
+        // Her: the segment passing within her capsule (a 0.3 m radius around her from her feet to 1.8 m).
+        if let Ok((pe, mut p, pxf)) = players.single_mut() {
+            let (a, b) = (pxf.translation + Vec3::Y * 0.3, pxf.translation + Vec3::Y * 1.5);
+            if p.counselor.alive() && segment_distance(from, to, a, b) < 0.35 {
+                let r = p.counselor.take_damage(Hit { amount: k.damage, blocked_with_weapon: false }, &ptuning.counselor);
+                info!("Jason's knife hit Vanessa for {:.0} (health {:.0})", r.dealt, p.counselor.health);
+                if r.died {
+                    commands.entity(pe).insert(PlayAction(DEATH.into())).remove::<(Staggered, crate::items::ItemAction)>();
+                } else {
+                    let reaction = hit_reaction(pxf, from);
+                    let len = counselor_model.as_ref().and_then(|c| c.length(reaction)).unwrap_or(0.67);
+                    commands.entity(pe).insert((PlayAction(reaction.into()), Staggered(len))).remove::<crate::items::ItemAction>();
+                }
+                commands.entity(ke).despawn();
+                continue;
+            }
+        }
+        if let Some(f) = f13_core::collision::segment_hit(&world, from, to, 1.0) {
+            xf.translation = from + (to - from) * f;
+            k.stuck = true;
+            continue;
+        }
+        xf.translation = to;
+        xf.look_to(k.vel.normalize_or(Vec3::Z), Vec3::Y);
+    }
+}
+
+/// The closest distance between segments p0..p1 and q0..q1.
+fn segment_distance(p0: Vec3, p1: Vec3, q0: Vec3, q1: Vec3) -> f32 {
+    let (d1, d2, r) = (p1 - p0, q1 - q0, p0 - q0);
+    let (a, e, f) = (d1.dot(d1), d2.dot(d2), d2.dot(r));
+    let (s, t) = if a <= 1e-9 && e <= 1e-9 {
+        (0.0, 0.0)
+    } else if a <= 1e-9 {
+        (0.0, (f / e).clamp(0.0, 1.0))
+    } else {
+        let c = d1.dot(r);
+        if e <= 1e-9 {
+            ((-c / a).clamp(0.0, 1.0), 0.0)
+        } else {
+            let b = d1.dot(d2);
+            let denom = a * e - b * b;
+            let mut s = if denom > 1e-9 { ((b * f - c * e) / denom).clamp(0.0, 1.0) } else { 0.0 };
+            let mut t = (b * s + f) / e;
+            if t < 0.0 {
+                t = 0.0;
+                s = (-c / a).clamp(0.0, 1.0);
+            } else if t > 1.0 {
+                t = 1.0;
+                s = ((b - c) / a).clamp(0.0, 1.0);
+            }
+            (s, t)
+        }
+    };
+    (p0 + d1 * s).distance(q0 + d2 * t)
+}
+
 /// A counselor's item hit Jason (items.rs): `stun` if it stunned him, else he flinches.
 #[derive(Component, Clone, Debug)]
 pub struct HitJason {
@@ -423,8 +598,8 @@ pub struct Struggle {
     pub input: f32,
     pub wiggle: f13_core::stun::Wiggle,
 }
-/// AI choice: how fast he mashes out of a stun with a minigame (the most the game counts, MaxWigglesPerSecond).
-const JASON_WIGGLES_PER_SECOND: f32 = 10.0;
+/// SCCharacterAIProperties (constructor): an AI character wiggles every Min..MaxWiggleInterval seconds.
+const AI_WIGGLE_INTERVAL: (f32, f32) = (0.15, 0.2);
 /// SCCharacter InvulnerableStunDuration (constructor): no new stun this long after one ends.
 const STUN_IMMUNE_SECONDS: f32 = 3.0;
 const FLINCH_FRONT: &str = "combat_stand_hit_reaction_front";
@@ -514,9 +689,14 @@ fn spawn_jason(
                 next_log: 0.0,
                 stalk: None,
                 fade: TeleportFade::default(),
+                knives: tuning.num_knives,
+                traps: tuning.trap_count,
+                knife_cooldown: 0.0,
+                trap_spots: Vec::new(),
                 faded: false,
                 stun_wiggle: default(),
                 stun_done: None,
+                next_wiggle: (-1.0, 0.0),
             },
             Transform { translation: feet, rotation, ..default() },
             Visibility::default(),
@@ -698,6 +878,7 @@ pub(crate) fn update_jason(
     let Ok((pe, mut p, mut pxf, driving, mut hiding, blocking)) = players.single_mut() else { return };
     for (je, mut j, mut xf, hit, mut know) in &mut jasons {
         j.stun_immune = (j.stun_immune - dt).max(0.0);
+        j.knife_cooldown = (j.knife_cooldown - dt).max(0.0);
         // Stalk runs down (slower standing still); the teleport effect fades him while he shifts or morphs.
         let moving = j.velocity.length_squared() > 0.0;
         if let Some(s) = j.stalk.as_mut() {
@@ -733,6 +914,8 @@ pub(crate) fn update_jason(
                         | JasonState::BreakingDoor { .. }
                         | JasonState::BurstingDoor { .. }
                         | JasonState::Shifting { .. }
+                        | JasonState::Throwing { .. }
+                        | JasonState::PlacingTrap { .. }
                 );
             match h.stun {
                 Some(stun) if can_stun => {
@@ -921,6 +1104,14 @@ pub(crate) fn update_jason(
                     info!("Jason: Stalk ({gdist:.0} m to his goal)");
                     j.stalk = Some(Stalk::start(t.stalk_active_time));
                 }
+                // A knife at her when she's in throwing range.
+                if sees && !driving && alive && j.knives > 0 && j.knife_cooldown <= 0.0 && (KNIFE_RANGE_M.0..=KNIFE_RANGE_M.1).contains(&dist) {
+                    info!("Jason: throwing a knife ({dist:.0} m, {} left)", j.knives);
+                    j.state = JasonState::Throwing { t: 0.0, thrown: false };
+                    j.velocity = Vec2::ZERO;
+                    commands.entity(je).insert(PlayAction(KNIFE_SELECT.into()));
+                    continue;
+                }
                 if sees && !driving && j.cooldown <= 0.0 {
                     // Going for a grab, he swings instead when she's inside the grab's minimum distance (else he'd
                     // stand there); going for a swing, he closes to swing range.
@@ -1034,6 +1225,52 @@ pub(crate) fn update_jason(
                     }
                 }
             }
+            JasonState::Throwing { t: at, thrown } => {
+                let at = at + dt;
+                walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(flat), dt, &t, &world);
+                let len = |n: &str, d: f32| killer.length(n).unwrap_or(d);
+                let aim_at = len(KNIFE_SELECT, 0.37);
+                let throw_at = aim_at + KNIFE_AIM_SECONDS;
+                let release = throw_at + 0.18f32.min(len(KNIFE_THROW, 0.72));
+                let end = throw_at + len(KNIFE_THROW, 0.72);
+                let anim = if at < aim_at { KNIFE_SELECT } else if at < throw_at { KNIFE_AIM } else { KNIFE_THROW };
+                commands.entity(je).insert(PlayAction(anim.into()));
+                let mut thrown = thrown;
+                if !thrown && at >= release {
+                    thrown = true;
+                    j.knives -= 1;
+                    j.knife_cooldown = t.knife_cooldown;
+                    let yaw = yaw_of(xf.rotation);
+                    let from = xf.translation + Vec3::Y * 1.6 + Vec3::new(yaw.sin(), 0.0, yaw.cos()) * 0.5;
+                    let target = pxf.translation + Vec3::Y * 1.2;
+                    commands.trigger(ThrowKnife { from, vel: knife_velocity(from, target), damage: t.knife_damage });
+                }
+                if at >= end {
+                    j.state = JasonState::Hunting;
+                    j.cooldown = t.attack_delay;
+                    commands.entity(je).remove::<PlayAction>();
+                } else {
+                    j.state = JasonState::Throwing { t: at, thrown };
+                }
+            }
+            JasonState::PlacingTrap { t: at } => {
+                let at = at + dt;
+                j.velocity = Vec2::ZERO;
+                if at >= killer.length(TRAP_SET).unwrap_or(2.47) {
+                    let yaw = yaw_of(xf.rotation);
+                    let at_pos = xf.translation + Vec3::new(yaw.sin(), 0.0, yaw.cos()) * t.trap_placement_m;
+                    let floor = f13_core::collision::surface_below(&world, at_pos.x, at_pos.z, at_pos.y + 0.5, at_pos.y - 2.0).map_or(at_pos.y, |s| s.0);
+                    let spot = Vec3::new(at_pos.x, floor, at_pos.z);
+                    j.traps -= 1;
+                    j.trap_spots.push(spot);
+                    commands.trigger(crate::items::SetKillerTrap(Transform::from_translation(spot).with_rotation(xf.rotation)));
+                    info!("Jason: trap set at ({:.1}, {:.1})", spot.x, spot.z);
+                    j.state = JasonState::Hunting;
+                    commands.entity(je).remove::<PlayAction>();
+                } else {
+                    j.state = JasonState::PlacingTrap { t: at };
+                }
+            }
             JasonState::Morphing { t: at, to: dest } => {
                 let at = at + dt;
                 j.velocity = Vec2::ZERO;
@@ -1110,6 +1347,14 @@ pub(crate) fn update_jason(
                 if at >= killer.length(anim).unwrap_or(1.6) {
                     j.state = JasonState::Hunting;
                     commands.entity(je).remove::<PlayAction>();
+                    // A trap in the doorway when he isn't after her and has none of his near.
+                    let sees = know.as_ref().is_some_and(|k| k.sees);
+                    let here = xf.translation;
+                    if !sees && j.traps > 0 && j.trap_spots.iter().all(|s| s.distance(here) > TRAP_SPACING_M) && killer.info.animations.contains_key(TRAP_SET) {
+                        info!("Jason: setting a trap in the doorway ({} left)", j.traps);
+                        j.state = JasonState::PlacingTrap { t: 0.0 };
+                        commands.entity(je).insert(PlayAction(TRAP_SET.into()));
+                    }
                 } else {
                     j.state = JasonState::OpeningDoor { door: de, t: at, anim };
                 }
@@ -1311,12 +1556,17 @@ pub(crate) fn update_jason(
                 if at == 0.0 {
                     j.stun_wiggle = default();
                     j.stun_done = None;
+                    j.next_wiggle = (-1.0, 0.0);
                 }
                 let at = at + dt;
                 walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, None, dt, &t, &world);
                 // Shaking it off: the AI wiggles at a steady rate (the axis flips every 1 / rate s).
                 if let (Some(game), None) = (stun.minigame(), j.stun_done) {
-                    let input = if ((at * JASON_WIGGLES_PER_SECOND) as i32) % 2 == 0 { -1.0 } else { 1.0 };
+                    // The axis flips every AI wiggle interval.
+                    if at >= j.next_wiggle.1 {
+                        j.next_wiggle = (-j.next_wiggle.0, at + AI_WIGGLE_INTERVAL.0 + (AI_WIGGLE_INTERVAL.1 - AI_WIGGLE_INTERVAL.0) * rng.0.frand());
+                    }
+                    let input = j.next_wiggle.0;
                     if j.stun_wiggle.tick(dt, input, &game) {
                         info!("Jason: shook off the stun after {at:.1}s");
                         j.stun_done = Some(at);

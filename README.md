@@ -134,7 +134,9 @@ searches the hiding spots around there. His other abilities work as the game's:
 - Shift (136 s in) winds up for 0.7 s, then he rushes at you, unseen, at 10 m/s for up to 4 s, and grabs you
   out of it.
 
-When he uses them is the computer player's choice. He finds his way on a navmesh built at load time from the map's collision
+When he uses them is the computer player's choice. He carries Part 2's kit: two throwing knives (30 damage each,
+thrown from 5 to 25 m, 3.5 s apart) and seven traps, which he sets in doorways and which catch you but not him.
+He finds his way on a navmesh built at load time from the map's collision
 with the game's own settings, like the game's runtime navmesh (about 4 s in the background; the HUD shows its
 progress, and `--nav-debug` draws it around you).
 `--no-jason` leaves him out, `--jason-delay s` gives you a head start, and `--bot-jason` waits to be killed

@@ -74,6 +74,7 @@ impl Plugin for ItemsPlugin {
             .add_systems(PostUpdate, give_items)
             .add_systems(Update, (hold_in_hand, start_action, block, toggle_map, follow_map).chain())
             .add_observer(wear_on_block)
+            .add_observer(set_killer_trap)
             .add_systems(FixedUpdate, (tick_action, fly, spring_traps, struggle_in_trap).chain().after(crate::player::move_player));
     }
 }
@@ -217,10 +218,28 @@ struct Flare {
     hit: bool,
 }
 
-/// An armed bear trap; `clear` once the counselor isn't standing in it (she was when it was armed).
+/// An armed bear trap; `clear` once the counselor isn't standing in it (she was when it was armed); `killer`: Jason's
+/// (KillerTrap_C: bCanArmerTrigger false, so it doesn't catch him).
 #[derive(Component)]
 pub struct ArmedTrap {
     clear: bool,
+    pub killer: bool,
+}
+
+/// Jason sets a trap here (jason.rs).
+#[derive(Event, Clone, Copy, Debug)]
+pub struct SetKillerTrap(pub Transform);
+
+/// The counselors' bear trap mesh, standing in for Jason's (A_Trap_Jason isn't exported).
+const TRAP_MESH: &str = "SummerCamp/Content/Props/SkeletalMeshes/Traps/A_Trap_Bear_01.glb";
+
+fn set_killer_trap(ev: On<SetKillerTrap>, mut commands: Commands, assets: Res<AssetServer>) {
+    commands.spawn((
+        ArmedTrap { clear: true, killer: true },
+        ev.0,
+        Visibility::Inherited,
+        bevy::world_serialization::WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(TRAP_MESH))),
+    ));
 }
 
 /// The counselor is caught in a bear trap.
@@ -434,7 +453,7 @@ fn tick_action(
                 commands
                     .entity(a.item)
                     .remove::<(Carried, ChildOf, InHand, Item)>()
-                    .insert((ArmedTrap { clear: false }, Transform::from_translation(Vec3::new(at.x, y, at.z)).with_rotation(xf.rotation), Visibility::Inherited));
+                    .insert((ArmedTrap { clear: false, killer: false }, Transform::from_translation(Vec3::new(at.x, y, at.z)).with_rotation(xf.rotation), Visibility::Inherited));
                 info!("bear trap armed at ({:.1}, {:.1}, {:.1})", at.x, y, at.z);
                 if let Ok(item) = items.get(a.item) {
                     commands.trigger(ClassScore::new(&item.class, "PlaceTrapScoreEvent"));
@@ -586,7 +605,7 @@ fn spring_traps(
                 continue;
             }
         }
-        for (je, jxf, j) in &jasons {
+        for (je, jxf, j) in jasons.iter().filter(|_| !trap.killer) {
             let d = Vec2::new(jxf.translation.x - txf.translation.x, jxf.translation.z - txf.translation.z).length();
             if d < 2.0 {
                 trace!("trap: Jason {d:.2} m away ({:?}, dy {:.2}); she is {:.2} m from it", j.state, jxf.translation.y - txf.translation.y, player.iter().next().map_or(0.0, |p| p.1.translation.distance(txf.translation)));
