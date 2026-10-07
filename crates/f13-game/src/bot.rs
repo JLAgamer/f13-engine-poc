@@ -257,7 +257,7 @@ fn run_bot(
         Option<Res<crate::match_flow::GameMatch>>,
         Query<&Transform, (With<crate::items::ArmedTrap>, Without<Player>, Without<Vehicle>)>,
     ),
-    mut exit: MessageWriter<AppExit>,
+    (mut exit, play): (MessageWriter<AppExit>, Option<Res<crate::jason_player::PlayJason>>),
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
 ) {
     let world = collision.with(&dynamic);
@@ -276,7 +276,12 @@ fn run_bot(
     let limit = if with_jason { 600.0 } else { 240.0 };
     if bot.total > limit && bot.step != Step::Done {
         error!("bot: gave up at {:?}", bot.step);
-        exit.write(AppExit::error());
+        // Playing Jason against it: it stops, the game goes on.
+        if play.is_some() {
+            bot.step = Step::Done;
+        } else {
+            exit.write(AppExit::error());
+        }
         return;
     }
     let (ref mut pxf, p, inv, driving, using, (held, acting, staggered, blocking, trapped, breathing), ref mut hiding) = *player;
@@ -1128,6 +1133,10 @@ fn run_bot(
             }
         }
         Step::Done => {
+            // Playing Jason against it: no photographs or verdict, the game goes on.
+            if play.is_some() {
+                return;
+            }
             // After a death, let the ragdoll settle and photograph it from above.
             // The ragdoll taking over from the kill's last frame, then settled, from above.
             if bot.goal == Goal::Jason && !p.counselor.alive() {

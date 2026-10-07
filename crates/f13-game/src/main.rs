@@ -27,6 +27,7 @@ mod interact;
 mod hiding;
 mod host;
 mod items;
+mod jason_player;
 mod kill_camera;
 mod jason;
 mod lighting;
@@ -84,6 +85,10 @@ struct Args {
     bot_raged: bool,
     /// Log frame time, entity counts and GPU pass times every few seconds.
     perf: bool,
+    /// Play Jason (jason_player.rs); a bot plays the counselor.
+    play_jason: bool,
+    /// Scripted Jason input (testing --play-jason).
+    play_jason_demo: bool,
     /// Take the host's commands on this localhost port (host.rs, `f13-host`).
     host: Option<u16>,
     give: Vec<String>,
@@ -136,6 +141,8 @@ fn parse_args() -> Args {
     let mut bot_locked_in = None;
     let mut bot_raged = false;
     let mut perf = false;
+    let mut play_jason = false;
+    let mut play_jason_demo = false;
     let mut host = None;
     let mut give = Vec::new();
     let mut no_jason = false;
@@ -183,6 +190,8 @@ fn parse_args() -> Args {
                 bot_raged = true;
             }
             "--perf" => perf = true,
+            "--play-jason" => play_jason = true,
+            "--play-jason-demo" => (play_jason, play_jason_demo) = (true, true),
             "--host" => host = Some(host.unwrap_or(f13_host_port())),
             "--host-port" => host = it.next().and_then(|v| v.parse().ok()).or(host),
             "--give" => give = it.next().map(|v| v.split(',').map(String::from).collect()).unwrap_or_default(),
@@ -229,7 +238,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight }
+    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight }
 }
 
 #[derive(Resource)]
@@ -346,9 +355,11 @@ fn main() {
             .insert_resource(senses::KillerAbilityTuning(tuning.jason.clone()))
             .add_plugins(player::PlayerPlugin { spawn, capsule: args.capsule, camera: args.camera, demo: args.demo, fear: args.fear.unwrap_or(0.0), health: args.health })
             .add_plugins(fear_events::FearEventsPlugin { locked: args.fear })
-            .add_plugins(match_flow::MatchPlugin { leave: !bot })
+            // Playing Jason, the bot playing her doesn't decide when the run ends.
+            .add_plugins(match_flow::MatchPlugin { leave: !bot || args.play_jason })
             .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }, collision::CollisionPlugin, audio::AudioPlugin, water::WaterPlugin, kill_camera::KillCameraPlugin, prop_anim::PropAnimPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin, navigation::NavigationPlugin { debug: args.nav_debug }));
-        if args.bot_escape {
+        // Playing Jason without a --bot-*: the escape bot plays her (the scripted Jason's test leaves her idle).
+        if args.bot_escape || (args.play_jason && !bot && !args.play_jason_demo) {
             app.add_plugins(bot::BotPlugin(bot::Goal::Escape));
         } else if args.bot_heal {
             app.add_plugins(bot::BotPlugin(bot::Goal::Heal));
@@ -413,8 +424,12 @@ fn main() {
         .add_systems(Startup, spawn_level)
         .add_systems(PostUpdate, apply_placed.before(bevy::camera::visibility::VisibilitySystems::CheckVisibility));
     // The counselor's HUD (embedded shader and UI material: after the asset and render plugins).
-    if !(args.fly || args.aerial) {
+    if !(args.fly || args.aerial) && !args.play_jason {
         app.add_plugins(ui::UiPlugin);
+    }
+    // Playing Jason (its input comes off the raw events, before the input plugin's systems).
+    if args.play_jason && !(args.fly || args.aerial) {
+        app.add_plugins(jason_player::PlayJasonPlugin { demo: args.play_jason_demo });
     }
     if let Some(port) = args.host.filter(|_| !(args.fly || args.aerial)) {
         app.add_plugins(host::HostPlugin { port });

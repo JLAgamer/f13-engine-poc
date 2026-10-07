@@ -6,7 +6,7 @@
 //! - `teleport counselor|jason <x> <y> <z>`: moves them (Bevy metres; she's put on the floor under the point)
 //! - `start`: starts the match now (from waiting); `end`: ends it now (to the outro, with the end-of-match awards)
 //! - `kick`: the counselor leaves (the game closes; it's single-player)
-//! - `jason`: making the player Jason (not yet: there's no playable Jason)
+//! - `jason`: making the player Jason mid-match (not yet: start the game with `--play-jason`)
 
 use crate::jason::Jason;
 use crate::player::{Player, Unsettled};
@@ -128,7 +128,7 @@ fn serve(
                 exit.write(AppExit::Success);
                 "kicked: the game closes".into()
             }
-            ["jason"] => "not yet: Jason isn't playable".into(),
+            ["jason"] => "not yet mid-match: start the game with --play-jason".into(),
             _ => "commands: status, give <Class>, teleport counselor|jason <x> <y> <z>, start, end, kick, jason".into(),
         };
         info!("host: {line} -> {answer}");

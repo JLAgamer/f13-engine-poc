@@ -84,7 +84,10 @@ Mechanics: Jason side
 - [x] Kill cameras (f13-core::camera_spline, kill_camera.rs): SCSplineCamera riding the kill's camera spline
       (holds, times to the next point, Unreal InterpCurves, field of view, the handicam shake) in the kill's space.
       Not ported: its trace in front of walls, blending back
-- [ ] Jason AI, remaining: playing as Jason
+- [x] Playing as Jason (`--play-jason`, jason_player.rs): walk, run, look; swing, heavy swing, grab and kill, knives
+      where he looks, traps, Shift, Morph (the point nearest 30 m ahead), Stalk; doors as he walks into them; his
+      camera; the escape bot plays the counselor. Not yet: Jason's HUD (KillerHUDWidget), Sense on demand, the map
+      for Morph, choosing kills
 - [x] Shift, Morph, Stalk (f13-core::killer_moves, jason.rs): Shift's 0.7 s wind-up, ShiftSpeed and ShiftTime (J2:
   1000 cm/s, 4 s), ending in a grab; Stalk's StalkActiveTimer (IdleStalkModifier standing still); Morph to the
   nearest SCKillerMorphPoint within 30 m of the spot after TeleportScreenTime; the teleport fade (he's hidden below
@@ -111,7 +114,7 @@ Match
 Host CLI (`f13-host`; f13-game `--host`, host.rs: line commands on 127.0.0.1)
 - [x] Spawn items (`give <Class>`: one of the match's items of the class into her hands or pockets)
 - [x] Teleport players (`teleport counselor|jason x y z`)
-- [ ] Make a player Jason, live in game (needs a playable Jason)
+- [ ] Make a player Jason, live in game (`--play-jason` at start for now)
 - [x] Force start and end matches (`start`, `end`), `status`
 - [x] Kick players (`kick`: single-player, so the game closes)
 

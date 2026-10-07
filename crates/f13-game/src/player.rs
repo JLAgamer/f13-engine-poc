@@ -540,6 +540,7 @@ pub(crate) fn follow_camera(
     vehicle_parts: Query<(), With<crate::props::VehiclePart>>,
     ragdolls: Query<&crate::ragdoll::Ragdolled>,
     jason_parts: Query<(), With<crate::jason::JasonPart>>,
+    play_jason: Option<Res<crate::jason_player::PlayJason>>,
 ) {
     let (player, driving) = *player;
     // Dead: the camera follows the body.
@@ -553,7 +554,8 @@ pub(crate) fn follow_camera(
     }
     let max_distance = if driving { CAR_CAMERA_DISTANCE_M } else { CAMERA_DISTANCE_M };
     let (ref mut cam, ref mut xf) = *camera;
-    if cursor.grab_mode == CursorGrabMode::Locked {
+    // Playing Jason, the mouse turns his view (jason_player.rs), not hers.
+    if cursor.grab_mode == CursorGrabMode::Locked && play_jason.is_none() {
         cam.yaw -= motion.delta.x * 0.003;
         cam.pitch = (cam.pitch - motion.delta.y * 0.003).clamp(-1.2, 0.8);
     }

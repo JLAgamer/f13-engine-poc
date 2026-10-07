@@ -203,6 +203,10 @@ For screenshots: `--screenshot out.png` (after loading; `--screenshot-after s` w
 x,y,z,tx,ty,tz` (eye and look-at, relative to her feet), `--pose <animation>@<seconds>` (holds her in one animation).
 `--speed x` runs the game clock faster (bots included; 4 keeps every result the same and cuts a bot run to ~15 s).
 
+## Playing as Jason
+
+`--play-jason` puts you in Jason's boots (a bot plays the counselor: the escape bot unless a `--bot-*` is given): WASD walk, Shift run, mouse look; left click swing (and, holding her, kill), middle click heavy swing, right click grab, F throw a knife where you look, T set a trap, 1 Shift, 2 Morph (to the morph point nearest 30 m ahead), 3 Stalk. Doors open or break as you walk into them. `--play-jason-demo` scripts the input (testing).
+
 ## Host commands
 
 Start the game with `--host` (`--host-port n`, default 7713; it listens on 127.0.0.1 only) and drive it with `f13-host`:

@@ -866,6 +866,34 @@ fn place_held(
     true
 }
 
+/// A closed door within reach ahead of `wish` (any, when `any_way`): what Jason does about it (burst through it
+/// raged, break it down when it's locked or barricaded, else open it) and its animation.
+fn door_in_way(
+    doors: &Query<(Entity, &mut crate::doors::Door, &GlobalTransform)>,
+    barricades: &Query<&mut crate::windows::Barricade>,
+    here: Vec3,
+    wish: Vec2,
+    any_way: bool,
+    raged: bool,
+) -> Option<(JasonState, &'static str)> {
+    let (de, d, g) = doors.iter().filter(|(_, d, _)| !d.open && !d.broken).find(|(_, _, g)| {
+        let to_door = Vec2::new(g.translation().x - here.x, g.translation().z - here.z);
+        to_door.length() < DOOR_REACH_M && (any_way || to_door.normalize_or_zero().dot(wish) > 0.3)
+    })?;
+    let barred = barricades.iter().any(|b| b.door == Some(de) && b.enabled);
+    Some(if raged {
+        info!("Jason: bursting through a door (raged)");
+        (JasonState::BurstingDoor { door: de, t: 0.0 }, DOOR_BURST)
+    } else if d.locked || barred {
+        info!("Jason: breaking down a {} door (health {:.0})", if barred { "barricaded" } else { "locked" }, d.health);
+        (JasonState::BreakingDoor { door: de, t: 0.0, section: 0, hit: false }, BREAK_DOOR[0])
+    } else {
+        let anim = if crate::doors::Door::is_inside(g, here) { DOOR_OPEN_INSIDE } else { DOOR_OPEN_OUTSIDE };
+        info!("Jason: opening a door");
+        (JasonState::OpeningDoor { door: de, t: 0.0, anim }, anim)
+    })
+}
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn update_jason(
     mut commands: Commands,
@@ -875,7 +903,7 @@ pub(crate) fn update_jason(
     nav: Option<ResMut<Nav>>,
     (killer, counselor_model): (Option<Res<KillerCharacter>>, Option<Res<crate::character::CounselorCharacter>>),
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
-    (mut rng, mut struggle): (ResMut<crate::GameRng>, ResMut<Struggle>),
+    (mut rng, mut struggle, mut controls): (ResMut<crate::GameRng>, ResMut<Struggle>, Option<ResMut<crate::jason_player::JasonControls>>),
     (mut jasons, morph_points): (Query<(Entity, &mut Jason, &mut Transform, Option<&HitJason>, Option<&mut crate::senses::Knowledge>), Without<Player>>, Option<Res<MorphPoints>>),
     (inventories, items): (Query<&crate::interact::Inventory>, Query<&crate::props::Item>),
     mut players: Query<(Entity, &mut Player, &mut Transform, Has<crate::vehicle::Driving>, Option<&mut crate::hiding::Hiding>, Has<crate::items::Blocking>), Without<Jason>>,
@@ -969,6 +997,9 @@ pub(crate) fn update_jason(
         let dist = flat.length();
         let angle = angle_to(xf.rotation, flat);
         let alive = p.counselor.alive();
+        // The player's Jason: this step's input; he faces and aims where they look.
+        let player_input = controls.as_mut().map(|c| c.take());
+        let face_dir = player_input.map_or(flat, |i| i.forward);
         let state = j.state.clone();
         match state {
             JasonState::Waiting(left) => {
@@ -983,6 +1014,77 @@ pub(crate) fn update_jason(
                     continue;
                 }
                 j.cooldown -= dt;
+                // The player's Jason (jason_player.rs): what they pressed, else the AI below.
+                if let Some(i) = player_input {
+                    let p = i.presses;
+                    let ready = |know: &Option<Mut<crate::senses::Knowledge>>, a: Ability| know.as_ref().is_some_and(|k| k.abilities.is_available(a, &Blockers::default()));
+                    if p.shift && ready(&know, Ability::Shift) {
+                        if let Some(k) = know.as_mut() {
+                            k.abilities.consume(Ability::Shift);
+                        }
+                        info!("Jason: Shift");
+                        j.state = JasonState::Shifting { shift: Shift::start() };
+                        j.velocity = Vec2::ZERO;
+                        continue;
+                    }
+                    if p.morph && ready(&know, Ability::Morph) {
+                        let ahead = xf.translation + Vec3::new(i.forward.x, 0.0, i.forward.y) * crate::jason_player::MORPH_AHEAD_M;
+                        if let Some(to) = morph_points.as_ref().and_then(|m| m.pick(ahead)) {
+                            if let Some(k) = know.as_mut() {
+                                k.abilities.consume(Ability::Morph);
+                            }
+                            info!("Jason: Morph");
+                            j.state = JasonState::Morphing { t: 0.0, to };
+                            j.velocity = Vec2::ZERO;
+                            continue;
+                        }
+                    }
+                    if p.stalk && j.stalk.is_none() && ready(&know, Ability::Stalk) {
+                        if let Some(k) = know.as_mut() {
+                            k.abilities.consume(Ability::Stalk);
+                        }
+                        info!("Jason: Stalk");
+                        j.stalk = Some(Stalk::start(t.stalk_active_time));
+                    }
+                    if p.knife && j.knives > 0 && j.knife_cooldown <= 0.0 {
+                        info!("Jason: throwing a knife ({} left)", j.knives);
+                        j.state = JasonState::Throwing { t: 0.0, thrown: false };
+                        j.velocity = Vec2::ZERO;
+                        commands.entity(je).insert(PlayAction(KNIFE_SELECT.into()));
+                        continue;
+                    }
+                    if p.trap && j.traps > 0 && killer.info.animations.contains_key(TRAP_SET) {
+                        info!("Jason: setting a trap ({} left)", j.traps);
+                        j.state = JasonState::PlacingTrap { t: 0.0 };
+                        commands.entity(je).insert(PlayAction(TRAP_SET.into()));
+                        continue;
+                    }
+                    if j.cooldown <= 0.0 && p.grab {
+                        info!("Jason: grab");
+                        j.state = JasonState::Reaching { t: 0.0 };
+                        commands.entity(je).insert(PlayAction(GRAB_STARTUP.into()));
+                        continue;
+                    }
+                    if j.cooldown <= 0.0 && (p.attack || p.heavy) {
+                        let heavy = p.heavy && killer.info.animations.contains_key(HEAVY_ATTACK);
+                        info!("Jason: {}swing", if heavy { "heavy " } else { "" });
+                        j.state = JasonState::Swinging { t: 0.0, hit: false, heavy };
+                        commands.entity(je).insert(PlayAction(if heavy { HEAVY_ATTACK } else { ATTACK }.into()));
+                        continue;
+                    }
+                    let raged = know.as_ref().is_some_and(|k| k.abilities.rage_active);
+                    if i.movement != Vec2::ZERO {
+                        if let Some((state, anim)) = door_in_way(&doors, &barricades, xf.translation, i.movement, false, raged) {
+                            j.velocity = Vec2::ZERO;
+                            j.state = state;
+                            commands.entity(je).insert(PlayAction(anim.into()));
+                            continue;
+                        }
+                    }
+                    let speed = if i.run && t.can_run { t.run_speed } else { t.walk_speed };
+                    walk(&mut j, &mut xf, i.movement, speed, None, dt, &t, &world);
+                    continue;
+                }
                 let sees = know.as_ref().is_none_or(|k| k.sees);
                 // Near the goal but not getting any closer: as good as there.
                 let stalled = j.stall > STALL_SECONDS;
@@ -1165,32 +1267,11 @@ pub(crate) fn update_jason(
                     wish = Vec2::ZERO; // close enough for anything; don't walk into her
                 }
                 // A closed door ahead: open it, or break it down when it's locked or barred.
-                let here = xf.translation;
-                let door_ahead = doors
-                    .iter()
-                    .filter(|(_, d, _)| !d.open && !d.broken)
-                    .find(|(_, _, g)| {
-                        let to_door = Vec2::new(g.translation().x - here.x, g.translation().z - here.z);
-                        to_door.length() < DOOR_REACH_M && (wish == Vec2::ZERO || to_door.normalize_or_zero().dot(wish) > 0.3)
-                    })
-                    .map(|(e, _, _)| e);
-                if let Some((de, d, g)) = door_ahead.and_then(|de| doors.get(de).ok()) {
-                    let barred = barricades.iter().any(|b| b.door == Some(de) && b.enabled);
+                let raged = know.as_ref().is_some_and(|k| k.abilities.rage_active);
+                if let Some((state, anim)) = door_in_way(&doors, &barricades, xf.translation, wish, wish == Vec2::ZERO, raged) {
                     j.velocity = Vec2::ZERO;
-                    if know.as_ref().is_some_and(|k| k.abilities.rage_active) {
-                        info!("Jason: bursting through a door (raged)");
-                        j.state = JasonState::BurstingDoor { door: de, t: 0.0 };
-                        commands.entity(je).insert(PlayAction(DOOR_BURST.into()));
-                    } else if d.locked || barred {
-                        info!("Jason: breaking down a {} door (health {:.0})", if barred { "barricaded" } else { "locked" }, d.health);
-                        j.state = JasonState::BreakingDoor { door: de, t: 0.0, section: 0, hit: false };
-                        commands.entity(je).insert(PlayAction(BREAK_DOOR[0].into()));
-                    } else {
-                        let anim = if crate::doors::Door::is_inside(g, here) { DOOR_OPEN_INSIDE } else { DOOR_OPEN_OUTSIDE };
-                        info!("Jason: opening a door");
-                        j.state = JasonState::OpeningDoor { door: de, t: 0.0, anim };
-                        commands.entity(je).insert(PlayAction(anim.into()));
-                    }
+                    j.state = state;
+                    commands.entity(je).insert(PlayAction(anim.into()));
                     continue;
                 }
                 let speed = if t.can_run && gdist > t.attack_range_m * 1.5 { t.run_speed } else { t.walk_speed };
@@ -1242,19 +1323,19 @@ pub(crate) fn update_jason(
                     let goal = if sees { to } else { know.as_ref().and_then(|k| k.last_known).map_or(to, |c| c.0) };
                     if phase == ShiftPhase::Moving {
                         // The game pushes him along his facing at ShiftSpeed; he turns as he steers.
-                        let dir = if sees { flat.normalize_or_zero() } else { steer(&mut j, &mut nav.0, navmesh, &world, xf.translation, goal, dt) };
+                        let dir = if let Some(i) = player_input { i.forward } else if sees { flat.normalize_or_zero() } else { steer(&mut j, &mut nav.0, navmesh, &world, xf.translation, goal, dt) };
                         turn_toward(&mut xf, dir, t.turn_rate_deg, dt);
                         let yaw = yaw_of(xf.rotation);
                         let fwd = Vec2::new(yaw.sin(), yaw.cos());
                         walk(&mut j, &mut xf, fwd, t.shift_speed, Some(fwd), dt, &t, &world);
                     } else {
-                        walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(flat), dt, &t, &world);
+                        walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(face_dir), dt, &t, &world);
                     }
                 }
             }
             JasonState::Throwing { t: at, thrown } => {
                 let at = at + dt;
-                walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(flat), dt, &t, &world);
+                walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(face_dir), dt, &t, &world);
                 let len = |n: &str, d: f32| killer.length(n).unwrap_or(d);
                 let aim_at = len(KNIFE_SELECT, 0.37);
                 let throw_at = aim_at + KNIFE_AIM_SECONDS;
@@ -1269,7 +1350,8 @@ pub(crate) fn update_jason(
                     j.knife_cooldown = t.knife_cooldown;
                     let yaw = yaw_of(xf.rotation);
                     let from = xf.translation + Vec3::Y * 1.6 + Vec3::new(yaw.sin(), 0.0, yaw.cos()) * 0.5;
-                    let target = pxf.translation + Vec3::Y * 1.2;
+                    // At her; the player's knife goes where they look.
+                    let target = player_input.map_or(pxf.translation + Vec3::Y * 1.2, |i| from + i.look * KNIFE_RANGE_M.1 * 0.5);
                     commands.trigger(ThrowKnife { from, vel: knife_velocity(from, target), damage: t.knife_damage });
                 }
                 if at >= end {
@@ -1315,7 +1397,7 @@ pub(crate) fn update_jason(
             }
             JasonState::Swinging { t: at, hit, heavy } => {
                 let at = at + dt;
-                walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(flat), dt, &t, &world);
+                walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(face_dir), dt, &t, &world);
                 let mut hit = hit;
                 let (window, length) = if heavy { (t.heavy_window, t.heavy_length) } else { (t.attack_window, t.attack_length) };
                 if !hit && at >= window.0 && at <= window.1 && alive && dist <= t.attack_range_m && angle_to(xf.rotation, flat) <= t.attack_angle_deg {
@@ -1465,7 +1547,7 @@ pub(crate) fn update_jason(
             }
             JasonState::Reaching { t: at } => {
                 let at = at + dt;
-                walk(&mut j, &mut xf, flat.normalize_or_zero(), t.walk_speed, Some(flat), dt, &t, &world);
+                walk(&mut j, &mut xf, face_dir.normalize_or_zero(), t.walk_speed, Some(face_dir), dt, &t, &world);
                 let startup = killer.length(GRAB_STARTUP).unwrap_or(0.25);
                 if at < startup {
                     j.state = JasonState::Reaching { t: at };
@@ -1542,7 +1624,8 @@ pub(crate) fn update_jason(
                     release(&mut commands, pe, GRAB_BREAK, counselor_model.as_deref());
                     j.state = JasonState::Stunned { t: 0.0, stun: Stun::GrabBreak };
                     commands.entity(je).insert(PlayAction(Stun::GrabBreak.anims().0.into()));
-                } else if at >= HOLD_BEFORE_KILL {
+                } else if player_input.map_or(at >= HOLD_BEFORE_KILL, |i| i.presses.attack) {
+                    // The AI kills after a while; the player when they click.
                     info!("Jason: Pickaxe Throat Hack");
                     j.state = JasonState::Killing { t: 0.0 };
                     commands.entity(je).insert((PlayAction(KILL.into()), crate::kill_camera::KillCam::new(crate::kill_camera::KILL_CLASS, *xf)));

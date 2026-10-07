@@ -48,7 +48,7 @@ fn load(export: Res<crate::ExportRoot>, mut cameras: ResMut<KillCameras>) {
     }
 }
 
-fn kill_camera(
+pub(crate) fn kill_camera(
     mut commands: Commands,
     time: Res<Time>,
     cameras: Res<KillCameras>,
