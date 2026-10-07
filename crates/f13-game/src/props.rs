@@ -416,6 +416,8 @@ fn spawn_props(
             let door_interact = info.components.iter().find(|c| c.name == "InteractComponent");
             commands.entity(root).insert(crate::doors::Door {
                 spots: info.components.iter().filter(|c| c.name.ends_with("_SpecialMoveHandler")).map(|c| (c.name.clone(), local(c))).collect(),
+                break_force: classes.prop(&actor.class, "BreakExplosionForce").as_f64().map_or(5000.0, |v| v as f32),
+                burst_force: classes.prop(&actor.class, "BurstExplosionForce").as_f64().map_or(20000.0, |v| v as f32),
                 open: false,
                 locked: false,
                 lockable: actor_bool(&classes, &actor.class, "bIsLockable", true),

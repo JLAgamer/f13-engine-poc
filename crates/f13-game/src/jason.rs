@@ -1625,6 +1625,7 @@ pub(crate) fn update_jason(
                     let health = d.health;
                     d.damage(health, false, &mut commands);
                     info!("Jason: burst through the door");
+                    commands.trigger(crate::doors::BreakApart { door: de, from: xf.translation, force: d.burst_force });
                     commands.entity(d.pivot).insert(Visibility::Hidden);
                     for mut b in barricades.iter_mut().filter(|b| b.door == Some(de)) {
                         b.enabled = false;
@@ -1669,6 +1670,7 @@ pub(crate) fn update_jason(
                         hit = true;
                         if d.damage(t.world_damage, barred, &mut commands) {
                             info!("Jason: broke the door down");
+                            commands.trigger(crate::doors::BreakApart { door: de, from: xf.translation, force: d.break_force });
                             commands.entity(d.pivot).insert(Visibility::Hidden);
                             for mut b in barricades.iter_mut().filter(|b| b.door == Some(de)) {
                                 b.enabled = false;

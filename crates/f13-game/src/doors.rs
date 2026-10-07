@@ -77,10 +77,108 @@ pub struct Door {
     /// `BaseDoorHealth`, and the Light / Medium / Heavy DestructionThreshold fractions of it.
     pub base_health: f32,
     pub damage_thresholds: [f32; 3],
+    /// BreakExplosionForce and BurstExplosionForce: how hard its chunks fly when it's broken down or burst through.
+    pub break_force: f32,
+    pub burst_force: f32,
     /// Its special move spots (component name -> door local): where her open, close, lock and unlock moves play from.
     pub spots: std::collections::HashMap<String, Transform>,
     /// The leaf's look (None in tests).
     pub visuals: Option<DoorVisuals>,
+}
+
+/// A door broken down or burst through: its leaf (its destructible mesh's chunks, the `Part` joints) flies apart from
+/// the blow at `from` with `force` (its Break/BurstExplosionForce). PLACEHOLDER: the APEX destructible's simulation
+/// isn't ported; the chunks fly out from the blow (force / 1000 m/s, upward a little), spin, fall under gravity onto
+/// the door's floor and are gone after a few seconds.
+#[derive(Event, Clone, Copy, Debug)]
+pub struct BreakApart {
+    pub door: Entity,
+    pub from: Vec3,
+    pub force: f32,
+}
+
+/// The broken leaf's chunks in flight.
+#[derive(Component)]
+struct Debris {
+    t: f32,
+    from: Vec3,
+    speed: f32,
+    floor: f32,
+}
+
+/// One chunk: its velocity and spin (the debris' local space) and its place.
+#[derive(Component)]
+struct Chunk {
+    velocity: Vec3,
+    spin: Vec3,
+}
+
+/// How long the debris lasts (s), and gravity (m/s²).
+const DEBRIS_SECONDS: f32 = 5.0;
+const GRAVITY: f32 = 9.8;
+
+pub struct DebrisPlugin;
+
+impl Plugin for DebrisPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_observer(break_apart).add_systems(Update, fly);
+    }
+}
+
+fn break_apart(ev: On<BreakApart>, mut commands: Commands, doors: Query<&Door>, leaves: Query<(&bevy::world_serialization::WorldAssetRoot, &GlobalTransform)>) {
+    let Ok(door) = doors.get(ev.door) else { return };
+    let Some(v) = &door.visuals else { return };
+    let Ok((scene, g)) = leaves.get(v.leaf) else { return };
+    let at = g.compute_transform();
+    let mut e = commands.spawn((bevy::world_serialization::WorldAssetRoot(scene.0.clone()), at, Debris { t: 0.0, from: ev.from, speed: (ev.force / 1000.0).min(10.0), floor: at.translation.y }));
+    if let Some(o) = &v.overrides {
+        e.insert(o.clone());
+    }
+}
+
+fn fly(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut debris: Query<(Entity, &mut Debris, &GlobalTransform)>,
+    children: Query<&Children>,
+    names: Query<&Name>,
+    mut chunks: Query<(&mut Transform, Option<&mut Chunk>, &GlobalTransform)>,
+    mut rng: ResMut<crate::GameRng>,
+) {
+    let dt = time.delta_secs();
+    for (e, mut d, g) in &mut debris {
+        d.t += dt;
+        if d.t > DEBRIS_SECONDS {
+            commands.entity(e).despawn();
+            continue;
+        }
+        let to_local = g.compute_transform().rotation.inverse();
+        for c in children.iter_descendants(e) {
+            if !names.get(c).is_ok_and(|n| n.as_str().starts_with("Part")) {
+                continue;
+            }
+            let Ok((mut xf, chunk, cg)) = chunks.get_mut(c) else { continue };
+            match chunk {
+                None => {
+                    let mut r = || rng.0.frand() * 2.0 - 1.0;
+                    let out = (cg.translation() - d.from).with_y(0.0).normalize_or(Vec3::X) + Vec3::Y * 0.4 + Vec3::new(r(), r(), r()) * 0.25;
+                    let spin = Vec3::new(r(), r(), r()) * 6.0;
+                    commands.entity(c).insert(Chunk { velocity: to_local * (out.normalize() * d.speed * (0.6 + 0.4 * rng.0.frand())), spin });
+                }
+                Some(mut ch) => {
+                    // Gravity (world down, in the debris' space), then onto the floor.
+                    ch.velocity += to_local * Vec3::NEG_Y * GRAVITY * dt;
+                    xf.translation += ch.velocity * dt;
+                    let spin = ch.spin * dt;
+                    xf.rotation = Quat::from_euler(EulerRot::XYZ, spin.x, spin.y, spin.z) * xf.rotation;
+                    if cg.translation().y < d.floor {
+                        ch.velocity = Vec3::ZERO;
+                        ch.spin = Vec3::ZERO;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// The leaf entity and what it shows: its transform on the pivot, its material overrides, and the Light, Medium and
@@ -238,6 +336,8 @@ mod tests {
             base_health: 60.0,
             damage_thresholds: [0.75, 0.5, 0.25],
             spots: Default::default(),
+            break_force: 5000.0,
+            burst_force: 20000.0,
             visuals: None,
         }
     }

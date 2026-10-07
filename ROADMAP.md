@@ -169,7 +169,9 @@ Presentation
 - [x] Each placement's CastShadow and cull distance (foliage InstanceEndCullDistance, max draw distance); sun shadows
       to 100 m in 3 cascades
 - [x] Door damage states (the Light/Medium/Heavy destructible meshes at 75/50/25% health); Jason's rage burst
-- [ ] Door break effects: the destructible chunks flying (BreakExplosionForce), sounds
+- [x] Door break effects: the leaf's destructible chunks fly from the blow (Break/BurstExplosionForce; PLACEHOLDER
+      flight, not the APEX simulation), fall to the floor and clear after a few seconds; the break's sounds (the door's
+      DoorDestroySoundCue, the montage's notifies)
 - [x] Barricade plank: checked; across the door 0.8 m up, just inside it (the component named `..._01_b` holds the
   `_01_a` mesh; the leaning `_01_b` stands against the frame when it's down)
 - [x] Counselor model: Vanessa's base body, default outfit (master pose), face on the head bone, hair on the face, skin
