@@ -698,7 +698,7 @@ fn spawn_jason(
     let stand = |at: &Transform| {
         let feet = f13_core::collision::spawn_floor(&world, at.translation, 1.5, tuning.capsule.half_height * 2.0, &WALK).unwrap_or(at.translation);
         let (yaw, _, _) = at.rotation.to_euler(EulerRot::YXZ);
-        Transform { translation: feet, rotation: Quat::from_rotation_y(yaw - std::f32::consts::FRAC_PI_2), ..default() }
+        Transform { translation: feet, rotation: Quat::from_rotation_y(yaw + std::f32::consts::FRAC_PI_2), ..default() }
     };
     let Transform { translation: feet, rotation, .. } = stand(&start);
     let morph_points: Vec<(Vec3, Transform)> = level
