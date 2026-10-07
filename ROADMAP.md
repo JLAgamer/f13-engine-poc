@@ -26,8 +26,8 @@ Mechanics: counselor side
 - [ ] Swimming, remaining: diving, Jason in water
 - [x] Fear events pushed in the client (fear_events.rs): darkness (f13-core::light, the map's point and spot lights),
   indoors (the cabins' indoor volumes, also used by Sense), wounded, Jason near and in view, grabbed, hidden, items
-  held, in water
-- [ ] Fear events, remaining: near friendlies and corpses (other counselors), blackouts (power)
+  held, in water, blackouts (inside a grid's volume while its power is out)
+- [ ] Fear events, remaining: near friendlies and corpses (other counselors)
 - [x] Hit reactions and death animations when Jason hits
 - [x] Collision: the counselor's capsule (34 x 82 cm) against the game's simple collision (convex hulls, boxes,
   spheres, capsules of every mesh whose profile blocks pawns, BlockingVolumes, terrain), doors, windows and cars
@@ -111,7 +111,7 @@ Mechanics: Jason side
 - [x] Generators (power.rs): the fuse boxes and their power grids; a destroyed fuse box puts out the powered lights
       in its grid's box (and they stop lighting her: darkness fear) and lights its red power-out light; counselors
       repair it (hold E, 15 s, pips), Jason destroys it (the player's E)
-- [ ] Generators, remaining: the blackout fear event, the computer Jason cutting the power
+- [ ] Generators, remaining: the computer Jason cutting the power
 - [x] Breaking walls (SCDestructibleWall in the cabin layouts): Jason breaks through a wall in his way (the player
       walking into it; the AI when it stands between him and her), the door break's montage and timing, his world
       damage against its BaseHealth 60; the section and its collision go

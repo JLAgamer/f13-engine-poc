@@ -206,6 +206,11 @@ fn push_events(
     // In water: the water volume at her (CurrentWaterVolume; she swims there).
     set("InWaterFearEvent", p.counselor.stance == f13_core::counselor::Stance::Swimming, 0.0);
     set("NearFriendlyFearEvent", false, 0.0);
+    // A blackout: inside a power grid's volume while its power is out (SCPowerGridVolume FUN_140422a30 pushes its fear
+    // event on the counselors overlapping it as the power goes, pops it as it comes back; the event, unset in the
+    // map, taken as BlackoutFearEvent).
+    let blackout = power.as_ref().is_some_and(|p| p.grid_at(to_unreal(centre)).is_some_and(|g| !p.on(g)));
+    set("BlackoutFearEvent", blackout, 0.0);
     let jason = jasons.iter().next();
     if let Some(j) = jason {
         let (min, max) = t.jason_near_range;
