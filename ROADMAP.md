@@ -285,7 +285,8 @@ Decomp audit (nothing guessed: every rule read from the decomp or the game's dat
       police.rs, doors.rs, items.rs, interact.rs. Jason's decisions stay ours (his AI was cut), marked as such.
       Found so far: her "Choke" line on a grab (the game never plays it there: removed); the grab kills' camera
       splines missed their component's place in the kill Blueprint (fixed); the barricade plank (one plank whose
-      pitch follows her "Barricade" curve: fixed); doors' interaction cameras (ported)
+      pitch follows her "Barricade" curve: fixed); doors' interaction cameras (ported); which interactable she uses
+      (the interactable manager's score: ported; its range test's yaw/pitch limits and occlusion still to export)
 - [x] Audit of hiding.rs, doors.rs, police.rs, items.rs, placed_kills.rs, character.rs, senses.rs, ui.rs, vehicle.rs
       (MODLOG "Decomp audit (worktree session)"): hiding voice lines and spot doors, the door's opening side, the
       police volume's obstruction, stun spot search and phone box rule, melee sweeps, guns, the firecracker throw,

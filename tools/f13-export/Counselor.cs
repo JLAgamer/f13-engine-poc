@@ -250,7 +250,13 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             var curves = MontageCurves(path);
             foreach (var seq in Sequences(path))
             {
-                if (info.Animations.ContainsKey(seq.Name)) continue;
+                // Already written from another montage: still give it this montage's notifies and curves if it has none.
+                if (info.Animations.TryGetValue(seq.Name, out var have))
+                {
+                    have.Windows ??= windows;
+                    have.Curves ??= curves;
+                    continue;
+                }
                 var a = WriteSequence(seq, skeleton, dir, keepRoot.Contains(path));
                 a.Windows = windows;
                 a.Curves = curves;
