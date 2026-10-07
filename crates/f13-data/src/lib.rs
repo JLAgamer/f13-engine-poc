@@ -7,6 +7,7 @@ pub mod kill_camera;
 pub mod level;
 pub mod sound;
 pub mod umg;
+pub mod vehicle;
 mod native_classes;
 pub mod world;
 

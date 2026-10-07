@@ -157,6 +157,9 @@ pub struct Vehicle {
     /// Forward speed in cm/s and current steering, -1..1.
     pub speed: f32,
     pub steer: f32,
+    /// Its handling (f13-core::vehicle: the movement component's engine, gearbox and wheels) and drivetrain state.
+    pub setup: f13_core::vehicle::VehicleSetup,
+    pub drive: f13_core::vehicle::VehicleState,
 }
 
 impl Vehicle {
@@ -525,6 +528,8 @@ fn spawn_props(
                 started: false,
                 speed: 0.0,
                 steer: 0.0,
+                setup: f13_data::vehicle::setup(&classes, &actor.class),
+                drive: default(),
             });
             let p = to_transform(&actor.transform).translation;
             info!("{} at ({:.0}, {:.0}, {:.0})", actor.class, p.x, p.y, p.z);

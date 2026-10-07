@@ -1,8 +1,9 @@
 //! Driving a repaired car and escaping through a car escape zone.
 //!
-//! PLACEHOLDER handling model: the game drives its cars with PhysX vehicle simulation (torque curve, two forward
-//! gears, front-wheel drive, per-wheel setups in `SCWheeledVehicleMovementComponent`). Until that is ported this is
-//! a simple kinematic car whose numbers below are guesses, not game data.
+//! Handling (f13-core::vehicle): the car's movement component's engine (torque curve, MaxRPM), automatic gearbox
+//! (ratios, shift points, latency), idle brake and wheels (radius, steering lock), in a reduced model of the game's
+//! PhysX vehicle (no sliding; grip-capped drive). The car turns like a bicycle on WHEELBASE_CM, follows the ground
+//! under its axles and stops at obstacles.
 //!
 //! Starting is the game's: when a counselor drives, the starter's hold time becomes
 //! `random[MinRestartTime, MaxRestartTime] * RestartTimeMod(stats, inverted)`, held like any interaction (after
@@ -23,13 +24,8 @@ use crate::props::{EscapeZone, Vehicle, VehiclePart};
 use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings};
 use bevy::prelude::*;
 
-const MAX_FORWARD_CM_S: f32 = 1800.0;
-const MAX_REVERSE_CM_S: f32 = 600.0;
-const ACCEL_CM_S2: f32 = 700.0;
-const BRAKE_CM_S2: f32 = 2000.0;
-const COAST_CM_S2: f32 = 300.0;
+/// The Chevette's axles, front to back (its wheel bones are about this far apart).
 const WHEELBASE_CM: f32 = 250.0;
-const MAX_STEER_DEG: f32 = 30.0;
 /// Half the car's length (front bumper distance from the root), metres.
 const HALF_LENGTH_M: f32 = 2.4;
 /// How far beyond the bumper, and how far to either side of the middle, Jason blocks the car (m; the game's
@@ -115,16 +111,11 @@ fn drive(
             steer -= 1.0;
         }
     }
-    // Speed: accelerate toward the input direction, brake when opposing it, coast otherwise.
-    let s = v.speed;
-    let a = if throttle == 0.0 {
-        -s.signum() * COAST_CM_S2.min(s.abs() / dt)
-    } else if s * throttle < 0.0 {
-        throttle * BRAKE_CM_S2
-    } else {
-        throttle * ACCEL_CM_S2
-    };
-    v.speed = (s + a * dt).clamp(-MAX_REVERSE_CM_S, MAX_FORWARD_CM_S);
+    // The drivetrain: throttle forward or back (against the motion, the brakes).
+    let setup = v.setup.clone();
+    v.drive.speed = v.speed;
+    v.drive.step(&setup, throttle, dt);
+    v.speed = v.drive.speed;
     v.steer += (steer - v.steer) * (dt * 6.0).min(1.0);
 
     let me = player.vehicle;
@@ -132,7 +123,7 @@ fn drive(
     let settings = MeshRayCastSettings::default().with_filter(&filter);
 
     // Turn like a bicycle model, then move along the car's forward axis (its Unreal +X).
-    let yaw_rate = v.speed / WHEELBASE_CM * (v.steer * MAX_STEER_DEG.to_radians()).tan();
+    let yaw_rate = v.speed / WHEELBASE_CM * (v.steer * setup.steer_at(v.speed).to_radians()).tan();
     let (yaw, _, _) = xf.rotation.to_euler(EulerRot::YXZ);
     let yaw = yaw - yaw_rate * dt;
     let forward = Quat::from_rotation_y(yaw) * Vec3::X;

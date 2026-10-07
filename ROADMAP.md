@@ -37,7 +37,10 @@ Mechanics: counselor side
 - [x] Repair minigame (hold timer, pips, hit bonus, miss rollback, killer notify) and the real engine start time
   (f13-core::minigame)
 - [x] Car: enter/exit, start, escape volume
-- [ ] Car handling from the game's vehicle setup (now a placeholder kinematic car)
+- [x] Car handling from the game's vehicle setup (f13-core::vehicle): the movement component's torque curve,
+      MaxRPM, automatic gearbox (ratios, shift points, latency), idle brake, the wheels' radius and steering lock,
+      Unreal's defaults (mass, final ratio, brakes, drag, steering curve); a reduced model of the PhysX vehicle (no
+      sliding, grip-capped drive, revs follow the wheels). Not yet: suspension, sliding, collisions' impulses
 - [x] Cabinets (drawers): search, items inside
 - [x] Doors: leaves exported and swinging on their pivot, open/close, lock/unlock by side (doors.rs; swing timing is a
   placeholder for the special-move montages)

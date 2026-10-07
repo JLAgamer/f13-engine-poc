@@ -429,9 +429,10 @@ switch (rest[0])
         if (rest[1] == Mvp.Map) ExportLevel(Mvp.Map, Mvp.Weather);
         else ExportLevel(rest[1]);
         break;
-    case "levels": // the MVP map and its cabin layouts
+    case "levels": // the MVP map and its cabin layouts, and the classes they use (classes.json)
         ExportLevel(Mvp.Map, Mvp.Weather);
         foreach (var l in Mvp.Layouts) ExportLevel(l);
+        WriteClasses();
         break;
     case "materials":
         WriteMaterialIndex();
@@ -710,7 +711,8 @@ static class Mvp
         "/Game/Props/Pickups/S_Pickup_Vehicle_Keys_01",
     ];
     // Classes the game spawns by reference from native code rather than from level data.
-    public static readonly string[] Classes = ["CarKeys_C"];
+    // Classes no level places but the game reads (the cars' wheels: SCWheeledVehicleMovementComponent WheelSetups).
+    public static readonly string[] Classes = ["CarKeys_C", "Chevette_FrontWheel_C", "Chevette_BackWheel_C"];
     // Montages whose length or root motion the rules use (anims.json).
     const string Shared = "/Game/Characters/Counselors/Base/Shared";
     public static readonly string[] Montages =
