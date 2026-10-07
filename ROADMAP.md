@@ -95,7 +95,7 @@ Mechanics: Jason side
       (holds, times to the next point, Unreal InterpCurves, field of view, the handicam shake) in the kill's space
 - [x] Kill cameras' CameraTrace (SCSplineCamera's tick): something between the camera and what it looks at pulls the
       camera to it and widens its field of view (indoor kills no longer film from behind walls)
-- [ ] Kill cameras, remaining: blending back
+- [x] Kill cameras blend back (0.5 s, their special moves' BlendBackTime) to the follow camera
 - [x] Playing as Jason (`--play-jason`, jason_player.rs): walk, run, look; swing, heavy swing, grab and kill, knives
       where he looks, traps, Shift, Morph (the point nearest 30 m ahead), Stalk; doors as he walks into them; his
       camera; the escape bot plays the counselor

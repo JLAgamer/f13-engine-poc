@@ -17,12 +17,39 @@ impl Plugin for KillCameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<KillCameras>()
             .add_systems(Startup, load)
-            .add_systems(Update, kill_camera.after(crate::player::follow_camera).after(crate::hiding::hiding_camera));
+            .add_systems(Update, (kill_camera, blend_back).chain().after(crate::player::follow_camera).after(crate::hiding::hiding_camera));
     }
 }
 
 #[derive(Resource, Default)]
 pub struct KillCameras(HashMap<String, CameraSpline>);
+
+/// The kill camera's BlendBackTime (the kills' special moves: 0.5 s): the camera eases from where the kill camera
+/// left it to the follow camera.
+const BLEND_BACK_SECONDS: f32 = 0.5;
+
+/// Easing back from a kill camera: where it ended, and for how long it's been easing.
+#[derive(Resource)]
+struct BlendBack {
+    from: Transform,
+    t: f32,
+}
+
+fn blend_back(mut commands: Commands, time: Res<Time>, blend: Option<ResMut<BlendBack>>, mut camera: Single<&mut Transform, With<PlayerCamera>>, kills: Query<(), With<KillCam>>) {
+    let Some(mut b) = blend else { return };
+    if !kills.is_empty() {
+        return;
+    }
+    b.t += time.delta_secs();
+    let s = (b.t / BLEND_BACK_SECONDS).clamp(0.0, 1.0);
+    let s = s * s * (3.0 - 2.0 * s);
+    let to = **camera;
+    camera.translation = b.from.translation.lerp(to.translation, s);
+    camera.rotation = b.from.rotation.slerp(to.rotation, s);
+    if s >= 1.0 {
+        commands.remove_resource::<BlendBack>();
+    }
+}
 
 /// A kill's camera running: the kill's origin (Jason's actor transform at its start, in Bevy's space) and time.
 #[derive(Component)]
@@ -76,6 +103,7 @@ pub(crate) fn kill_camera(
         persp.fov = normal;
         *normal_fov = None;
         commands.entity(e).remove::<KillCam>();
+        commands.insert_resource(BlendBack { from: **xf, t: 0.0 });
         return;
     }
     let p = spline.at(k.t);
