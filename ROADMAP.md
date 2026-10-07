@@ -167,8 +167,10 @@ Presentation
 - [x] Sitting in the car: her capsule at the driver's seat's AttachSocket (SeatSocketFL on the car mesh; the exporter
       writes skeletal meshes' sockets in component space), playing f_normal_sit_car_drive_forward; getting in and out,
       her enter and exit takes with their root motion (enter ends in the seat, exit starts there)
-- [ ] Animations, remaining: start/stop transitions, turn in place, foot-marker sync (now normalised time), limp
-      movement, aim offsets
+- [x] Starting off and stopping: her forward start (walk, run, sprint) as she sets off ahead, her stop (by her
+      fastest gait, on the foot her last step left forward) as she halts; their footstep notifies (PLACEHOLDER rules)
+- [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: root rotation), turn in place
+      (the counselor has no turn takes), foot-marker sync (now normalised time), limp movement, aim offsets
 - [x] Door special moves: her open and close takes (inside or outside), the leaf swinging in the montage's
       OpenCloseDoor driver window; she stands while they play
 - [x] Window special moves: her open and close takes (the pane moving in the montage's WindowMoveDriver window),
