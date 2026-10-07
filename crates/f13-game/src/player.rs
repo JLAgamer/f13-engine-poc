@@ -367,8 +367,13 @@ fn update_counselor(
     }
 }
 
+/// A direction she walks in by herself (Bevy x, z), ignoring the keys: escaping on foot (police.rs).
+#[derive(Component, Clone, Copy)]
+pub struct Autopilot(pub Vec2);
+
 pub(crate) fn move_player(
     intent: Res<Intent>,
+    autopilot: Query<&Autopilot>,
     time: Res<Time>,
     tuning: Res<PlayerTuning>,
     camera: Single<&PlayerCamera>,
@@ -395,7 +400,11 @@ pub(crate) fn move_player(
     let right = Vec2::new(cos, -sin);
     let repairing = interaction.as_ref().is_some_and(|i| i.busy());
     let busy = !p.counselor.alive() || using.is_some() || repairing || staggered || item_action || trapped || door_move || window_move || barricade_move;
-    let wish = if busy { Vec2::ZERO } else { forward * intent.movement.y + right * intent.movement.x };
+    let wish = match autopilot.get(entity) {
+        _ if busy => Vec2::ZERO,
+        Ok(a) => a.0.normalize_or_zero(),
+        Err(_) => forward * intent.movement.y + right * intent.movement.x,
+    };
 
     let (facing, _, _) = xf.rotation.to_euler(EulerRot::YXZ);
     if let Some((local, _)) = p.root_motion {

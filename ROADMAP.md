@@ -144,8 +144,9 @@ Match
       MinFuseSpawnDistance), put in with the repair minigame (AM_normal_stand_repair_phonebox), the phone's 12 s call
       (AM_normal_stand_use_phone, PoliceCalled, her CallPolice line), PoliceResponseTime's countdown, the police car at a
       random unobstructed spawner (its siren, its turning lights), the level's blocker coming down, its escape volume
-      opening, Jason turned back from it, escaping on foot; the HUD's police timer (ShowPoliceTimer, PoliceTimerText)
-- [ ] Police, remaining: the 6 s escape delay and its camera, the minimap icon, Jason breaking the phone box
+      opening, Jason turned back from it, escaping on foot (walking its ExitPath for its 6 s EscapeDelay); the HUD's
+      police timer (ShowPoliceTimer, PoliceTimerText)
+- [ ] Police, remaining: the escape's camera spline, the minimap icon, Jason breaking the phone box
       (Jason_PhoneBox_Destruction), his police stun (combat_stand_stunned_police)
 - [ ] Match flow, remaining: lobby, level intro and outro sequences, the Tommy Jarvis timer, badges, Jason
       dying

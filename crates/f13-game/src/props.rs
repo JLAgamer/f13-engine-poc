@@ -192,6 +192,10 @@ pub struct EscapeZone {
     pub radius_m: f32,
     /// The volume's trigger root: on the road just before the zone, so (zone - trigger) is roughly the way out.
     pub trigger: Vec3,
+    /// Its ExitPath spline's points (world), the way out of the map.
+    pub exit: Vec<Vec3>,
+    /// EscapeDelay, s: from entering to escaping.
+    pub delay: f32,
 }
 
 pub struct PropsPlugin {
@@ -612,9 +616,32 @@ fn spawn_props(
             let radius = sphere.props["SphereRadius"].as_f64().unwrap_or(32.0) as f32;
             let car = a.props["EscapeType"].as_str() == Some("ESCEscapeType::Car");
             let trigger = a.components.iter().find(|c| c.name == "TriggerRoot").and_then(|c| c.world).or(a.transform).unwrap_or(at);
+            let exit = a
+                .components
+                .iter()
+                .find(|c| c.name == "ExitPath")
+                .and_then(|c| Some((c.world?, c.props["SplineCurves"]["Position"]["Points"].as_array()?)))
+                .map(|(w, points)| {
+                    points
+                        .iter()
+                        .filter_map(|p| {
+                            let v = &p["OutVal"];
+                            let t = [v["X"].as_f64()? as f32, v["Y"].as_f64()? as f32, v["Z"].as_f64()? as f32];
+                            Some(to_transform(&Xform { t, r: [0.0, 0.0, 0.0, 1.0], s: [1.0; 3] }.then(&w)).translation)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             commands.spawn((
                 to_transform(&Xform { r: [0.0, 0.0, 0.0, 1.0], s: [1.0; 3], ..at }),
-                EscapeZone { car, active: car, radius_m: radius / 100.0, trigger: to_transform(&trigger).translation },
+                EscapeZone {
+                    car,
+                    active: car,
+                    radius_m: radius / 100.0,
+                    trigger: to_transform(&trigger).translation,
+                    exit,
+                    delay: a.props["EscapeDelay"].as_f64().map_or(0.0, |d| d as f32),
+                },
                 Name::new(a.name.clone()),
             ));
         }

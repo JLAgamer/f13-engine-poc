@@ -8,8 +8,10 @@
 //! - **Arriving** (SpawnPolice): spawners in a random order (FRand), the first whose escape volume is
 //!   unobstructed spawns the police car (Police_C: its car, siren and lights) at its own transform and activates
 //!   that volume. The car's red and blue spot lights turn 8 degrees a frame (its Blueprint's tick).
-//! - **Escaping**: a counselor alive and free (not grabbed, not in a car, not hiding) inside the active volume
-//!   escapes (the volume's on-foot escape; the 6 s EscapeDelay and its camera aren't ported).
+//! - **Escaping** (SCEscapeVolume::OnOverlap, on foot): a counselor alive and free (not grabbed, not in a car, not
+//!   hiding) inside the active volume starts escaping: she walks its ExitPath from its point nearest her, by
+//!   herself, and the escape counts (the game mode's CharacterEscaped) after its EscapeDelay (6 s). Its camera
+//!   spline isn't ported.
 //! - **The level's blockers**: CrystalLake_Small_Design's Blueprint turns off the collision of the BlockingVolume in
 //!   front of the escape the police came to (its PoliceSpawnedEvent handlers: Police_Blocker_A for PoliceSPawner12,
 //!   Police_Blocker_B for PoliceSPawner2); until then it keeps counselors out.
@@ -306,20 +308,52 @@ fn turn_back_jason(arrived: Option<Res<PoliceArrived>>, zones: Query<(&EscapeZon
     }
 }
 
-/// On foot, inside the police's volume: she escapes.
+/// Escaping on foot: the exit path's points still ahead of her, and the time left until the escape counts.
+#[derive(Component)]
+pub struct EscapingOnFoot {
+    path: Vec<Vec3>,
+    left: f32,
+}
+
+/// On foot, inside the police's volume: she starts escaping, walks the way out, and escapes after the delay.
 #[allow(clippy::type_complexity)]
 fn escape_with_police(
     mut commands: Commands,
+    time: Res<Time>,
     arrived: Option<Res<PoliceArrived>>,
     escaped: Option<Res<crate::vehicle::Escaped>>,
     zones: Query<(&EscapeZone, &GlobalTransform)>,
-    player: Single<(&Transform, &crate::player::Player), (Without<crate::vehicle::Driving>, Without<crate::jason::Held>, Without<crate::hiding::Hiding>)>,
+    mut player: Single<
+        (Entity, &Transform, &mut crate::player::Player, Option<&mut EscapingOnFoot>),
+        (Without<crate::vehicle::Driving>, Without<crate::jason::Held>, Without<crate::hiding::Hiding>),
+    >,
 ) {
     let (Some(a), None) = (arrived, escaped) else { return };
-    let Ok((zone, zxf)) = zones.get(a.zone) else { return };
-    let (xf, p) = *player;
-    if p.counselor.alive() && xf.translation.distance(zxf.translation()) <= zone.radius_m {
-        info!("escaped with the police: {:.1} m from the volume's centre (radius {:.1})", xf.translation.distance(zxf.translation()), zone.radius_m);
-        commands.insert_resource(crate::vehicle::Escaped { how: "with the police".into() });
+    let (pe, xf, ref mut p, ref mut escaping) = *player;
+    if let Some(e) = escaping.as_mut() {
+        // Stamina stays full while she leaves (bLockStamina).
+        p.counselor.stamina = 100.0;
+        while e.path.first().is_some_and(|q| q.with_y(0.0).distance(xf.translation.with_y(0.0)) < 1.0) {
+            e.path.remove(0);
+        }
+        let dir = e.path.first().map_or(Vec2::ZERO, |q| Vec2::new(q.x - xf.translation.x, q.z - xf.translation.z));
+        commands.entity(pe).insert(crate::player::Autopilot(dir));
+        e.left -= time.delta_secs();
+        if e.left <= 0.0 {
+            info!("escaped with the police at ({:.1}, {:.1}, {:.1}), {} exit points ahead", xf.translation.x, xf.translation.y, xf.translation.z, e.path.len());
+            commands.entity(pe).remove::<(EscapingOnFoot, crate::player::Autopilot)>();
+            commands.insert_resource(crate::vehicle::Escaped { how: "with the police".into() });
+        }
+        return;
     }
+    let Ok((zone, zxf)) = zones.get(a.zone) else { return };
+    let d = xf.translation.distance(zxf.translation());
+    if !p.counselor.alive() || d > zone.radius_m {
+        return;
+    }
+    // The path from its point nearest her (in the ground plane) to its end.
+    let flat = |q: &Vec3| q.with_y(0.0).distance(xf.translation.with_y(0.0));
+    let nearest = zone.exit.iter().enumerate().min_by(|a, b| flat(a.1).total_cmp(&flat(b.1))).map_or(0, |(i, _)| i);
+    info!("escaping with the police: {d:.1} m from the volume's centre (radius {:.1}), {} exit points, {:.0} s", zone.radius_m, zone.exit.len() - nearest, zone.delay);
+    commands.entity(pe).insert(EscapingOnFoot { path: zone.exit[nearest..].to_vec(), left: zone.delay });
 }
