@@ -115,7 +115,8 @@ Presentation
       to 100 m in 3 cascades
 - [x] Door damage states (the Light/Medium/Heavy destructible meshes at 75/50/25% health); Jason's rage burst
 - [ ] Door break effects: the destructible chunks flying (BreakExplosionForce), sounds
-- [ ] Barricade plank: check its placement (not visible across the door in a screenshot)
+- [x] Barricade plank: checked; across the door 0.8 m up, just inside it (the component named `..._01_b` holds the
+  `_01_a` mesh; the leaning `_01_b` stands against the frame when it's down)
 - [x] Counselor model: Vanessa's base body, default outfit (master pose), face on the head bone, hair on the face, skin
       clipped under the clothes by the outfit's skin mask (f13-game character.rs, shaders/skin.wgsl)
 - [ ] Counselor model, remaining: facial animation and hair dynamics (their own anim Blueprints), the eyes' iris and
