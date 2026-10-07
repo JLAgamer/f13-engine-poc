@@ -198,7 +198,7 @@ Presentation
       her enter and exit takes with their root motion (enter ends in the seat, exit starts there)
 - [x] Starting off and stopping: her forward start (walk, run, sprint) as she sets off ahead, her stop (by her
       fastest gait, on the foot her last step left forward) as she halts; their footstep notifies (PLACEHOLDER rules)
-- [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: root rotation), foot-marker
+- [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: their root doesn't turn, the body turns about it; how the actor turns with them is unread), foot-marker
       sync (now normalised time), aim offsets (Base_Counselor_AnimBP's AimOffsets, the Hunter's poses on the shared
       skeleton, by AimPitch while bIsAiming), BS_Run_Lean. Not in the game: turn-in-place takes, limp movement
       (bShouldPlayWounded only swaps in F_hurt_stand_idle_01, done)
