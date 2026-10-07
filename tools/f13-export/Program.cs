@@ -297,6 +297,26 @@ void WriteKillCameras()
     Console.WriteLine($"kill_cameras.json: {all.Count} kills");
 }
 
+// water.json: the map's water volumes (volumes with bWaterVolume, e.g. Swim_PhysicsVolume): the actor's name (its
+// transform is in the level layout) and its brush's boxes (BrushBodySetup AggGeom convex elements' ElemBox, actor
+// space, cm).
+void WriteWater()
+{
+    var all = new Newtonsoft.Json.Linq.JArray();
+    foreach (var e in provider.LoadPackage(ToFile(Mvp.Map)).GetExports())
+    {
+        if (!e.GetOrDefault("bWaterVolume", false)) continue;
+        var body = e.GetOrDefault<FPackageIndex?>("BrushComponent")?.Load<UObject>()?.GetOrDefault<FPackageIndex?>("BrushBodySetup")?.Load<UObject>();
+        var props = body == null ? null : Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(body))["Properties"];
+        var boxes = new Newtonsoft.Json.Linq.JArray();
+        foreach (var c in props?["AggGeom"]?["ConvexElems"] ?? new Newtonsoft.Json.Linq.JArray())
+            if (c["ElemBox"] is { } b) boxes.Add(new Newtonsoft.Json.Linq.JObject { ["Min"] = b["Min"], ["Max"] = b["Max"] });
+        all.Add(new Newtonsoft.Json.Linq.JObject { ["Name"] = e.Name, ["Class"] = e.ExportType, ["FluidFriction"] = e.GetOrDefault("FluidFriction", 0.3f), ["Boxes"] = boxes });
+    }
+    File.WriteAllText(Path.Combine(outDir!, "water.json"), all.ToString(Newtonsoft.Json.Formatting.Indented));
+    Console.WriteLine($"water.json: {all.Count} water volumes");
+}
+
 void WriteCollision()
 {
     var path = Path.Combine(outDir!, "collision.json");
@@ -463,6 +483,7 @@ switch (rest[0])
         new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, Mvp.KillerAnims, Mvp.KeepRoot);
         new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TrapMesh, Mvp.TrapAnims);
         WriteKillCameras();
+        WriteWater();
         WriteCollision();
         {
             var sx = new SoundExporter(provider, outDir, ToFile);
@@ -501,6 +522,9 @@ switch (rest[0])
     }
     case "killer": // the MVP Jason's parts, weapon and animations (and the meshes they need)
         new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, Mvp.KillerAnims, Mvp.KeepRoot);
+        break;
+    case "water": // the map's water volumes (water.json)
+        WriteWater();
         break;
     case "killcams": // the kills' camera splines (kill_cameras.json)
         WriteKillCameras();
@@ -719,6 +743,11 @@ static class Mvp
         $"{Female}/Locomotion/F_normal_stand_walk_forward",
         $"{Female}/Locomotion/F_normal_stand_run_forward",
         $"{Female}/Locomotion/F_normal_stand_sprint_forward",
+        // Swimming (idle, slow, fast, sprint).
+        $"{Female}/Locomotion/Swimming/f_normal_swim_idle",
+        $"{Female}/Locomotion/Swimming/f_normal_swim_slow",
+        $"{Female}/Locomotion/Swimming/f_normal_swim_fast",
+        $"{Female}/Locomotion/Swimming/f_normal_swim_sprint",
         $"{Female}/Locomotion/F_normal_stand_walk_back",
         $"{Female}/Locomotion/F_normal_stand_walk_left",
         $"{Female}/Locomotion/F_normal_stand_walk_right",

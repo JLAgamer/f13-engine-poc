@@ -199,7 +199,8 @@ fn push_events(
     }
     set("WoundedFearEvent", p.counselor.wounded, 0.0);
     set("IndoorFearEvent", s.indoors(xf.translation), 0.0);
-    set("InWaterFearEvent", false, 0.0);
+    // In water: the water volume at her (CurrentWaterVolume; she swims there).
+    set("InWaterFearEvent", p.counselor.stance == f13_core::counselor::Stance::Swimming, 0.0);
     set("NearFriendlyFearEvent", false, 0.0);
     let jason = jasons.iter().next();
     if let Some(j) = jason {

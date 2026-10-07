@@ -36,6 +36,8 @@ const HURT_IDLE: &str = "F_hurt_stand_idle_01";
 const MOVE: [&str; 3] = ["F_normal_stand_walk_forward", "F_normal_stand_run_forward", "F_normal_stand_sprint_forward"];
 const CROUCH_IDLE: &str = "f_normal_crouch_idle_01";
 const CROUCH_WALK: &str = "f_normal_crouch_walk_forward";
+/// Swimming: idle, slow, fast, sprint.
+const SWIM: [&str; 4] = ["f_normal_swim_idle", "f_normal_swim_slow", "f_normal_swim_fast", "f_normal_swim_sprint"];
 const COMBAT_IDLE: &str = "f_combat_stand_idle_1h";
 /// AM_F_Combat_Stand_Block_Idle.
 const BLOCK_IDLE: &str = "F_combat_stand_block_idle";
@@ -442,6 +444,18 @@ pub(crate) fn animate(
                     targets.insert(CROUCH_IDLE, 1.0 - s);
                     targets.insert(CROUCH_WALK, s);
                 }
+                Stance::Swimming => {
+                    // Idle, slow at swimming speed, fast at running, sprint at sprinting (each in water).
+                    let m = t.water_speed_mod;
+                    let marks = [0.0, m * t.max_swim_speed, m * t.max_run_speed, m * t.max_sprint_speed];
+                    let state = speed_state(speed, &marks);
+                    for (k, name) in SWIM.iter().enumerate() {
+                        let w = (1.0 - (state - k as f32).abs()).max(0.0);
+                        if w > 0.0 {
+                            *targets.entry(name).or_default() += w;
+                        }
+                    }
+                }
                 Stance::Combat => {
                     let s = (speed / t.max_combat_speed.max(1.0)).clamp(0.0, 1.0);
                     let idle = if blocking && character.clips.contains_key(BLOCK_IDLE) { BLOCK_IDLE } else { COMBAT_IDLE };
@@ -474,7 +488,7 @@ pub(crate) fn animate(
             }
         }
 
-        let synced = |n: &str| MOVE.contains(&n) || n == CROUCH_WALK || COMBAT_WALK.iter().any(|(_, m)| *m == n);
+        let synced = |n: &str| MOVE.contains(&n) || SWIM[1..].contains(&n) || n == CROUCH_WALK || COMBAT_WALK.iter().any(|(_, m)| *m == n);
         rig.drive(&character.0, &targets, &synced, dt, &mut anim);
 
         // The Footstep_L / Footstep_R notifies the locomotion cycle that weighs most passed this frame (audio.rs).

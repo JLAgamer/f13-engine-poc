@@ -42,6 +42,7 @@ mod senses;
 mod ui;
 mod windows;
 mod vehicle;
+mod water;
 
 use bevy::asset::AssetPlugin;
 use bevy::camera_controller::free_camera::{FreeCamera, FreeCameraPlugin};
@@ -97,6 +98,8 @@ struct Args {
     /// Game clock multiplier (testing: run bots faster than real time).
     speed: f32,
     health: Option<f32>,
+    /// Start the counselor here (Bevy metres) instead of at a counselor start (testing).
+    spawn: Option<Vec3>,
     tuning: Option<PathBuf>,
     foliage: bool,
     screenshot: Option<PathBuf>,
@@ -143,6 +146,7 @@ fn parse_args() -> Args {
     let mut fear = None;
     let mut speed = 1.0f32;
     let mut health = None;
+    let mut spawn = None;
     let mut tuning = None;
     let mut foliage = true;
     let mut screenshot = None;
@@ -186,6 +190,12 @@ fn parse_args() -> Args {
             "--speed" => speed = it.next().and_then(|v| v.parse().ok()).unwrap_or(1.0f32).clamp(0.1, 16.0),
             "--fear" => fear = Some(it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0f32).clamp(0.0, 100.0)),
             "--health" => health = it.next().and_then(|v| v.parse().ok()),
+            "--spawn" => {
+                let v: Vec<f32> = it.next().unwrap_or_default().split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                if v.len() == 3 {
+                    spawn = Some(Vec3::new(v[0], v[1], v[2]));
+                }
+            }
             "--tuning" => tuning = it.next().map(PathBuf::from),
             "--flashlight" => flashlight = true,
             "--round-time" => round_time = it.next().and_then(|v| v.parse().ok()).map(|t: i32| t.max(1)),
@@ -213,7 +223,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight }
+    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight }
 }
 
 #[derive(Resource)]
@@ -285,7 +295,7 @@ fn main() {
     };
     println!("cabin layout {layout}");
     let layouts = vec![main, load(&layout)];
-    let spawn = counselor_start(&layouts);
+    let spawn = args.spawn.unwrap_or_else(|| counselor_start(&layouts));
     let mut app = App::new();
     // Gameplay randomness (stumbles, ...), separate from the match layout so both repeat with --seed.
     app.insert_resource(Anims::load(&args.export));
@@ -331,7 +341,7 @@ fn main() {
             .add_plugins(player::PlayerPlugin { spawn, capsule: args.capsule, camera: args.camera, demo: args.demo, fear: args.fear.unwrap_or(0.0), health: args.health })
             .add_plugins(fear_events::FearEventsPlugin { locked: args.fear })
             .add_plugins(match_flow::MatchPlugin { leave: !bot })
-            .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }, collision::CollisionPlugin, audio::AudioPlugin, kill_camera::KillCameraPlugin, prop_anim::PropAnimPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin, navigation::NavigationPlugin { debug: args.nav_debug }));
+            .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }, collision::CollisionPlugin, audio::AudioPlugin, water::WaterPlugin, kill_camera::KillCameraPlugin, prop_anim::PropAnimPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin, navigation::NavigationPlugin { debug: args.nav_debug }));
         if args.bot_escape {
             app.add_plugins(bot::BotPlugin(bot::Goal::Escape));
         } else if args.bot_heal {

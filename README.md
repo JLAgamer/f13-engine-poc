@@ -74,6 +74,7 @@ dotnet run --project tools/f13-export -- --game "<path to F13Game>" --out "<expo
   minigame widgets) as JSON (each widget's properties, slot and children; their textures as PNG; UI materials' texture
   samples and parameters), `textures.json` (the item icons the classes name) and the game's font (`fonts/`, its loose
   .ufont files). `tools/f13-export ... ui` writes just these.
+- `water.json`: the map's water volumes (their brush boxes). `tools/f13-export ... water` writes just this.
 - `kill_cameras.json`: each kill's camera spline (its SCCameraSplineComponent's curves). `tools/f13-export ...
   killcams` writes just this.
 - `props/`: skeletal props' own animations (the bear trap's), as `.anim` with an index per mesh. `tools/f13-export ...
@@ -170,7 +171,7 @@ then the game closes. The game would go back to the lobby here.
 XP comes from the game's score events, where the game awards them: picking up weapons and car parts, repairs,
 first aid, barricading, firecrackers, traps, hitting and stunning Jason, breaking his grab, escaping, and the match's
 own (time bonus, unscathed, match complete, team escaped). Each one shows on the right as it's scored.
-`--round-time s` shortens the match for testing. The level intro and outro sequences aren't played.
+`--round-time s` shortens the match for testing; `--spawn x,y,z` starts her there (metres, Bevy axes). The level intro and outro sequences aren't played.
 
 Items, cabinets and cars spawn as in the game (`--seed n` repeats a match; the log lists where the cars and parts
 are). E picks up (preferring what the camera looks at), searches drawers and installs parts, G drops the held

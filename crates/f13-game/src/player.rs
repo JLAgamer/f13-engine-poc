@@ -26,6 +26,9 @@ const SPAWN_PROBE_M: f32 = 1.5;
 pub(crate) const CAPSULE_RADIUS_M: f32 = 0.34;
 /// Base_Counselor's CollisionCylinder: half height 82 cm, radius left at ACharacter's 34 cm.
 pub(crate) const CAPSULE_HALF_HEIGHT_M: f32 = 0.82;
+/// Afloat, her centre is this far under the water's surface (Unreal floats a Buoyancy 1 swimmer with its centre at the
+/// surface: just above, it isn't in water and falls back).
+const SWIM_DEPTH_M: f32 = 0.05;
 const CAMERA_DISTANCE_M: f32 = 3.0;
 const CAR_CAMERA_DISTANCE_M: f32 = 7.0;
 const CAMERA_HEIGHT_M: f32 = 1.6;
@@ -58,6 +61,8 @@ pub struct Player {
     pub grounded: bool,
     /// In a hiding spot (hiding.rs).
     pub hidden: bool,
+    /// Swimming: her input acceleration squared (cm²/s⁴; stamina only drains while she strokes).
+    pub swim_accel_sq: f32,
 }
 
 /// Placed (spawned or teleported) but not yet put on the floor: the next move finds the floor under this point, or,
@@ -73,6 +78,7 @@ impl Player {
             fear: self.fear,
             dodging: self.counselor.dodging(),
             in_hiding: self.hidden,
+            accel_sq: self.swim_accel_sq,
             ..Default::default()
         }
     }
@@ -162,7 +168,7 @@ fn spawn_player(
     counselor.health = config.health.unwrap_or(tuning.counselor.health.max_health).clamp(1.0, tuning.counselor.health.max_health);
     counselor.update_wounded(counselor.health, true, &tuning.counselor);
     let player = commands.spawn((
-        Player { counselor, velocity: Vec2::ZERO, walk_toggle: false, fear: config.fear, root_motion: None, montage: None, vel_y: 0.0, grounded: false, hidden: false },
+        Player { counselor, velocity: Vec2::ZERO, walk_toggle: false, fear: config.fear, root_motion: None, montage: None, vel_y: 0.0, grounded: false, hidden: false, swim_accel_sq: 0.0 },
         Transform::from_translation(config.spawn),
         Visibility::default(),
         Unsettled,
@@ -292,10 +298,11 @@ fn update_counselor(
         p.walk_toggle = !p.walk_toggle;
     }
     let c = &mut p.counselor;
-    if intent.toggle_crouch {
+    let swimming = c.stance == Stance::Swimming;
+    if intent.toggle_crouch && !swimming {
         c.stance = if c.stance == Stance::Crouching { Stance::Standing } else { Stance::Crouching };
     }
-    if intent.toggle_combat {
+    if intent.toggle_combat && !swimming {
         c.stance = if c.stance == Stance::Combat { Stance::Standing } else { Stance::Combat };
         c.set_sprinting(false);
         info!("combat stance {}", c.stance == Stance::Combat);
@@ -370,6 +377,7 @@ pub(crate) fn move_player(
     interaction: Option<Res<crate::interact::Interaction>>,
     collision: Res<crate::collision::WorldCollision>,
     dynamic: Res<crate::collision::DynamicColliders>,
+    water: Option<Res<crate::water::Water>>,
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
@@ -397,6 +405,7 @@ pub(crate) fn move_player(
         let situation = p.situation();
         let max_speed = p.counselor.max_speed(&situation, &tuning.counselor);
         let accel = input_acceleration(wish.to_array(), &tuning.movement);
+        p.swim_accel_sq = accel[0] * accel[0] + accel[1] * accel[1];
         let mut v = p.velocity.to_array();
         calc_velocity(&mut v, accel, max_speed, dt, &tuning.movement);
         p.velocity = Vec2::from_array(v);
@@ -418,8 +427,40 @@ pub(crate) fn move_player(
     let cap = f13_core::collision::Capsule { radius: CAPSULE_RADIUS_M, half_height: CAPSULE_HALF_HEIGHT_M };
     let mut pos = xf.translation;
     let (grounded, delta) = (p.grounded, p.velocity * dt / CM);
-    let r = f13_core::collision::move_capsule(&world, &mut pos, &mut p.vel_y, grounded, delta, dt, &cap, &WALK);
+    // Water: she swims while her centre is under the surface (Unreal's IsInWater at the pawn's location); with
+    // Buoyancy 1 she floats with her centre at the surface (SWIM_DEPTH_M under it, so she stays in).
+    let surface = water.as_ref().and_then(|w| w.surface_at(pos + Vec3::Y * CAPSULE_HALF_HEIGHT_M));
+    let swimming = p.counselor.stance == Stance::Swimming;
+    if let (Some(top), false) = (surface, swimming) {
+        info!("swimming (surface {top:.2})");
+        p.counselor.stance = Stance::Swimming;
+        p.counselor.set_sprinting(false);
+    }
+    let swim_feet = surface.map(|top| top - SWIM_DEPTH_M - CAPSULE_HALF_HEIGHT_M);
+    if let Some(feet) = swim_feet {
+        // Afloat (from wherever she was under the surface).
+        pos.y = feet;
+        p.vel_y = 0.0;
+    }
+    let r = f13_core::collision::move_capsule(&world, &mut pos, &mut p.vel_y, grounded && swim_feet.is_none(), delta, dt, &cap, &WALK);
     p.grounded = r.grounded;
+    if let (Some(feet), Stance::Swimming) = (swim_feet, p.counselor.stance) {
+        // Out where the bottom comes up to where she floats, else afloat.
+        let floor = f13_core::collision::surface_below(&world, pos.x, pos.z, feet + MAX_STEP_HEIGHT_M, feet - 3.0).map(|s| s.0);
+        if floor.is_some_and(|y| y >= feet) {
+            info!("out of the water");
+            p.counselor.stance = Stance::Standing;
+            pos.y = floor.unwrap_or(pos.y).max(pos.y);
+            p.grounded = true;
+        } else {
+            pos.y = feet;
+            p.vel_y = 0.0;
+            p.grounded = false;
+        }
+    } else if p.counselor.stance == Stance::Swimming {
+        info!("out of the water");
+        p.counselor.stance = Stance::Standing;
+    }
     // Like Unreal's SlideAlongSurface: drop the velocity going into the walls hit.
     if let Some(n) = r.wall_normal.try_normalize() {
         let into = p.velocity.dot(n).min(0.0);

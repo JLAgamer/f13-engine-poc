@@ -20,7 +20,10 @@ Mechanics: counselor side
 - [x] Unreal walking movement: acceleration, friction, braking (f13-core::movement)
 - [x] Stumbles: random (fear and stamina curves, wounds, stats, cooldown) and on running out of stamina (f13-core::stumble)
 - [x] Combat stance and dodge: double-tap, stamina cost, root motion (f13-core::dodge, anims.json)
-- [ ] Swimming
+- [x] Swimming (water.rs, player.rs): the map's water volume (Swim_PhysicsVolume's brush box); she swims while her
+      centre is under its surface (IsInWater), afloat at the surface, out where the bottom comes up; the swim
+      blend (idle, slow, fast, sprint), swimming speed and stamina, the InWater fear event. Not yet: diving, wading
+      sounds, Jason in water
 - [x] Fear events pushed in the client (fear_events.rs): darkness (f13-core::light, the map's point and spot lights),
   indoors (the cabins' indoor volumes, also used by Sense), wounded, Jason near and in view, grabbed, hidden, items
   held. Not yet: in water (with swimming), near friendlies and corpses (other counselors), blackouts (power)
@@ -90,7 +93,9 @@ Mechanics: Jason side
 - [x] Throwing knives (J2's two, the knife's damage and cooldown, the throw montage and its ThrowKnife notify,
   SCJasonAIProperties' 5..25 m; placeholder knife speed) and Jason's traps (J2's seven KillerTraps, set in doorways
   he opens; they catch counselors, not him; his trap's own mesh isn't exported)
-- [ ] More kills; knife pickups
+- [x] Knife pickups: the map's ThrowingKnifePickups (large items) add their StackSize to Jason's knives as he passes
+      (AddKnives, no cap); the computer Jason doesn't seek them out, and there's no pick-up move
+- [ ] More kills
 - [ ] Breaking walls, generators
 - [ ] Car interactions: stopping and grabbing out of the car
 
