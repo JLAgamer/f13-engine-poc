@@ -102,7 +102,8 @@ Mechanics: Jason side
 - [x] Jason's HUD when he's played (KillerHUDWidget): his timer, knives and traps left, the abilities' unlock bars and
       ready glows, rage
 - [x] Sense on demand when Jason's played (4; the computer Jason uses it when ready and she's out of sight)
-- [ ] Playing as Jason, remaining: the map for Morph, choosing kills
+- [x] Choosing kills when Jason's played: 1-5 while holding her (a click: one at random)
+- [ ] Playing as Jason, remaining: the map for Morph
 - [x] Shift, Morph, Stalk (f13-core::killer_moves, jason.rs): Shift's 0.7 s wind-up, ShiftSpeed and ShiftTime (J2:
   1000 cm/s, 4 s), ending in a grab; Stalk's StalkActiveTimer (IdleStalkModifier standing still); Morph to the
   nearest SCKillerMorphPoint within 30 m of the spot after TeleportScreenTime; the teleport fade (he's hidden below
@@ -116,7 +117,7 @@ Mechanics: Jason side
       (AddKnives, no cap); the computer Jason doesn't seek them out, and there's no pick-up move
 - [x] More kills: the pickaxe's five grab kills (Throat Hack, Can Opener, Curb Stomp, Sweep The Leg, Top Popper),
       paired montages and kill cameras; the AI picks one at random, `--kill <name>` forces one
-- [ ] Kills, remaining: the other weapons' kills, environment (placed) kills, choosing kills as the player
+- [ ] Kills, remaining: the other weapons' kills, environment (placed) kills
 - [x] Generators (power.rs): the fuse boxes and their power grids; a destroyed fuse box puts out the powered lights
       in its grid's box (and they stop lighting her: darkness fear) and lights its red power-out light; counselors
       repair it (hold E, 15 s, pips), Jason destroys it (the player's E: Jason_Generator_Destruction_Machete's

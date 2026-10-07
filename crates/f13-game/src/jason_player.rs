@@ -5,7 +5,7 @@
 //! events before the engine sees them: the player's keys never reach her.
 //!
 //! Keys: WASD walk, Shift run, mouse look; left click swing, middle click heavy swing, right click grab, F throw a
-//! knife, T set a trap, left click again while holding her to kill her, 1 Shift, 2 Morph (to the morph point nearest 30 m ahead of where he looks), 3 Stalk, 4 Sense. Doors in
+//! knife, T set a trap, left click again while holding her to kill her, 1 Shift, 2 Morph (to the morph point nearest 30 m ahead of where he looks), 3 Stalk, 4 Sense; while holding her 1-5 pick a kill. Doors in
 //! his way open or break as he walks into them; E destroys a fuse box he's at (the power in its grid goes out). Esc frees the mouse, a click takes it again.
 
 use bevy::input::keyboard::KeyboardInput;
@@ -82,6 +82,8 @@ pub struct Presses {
     pub stalk: bool,
     /// E: destroy the fuse box at hand.
     pub interact: bool,
+    /// 1-5 while he holds her: that grab kill (jason.rs KILLS).
+    pub kill: Option<usize>,
 }
 
 /// One fixed step's input.
@@ -156,6 +158,10 @@ fn capture(
     p.morph |= c.keys.just_pressed(KeyCode::Digit2);
     p.stalk |= c.keys.just_pressed(KeyCode::Digit3);
     let sense = c.keys.just_pressed(KeyCode::Digit4);
+    let digits = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::Digit5];
+    if let Some(i) = digits.iter().position(|&k| c.keys.just_pressed(k)) {
+        p.kill = Some(i);
+    }
     c.sense |= sense;
     p.interact |= c.keys.just_pressed(KeyCode::KeyE);
 }
@@ -187,8 +193,9 @@ fn demo(
     let now = time.elapsed_secs();
     let (knife, swung, last) = &mut *done;
     debug!("jason demo: {:?} at {:.1}, {dist:.1} m from her, velocity {:.0}", j.state, jxf.translation, j.velocity);
+    // Holding her: a kill picked by its key (3: the third).
     if matches!(j.state, crate::jason::JasonState::Holding { t } if t > 1.5) {
-        controls.latched.attack = true;
+        controls.latched.kill = Some(2);
     }
     if !matches!(j.state, crate::jason::JasonState::Hunting) || now - *last < 1.0 {
         return;

@@ -1850,10 +1850,11 @@ pub(crate) fn update_jason(
                     release(&mut commands, pe, GRAB_BREAK, counselor_model.as_deref());
                     j.state = JasonState::Stunned { t: 0.0, stun: Stun::GrabBreak };
                     commands.entity(je).insert(PlayAction(Stun::GrabBreak.anims().0.into()));
-                } else if player_input.map_or(at >= HOLD_BEFORE_KILL, |i| i.presses.attack) {
-                    // The AI kills after a while; the player when they click.
-                    // One of the weapon's grab kills (the game: the player's picks, the AI's at random).
-                    j.kill = config.kill.unwrap_or_else(|| rng.0.index(KILLS.len()));
+                } else if player_input.map_or(at >= HOLD_BEFORE_KILL, |i| i.presses.attack || i.presses.kill.is_some()) {
+                    // The AI kills after a while; the player when they pick a kill (1-5) or click (one at random).
+                    // One of the weapon's grab kills.
+                    let picked = player_input.and_then(|i| i.presses.kill).filter(|&k| k < KILLS.len());
+                    j.kill = picked.or(config.kill).unwrap_or_else(|| rng.0.index(KILLS.len()));
                     let (anim, class, name) = KILLS[j.kill];
                     info!("Jason: {name}");
                     j.state = JasonState::Killing { t: 0.0 };

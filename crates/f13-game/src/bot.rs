@@ -990,13 +990,17 @@ fn run_bot(
         Step::AwaitJason => {
             let Some((j, jxf)) = jasons.iter().next() else { return };
             if bot.goal == Goal::Abilities {
+                // A Morph can come and go between two frames at speed: also seen as Morph recharging once unlocked.
+                let mut morph_spent = false;
                 if let Some(mut k) = knowledge.iter_mut().next() {
                     if !k.sees {
                         k.last_known = Some((pxf.translation, time.elapsed_secs(), crate::senses::Clue::Heard));
                     }
+                    let a = &k.abilities;
+                    morph_spent = a.is_unlocked(f13_core::killer_abilities::Ability::Morph) && a.recharge_fraction(f13_core::killer_abilities::Ability::Morph) < 1.0;
                 }
                 let used = [
-                    (matches!(j.state, crate::jason::JasonState::Morphing { .. }), "morph"),
+                    (matches!(j.state, crate::jason::JasonState::Morphing { .. }) || morph_spent, "morph"),
                     (j.stalking(), "stalk"),
                     (j.shifting(), "shift"),
                 ];
