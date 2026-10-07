@@ -78,7 +78,14 @@ const GRAB_STARTUP: &str = "normal_grab_startup";
 const GRAB_ENTER: &str = "normal_grab_enter_1";
 const GRAB_IDLE: &str = "normal_grab_idle";
 const GRAB_MISS: &str = "normal_grab_miss";
-const KILL: &str = "cinematic_pickaxe_throathack";
+/// The pickaxe's grab kills: his and her paired montage (same name), the kill class (its camera), and its KillName.
+pub const KILLS: [(&str, &str, &str); 5] = [
+    ("cinematic_pickaxe_throathack", "Pickaxe_ThroatHack_GrabKill", "Pickaxe Throat Hack"),
+    ("cinematic_pickaxe_head_canopener", "Pickaxe_Canopener_GrabKill", "Pickaxe Can Opener"),
+    ("cinematic_pickaxe_curbstomp", "PickAxe_CurbStomp_GrabKill", "Pickaxe Curb Stomp"),
+    ("cinematic_pickaxe_sweeptheleg", "PickAxe_SweepTheLeg_GrabKill", "Pickaxe Sweep The Leg"),
+    ("cinematic_pickaxe_toppopper", "PickAxe_TopPopper_GrabKill", "Pickaxe Top Popper"),
+];
 
 const HIT_BACK: &str = "f_normal_stand_hitreaction_back_01";
 const HIT_LEFT: &str = "f_normal_stand_hitreaction_left_01";
@@ -88,7 +95,6 @@ const BLOCK_REACT: &str = "f_combat_stand_2h_attack_block";
 const DEATH: &str = "f_normal_stand_death_01";
 const GRABBED_ENTER: &str = "f_normal_grab_enter";
 const GRABBED_IDLE: &str = "f_normal_grab_idle";
-const COUNSELOR_KILL: &str = "cinematic_pickaxe_throathack";
 const DOOR_OPEN_INSIDE: &str = "normal_stand_door_open_inside_forward";
 const DOOR_OPEN_OUTSIDE: &str = "normal_stand_door_open_outside_forward";
 const DOOR_BURST: &str = "uber_stand_wall_smash_02";
@@ -151,16 +157,19 @@ const WANDER_SECONDS: f32 = 40.0;
 pub struct JasonPlugin {
     /// Seconds before he starts hunting.
     pub delay: f32,
+    /// The grab kill he always does (an index into [`KILLS`]; `--kill <name>`), else one at random.
+    pub kill: Option<usize>,
 }
 
 #[derive(Resource)]
-struct JasonConfig {
+pub(crate) struct JasonConfig {
     delay: f32,
+    kill: Option<usize>,
 }
 
 impl Plugin for JasonPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(JasonConfig { delay: self.delay })
+        app.insert_resource(JasonConfig { delay: self.delay, kill: self.kill })
             .add_systems(Startup, spawn_jason)
             .add_systems(FixedUpdate, (update_jason, recover_counselor, fly_knives, pick_up_knives))
             .add_observer(spawn_knife)
@@ -323,6 +332,8 @@ pub struct Jason {
     pub fade: TeleportFade,
     /// Knives and traps left; the knife cooldown; where his traps are.
     pub knives: u32,
+    /// The grab kill he's doing ([`KILLS`]).
+    pub kill: usize,
     pub traps: u32,
     knife_cooldown: f32,
     trap_spots: Vec<Vec3>,
@@ -719,6 +730,7 @@ fn spawn_jason(
                 stalk: None,
                 fade: TeleportFade::default(),
                 knives: tuning.num_knives,
+                kill: 0,
                 traps: tuning.trap_count,
                 knife_cooldown: 0.0,
                 trap_spots: Vec::new(),
@@ -916,7 +928,7 @@ pub(crate) fn update_jason(
     nav: Option<ResMut<Nav>>,
     (killer, counselor_model): (Option<Res<KillerCharacter>>, Option<Res<crate::character::CounselorCharacter>>),
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
-    (mut rng, mut struggle, mut controls): (ResMut<crate::GameRng>, ResMut<Struggle>, Option<ResMut<crate::jason_player::JasonControls>>),
+    (mut rng, mut struggle, mut controls, config): (ResMut<crate::GameRng>, ResMut<Struggle>, Option<ResMut<crate::jason_player::JasonControls>>, Res<JasonConfig>),
     (mut jasons, morph_points): (Query<(Entity, &mut Jason, &mut Transform, Option<&HitJason>, Option<&mut crate::senses::Knowledge>), Without<Player>>, Option<Res<MorphPoints>>),
     (inventories, items, mut fuse_boxes, mut grids): (
         Query<&crate::interact::Inventory>,
@@ -1707,16 +1719,20 @@ pub(crate) fn update_jason(
                     commands.entity(je).insert(PlayAction(Stun::GrabBreak.anims().0.into()));
                 } else if player_input.map_or(at >= HOLD_BEFORE_KILL, |i| i.presses.attack) {
                     // The AI kills after a while; the player when they click.
-                    info!("Jason: Pickaxe Throat Hack");
+                    // One of the weapon's grab kills (the game: the player's picks, the AI's at random).
+                    j.kill = config.kill.unwrap_or_else(|| rng.0.index(KILLS.len()));
+                    let (anim, class, name) = KILLS[j.kill];
+                    info!("Jason: {name}");
                     j.state = JasonState::Killing { t: 0.0 };
-                    commands.entity(je).insert((PlayAction(KILL.into()), crate::kill_camera::KillCam::new(crate::kill_camera::KILL_CLASS, *xf)));
-                    commands.entity(pe).insert(PlayAction(COUNSELOR_KILL.into()));
+                    commands.entity(je).insert((PlayAction(anim.into()), crate::kill_camera::KillCam::new(class, *xf)));
+                    commands.entity(pe).insert(PlayAction(anim.into()));
                 } else {
                     j.state = JasonState::Holding { t: at };
                 }
             }
             JasonState::Killing { t: at } => {
                 let at = at + dt;
+                let (kill, _, kill_name) = KILLS[j.kill];
                 let jrig = rigs.iter().find(|(_, c, _)| c.parent() == je);
                 let crig = rigs.iter().find(|(_, c, _)| c.parent() == pe);
                 if alive {
@@ -1724,16 +1740,16 @@ pub(crate) fn update_jason(
                         place_held(pe, &mut pxf, true, jr, (cr, cxf), &killer.info, &c.info, &globals);
                     }
                     // She dies, and goes limp, where her side of the kill says (he plays his out).
-                    if at >= ragdoll_time(counselor_model.as_deref(), COUNSELOR_KILL) {
+                    if at >= ragdoll_time(counselor_model.as_deref(), kill) {
                         let health = p.counselor.health;
                         p.counselor.take_damage(Hit { amount: health, blocked_with_weapon: false }, &ptuning.counselor);
                         commands.entity(pe).remove::<(Held, PlayAction)>();
-                        info!("Vanessa: killed by Jason (Pickaxe Throat Hack)");
+                        info!("Vanessa: killed by Jason ({kill_name})");
                     }
                 }
-                if at >= killer.length(KILL).unwrap_or(12.0) {
+                if at >= killer.length(kill).unwrap_or(12.0) {
                     // He stays where the kill took him (its root motion), not back at its start.
-                    if let Some((_, last)) = killer.root_motion(KILL) {
+                    if let Some((_, last)) = killer.root_motion(kill) {
                         *xf = crate::character::flat(Transform::from_matrix(xf.to_matrix() * last.to_matrix()));
                         snap_rig(&mut rigs, je);
                     }

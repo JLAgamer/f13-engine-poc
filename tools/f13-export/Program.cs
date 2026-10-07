@@ -801,7 +801,7 @@ static class Mvp
         $"{Shared}/Interaction/Trap/AM_normal_stand_trap_place",
         $"{Shared}/Grab/AM_Grab_Break",
         $"{Shared}/Grab/AM_normal_grab_pocketknife_break",
-        CounselorKill,
+        .. CounselorKills,
         .. CounselorHiding,
         .. Montages,
     ];
@@ -839,18 +839,26 @@ static class Mvp
         $"{JasonHide}/AM_cinematic_hidespot_axe_bed_kill",
         $"{JasonAnim}/Cinematic/AM_cinematic_hidespot_hand_sleepingbag_kill",
     ];
-    // The pickaxe's DefaultGrabKill (Pickaxe_ThroatHack_GrabKill): Jason_PickaxeKill_01 and Counselor_PickaxeKill_01
-    // play these paired montages around one origin.
-    const string CounselorKill = $"{Shared}/Cinematic/AM_cinematic_pickaxe_throathack";
+    // The pickaxe's grab kills (its DefaultGrabKill Pickaxe_ThroatHack_GrabKill, and the others): each plays a paired
+    // Jason and counselor montage around one origin.
+    static string[] PickaxeKills => ["pickaxe_throathack", "pickaxe_head_canopener", "pickaxe_curbstomp", "pickaxe_sweeptheleg", "pickaxe_toppopper"];
+    static string[] CounselorKills => [.. PickaxeKills.Select(k => $"{Shared}/Cinematic/AM_cinematic_{k}")];
     const string JasonAnim = "/Game/Characters/Killers/Jason/Base/Animation";
-    const string JasonKill = $"{JasonAnim}/Cinematic/AM_cinematic_pickaxe_throathack";
+    static string[] JasonKills => [.. PickaxeKills.Select(k => $"{JasonAnim}/Cinematic/AM_cinematic_{k}")];
     const string JasonStun = $"{JasonAnim}/Deaths_HitReacts_Stuns";
-    public static readonly string[] PairedKills = [CounselorKill, JasonKill];
+    public static string[] PairedKills => [.. CounselorKills, .. JasonKills];
     /// Animations that keep their root translation (played from a fixed spot: paired kills, hiding spots).
     public static string[] KeepRoot => [.. PairedKills, .. CounselorHiding, .. JasonHiding];
     public const string Killer = "/Game/Characters/Killers/Jason/J2/Jason_SackHead";
     /// The kills whose cameras f13-game plays (kill_cameras.json).
-    public static readonly string[] KillCameras = ["/Game/Blueprints/ContextKills/Pickaxe_ThroatHack_GrabKill"];
+    public static readonly string[] KillCameras =
+    [
+        "/Game/Blueprints/ContextKills/Pickaxe_ThroatHack_GrabKill",
+        "/Game/Blueprints/ContextKills/Pickaxe_Canopener_GrabKill",
+        "/Game/Blueprints/ContextKills/PickAxe_CurbStomp_GrabKill",
+        "/Game/Blueprints/ContextKills/PickAxe_SweepTheLeg_GrabKill",
+        "/Game/Blueprints/ContextKills/PickAxe_TopPopper_GrabKill",
+    ];
     // Jason_AnimBP's BS_Jason_Normal_Move (SpeedState 0 idle, 1 walk, 2 fast walk, 3 run), the pickaxe's combat idle,
     // attacks (PickAxe's NeutralAttack and ForwardAttack), the grab, and the grab kill.
     /// The bear trap's own animations (BearTrap_C ArmedAnimation, TriggeredAnimation, EscapedAnimation; its idles).
@@ -900,7 +908,7 @@ static class Mvp
         $"{JasonAnim}/Interaction/Doors/AM_normal_stand_door_break_axe",
         // Raged, he bursts through a closed door instead (BurstDoorFrom*: Jason_WallSmash).
         $"{JasonAnim}/Abilities/AM_Jason_uber_stand_wall_smash_02",
-        JasonKill,
+        .. JasonKills,
         .. JasonHiding,
     ];
 }

@@ -88,6 +88,8 @@ struct Args {
     perf: bool,
     /// Play Jason (jason_player.rs); a bot plays the counselor.
     play_jason: bool,
+    /// Jason's grab kill, by name (jason::KILLS: e.g. curbstomp); else one at random.
+    kill: Option<usize>,
     /// Every fuse box starts destroyed (power.rs; implied by --bot-power).
     cut_power: bool,
     bot_power: bool,
@@ -146,6 +148,7 @@ fn parse_args() -> Args {
     let mut bot_raged = false;
     let mut perf = false;
     let mut play_jason = false;
+    let mut kill = None;
     let mut cut_power = false;
     let mut bot_power = false;
     let mut play_jason_demo = false;
@@ -197,6 +200,13 @@ fn parse_args() -> Args {
             }
             "--perf" => perf = true,
             "--play-jason" => play_jason = true,
+            "--kill" => {
+                let name = it.next().unwrap_or_default();
+                kill = jason::KILLS.iter().position(|(anim, _, _)| anim.ends_with(name.as_str()));
+                if kill.is_none() {
+                    eprintln!("--kill {name}: none of {:?}", jason::KILLS.map(|k| k.0));
+                }
+            }
             "--cut-power" => cut_power = true,
             "--bot-power" => (bot_power, cut_power) = (true, true),
             "--play-jason-demo" => (play_jason, play_jason_demo) = (true, true),
@@ -246,7 +256,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, cut_power, bot_power, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight }
+    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight }
 }
 
 #[derive(Resource)]
@@ -400,7 +410,7 @@ fn main() {
         // The counselor bots test her alone; --bot-jason tests him.
         let bot_alone = args.bot_escape || args.bot_heal || args.bot_dodge || args.bot_door || args.bot_trap;
         if !args.no_jason && !bot_alone {
-            app.add_plugins(jason::JasonPlugin { delay: args.jason_delay });
+            app.add_plugins(jason::JasonPlugin { delay: args.jason_delay, kill: args.kill });
         }
     }
     if let Some(path) = args.screenshot.clone() {

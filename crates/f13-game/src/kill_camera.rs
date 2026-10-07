@@ -8,9 +8,7 @@ use f13_core::camera_spline::{quaternion, rotator, CameraSpline, Handicam};
 use f13_data::level::Xform;
 use std::collections::HashMap;
 
-/// The kill Jason does and its camera (Pickaxe_ThroatHack_GrabKill plays cinematic_pickaxe_throathack).
-pub const KILL_CLASS: &str = "Pickaxe_ThroatHack_GrabKill";
-/// Its SCSplineCamera template's HandicamShakeFrequency (HandicamShakeFrequenceRandomizer is left at 0).
+/// The kills' SCSplineCamera templates' HandicamShakeFrequency (the throat hack's) (HandicamShakeFrequenceRandomizer is left at 0).
 const HANDICAM_FREQUENCY: Vec3 = Vec3::new(1.0, 1.0, 0.5);
 
 pub struct KillCameraPlugin;

@@ -172,7 +172,7 @@ then the game closes. The game would go back to the lobby here.
 XP comes from the game's score events, where the game awards them: picking up weapons and car parts, repairs,
 first aid, barricading, firecrackers, traps, hitting and stunning Jason, breaking his grab, escaping, and the match's
 own (time bonus, unscathed, match complete, team escaped). Each one shows on the right as it's scored.
-`--round-time s` shortens the match for testing; `--cut-power` starts every fuse box destroyed (hold E at one to repair it); `--spawn x,y,z` starts her there (metres, Bevy axes). The level intro and outro sequences aren't played.
+`--round-time s` shortens the match for testing; `--kill <name>` makes Jason use one grab kill (e.g. `curbstomp`; else one of the pickaxe's five at random); `--cut-power` starts every fuse box destroyed (hold E at one to repair it); `--spawn x,y,z` starts her there (metres, Bevy axes). The level intro and outro sequences aren't played.
 
 Items, cabinets and cars spawn as in the game (`--seed n` repeats a match; the log lists where the cars and parts
 are). E picks up (preferring what the camera looks at), searches drawers and installs parts, G drops the held
