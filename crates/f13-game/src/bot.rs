@@ -6,6 +6,8 @@
 //! `--bot-police`: fetch the phone box's fuse, put it in, repair the box once it's broken (as Jason breaks it),
 //! call the police on its phone, then (the countdown cut
 //! to 10 s) walk into the escape volume they open; exits when she escapes.
+//! `--bot-placed-kill`: wait at the placed kill nearest Jason, where he hears her: passes when he grabs her and kills
+//! her with it (a placed kill: his place and her death on its paired takes, its own camera).
 //! `--bot-heal`: fetch a first aid spray and use it (start hurt with `--health`); exits when healed.
 //! `--bot-door`: doors, barricades and windows ([`FX_STEPS`]): open/close/lock/unlock the nearest lockable door,
 //! barricade the nearest barred door and check it holds from both sides, then open a window, climb in, close it,
@@ -68,6 +70,8 @@ pub enum Goal {
     CarGrab,
     /// Fetch the phone box's fuse, put it in, call the police, and escape with them.
     Police,
+    /// Wait at a placed kill for Jason: he should grab her and use it.
+    PlacedKill,
 }
 
 pub struct BotPlugin(pub Goal);
@@ -276,7 +280,7 @@ fn run_bot(
         Query<(Entity, &crate::power::FuseBox, &Transform), (Without<Player>, Without<Vehicle>)>,
         Option<Res<crate::power::PowerGrids>>,
     ),
-    (collision, dynamic, (mut phone_boxes, mut phones, arrived, police_cars, jason_entities)): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<Res<crate::police::PoliceArrived>>, Query<&Transform, (With<crate::police::PoliceCar>, Without<Player>, Without<Vehicle>)>, Query<Entity, With<crate::jason::Jason>>)),
+    (collision, dynamic, (mut phone_boxes, mut phones, arrived, police_cars, jason_entities, placed_kills)): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<Res<crate::police::PoliceArrived>>, Query<&Transform, (With<crate::police::PoliceCar>, Without<Player>, Without<Vehicle>)>, Query<Entity, With<crate::jason::Jason>>, Query<(Entity, &crate::placed_kills::PlacedKill)>)),
 ) {
     let world = collision.with(&dynamic);
     let dt = time.delta_secs();
@@ -290,7 +294,7 @@ fn run_bot(
     for k in [KeyCode::Space, KeyCode::KeyW, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::KeyC, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD] {
         keys.release(k);
     }
-    let with_jason = matches!(bot.goal, Goal::CarGrab | Goal::Jason | Goal::Fight | Goal::Hide | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities | Goal::Block);
+    let with_jason = matches!(bot.goal, Goal::PlacedKill | Goal::CarGrab | Goal::Jason | Goal::Fight | Goal::Hide | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities | Goal::Block);
     let limit = if with_jason { 600.0 } else { 240.0 };
     if bot.total > limit && bot.step != Step::Done {
         error!("bot: gave up at {:?}", bot.step);
@@ -306,7 +310,8 @@ fn run_bot(
     let busy = acting || staggered || held;
     let sees = knowledge.iter().next().is_some_and(|k| k.sees);
     // Jason only knows what he perceives: when he hasn't seen her for a while, step out 10 m in front of him.
-    if matches!(bot.goal, Goal::Jason | Goal::Fight | Goal::HideSeen | Goal::Block) && matches!(bot.step, Step::AwaitJason | Step::Hide(0)) && hiding.is_none() && p.counselor.alive() && !held {
+    // (Blocking, only once the block is up: else his first swing or knife lands before it.)
+    if matches!(bot.goal, Goal::Jason | Goal::Fight | Goal::HideSeen | Goal::Block) && (bot.goal != Goal::Block || blocking) && matches!(bot.step, Step::AwaitJason | Step::Hide(0)) && hiding.is_none() && p.counselor.alive() && !held {
         if sees {
             bot.dodge_from = Some((Vec3::ZERO, bot.total));
         }
@@ -315,7 +320,9 @@ fn run_bot(
             let _ = j;
             if !sees && unseen_for > 8.0 {
                 let yaw = jxf.rotation.to_euler(EulerRot::YXZ).0;
-                let ahead = jxf.translation + Vec3::new(yaw.sin(), 0.0, yaw.cos()) * 10.0 + Vec3::Y * 1.0;
+                // Hiding where he sees her: farther out, so she has time to get in before he's on her.
+                let out = if bot.goal == Goal::HideSeen { 15.0 } else { 10.0 };
+                let ahead = jxf.translation + Vec3::new(yaw.sin(), 0.0, yaw.cos()) * out + Vec3::Y * 1.0;
                 if let Some(at) = stand_spot(&world, ahead, 1.5) {
                     info!("bot: stepping out in front of Jason");
                     place(pxf, at);
@@ -425,6 +432,28 @@ fn run_bot(
                     a.unlocked = [true; 4];
                     a.recharge_timer = a.tuning.recharge_time;
                 }
+            }
+            if bot.goal == Goal::PlacedKill {
+                // The placed kill nearest Jason: she stands just in front of it.
+                let Some((_, jxf)) = jasons.iter().next() else {
+                    error!("bot: no Jason");
+                    bot.step = Step::Done;
+                    return;
+                };
+                let near = |k: &crate::placed_kills::PlacedKill| k.interact.distance(jxf.translation);
+                let Some((e, k)) = placed_kills.iter().filter(|(_, k)| !k.used).min_by(|a, b| near(a.1).total_cmp(&near(b.1))) else {
+                    error!("bot: no placed kill");
+                    bot.step = Step::Done;
+                    return;
+                };
+                let front = k.interact + Vec3::new(k.forward.x, 0.0, k.forward.y) * 0.9;
+                let at = stand_spot(&world, front.with_y(k.spot.translation.y + 1.0), 1.5).unwrap_or(front);
+                place(pxf, at);
+                info!("bot: waiting at {} ({}), Jason {:.0} m away", k.takes().2, k.camera_key, jxf.translation.distance(at));
+                bot.fixtures[0] = Some(e);
+                bot.step = Step::AwaitJason;
+                bot.timer = 0.0;
+                return;
             }
             if matches!(bot.goal, Goal::Jason | Goal::Fight | Goal::Abilities | Goal::Block) {
                 match jasons.iter().next() {
@@ -650,6 +679,8 @@ fn run_bot(
                 return;
             }
             let step = &FX_STEPS[i];
+            // Placed on the step's first frame however long it was (a hitch at speed can pass 0.5 s at once).
+            let first_frame = bot.timer <= dt + 1e-6;
             let target = bot.fixtures[step.fx as usize];
             let Some((interact, gxf)) = target.and_then(|e| match step.fx {
                 Fx::Window => windows.get(e).ok().map(|(_, w, x)| (w.interact, *x)),
@@ -666,7 +697,7 @@ fn run_bot(
             if let Some(inwards) = step.walk {
                 // From 1 m out, walk at the doorway's centre (the actor origin) to 3 m beyond it.
                 let side = if inwards { 1.0 } else { -1.0 };
-                if step.outside.is_some() && bot.timer < 0.5 {
+                if step.outside.is_some() && (bot.timer < 0.5 || first_frame) {
                     place(pxf, gxf.translation() + fwd * side);
                 }
                 look_at(&mut camera, pxf, gxf.translation() - fwd * side * 3.0 + Vec3::Y);
@@ -681,7 +712,7 @@ fn run_bot(
             }
             if let (Some(outside), None) = (step.outside, step.walk) {
                 let stand = Vec3::new(at.x, gxf.translation().y, at.z) + fwd * if outside { 0.8 } else { -0.8 };
-                if bot.timer < 0.5 {
+                if bot.timer < 0.5 || first_frame {
                     place(pxf, stand);
                 }
             }
@@ -1009,8 +1040,11 @@ fn run_bot(
                     let Ok((zone, zxf)) = zones.get(a.zone) else { return };
                     // Jason, if he's about, dropped in the middle of their volume: they should shoot him back out.
                     if let (Some(je), Some((j, jxf))) = (jason_entities.iter().next(), jasons.iter().next()) {
-                        if !bot.jason_shots.contains(&"dropped") {
+                        // Again if he got away unstunned (a Morph as he landed).
+                        if !bot.jason_shots.contains(&"dropped") || (bot.timer > 3.0 && !bot.jason_shots.contains(&"police stun") && jxf.translation.distance(zxf.translation()) > zone.radius_m + 3.0) {
+                            bot.jason_shots.retain(|s| *s != "dropped");
                             bot.jason_shots.push("dropped");
+                            bot.timer = 0.0;
                             info!("bot: dropping Jason into the police's escape");
                             commands.entity(je).insert(Transform { translation: zxf.translation() + Vec3::Y * 1.0, ..*jxf });
                         }
@@ -1071,8 +1105,14 @@ fn run_bot(
                             info!("bot: trap placed");
                             bot.step = Step::Trap(1);
                             bot.timer = 0.0;
-                        } else if bot.timer < 1.2 {
+                        } else if !bot.second_tap || bot.timer > 4.0 {
+                            // One click (again after a while if it didn't take): a fixed window can pass in one
+                            // long frame at speed.
                             mouse.press(MouseButton::Left);
+                            bot.second_tap = true;
+                            if bot.timer > 4.0 {
+                                bot.timer = 1.0;
+                            }
                         }
                     }
                 }
@@ -1087,7 +1127,7 @@ fn run_bot(
                         return;
                     }
                     let Some(at) = trap else { return };
-                    if bot.timer < 0.1 {
+                    if bot.timer < 0.1 || bot.timer <= dt + 1e-6 {
                         let back = pxf.translation - at;
                         let back = Vec3::new(back.x, 0.0, back.z).normalize_or(Vec3::Z);
                         if let Some(spot) = stand_spot(&world, at + back * 2.0 + Vec3::Y, 1.5) {
@@ -1163,20 +1203,37 @@ fn run_bot(
         }
         Step::AwaitJason => {
             let Some((j, jxf)) = jasons.iter().next() else { return };
+            if bot.goal == Goal::PlacedKill {
+                // He hears her where she waits.
+                if let Some(mut k) = knowledge.iter_mut().next() {
+                    if !k.sees {
+                        k.last_known = Some((pxf.translation, time.elapsed_secs(), crate::senses::Clue::Heard));
+                    }
+                }
+                let placed = bot.fixtures[0].and_then(|e| placed_kills.get(e).ok()).map(|(_, k)| k.takes().2);
+                if matches!(j.state, crate::jason::JasonState::Killing { .. }) && placed == Some(j.kill_move.2) && !bot.jason_shots.contains(&"placed") {
+                    bot.jason_shots.push("placed");
+                    info!("bot: Jason is killing her with the placed kill ({})", j.kill_move.2);
+                }
+            }
             if bot.goal == Goal::Abilities {
                 // A Morph can come and go between two frames at speed: also seen as Morph recharging once unlocked.
-                let mut morph_spent = false;
+                let (mut morph_spent, mut stalk_spent, mut shift_spent) = (false, false, false);
                 if let Some(mut k) = knowledge.iter_mut().next() {
                     if !k.sees {
                         k.last_known = Some((pxf.translation, time.elapsed_secs(), crate::senses::Clue::Heard));
                     }
                     let a = &k.abilities;
-                    morph_spent = a.is_unlocked(f13_core::killer_abilities::Ability::Morph) && a.recharge_fraction(f13_core::killer_abilities::Ability::Morph) < 1.0;
+                    let spent = |ability| a.is_unlocked(ability) && a.recharge_fraction(ability) < 1.0;
+                    morph_spent = spent(f13_core::killer_abilities::Ability::Morph);
+                    // Stalk and Shift too: one can start and end within a long frame at speed (a grab out of a Shift).
+                    stalk_spent = spent(f13_core::killer_abilities::Ability::Stalk);
+                    shift_spent = spent(f13_core::killer_abilities::Ability::Shift);
                 }
                 let used = [
                     (matches!(j.state, crate::jason::JasonState::Morphing { .. }) || morph_spent, "morph"),
-                    (j.stalking(), "stalk"),
-                    (j.shifting(), "shift"),
+                    (j.stalking() || stalk_spent, "stalk"),
+                    (j.shifting() || shift_spent, "shift"),
                 ];
                 for (on, name) in used {
                     if on && !bot.jason_shots.contains(&name) {
@@ -1329,7 +1386,8 @@ fn run_bot(
                     } else {
                         bot.second_tap = false;
                     }
-                    if bot.timer > 3.0 {
+                    // (8 s: at speed, a few long frames can pass 3 s with only a press or two.)
+                    if bot.timer > 8.0 {
                         error!("bot: couldn't get into the hiding spot");
                         bot.step = Step::Done;
                         bot.timer = 0.0;
@@ -1460,6 +1518,7 @@ fn run_bot(
                     Goal::Trap => p.counselor.alive() && bot.last_health == 50.0 && bot.jason_shots.contains(&"free"),
                     Goal::Fight => p.counselor.alive() && bot.jason_shots.contains(&"stun"),
                     Goal::CarGrab => !p.counselor.alive() && bot.jason_shots.contains(&"pulled"),
+                    Goal::PlacedKill => !p.counselor.alive() && bot.jason_shots.contains(&"placed"),
                     Goal::Power => bot.fixtures[0]
                         .and_then(|e| fuse_boxes.get(e).ok())
                         .is_some_and(|(_, f, _)| !f.destroyed && f.grid.is_some_and(|g| grids.as_ref().is_some_and(|p| p.on(g)))),
@@ -1508,7 +1567,7 @@ fn run_bot(
                     Goal::Police => &[&["GridPartRepaired"], &["CallPolice"], &["Escape"]],
                     Goal::Fight => &[&["StunJason", "StunJasonShotgun", "StunJasonFlare", "FirecrackerJasonStun", "EscapeJasonGrab", "Trapper"]],
                     // Her death ends the match.
-                    Goal::Jason | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities | Goal::Block | Goal::CarGrab => &[&["CompletedMatch"]],
+                    Goal::Jason | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities | Goal::Block | Goal::CarGrab | Goal::PlacedKill => &[&["CompletedMatch"]],
                     _ => &[],
                 };
                 let mut unscored = Vec::new();

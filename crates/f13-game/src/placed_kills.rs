@@ -1,0 +1,117 @@
+//! Placed (environment) kills (SCContextKillActor: Wall_FaceSmash_PlacedKill, Table_Placedkill, ...): Jason holding
+//! a counselor uses one he's at: he takes its ContextKillComponent's place and facing (InteractorPositionRequirement
+//! LocationAndRotation), the two play its special moves' paired montages (InteractorSpecialClass Jason_*,
+//! VictimSpecialClass Counselor_*: bDieOnFinish), and its own camera spline (under the ContextKillComponent) films
+//! it. Most can be used once (bOnlyUseableOnce). Their KillInfo scores Jason's Resourceful.
+//!
+//! Reach: its Interactable's DistanceLimit (ILLInteractableComponent's 200 cm unless set), and with bUseYawLimit, the
+//! side it faces within MaxYawOffset. PLACEHOLDER: the interactable checks (distance from what, the yaw test's
+//! exact vectors) aren't read; here it's his distance to the Interactable in the ground plane, and his place within
+//! MaxYawOffset of its forward. The props' own animations (the bird bath, the water pump, the chair) aren't played.
+
+use bevy::prelude::*;
+use f13_data::classes::ClassDb;
+use f13_data::level::Xform;
+
+pub struct PlacedKillsPlugin;
+
+impl Plugin for PlacedKillsPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Startup, spawn_placed_kills);
+    }
+}
+
+/// Each kind: its actor class, Jason's take, hers, and its KillInfo's KillName.
+pub const KINDS: [(&str, &str, &str, &str); 15] = [
+    ("Birdbath_PlacedKill_C", "cinematic_hand_birdbath", "cinematic_hand_birdbath", "Bird Bath"),
+    ("HeadSmash_PlacedKill_C", "cinematic_f_gravestone_headsmash_01", "cinematic_gravestone_headsmash", "Head Smash"),
+    ("IronFence_PlacedKill_C", "cinematic_hand_ironfence", "cinematic_hand_ironfence", "Iron Fence"),
+    ("TreeArmRipoff_PlacedKill_C", "cinematic_hand_tree_arm_ripoff", "cinematic_hand_tree_arm_ripoff", "Tree Arm Ripoff"),
+    ("LightPostArmRipoff_PlacedKill_C", "cinematic_hand_tree_arm_ripoff", "cinematic_hand_tree_arm_ripoff", "Tree Arm Ripoff"),
+    ("Vertical_BackBreak_PlacedKil_C", "cinematic_surface_vertical_backbreak", "cinematic_surface_vertical_backbreak", "Vertical Back Break"),
+    ("Wall_FaceSmash_PlacedKill_C", "cinematic_m_wall_facesmash_01", "cinematic_wall_facesmash", "Wall Face Smash"),
+    ("WaterPump_PlacedKill_C", "cinematic_hand_waterpump", "cinematic_hand_waterpump", "Water Pump"),
+    ("AdirondackChair_PlacedKill_C", "cinematic_f_adirondackchair_kill_01", "cinematic_adirondackchair_kill", "Chair Kill"),
+    ("Stick_Campfire_PlacedKill_C", "cinematic_stick_campfire", "cinematic_stick_campfire", "Campfire"),
+    ("TreeStumpSlam_PlacedKill_C", "cinematic_hand_treestump_faceslam", "cinematic_hand_treestump_faceslam", "Tree Stump"),
+    ("Fireplace_PlacedKill_C", "cinematic_fireplace", "cinematic_fireplace", "Fireplace"),
+    ("Table_Placedkill_C", "cinematic_hand_table", "cinematic_hand_table", "Table Smash"),
+    ("TreeBranch_PlacedKill_C", "cinematic_treebranch_chesthole_01", "cinematic_treebranch_chesthole_01", "Tree Branch"),
+    ("WallHeadPunch_PlacedKill_C", "cinematic_wall_headpunch_01", "cinematic_wall_headpunch_01", "Wall Head Punch"),
+];
+
+/// ILLInteractableComponent's constructor: DistanceLimit (cm).
+const DEFAULT_REACH_CM: f32 = 200.0;
+
+/// A placed kill in the level.
+#[derive(Component, Debug)]
+pub struct PlacedKill {
+    /// Index into [`KINDS`].
+    pub kind: usize,
+    /// Its kill camera's key (kill_cameras.json: the actor's package name).
+    pub camera_key: String,
+    /// Where Jason stands for it (his transform: the ContextKillComponent's, turned to face as characters do).
+    pub spot: Transform,
+    /// Its camera spline's frame (world).
+    pub camera: Transform,
+    /// Its Interactable: where, facing which way (ground plane), how far it reaches (m), and its yaw limit (degrees).
+    pub interact: Vec3,
+    pub forward: Vec2,
+    pub reach_m: f32,
+    pub yaw_limit: Option<f32>,
+    pub only_once: bool,
+    pub used: bool,
+}
+
+impl PlacedKill {
+    /// Jason at `at` can use it.
+    pub fn in_reach(&self, at: Vec3) -> bool {
+        if self.used && self.only_once {
+            return false;
+        }
+        let d = Vec2::new(at.x - self.interact.x, at.z - self.interact.z);
+        if d.length() > self.reach_m || (at.y - self.interact.y).abs() > 2.5 {
+            return false;
+        }
+        self.yaw_limit.is_none_or(|limit| d.try_normalize().is_some_and(|d| d.angle_to(self.forward).abs().to_degrees() <= limit))
+    }
+
+    pub fn takes(&self) -> (&'static str, &'static str, &'static str) {
+        let (_, his, hers, name) = KINDS[self.kind];
+        (his, hers, name)
+    }
+}
+
+fn spawn_placed_kills(mut commands: Commands, level: Res<crate::Level>, export: Res<crate::ExportRoot>) {
+    let Ok(classes) = ClassDb::load(&export.0.join("classes.json")) else { return };
+    let mut n = 0;
+    for a in level.layouts.iter().flat_map(|l| &l.actors) {
+        let Some(kind) = KINDS.iter().position(|k| k.0 == a.class) else { continue };
+        let (Some(t), Some(info)) = (a.transform, classes.get(&a.class)) else { continue };
+        let comp = |name: &str| info.components.iter().find(|c| c.name == name);
+        let world = |c: &f13_data::level::ComponentInfo| crate::to_transform(&c.local.unwrap_or(Xform::IDENTITY).then(&t));
+        let Some(kill) = info.components.iter().find(|c| c.kind == "SCContextKillComponent") else { continue };
+        let Some(camera) = info.components.iter().find(|c| c.kind == "SCCameraSplineComponent") else { continue };
+        let Some(interact) = comp("Interactable") else { continue };
+        let spot = world(kill);
+        let iw = world(interact);
+        let f = iw.rotation * Vec3::X;
+        commands.spawn((
+            PlacedKill {
+                kind,
+                camera_key: a.class.trim_end_matches("_C").to_string(),
+                spot: Transform { rotation: spot.rotation * Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), ..spot },
+                camera: world(camera),
+                interact: iw.translation,
+                forward: Vec2::new(f.x, f.z).normalize_or(Vec2::X),
+                reach_m: interact.props["DistanceLimit"].as_f64().map_or(DEFAULT_REACH_CM, |d| d as f32) / 100.0,
+                yaw_limit: interact.props["bUseYawLimit"].as_bool().unwrap_or(false).then(|| interact.props["MaxYawOffset"].as_f64().unwrap_or(15.0) as f32),
+                only_once: a.props["bOnlyUseableOnce"].as_bool().or(info.props["bOnlyUseableOnce"].as_bool()).unwrap_or(false),
+                used: false,
+            },
+            Name::new(a.name.clone()),
+        ));
+        n += 1;
+    }
+    info!("placed kills: {n}");
+}

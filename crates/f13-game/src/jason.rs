@@ -349,6 +349,30 @@ pub enum JasonState {
     Done,
 }
 
+impl Jason {
+    /// Whether a stun takes now: not right after one (stun immunity), and in a state a hit can interrupt.
+    pub fn stunnable(&self) -> bool {
+        self.stun_immune <= 0.0
+            && matches!(
+                self.state,
+                JasonState::Hunting
+                    | JasonState::Swinging { .. }
+                    | JasonState::Reaching { .. }
+                    | JasonState::Missed { .. }
+                    | JasonState::Holding { .. }
+                    | JasonState::Flinching { .. }
+                    | JasonState::OpeningDoor { .. }
+                    | JasonState::BreakingDoor { .. }
+                    | JasonState::BurstingDoor { .. }
+                    | JasonState::Shifting { .. }
+                    | JasonState::Throwing { .. }
+                    | JasonState::PlacingTrap { .. }
+                    | JasonState::BreakingFuse { .. }
+                    | JasonState::Slamming { .. }
+            )
+    }
+}
+
 #[derive(Component)]
 pub struct Jason {
     pub state: JasonState,
@@ -390,6 +414,8 @@ pub struct Jason {
     pub knives: u32,
     /// The grab kill he's doing ([`KILLS`]).
     pub kill: usize,
+    /// The kill he's doing: his take, hers, its name (a grab kill's, or a placed kill's).
+    pub kill_move: (&'static str, &'static str, &'static str),
     pub traps: u32,
     knife_cooldown: f32,
     trap_spots: Vec<Vec3>,
@@ -792,6 +818,7 @@ fn spawn_jason(
                 fade: TeleportFade::default(),
                 knives: tuning.num_knives,
                 kill: 0,
+                kill_move: (KILLS[0].0, KILLS[0].0, KILLS[0].2),
                 traps: tuning.trap_count,
                 knife_cooldown: 0.0,
                 trap_spots: Vec::new(),
@@ -1001,7 +1028,7 @@ pub(crate) fn update_jason(
     mut players: Query<(Entity, &mut Player, &mut Transform, Option<&crate::vehicle::Driving>, Option<&mut crate::hiding::Hiding>, Has<crate::items::Blocking>), Without<Jason>>,
     mut doors: Query<(Entity, &mut crate::doors::Door, &GlobalTransform)>,
     (mut barricades, mut walls): (Query<&mut crate::windows::Barricade>, Query<(Entity, &mut crate::doors::Wall, &GlobalTransform)>),
-    (mut spots, cabinets): (Query<(Entity, &mut crate::hiding::HidingSpot, &GlobalTransform)>, Query<&GlobalTransform, With<crate::props::Cabinet>>),
+    (mut spots, cabinets, mut placed_kills): (Query<(Entity, &mut crate::hiding::HidingSpot, &GlobalTransform)>, Query<&GlobalTransform, With<crate::props::Cabinet>>, Query<&mut crate::placed_kills::PlacedKill>),
     mut rigs: Query<(&mut Rig, &ChildOf, &Transform), (Without<Jason>, Without<Player>)>,
     (globals, navmesh, leaves, parents): (
         Query<&GlobalTransform>,
@@ -1061,24 +1088,7 @@ pub(crate) fn update_jason(
             if matches!(h.stun, None | Some(Stun::Weapon { .. })) {
                 commands.trigger(Score("DamageJason"));
             }
-            let can_stun = j.stun_immune <= 0.0
-                && matches!(
-                    j.state,
-                    JasonState::Hunting
-                        | JasonState::Swinging { .. }
-                        | JasonState::Reaching { .. }
-                        | JasonState::Missed { .. }
-                        | JasonState::Holding { .. }
-                        | JasonState::Flinching { .. }
-                        | JasonState::OpeningDoor { .. }
-                        | JasonState::BreakingDoor { .. }
-                        | JasonState::BurstingDoor { .. }
-                        | JasonState::Shifting { .. }
-                        | JasonState::Throwing { .. }
-                        | JasonState::PlacingTrap { .. }
-                        | JasonState::BreakingFuse { .. }
-                        | JasonState::Slamming { .. }
-                );
+            let can_stun = j.stunnable();
             match h.stun {
                 Some(stun) if can_stun => {
                     info!("Jason: stunned ({stun:?}, {:.0}s)", stun.seconds());
@@ -1890,6 +1900,21 @@ pub(crate) fn update_jason(
                     release(&mut commands, pe, GRAB_BREAK, counselor_model.as_deref());
                     j.state = JasonState::Stunned { t: 0.0, stun: Stun::GrabBreak };
                     commands.entity(je).insert(PlayAction(Stun::GrabBreak.anims().0.into()));
+                } else if let Some(mut pk) = placed_kills
+                    .iter_mut()
+                    .find(|k| k.in_reach(xf.translation))
+                    .filter(|_| config.kill.is_none() && player_input.map_or(at >= HOLD_BEFORE_KILL, |i| i.presses.interact))
+                {
+                    // A placed kill at hand (the player's E; the AI uses one when it can): he takes its place.
+                    let (his, hers, name) = pk.takes();
+                    info!("Jason: {name} (placed kill)");
+                    pk.used = true;
+                    j.kill_move = (his, hers, name);
+                    *xf = killer.place(his, pk.spot).0;
+                    j.state = JasonState::Killing { t: 0.0 };
+                    commands.entity(je).insert((PlayAction(his.into()), crate::kill_camera::KillCam::at(&pk.camera_key, pk.camera)));
+                    commands.entity(pe).insert(PlayAction(hers.into()));
+                    snap_rig(&mut rigs, je);
                 } else if player_input.map_or(at >= HOLD_BEFORE_KILL, |i| i.presses.attack || i.presses.kill.is_some()) {
                     // The AI kills after a while; the player when they pick a kill (1-5) or click (one at random).
                     // One of the weapon's grab kills.
@@ -1897,6 +1922,7 @@ pub(crate) fn update_jason(
                     j.kill = picked.or(config.kill).unwrap_or_else(|| rng.0.index(KILLS.len()));
                     let (anim, class, name) = KILLS[j.kill];
                     info!("Jason: {name}");
+                    j.kill_move = (anim, anim, name);
                     j.state = JasonState::Killing { t: 0.0 };
                     commands.entity(je).insert((PlayAction(anim.into()), crate::kill_camera::KillCam::new(class, *xf)));
                     commands.entity(pe).insert(PlayAction(anim.into()));
@@ -1927,7 +1953,7 @@ pub(crate) fn update_jason(
             }
             JasonState::Killing { t: at } => {
                 let at = at + dt;
-                let (kill, _, kill_name) = KILLS[j.kill];
+                let (kill, her_kill, kill_name) = j.kill_move;
                 let jrig = rigs.iter().find(|(_, c, _)| c.parent() == je);
                 let crig = rigs.iter().find(|(_, c, _)| c.parent() == pe);
                 if alive {
@@ -1935,7 +1961,7 @@ pub(crate) fn update_jason(
                         place_held(pe, &mut pxf, true, jr, (cr, cxf), &killer.info, &c.info, &globals);
                     }
                     // She dies, and goes limp, where her side of the kill says (he plays his out).
-                    if at >= ragdoll_time(counselor_model.as_deref(), kill) {
+                    if at >= ragdoll_time(counselor_model.as_deref(), her_kill) {
                         let health = p.counselor.health;
                         p.counselor.take_damage(Hit { amount: health, blocked_with_weapon: false }, &ptuning.counselor);
                         commands.entity(pe).remove::<(Held, PlayAction)>();

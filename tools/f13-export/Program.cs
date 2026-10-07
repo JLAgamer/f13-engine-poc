@@ -488,6 +488,15 @@ switch (rest[0])
             Console.WriteLine(Newtonsoft.Json.JsonConvert.SerializeObject(e, Newtonsoft.Json.Formatting.Indented));
         }
         return 0;
+    case "cdo": // cdo <class name>...: each Blueprint class's defaults (its CDO's properties), one JSON line each
+        foreach (var name in rest.Skip(1))
+        {
+            var file = provider.Files.Keys.FirstOrDefault(k => k.EndsWith("/" + name.TrimEnd('C').TrimEnd('_') + ".uasset", StringComparison.OrdinalIgnoreCase));
+            var cdo = file == null ? null : provider.LoadPackage(file).GetExports().FirstOrDefault(e => e.Name.StartsWith("Default__"));
+            var props = cdo == null ? null : Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(cdo))["Properties"];
+            Console.WriteLine($"{name}\t{file}\t{props?.ToString(Newtonsoft.Json.Formatting.None)}");
+        }
+        return 0;
     case "pseudo": // pseudo <package>: its Blueprint classes' bytecode as pseudo code (reverse engineering)
         provider.ReadScriptData = true;
         foreach (var e in provider.LoadPackage(ToFile(rest[1])).GetExports().OfType<UClass>())
@@ -994,9 +1003,13 @@ static class Mvp
     // The pickaxe's grab kills (its DefaultGrabKill Pickaxe_ThroatHack_GrabKill, and the others): each plays a paired
     // Jason and counselor montage around one origin.
     static string[] PickaxeKills => ["pickaxe_throathack", "pickaxe_head_canopener", "pickaxe_curbstomp", "pickaxe_sweeptheleg", "pickaxe_toppopper"];
-    static string[] CounselorKills => [.. PickaxeKills.Select(k => $"{Shared}/Cinematic/AM_cinematic_{k}")];
+    static string[] CounselorKills => [.. PickaxeKills.Select(k => $"{Shared}/Cinematic/AM_cinematic_{k}"), .. PlacedKillsHers.Select(m => $"{Shared}/Cinematic/{m}")];
+    /// The map's placed (environment) kills' montages: their ContextKillComponents' special moves' ContextMontage, the
+    /// victim's (Counselor_*) and Jason's (Jason_*).
+    static string[] PlacedKillsHers => ["AM_cinematic_adirondackchair_kill", "AM_cinematic_fireplace", "AM_cinematic_gravestone_headsmash", "AM_cinematic_hand_birdbath", "AM_cinematic_hand_ironfence", "AM_cinematic_hand_table", "AM_cinematic_hand_tree_arm_ripoff", "AM_cinematic_hand_treestump_faceslam", "AM_cinematic_hand_waterpump", "AM_cinematic_stick_campfire", "AM_cinematic_surface_vertical_backbreak", "AM_cinematic_treebranch_chesthole_01", "AM_cinematic_wall_facesmash", "AM_cinematic_wall_headpunch_01"];
+    static string[] PlacedKillsHis => ["AM_Jason_cinematic_gravestone_headsmash_01", "AM_Jason_cinematic_surface_vertical_backbreak", "AM_cinematic_f_adirondackchair_kill_01", "AM_cinematic_fireplace", "AM_cinematic_hand_birdbath", "AM_cinematic_hand_ironfence", "AM_cinematic_hand_table", "AM_cinematic_hand_tree_arm_ripoff", "AM_cinematic_hand_treestump_faceslam", "AM_cinematic_hand_waterpump", "AM_cinematic_m_wall_facesmash_01", "AM_cinematic_stick_campfire", "AM_cinematic_treebranch_chesthole_01", "AM_cinematic_wall_headpunch_01"];
     const string JasonAnim = "/Game/Characters/Killers/Jason/Base/Animation";
-    static string[] JasonKills => [.. PickaxeKills.Select(k => $"{JasonAnim}/Cinematic/AM_cinematic_{k}")];
+    static string[] JasonKills => [.. PickaxeKills.Select(k => $"{JasonAnim}/Cinematic/AM_cinematic_{k}"), .. PlacedKillsHis.Select(m => $"{JasonAnim}/Cinematic/{m}")];
     const string JasonStun = $"{JasonAnim}/Deaths_HitReacts_Stuns";
     public static string[] PairedKills => [.. CounselorKills, .. JasonKills];
     /// Getting in and out of the driver's seat (played from the seat's socket).
@@ -1025,6 +1038,22 @@ static class Mvp
         "/Game/Blueprints/ContextKills/PickAxe_CurbStomp_GrabKill",
         "/Game/Blueprints/ContextKills/PickAxe_SweepTheLeg_GrabKill",
         "/Game/Blueprints/ContextKills/PickAxe_TopPopper_GrabKill",
+        // The placed kills' (their SCCameraSpline, under the ContextKillComponent).
+        "/Game/Blueprints/ContextKills/Birdbath_PlacedKill",
+        "/Game/Blueprints/ContextKills/HeadSmash_PlacedKill",
+        "/Game/Blueprints/ContextKills/IronFence_PlacedKill",
+        "/Game/Blueprints/ContextKills/TreeArmRipoff_PlacedKill",
+        "/Game/Blueprints/ContextKills/Vertical_BackBreak_PlacedKil",
+        "/Game/Blueprints/ContextKills/Wall_FaceSmash_PlacedKill",
+        "/Game/Blueprints/ContextKills/WaterPump_PlacedKill",
+        "/Game/Blueprints/ContextKills/AdirondackChair_PlacedKill",
+        "/Game/Blueprints/ContextKills/LightPostArmRipoff_PlacedKill",
+        "/Game/Blueprints/ContextKills/Stick_Campfire_PlacedKill",
+        "/Game/Blueprints/ContextKills/TreeStumpSlam_PlacedKill",
+        "/Game/Blueprints/ContextKills/Fireplace_PlacedKill",
+        "/Game/Blueprints/ContextKills/Table_Placedkill",
+        "/Game/Blueprints/ContextKills/TreeBranch_PlacedKill",
+        "/Game/Blueprints/ContextKills/WallHeadPunch_PlacedKill",
     ];
     // Jason_AnimBP's BS_Jason_Normal_Move (SpeedState 0 idle, 1 walk, 2 fast walk, 3 run), the pickaxe's combat idle,
     // attacks (PickAxe's NeutralAttack and ForwardAttack), the grab, and the grab kill.

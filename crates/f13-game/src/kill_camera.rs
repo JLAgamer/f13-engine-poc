@@ -54,15 +54,20 @@ fn blend_back(mut commands: Commands, time: Res<Time>, blend: Option<ResMut<Blen
 /// A kill's camera running: the kill's origin (Jason's actor transform at its start, in Bevy's space) and time.
 #[derive(Component)]
 pub struct KillCam {
-    pub kill: &'static str,
+    pub kill: String,
     pub origin: Transform,
     pub t: f32,
     handicam: Handicam,
 }
 
 impl KillCam {
-    pub fn new(kill: &'static str, jason: Transform) -> Self {
-        KillCam { kill, origin: Transform::from_matrix(jason.to_matrix() * Transform::from_rotation(crate::character::FACING).to_matrix()), t: 0.0, handicam: Handicam::default() }
+    pub fn new(kill: &str, jason: Transform) -> Self {
+        Self::at(kill, Transform::from_matrix(jason.to_matrix() * Transform::from_rotation(crate::character::FACING).to_matrix()))
+    }
+
+    /// From its camera spline's own frame (a placed kill's, under its ContextKillComponent).
+    pub fn at(kill: &str, origin: Transform) -> Self {
+        KillCam { kill: kill.to_string(), origin, t: 0.0, handicam: Handicam::default() }
     }
 }
 
@@ -92,7 +97,7 @@ pub(crate) fn kill_camera(
         }
         return;
     };
-    let Some(spline) = cameras.0.get(k.kill) else {
+    let Some(spline) = cameras.0.get(k.kill.as_str()) else {
         commands.entity(e).remove::<KillCam>();
         return;
     };

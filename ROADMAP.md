@@ -43,6 +43,8 @@ Mechanics: counselor side
       Unreal's defaults (mass, final ratio, brakes, drag, steering curve); a reduced model of the PhysX vehicle (no
       sliding, grip-capped drive, revs follow the wheels)
 - [ ] Car handling, remaining: suspension, sliding, collisions' impulses
+      (the PhysX vehicle SDK is statically linked and stripped: its tire and drivetrain code wasn't found in the
+      binary; PhysX 3.4's published source would be the reference, pending a decision on downloading it)
 - [x] Cabinets (drawers): search, items inside
 - [x] Doors: leaves exported and swinging on their pivot, open/close, lock/unlock by side (doors.rs; swing timing is a
   placeholder for the special-move montages)
@@ -119,7 +121,12 @@ Mechanics: Jason side
       (AddKnives, no cap); the computer Jason doesn't seek them out, and there's no pick-up move
 - [x] More kills: the pickaxe's five grab kills (Throat Hack, Can Opener, Curb Stomp, Sweep The Leg, Top Popper),
       paired montages and kill cameras; the AI picks one at random, `--kill <name>` forces one
-- [ ] Kills, remaining: the other weapons' kills, environment (placed) kills
+- [x] Placed (environment) kills (placed_kills.rs): the map's SCContextKillActors (15 kinds: tables, walls, trees,
+      back breaks, the bird bath, the water pump, the campfire...): Jason holding her at one (in its Interactable's
+      reach and yaw limit) takes its ContextKillComponent's place, both play its special moves' paired montages, its
+      own camera spline films it, used once where bOnlyUseableOnce; the player's E, the AI whenever one is at hand
+- [ ] Kills, remaining: the other weapons' kills; the placed kills' props' own animations (bird bath, water pump,
+      chair), walking her to one
 - [x] Generators (power.rs): the fuse boxes and their power grids; a destroyed fuse box puts out the powered lights
       in its grid's box (and they stop lighting her: darkness fear) and lights its red power-out light; counselors
       repair it (hold E, 15 s, pips), Jason destroys it (the player's E: Jason_Generator_Destruction_Machete's

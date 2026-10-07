@@ -80,7 +80,7 @@ pub struct Presses {
     pub shift: bool,
     pub morph: bool,
     pub stalk: bool,
-    /// E: destroy the fuse box at hand.
+    /// E: destroy the fuse box at hand; holding her, use the placed kill at hand.
     pub interact: bool,
     /// 1-5 while he holds her: that grab kill (jason.rs KILLS).
     pub kill: Option<usize>,

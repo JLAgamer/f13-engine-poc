@@ -338,7 +338,7 @@ fn turn_back_jason(
     spawners: Query<&PoliceSpawner>,
     names: Query<&Name>,
     tuning: Option<Res<crate::jason::KillerTuning>>,
-    mut jasons: Query<(Entity, &mut Transform), (With<crate::jason::Jason>, Without<crate::jason::HitJason>)>,
+    mut jasons: Query<(Entity, &crate::jason::Jason, &mut Transform), Without<crate::jason::HitJason>>,
 ) {
     let Some(a) = arrived else { return };
     let Ok((zone, zxf)) = zones.get(a.zone) else { return };
@@ -346,8 +346,9 @@ fn turn_back_jason(
     let Some(s) = spawners.iter().find(|s| s.zone == name) else { return };
     let center = zxf.translation();
     let out = zone.radius_m + tuning.map_or(0.4, |t| t.capsule.radius) + 0.05;
-    for (je, mut j) in &mut jasons {
-        if j.translation.with_y(0.0).distance(center.with_y(0.0)) >= zone.radius_m {
+    for (je, jason, mut j) in &mut jasons {
+        // Busy (a move he can't be stunned out of): the police wait for him (the game defers it past special moves).
+        if j.translation.with_y(0.0).distance(center.with_y(0.0)) >= zone.radius_m || !jason.stunnable() {
             continue;
         }
         let away = (j.translation - center).with_y(0.0).try_normalize().unwrap_or_else(|| (s.intercept - center).with_y(0.0).normalize_or(Vec3::X));

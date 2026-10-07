@@ -37,6 +37,7 @@ mod navigation;
 mod perf;
 mod mipmaps;
 mod player;
+mod placed_kills;
 mod police;
 mod power;
 mod prop_anim;
@@ -95,6 +96,7 @@ struct Args {
     cut_power: bool,
     bot_power: bool,
     bot_police: bool,
+    bot_placed_kill: bool,
     bot_car_grab: bool,
     /// Scripted Jason input (testing --play-jason).
     play_jason_demo: bool,
@@ -155,6 +157,7 @@ fn parse_args() -> Args {
     let mut cut_power = false;
     let mut bot_power = false;
     let mut bot_police = false;
+    let mut bot_placed_kill = false;
     let mut bot_car_grab = false;
     let mut play_jason_demo = false;
     let mut host = None;
@@ -215,6 +218,7 @@ fn parse_args() -> Args {
             "--cut-power" => cut_power = true,
             "--bot-power" => (bot_power, cut_power) = (true, true),
             "--bot-police" => bot_police = true,
+            "--bot-placed-kill" => bot_placed_kill = true,
             "--bot-car-grab" => bot_car_grab = true,
             "--play-jason-demo" => (play_jason, play_jason_demo) = (true, true),
             "--host" => host = Some(host.unwrap_or(f13_host_port())),
@@ -263,7 +267,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight }
+    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight }
 }
 
 #[derive(Resource)]
@@ -367,7 +371,7 @@ fn main() {
             rules.round_time = t;
         }
         app.insert_resource(match_flow::MatchTuning { rules, events: tuning.score_events.clone() });
-        let bot = args.bot_car_grab || args.bot_power || args.bot_police || args.bot_escape || args.bot_heal || args.bot_dodge || args.bot_door || args.bot_jason || args.bot_abilities || args.bot_block || args.bot_trap || args.bot_fight || args.bot_hide || args.bot_hide_seen || args.bot_locked_in.is_some();
+        let bot = args.bot_car_grab || args.bot_power || args.bot_police || args.bot_placed_kill || args.bot_escape || args.bot_heal || args.bot_dodge || args.bot_door || args.bot_jason || args.bot_abilities || args.bot_block || args.bot_trap || args.bot_fight || args.bot_hide || args.bot_hide_seen || args.bot_locked_in.is_some();
         app.insert_resource(player::PlayerTuning {
             counselor: tuning.counselor,
             movement: tuning.counselor_movement,
@@ -383,7 +387,7 @@ fn main() {
             // Playing Jason, the bot playing her doesn't decide when the run ends.
             .add_plugins(match_flow::MatchPlugin { leave: !bot || args.play_jason })
             .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }, collision::CollisionPlugin, audio::AudioPlugin, water::WaterPlugin, power::PowerPlugin { cut: args.cut_power }, kill_camera::KillCameraPlugin, prop_anim::PropAnimPlugin, doors::DebrisPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin, navigation::NavigationPlugin { debug: args.nav_debug }))
-            .add_plugins(police::PolicePlugin);
+            .add_plugins((police::PolicePlugin, placed_kills::PlacedKillsPlugin));
         // Playing Jason without a --bot-*: the escape bot plays her (the scripted Jason's test leaves her idle).
         if args.bot_escape || (args.play_jason && !bot && !args.play_jason_demo) {
             app.add_plugins(bot::BotPlugin(bot::Goal::Escape));
@@ -393,6 +397,8 @@ fn main() {
             app.add_plugins(bot::BotPlugin(bot::Goal::Power));
         } else if args.bot_police {
             app.add_plugins(bot::BotPlugin(bot::Goal::Police));
+        } else if args.bot_placed_kill {
+            app.add_plugins(bot::BotPlugin(bot::Goal::PlacedKill));
         } else if args.bot_heal {
             app.add_plugins(bot::BotPlugin(bot::Goal::Heal));
         } else if args.bot_dodge {
