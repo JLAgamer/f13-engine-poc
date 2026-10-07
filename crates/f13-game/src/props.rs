@@ -415,6 +415,7 @@ fn spawn_props(
         if let Some((pivot, pivot_closed)) = pivot {
             let door_interact = info.components.iter().find(|c| c.name == "InteractComponent");
             commands.entity(root).insert(crate::doors::Door {
+                spots: info.components.iter().filter(|c| c.name.ends_with("_SpecialMoveHandler")).map(|c| (c.name.clone(), local(c))).collect(),
                 open: false,
                 locked: false,
                 lockable: actor_bool(&classes, &actor.class, "bIsLockable", true),

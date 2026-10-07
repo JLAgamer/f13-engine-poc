@@ -163,6 +163,8 @@ mod tests {
             take_vault_damage: true,
             pane: None,
             glass: vec![],
+            vault: [None; 2],
+            dive: [None; 2],
         }
     }
 

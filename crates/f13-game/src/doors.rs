@@ -77,6 +77,8 @@ pub struct Door {
     /// `BaseDoorHealth`, and the Light / Medium / Heavy DestructionThreshold fractions of it.
     pub base_health: f32,
     pub damage_thresholds: [f32; 3],
+    /// Its special move spots (component name -> door local): where her open, close, lock and unlock moves play from.
+    pub spots: std::collections::HashMap<String, Transform>,
     /// The leaf's look (None in tests).
     pub visuals: Option<DoorVisuals>,
 }
@@ -235,6 +237,7 @@ mod tests {
             swing_seconds: SWING_SECONDS,
             base_health: 60.0,
             damage_thresholds: [0.75, 0.5, 0.25],
+            spots: Default::default(),
             visuals: None,
         }
     }

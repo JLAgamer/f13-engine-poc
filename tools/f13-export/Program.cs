@@ -953,7 +953,10 @@ static class Mvp
     ];
     /// Animations that keep their root translation (played from a fixed spot: paired kills, hiding spots, car seats,
     /// windows).
-    public static string[] KeepRoot => [.. PairedKills, .. CounselorHiding, .. JasonHiding, .. CarSeat, .. CarGrab, .. WindowMoves];
+    public static string[] KeepRoot => [.. PairedKills, .. CounselorHiding, .. JasonHiding, .. CarSeat, .. CarGrab, .. WindowMoves, .. DoorMoves];
+    /// Her door moves (open, close, lock, unlock; played from the door's special move spots).
+    static string[] DoorMoves => [.. new[] { "open_inside_forward", "open_outside_forward", "close_inside_forward", "close_outside_forward", "lock", "unlock" }
+        .Select(m => $"/Game/Characters/Counselors/Base/Female/Animation/Interaction/Doors/f_normal_stand_door_{m}")];
     public const string Killer = "/Game/Characters/Killers/Jason/J2/Jason_SackHead";
     /// The kills whose cameras f13-game plays (kill_cameras.json).
     public static readonly string[] KillCameras =

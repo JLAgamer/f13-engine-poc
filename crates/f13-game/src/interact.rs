@@ -99,6 +99,8 @@ pub struct DoorMove {
     swing: (f32, f32),
     length: f32,
     swung: bool,
+    /// Played on its own root motion: where it plays from and where it leaves her.
+    root: Option<(Transform, Transform)>,
 }
 
 /// The counselor working a window (its special moves' montages, her takes): opening and closing move the pane in the
@@ -254,6 +256,28 @@ fn end_repair_anim(commands: &mut Commands, player: Entity, base: Option<&String
 pub struct LockAnim;
 
 /// Her take of a door montage: opening or closing, from inside or outside.
+/// The door's special move spot for each of her door takes (the door Blueprints' SpecialMoveHandlers).
+fn door_spot(anim: &str) -> &'static str {
+    match anim {
+        "f_normal_stand_door_open_inside_forward" => "OpenDoorInside_SpecialMoveHandler",
+        "f_normal_stand_door_open_outside_forward" => "OpenDoorOutside_SpecialMoveHandler",
+        "f_normal_stand_door_close_inside_forward" => "CloseDoorInsideForward_SpecialMoveHandler",
+        "f_normal_stand_door_close_outside_forward" => "CloseDoorOutsideForward_SpecialMoveHandler",
+        "f_normal_stand_door_lock" => "LockDoorInside_SpecialMoveHandler",
+        _ => "",
+    }
+}
+
+/// Her take at a door played from its special move spot (upright at her height), on its own root motion: where it plays
+/// from and where it leaves her. None without the spot or the take's root.
+fn door_root(door: &Door, gxf: &GlobalTransform, at_y: f32, anim: &str, model: Option<&crate::character::CounselorCharacter>) -> Option<(Transform, Transform)> {
+    let spot = door.spots.get(door_spot(anim))?;
+    let model = model.filter(|m| m.root_motion(anim).is_some())?;
+    let mut at = crate::hiding::HidingSpot::world(gxf, spot);
+    at.translation.y = at_y;
+    Some(model.place(anim, at))
+}
+
 fn door_anim(opening: bool, inside: bool) -> &'static str {
     match (opening, inside) {
         (true, true) => "f_normal_stand_door_open_inside_forward",
@@ -263,7 +287,6 @@ fn door_anim(opening: bool, inside: bool) -> &'static str {
     }
 }
 
-/// Swings the door at the montage's window, and lets her go at its end.
 /// She's moving a door's barricade (Counselor_Barricade_Pulldown / PushUp): her take, the barricade going up or down
 /// as its UseBarricade driver window ends.
 #[derive(Component)]
@@ -302,14 +325,24 @@ fn flip_barricade(commands: &mut Commands, b: &mut Barricade) {
     info!("door {}", if b.enabled { "barricaded" } else { "unbarricaded" });
 }
 
+/// Swings the door at the montage's window, and lets her go at its end (where its root motion took her).
 fn door_moves(
     mut commands: Commands,
     time: Res<Time>,
-    mut players: Query<(Entity, &mut DoorMove, &Transform), With<Player>>,
+    mut players: Query<(Entity, &mut DoorMove, &mut Transform), With<Player>>,
     mut doors: Query<(&mut Door, &GlobalTransform)>,
+    mut rigs: Query<(&ChildOf, &mut crate::character::Rig)>,
 ) {
-    for (pe, mut m, xf) in &mut players {
+    for (pe, mut m, mut xf) in &mut players {
         m.t += time.delta_secs();
+        if let Some((origin, end)) = m.root {
+            *xf = if m.t >= m.length { end } else { origin };
+            if m.t >= m.length {
+                if let Some((_, mut rig)) = rigs.iter_mut().find(|(c, _)| c.parent() == pe) {
+                    rig.snap();
+                }
+            }
+        }
         if !m.swung && m.t >= m.swing.0 {
             m.swung = true;
             if let Ok((mut door, gxf)) = doors.get_mut(m.door) {
@@ -604,8 +637,9 @@ fn act(
                 match timing {
                     Some(t) => {
                         let swing = t.window("Driver: OpenCloseDoor").unwrap_or((0.0, 0.5));
+                        let root = door_root(&door, gxf, player_xf.translation.y, anim, model.as_deref());
                         commands.entity(player_entity).insert((
-                            DoorMove { door: d, t: 0.0, swing, length: t.length, swung: false },
+                            DoorMove { door: d, t: 0.0, swing, length: t.length, swung: false, root },
                             crate::character::PlayAction(anim.into()),
                         ));
                     }
@@ -629,6 +663,17 @@ fn act(
             // Locking or unlocking (not a barricade): her take while she holds.
             if events.contains(&MinigameEvent::Started) && !barricaded_door {
                 let anim = if door.locked { "f_normal_stand_door_unlock" } else { "f_normal_stand_door_lock" };
+                // On the lock's special move spot (the take stays in place).
+                let spot = if door.locked {
+                    if Door::is_inside(gxf, player_xf.translation) { "UnlockDoorInside_SpecialMoveHandler" } else { "UnlockDoorOutside_SpecialMoveHandler" }
+                } else {
+                    door_spot(anim)
+                };
+                if let Some(s) = door.spots.get(spot) {
+                    let at = crate::hiding::HidingSpot::world(gxf, s);
+                    player_xf.translation = Vec3::new(at.translation.x, player_xf.translation.y, at.translation.z);
+                    player_xf.rotation = at.rotation;
+                }
                 commands.entity(player_entity).insert((LockAnim, crate::character::PlayAction(anim.into())));
             }
             if events.contains(&MinigameEvent::Completed) {
