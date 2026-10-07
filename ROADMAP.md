@@ -190,7 +190,7 @@ Presentation
   from a fall) and wading steps (GetFootstepInWater: shallow or deep); items put down (DroppedSoundCue); the car's
   key turning and engine running (EngineStartCue, EngineCue, on the car); walls' hit and break cues; the
   ability-unlock warning (KiKiKiMaMaMa) and JasonTeleportedNearStinger. Remaining: the other stingers, scary
-  sounds, item use sounds, the car's brakes and horn, voices, ambience
+  sounds, item use sounds, voices, ambience (the car's horn, H, and brakes play their audio components' cues)
 
 Setup
 - [x] Tools refuse a packed (stock) install with a clear message; they need the content extracted to loose files

@@ -162,6 +162,8 @@ pub struct Vehicle {
     /// Its handling (f13-core::vehicle: the movement component's engine, gearbox and wheels) and drivetrain state.
     pub setup: f13_core::vehicle::VehicleSetup,
     pub drive: f13_core::vehicle::VehicleState,
+    /// Braking (for the brake sound's start).
+    pub braking: bool,
 }
 
 impl Vehicle {
@@ -274,6 +276,8 @@ fn spawn_props(
             .into_iter()
             .flatten()
             .filter_map(|(k, v)| Some((k.clone(), crate::audio::cue_name(v)?)))
+            // And its audio components' Sounds, by component name (a car's HornAudioComponent, BrakeAudio...).
+            .chain(info.components.iter().filter(|c| c.kind == "AudioComponent").filter_map(|c| Some((c.name.clone(), crate::audio::cue_name(&c.props["Sound"])?))))
             .collect();
         if !sounds.is_empty() {
             commands.entity(root).insert(crate::audio::ClassSounds(sounds));
@@ -534,6 +538,7 @@ fn spawn_props(
                 steer: 0.0,
                 setup: f13_data::vehicle::setup(&classes, &actor.class),
                 drive: default(),
+                braking: false,
             });
             let p = to_transform(&actor.transform).translation;
             info!("{} at ({:.0}, {:.0}, {:.0})", actor.class, p.x, p.y, p.z);

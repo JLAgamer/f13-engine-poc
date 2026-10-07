@@ -182,7 +182,7 @@ closed window or climbs through an open or broken one; sprint + E dives through 
 hold E closes an open one (first aid heals after its 2 s animation). Repairs are the game's skill check: hold E
 and, when the needle reaches a pip on the dial (the game's interaction dial), press its mouse button (R = right, L = left); hits speed
 the repair up, misses roll it back. Escape by car: install the gas
-can and the battery, get in the driver's seat (E), hold E to start with the keys in your pockets (about 5 s), drive (WASD) into
+can and the battery, get in the driver's seat (E), hold E to start with the keys in your pockets (about 5 s), drive (WASD; H the horn) into
 a car escape zone; F gets out. `--near-car` starts you next to a car. `--bot-escape` plays the whole escape
 automatically (teleporting between goals), waits for the match's results and exits; `--bot-heal` fetches and uses a first aid spray;
 `--bot-dodge` dodges in each direction and checks the distance and stamina; `--bot-door` runs 16 checks on a door, a
