@@ -24,6 +24,7 @@ class SoundExporter(IFileProvider provider, string outDir, Func<string, string> 
     string Dir => Path.Combine(outDir, "sounds");
 
     public const string CounselorAnimBp = "/Game/Characters/Counselors/Base/Base_Counselor_AnimBP";
+    public const string JasonAnimBp = "/Game/Characters/Killers/Jason/Base/Jason_AnimBP";
     static readonly string[] FootstepFunctions = ["GetFootstepSound", "GetLandingSound", "GetFootstepInWater"];
 
     /// Writes the cues (and their waves); returns how many cues were written.
@@ -149,10 +150,13 @@ class SoundExporter(IFileProvider provider, string outDir, Func<string, string> 
     }
 
     /// Decodes the footstep functions' switches into sounds/footsteps.json; returns every cue path they name.
-    public List<string> FootstepTables()
+    /// The counselor's footstep tables (footsteps.json) and Jason's (footsteps_jason.json).
+    public List<string> FootstepTables() => [.. FootstepTables(CounselorAnimBp, "footsteps.json"), .. FootstepTables(JasonAnimBp, "footsteps_jason.json")];
+
+    public List<string> FootstepTables(string animBp, string outName)
     {
         Directory.CreateDirectory(Dir);
-        var file = toFile(CounselorAnimBp);
+        var file = toFile(animBp);
         var pkg = (Package)provider.LoadPackage(file);
         var bytes = provider.SavePackage(file).OrderBy(f => f.Key.EndsWith(".uexp")).SelectMany(f => f.Value).ToArray();
         var cues = new List<string>();
@@ -190,7 +194,7 @@ class SoundExporter(IFileProvider provider, string outDir, Func<string, string> 
             }
             else outJ[fn] = tables;
         }
-        File.WriteAllText(Path.Combine(Dir, "footsteps.json"), outJ.ToString(Formatting.Indented));
+        File.WriteAllText(Path.Combine(Dir, outName), outJ.ToString(Formatting.Indented));
         return cues.Distinct().ToList();
     }
 

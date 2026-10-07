@@ -250,9 +250,9 @@ pub struct Rig {
     /// Current weight per animation.
     weights: HashMap<String, f32>,
     /// Shared phase (0..1) of the synced locomotion cycles, and free-running time of the idles.
-    phase: f32,
+    pub(crate) phase: f32,
     /// The phase last frame (for the footstep notifies it passed).
-    prev_phase: f32,
+    pub(crate) prev_phase: f32,
     idle_time: f32,
     /// The montage or action playing: its animation and time since it started.
     pub action: Option<(String, f32)>,

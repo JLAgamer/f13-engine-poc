@@ -333,6 +333,8 @@ pub struct Sounds {
     dir: PathBuf,
     cues: HashMap<String, Option<Cue>>,
     footsteps: Option<Footsteps>,
+    /// Jason's (Jason_AnimBP's GetFootstepSound).
+    jason_footsteps: Option<Footsteps>,
     terrain: Vec<TerrainSurfaces>,
 }
 
@@ -449,7 +451,8 @@ fn load_terrain(export: &std::path::Path, level: &crate::Level) -> Vec<TerrainSu
 fn load_sounds(mut commands: Commands, export: Res<crate::ExportRoot>, level: Res<crate::Level>) {
     let dir = export.0.join("sounds");
     let footsteps = Footsteps::load(&dir).map_err(|e| warn!("no footstep sounds ({e}): re-export with tools/f13-export sounds")).ok();
-    commands.insert_resource(Sounds { dir, cues: HashMap::new(), footsteps, terrain: load_terrain(&export.0, &level) });
+    let jason_footsteps = Footsteps::load_file(&dir, "footsteps_jason.json").ok();
+    commands.insert_resource(Sounds { dir, cues: HashMap::new(), footsteps, jason_footsteps, terrain: load_terrain(&export.0, &level) });
 }
 
 /// The camera hears.
@@ -521,10 +524,21 @@ fn footstep(
     sounds: Option<Res<Sounds>>,
     players: Query<(&Player, &GlobalTransform)>,
     (collision, dynamic): (Option<Res<crate::collision::WorldCollision>>, Option<Res<crate::collision::DynamicColliders>>),
+    jasons: Query<(&crate::jason::Jason, &GlobalTransform)>,
+    killer: Option<Res<crate::jason::KillerTuning>>,
 ) {
     let (Some(sounds), Some(collision), Some(dynamic)) = (sounds, collision, dynamic) else { return };
-    let Some(tables) = &sounds.footsteps else { return };
-    let Ok((p, g)) = players.get(ev.owner) else { return };
+    // Hers, or Jason's (his table; running past his walking speed).
+    let (tables, g, gait) = if let Ok((p, g)) = players.get(ev.owner) {
+        let c = &p.counselor;
+        (sounds.footsteps.as_ref(), g, if c.running || c.sprinting { "run" } else { "walk" })
+    } else if let Ok((j, g)) = jasons.get(ev.owner) {
+        let walk = killer.as_ref().map_or(160.0, |t| t.walk_speed);
+        (sounds.jason_footsteps.as_ref(), g, if j.velocity.length() > walk * 1.2 { "run" } else { "walk" })
+    } else {
+        return;
+    };
+    let Some(tables) = tables else { return };
     let feet = g.translation();
     // Her foot's side of her (the game traces from the foot socket).
     let side = g.rotation() * Vec3::X * if ev.left { 0.1 } else { -0.1 };
@@ -535,8 +549,7 @@ fn footstep(
         Some((_, s)) => s,
         None => 0,
     };
-    let c = &p.counselor;
-    let gait = if c.running || c.sprinting { "run" } else { "walk" };
+    // (The decoder tags tables by the cue names' gender; Jason's carry none and come out "female".)
     if let Some(cue) = tables.cue("female", gait, surface) {
         trace!("footstep: surface {surface}, {cue}");
         commands.trigger(PlaySound { cue: cue.to_string(), at: Some(at) });

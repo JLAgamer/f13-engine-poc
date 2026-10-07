@@ -1944,6 +1944,7 @@ fn recover_counselor(mut commands: Commands, time: Res<Time>, mut players: Query
 }
 
 fn animate_jason(
+    mut commands: Commands,
     time: Res<Time>,
     killer: Option<Res<KillerCharacter>>,
     tuning: Option<Res<KillerTuning>>,
@@ -1976,6 +1977,18 @@ fn animate_jason(
         }
         let synced = |n: &str| MOVE.contains(&n);
         rig.drive(&killer.0, &targets, &synced, dt, &mut anim);
+        // His footsteps (Jason_AnimBP's Footstep notifies): his locomotion cycles carry none here, so a step at the
+        // start of each cycle and one halfway.
+        let (before, after) = (rig.prev_phase, rig.phase);
+        rig.prev_phase = after;
+        if rig.action.is_none() && speed > 1.0 {
+            for (at, left) in [(0.0f32, true), (0.5, false)] {
+                let passed = if after >= before { before < at && at <= after } else { at > before || at <= after };
+                if passed {
+                    commands.trigger(crate::audio::Footstep { owner: parent.parent(), left });
+                }
+            }
+        }
     }
 }
 

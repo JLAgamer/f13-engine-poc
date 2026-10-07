@@ -246,8 +246,14 @@ pub struct Footsteps {
 }
 
 impl Footsteps {
+    /// The counselor's (footsteps.json).
     pub fn load(dir: &Path) -> Result<Footsteps, crate::LoadError> {
-        let text = std::fs::read_to_string(dir.join("footsteps.json")).map_err(crate::LoadError::Io)?;
+        Self::load_file(dir, "footsteps.json")
+    }
+
+    /// An animation Blueprint's tables (footsteps.json: the counselor's, footsteps_jason.json: Jason's).
+    pub fn load_file(dir: &Path, name: &str) -> Result<Footsteps, crate::LoadError> {
+        let text = std::fs::read_to_string(dir.join(name)).map_err(crate::LoadError::Io)?;
         let v: Value = serde_json::from_str(&text).map_err(crate::LoadError::Json)?;
         let mut tables = Vec::new();
         for f in ["GetFootstepSound", "GetLandingSound"] {
