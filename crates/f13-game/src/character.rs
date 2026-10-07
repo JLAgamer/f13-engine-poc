@@ -501,7 +501,7 @@ pub(crate) fn animate(
                     let t = w.start / info.length.max(1e-3);
                     let passed = if after >= before { before < t && t <= after } else { t > before || t <= after };
                     if passed {
-                        commands.trigger(crate::audio::Footstep { owner: parent.parent(), left: w.name == "Footstep_L" });
+                        commands.trigger(crate::audio::Footstep { owner: parent.parent(), left: w.name == "Footstep_L", land: false });
                     }
                 }
             }

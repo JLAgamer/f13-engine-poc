@@ -1985,7 +1985,7 @@ fn animate_jason(
             for (at, left) in [(0.0f32, true), (0.5, false)] {
                 let passed = if after >= before { before < at && at <= after } else { at > before || at <= after };
                 if passed {
-                    commands.trigger(crate::audio::Footstep { owner: parent.parent(), left });
+                    commands.trigger(crate::audio::Footstep { owner: parent.parent(), left, land: false });
                 }
             }
         }

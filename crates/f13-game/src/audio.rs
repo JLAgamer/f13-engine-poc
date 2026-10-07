@@ -326,6 +326,8 @@ fn near_music(
 pub struct Footstep {
     pub owner: Entity,
     pub left: bool,
+    /// Landing from a fall (GetLandingSound) rather than a step.
+    pub land: bool,
 }
 
 #[derive(Resource)]
@@ -526,12 +528,13 @@ fn footstep(
     (collision, dynamic): (Option<Res<crate::collision::WorldCollision>>, Option<Res<crate::collision::DynamicColliders>>),
     jasons: Query<(&crate::jason::Jason, &GlobalTransform)>,
     killer: Option<Res<crate::jason::KillerTuning>>,
+    water: Option<Res<crate::water::Water>>,
 ) {
     let (Some(sounds), Some(collision), Some(dynamic)) = (sounds, collision, dynamic) else { return };
     // Hers, or Jason's (his table; running past his walking speed).
     let (tables, g, gait) = if let Ok((p, g)) = players.get(ev.owner) {
         let c = &p.counselor;
-        (sounds.footsteps.as_ref(), g, if c.running || c.sprinting { "run" } else { "walk" })
+        (sounds.footsteps.as_ref(), g, if ev.land { "land" } else if c.running || c.sprinting { "run" } else { "walk" })
     } else if let Ok((j, g)) = jasons.get(ev.owner) {
         let walk = killer.as_ref().map_or(160.0, |t| t.walk_speed);
         (sounds.jason_footsteps.as_ref(), g, if j.velocity.length() > walk * 1.2 { "run" } else { "walk" })
@@ -540,6 +543,15 @@ fn footstep(
     };
     let Some(tables) = tables else { return };
     let feet = g.translation();
+    // In water (GetFootstepInWater): deep water's cue past half a metre, else shallow water's.
+    if let Some(top) = water.as_ref().and_then(|w| w.surface_at(feet + Vec3::Y * 0.05)) {
+        let cue = if top - feet.y > 0.5 { tables.in_water.first() } else { tables.in_water.get(1) };
+        if let Some(cue) = cue {
+            trace!("footstep: in water, {cue}");
+            commands.trigger(PlaySound { cue: cue.clone(), at: Some(feet) });
+        }
+        return;
+    }
     // Her foot's side of her (the game traces from the foot socket).
     let side = g.rotation() * Vec3::X * if ev.left { 0.1 } else { -0.1 };
     let at = feet + side;

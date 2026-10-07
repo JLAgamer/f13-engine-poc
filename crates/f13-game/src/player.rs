@@ -26,6 +26,8 @@ const SPAWN_PROBE_M: f32 = 1.5;
 pub(crate) const CAPSULE_RADIUS_M: f32 = 0.34;
 /// Base_Counselor's CollisionCylinder: half height 82 cm, radius left at ACharacter's 34 cm.
 pub(crate) const CAPSULE_HALF_HEIGHT_M: f32 = 0.82;
+/// Falling faster than this (m/s) when she touches down makes a landing sound rather than a step's.
+const LANDING_SPEED_M_S: f32 = 2.0;
 /// Afloat, her centre is this far under the water's surface (Unreal floats a Buoyancy 1 swimmer with its centre at the
 /// surface: just above, it isn't in water and falls back).
 const SWIM_DEPTH_M: f32 = 0.05;
@@ -442,8 +444,13 @@ pub(crate) fn move_player(
         pos.y = feet;
         p.vel_y = 0.0;
     }
+    let falling = p.vel_y;
     let r = f13_core::collision::move_capsule(&world, &mut pos, &mut p.vel_y, grounded && swim_feet.is_none(), delta, dt, &cap, &WALK);
     p.grounded = r.grounded;
+    // Down from a fall: her landing sound (GetLandingSound).
+    if !grounded && r.grounded && falling < -LANDING_SPEED_M_S && swim_feet.is_none() {
+        commands.trigger(crate::audio::Footstep { owner: entity, left: true, land: true });
+    }
     if let (Some(feet), Stance::Swimming) = (swim_feet, p.counselor.stance) {
         // Out where the bottom comes up to where she floats, else afloat.
         let floor = f13_core::collision::surface_below(&world, pos.x, pos.z, feet + MAX_STEP_HEIGHT_M, feet - 3.0).map(|s| s.0);

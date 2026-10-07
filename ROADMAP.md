@@ -186,8 +186,8 @@ Presentation
   terrain's heaviest paint layer; Base_Counselor_AnimBP's tables); doors, windows and barricades (their classes' cues);
   Jason's near music (NearCounselorMusic by distance, silenced by Stalk); the counselor's music (MusicCounselor:
   MatchStart, CounselorIdle after each track, the two-minute warning, death and survival music; fades); Jason's
-  footsteps (Jason_AnimBP's tables, a step each half of his locomotion cycle). Remaining:
-  landing and wading footsteps, stingers, the ability-unlock warning, scary sounds, items, car,
+  footsteps (Jason_AnimBP's tables, a step each half of his locomotion cycle); her landing (GetLandingSound, down
+  from a fall) and wading steps (GetFootstepInWater: shallow or deep). Remaining: stingers, the ability-unlock warning, scary sounds, items, car,
   voices, ambience
 
 Setup
