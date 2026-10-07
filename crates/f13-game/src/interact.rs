@@ -113,6 +113,8 @@ pub struct WindowMove {
     from: Vec3,
     to: Vec3,
     effect_done: bool,
+    /// Played on its own root motion: where it plays from and where it leaves her.
+    root: Option<(Transform, Transform)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,21 +140,36 @@ impl WindowMoveKind {
 }
 
 fn start_window_move(commands: &mut Commands, player: Entity, window: Entity, kind: WindowMoveKind, from: Vec3, to: Vec3) {
-    commands.entity(player).insert((WindowMove { window, kind, t: 0.0, from, to, effect_done: false }, crate::character::PlayAction(kind.take().0.into())));
+    commands.entity(player).insert((WindowMove { window, kind, t: 0.0, from, to, effect_done: false, root: None }, crate::character::PlayAction(kind.take().0.into())));
+}
+
+/// Through the window on her take's own root motion, from its special move spot: where the take plays from and
+/// where it leaves her.
+fn start_window_root_move(commands: &mut Commands, player: Entity, window: Entity, kind: WindowMoveKind, root: (Transform, Transform)) {
+    let m = WindowMove { window, kind, t: 0.0, from: root.0.translation, to: root.1.translation, effect_done: false, root: Some(root) };
+    commands.entity(player).insert((m, crate::character::PlayAction(kind.take().0.into())));
 }
 
 fn window_moves(
     mut commands: Commands,
     time: Res<Time>,
+    model: Option<Res<crate::character::CounselorCharacter>>,
     mut players: Query<(Entity, &mut WindowMove, &mut Transform), With<Player>>,
     mut windows: Query<&mut Window>,
+    mut rigs: Query<(&ChildOf, &mut crate::character::Rig)>,
 ) {
     for (pe, mut m, mut xf) in &mut players {
         m.t += time.delta_secs();
-        let (_, length, effect_at) = m.kind.take();
-        if matches!(m.kind, WindowMoveKind::Vault | WindowMoveKind::Dive) {
-            let a = (m.t / length).clamp(0.0, 1.0);
-            xf.translation = m.from.lerp(m.to, a);
+        let (take, length, effect_at) = m.kind.take();
+        let length = model.as_ref().and_then(|c| c.length(take)).unwrap_or(length);
+        match m.root {
+            // Her take's root motion carries her; she stays where it plays from.
+            Some((origin, _)) => *xf = origin,
+            None if matches!(m.kind, WindowMoveKind::Vault | WindowMoveKind::Dive) => {
+                let a = (m.t / length).clamp(0.0, 1.0);
+                xf.translation = m.from.lerp(m.to, a);
+            }
+            None => {}
         }
         if !m.effect_done && m.t >= effect_at {
             m.effect_done = true;
@@ -166,10 +183,24 @@ fn window_moves(
             }
         }
         if m.t >= length {
+            // Where the take left her.
+            if let Some((_, end)) = m.root {
+                *xf = end;
+                if let Some((_, mut rig)) = rigs.iter_mut().find(|(c, _)| c.parent() == pe) {
+                    rig.snap();
+                }
+            }
             if m.kind == WindowMoveKind::Dive {
                 // On to the landing, where she came down.
-                let (w, to) = (m.window, m.to);
-                start_window_move(&mut commands, pe, w, WindowMoveKind::Land, to, to);
+                let w = m.window;
+                let land = WindowMoveKind::Land.take().0;
+                match (m.root, model.as_ref()) {
+                    (Some((_, end)), Some(c)) if c.root_motion(land).is_some() => start_window_root_move(&mut commands, pe, w, WindowMoveKind::Land, c.place(land, end)),
+                    _ => {
+                        let to = m.to;
+                        start_window_move(&mut commands, pe, w, WindowMoveKind::Land, to, to);
+                    }
+                }
             } else {
                 commands.entity(pe).remove::<(WindowMove, crate::character::PlayAction)>();
             }
@@ -643,7 +674,18 @@ fn act(
                         let damage = window.damage(action);
                         let landing = Window::landing(gxf, window.interact, player_xf.translation);
                         let kind = if action == WindowAction::Dive { WindowMoveKind::Dive } else { WindowMoveKind::Vault };
-                        start_window_move(&mut commands, player_entity, w, kind, player_xf.translation, landing);
+                        // From the side she's on: its special move spot, her take's root motion carrying her over.
+                        let side = if Window::is_inside(gxf, player_xf.translation) { 0 } else { 1 };
+                        let spot = if kind == WindowMoveKind::Dive { window.dive[side] } else { window.vault[side] };
+                        let take = kind.take().0;
+                        match (spot, model.as_ref()) {
+                            (Some(spot), Some(c)) if c.root_motion(take).is_some() => {
+                                let mut at = crate::hiding::HidingSpot::world(gxf, &spot);
+                                at.translation.y = player_xf.translation.y;
+                                start_window_root_move(&mut commands, player_entity, w, kind, c.place(take, at));
+                            }
+                            _ => start_window_move(&mut commands, player_entity, w, kind, player_xf.translation, landing),
+                        }
                         if damage > 0.0 {
                             p.counselor.take_damage(f13_core::health::Hit { amount: damage, ..Default::default() }, &tuning.counselor);
                         }

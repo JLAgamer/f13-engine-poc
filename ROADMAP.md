@@ -201,7 +201,9 @@ Presentation
 - [x] Door lock and unlock: her takes while she holds E
 - [x] Barricade special moves: her pull-down and push-up takes (Counselor_Barricade_Pulldown / PushUp), the
       barricade moving as their UseBarricade window ends
-- [ ] Special moves, remaining: the montages' own root motion (she's moved in a line or stays in place)
+- [x] Through windows on the takes' own root motion: the climb, the dive and its landing play from the window's
+      CounselorVault / CounselorDive special move spot on her side
+- [ ] Special moves, remaining: the other montages' own root motion (doors, locks, repairs play in place)
 - [x] Repair minigame dial UI: SCInteractMinigame_Widget (its progress circle filled clockwise, the needle turned, the
       pips as red arcs of its ring, the next pip's mouse button in the middle), for every hold interaction
 - [x] HUD (ui.rs): CounselorHUDWidget from its UMG tree (f13-data::umg lays it out as Slate does), the game's font

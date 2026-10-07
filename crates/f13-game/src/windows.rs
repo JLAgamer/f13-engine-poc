@@ -33,6 +33,10 @@ pub struct Window {
     pub pane: Option<(Entity, Transform, Transform)>,
     /// Glass meshes hidden once broken.
     pub glass: Vec<Entity>,
+    /// Where she starts climbing through and diving, from inside and from outside (its CounselorVault/Dive
+    /// special move components, window local).
+    pub vault: [Option<Transform>; 2],
+    pub dive: [Option<Transform>; 2],
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

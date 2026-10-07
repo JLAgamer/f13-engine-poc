@@ -493,6 +493,8 @@ fn spawn_props(
                 take_vault_damage: classes.prop(&actor.class, "bTakeVaultDamage").as_bool().unwrap_or(false),
                 pane,
                 glass,
+                vault: ["CounselorVaultInside", "CounselorVaultOutside"].map(|n| info.components.iter().find(|c| c.name == n).map(local)),
+                dive: ["CounselorDiveInside", "CounselorDiveOutside"].map(|n| info.components.iter().find(|c| c.name == n).map(local)),
             });
             *counts.entry("windows").or_default() += 1;
         }

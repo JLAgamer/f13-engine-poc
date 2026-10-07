@@ -944,8 +944,16 @@ static class Mvp
     static string[] CarSeat => ["/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_stand_car_enter_left", "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_exit_left"];
     /// The driver pulled out of the car: her side and his (paired, played from DriverGrab).
     static string[] CarGrab => ["/Game/Characters/Counselors/Base/Shared/Car/AM_normal_stand_car_grab_left", $"{JasonAnim}/Car/AM_normal_stand_car_grab_left"];
-    /// Animations that keep their root translation (played from a fixed spot: paired kills, hiding spots, car seats).
-    public static string[] KeepRoot => [.. PairedKills, .. CounselorHiding, .. JasonHiding, .. CarSeat, .. CarGrab];
+    /// Through a window: her climb, and the dive and its landing (played from the window's special move spots).
+    static string[] WindowMoves =>
+    [
+        "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Windows/f_normal_stand_window_climb_01",
+        "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Windows/f_normal_stand_window_dive",
+        $"{Shared}/Interaction/Window/AM_normal_stand_window_jump",
+    ];
+    /// Animations that keep their root translation (played from a fixed spot: paired kills, hiding spots, car seats,
+    /// windows).
+    public static string[] KeepRoot => [.. PairedKills, .. CounselorHiding, .. JasonHiding, .. CarSeat, .. CarGrab, .. WindowMoves];
     public const string Killer = "/Game/Characters/Killers/Jason/J2/Jason_SackHead";
     /// The kills whose cameras f13-game plays (kill_cameras.json).
     public static readonly string[] KillCameras =
