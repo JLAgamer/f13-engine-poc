@@ -182,6 +182,17 @@ void ExportLevel(string mapPath, params string[] extra)
                 var lx = new LandscapeMeshExporter(proxy);
                 session.Add(lx);
                 layout.Landscapes.Add(new LandscapeInfo { Level = levelName, Actor = actor.Name, File = lx.SavePath + ".glb" });
+                // Each paint layer's physical surface (its LayerInfo's PhysMaterial), next to the weight maps
+                // (<layer info>_LayerInfo.png): footsteps take the surface of the layer that weighs most.
+                var surfaces = new SortedDictionary<string, int>();
+                foreach (var ci in proxy.LandscapeComponents)
+                    if (ci.Load<CUE4Parse.UE4.Assets.Exports.Component.Landscape.ULandscapeComponent>() is { } lc)
+                        foreach (var alloc in lc.GetWeightmapLayerAllocations())
+                            if (alloc.LayerInfo.Load<UObject>() is { } li)
+                                surfaces[li.Name] = Collision.SurfaceOf(li.GetOrDefault<FPackageIndex?>("PhysMaterial")?.Load<UObject>());
+                var sdir = Path.Combine(outDir, lx.SavePath);
+                Directory.CreateDirectory(sdir);
+                File.WriteAllText(Path.Combine(sdir, "surfaces.json"), System.Text.Json.JsonSerializer.Serialize(surfaces, new JsonSerializerOptions { WriteIndented = true }));
             }
         }
         // Mesh components: every StaticMeshComponent export in the level package (includes Blueprint actor parts).
@@ -353,6 +364,15 @@ switch (rest[0])
         Console.WriteLine($"{rest[2]}: {e.SerialSize} bytes at {e.SerialOffset}; names {pkg.NameMap.Length}, None = {Array.FindIndex(pkg.NameMap, n => n.Name == "None")}");
         return 0;
     }
+    case "imports": // imports <package>: the import and export tables (index: name), to read Blueprint bytecode
+    {
+        var pkg = (CUE4Parse.UE4.Assets.Package)provider.LoadPackage(ToFile(rest[1]));
+        for (var i = 0; i < pkg.ImportMap.Length; i++)
+            Console.WriteLine($"{-(i + 1)}: {pkg.ImportMap[i].ClassName.Text} {pkg.ImportMap[i].ObjectName.Text}");
+        for (var i = 0; i < pkg.ExportMap.Length; i++)
+            Console.WriteLine($"{i + 1}: {pkg.ExportMap[i].ClassName} {pkg.ExportMap[i].ObjectName.Text}");
+        return 0;
+    }
     case "assets":
         foreach (var a in rest.Skip(1)) ExportAsset(a);
         break;
@@ -413,7 +433,18 @@ switch (rest[0])
         new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims, Mvp.KeepRoot);
         new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, Mvp.KillerAnims, Mvp.KeepRoot);
         WriteCollision();
+        {
+            var sx = new SoundExporter(provider, outDir, ToFile);
+            sx.Export(sx.FootstepTables().Concat(Mvp.Sounds).Concat(sx.ClassSounds()));
+        }
         break;
+    case "sounds": // the sounds f13-game plays (sounds/): the counselor's footsteps, the classes' cues, Mvp.Sounds
+    {
+        var sx = new SoundExporter(provider, outDir, ToFile);
+        var n = sx.Export(sx.FootstepTables().Concat(Mvp.Sounds).Concat(sx.ClassSounds()));
+        Console.WriteLine($"sounds: {n} cues");
+        return 0;
+    }
     case "collision": // levels (for collision flags), classes and collision.json; no meshes or textures
         ExportLevel(Mvp.Map, Mvp.Weather);
         foreach (var l in Mvp.Layouts) ExportLevel(l);
@@ -614,6 +645,8 @@ static class Mvp
         "/Game/Characters/Killers/Jason/Base/Animation/Abilities/AM_Jason_uber_stand_wall_smash_02",
     ];
     public const string Counselor = "/Game/Characters/Counselors/Athlete/Athlete_Counselor";
+    // Sounds f13-game plays besides the footsteps (SoundCues or SoundWaves).
+    public static readonly string[] Sounds = [];
     // Animations f13-game plays on the counselor: Athlete_AnimBP's female overrides of Base_Counselor_AnimBP's
     // locomotion (BS_F_Normal_Move: idle, walk, run, sprint; BS_F_Combat strafing), crouch, wounded idle, and the
     // montages the rules use.

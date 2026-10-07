@@ -8,20 +8,28 @@
 use glam::{Vec2, Vec3};
 use std::collections::HashMap;
 
-/// A triangle with its unit normal (counter-clockwise front face).
+/// A triangle with its unit normal (counter-clockwise front face) and its physical surface type (Unreal's
+/// EPhysicalSurface: 0 the default; [`Tri::TERRAIN`]: the terrain, whose surface is its paint layer's).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Tri {
     pub a: Vec3,
     pub b: Vec3,
     pub c: Vec3,
     pub n: Vec3,
+    pub surface: u8,
 }
 
 impl Tri {
+    pub const TERRAIN: u8 = u8::MAX;
+
     pub fn new(a: Vec3, b: Vec3, c: Vec3) -> Option<Self> {
         let n = (b - a).cross(c - a);
         let len = n.length();
-        (len > 1e-12).then(|| Tri { a, b, c, n: n / len })
+        (len > 1e-12).then(|| Tri { a, b, c, n: n / len, surface: 0 })
+    }
+
+    pub fn with_surface(self, surface: u8) -> Self {
+        Tri { surface, ..self }
     }
 
     pub fn min(&self) -> Vec3 {
@@ -357,6 +365,19 @@ pub fn surface_below(world: &(impl TriSource + ?Sized), x: f32, z: f32, top: f32
             if y <= top && y >= bottom && best.is_none_or(|(b, _)| y > b) {
                 // Facing down (the underside of a hull): use the hull's top face instead, found separately.
                 best = Some((y, if t.n.y < 0.0 { -t.n } else { t.n }));
+            }
+        }
+    });
+    best
+}
+
+/// The highest triangle crossing the vertical line at (x, z) between `bottom` and `top`: (height, its surface).
+pub fn ground_surface(world: &(impl TriSource + ?Sized), x: f32, z: f32, top: f32, bottom: f32) -> Option<(f32, u8)> {
+    let mut best: Option<(f32, u8)> = None;
+    world.for_each_in(Vec3::new(x, bottom, z), Vec3::new(x, top, z), &mut |t| {
+        if let Some(y) = t.height_at(x, z) {
+            if y <= top && y >= bottom && best.is_none_or(|(b, _)| y > b) {
+                best = Some((y, t.surface));
             }
         }
     });

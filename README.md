@@ -64,7 +64,12 @@ dotnet run --project tools/f13-export -- --game "<path to F13Game>" --out "<expo
   `tools/f13-export ... killer` writes just these.
 - `collision.json`: each static mesh's simple collision (convex point sets); level placements and class components
   say whether they block counselors (their collision profile, read from the game's DefaultEngine.ini), and
-  BlockingVolumes carry their hulls. `tools/f13-export ... collision` writes just these (and the level files).
+  BlockingVolumes carry their hulls, and each mesh its physical surface (footsteps); each landscape's
+  `surfaces.json` gives its paint layers' surfaces. `tools/f13-export ... collision` writes just these (and the level
+  files).
+- `sounds/`: the SoundCues f13-game plays (footsteps, and every cue the exported classes name) as node graphs (random, modulator, mixer, looping, attenuation...) with their
+  waves decoded (Ogg Vorbis), and `footsteps.json`, the counselor's footstep sounds by surface, decoded from her
+  animation Blueprint's script. `tools/f13-export ... sounds` writes just these.
 - `anims.json`: length and root motion of the montages the rules use (dodges, stumbles); dodges and stumbles move
   the counselor by it, as the game's root motion does.
 - `classes.json`: Blueprint classes the match can spawn (cabinets, items, cars, doors...): parents, defaults and
@@ -98,6 +103,11 @@ The night is lit as the game lights it, from the export:
 
 F turns your flashlight on and off (the game's settings: cone, range, colour, the way it turns with you). While it's
 on, darkness doesn't scare you. `--flashlight` starts with it on.
+
+Sound: your footsteps are the game's, by what you step on (dirt, grass, leaves, gravel, rock, wooden floors...) and
+whether you walk or run, panned and fading with distance as the game sets them; doors (opening, closing, locked,
+Jason's blows, breaking), windows and barricades play their own cues. Music, Jason, items and the car aren't heard
+yet.
 
 Not yet:
 - Enlighten's bounce light;

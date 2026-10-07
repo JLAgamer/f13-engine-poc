@@ -249,6 +249,8 @@ pub struct Rig {
     weights: HashMap<String, f32>,
     /// Shared phase (0..1) of the synced locomotion cycles, and free-running time of the idles.
     phase: f32,
+    /// The phase last frame (for the footstep notifies it passed).
+    prev_phase: f32,
     idle_time: f32,
     /// The montage or action playing: its animation and time since it started.
     pub action: Option<(String, f32)>,
@@ -303,6 +305,7 @@ pub fn spawn_model(commands: &mut Commands, assets: &AssetServer, character: &Ch
         outfit_bound: Vec::new(),
         weights: HashMap::new(),
         phase: 0.0,
+        prev_phase: 0.0,
         idle_time: 0.0,
         action: None,
         snap: false,
@@ -388,6 +391,7 @@ fn assemble(
 /// Picks the target weight of each animation from the counselor's state, eases the weights toward them, and poses
 /// the AnimationPlayer (every clip is positioned by hand: speed 0, seek time set here).
 pub(crate) fn animate(
+    mut commands: Commands,
     time: Res<Time>,
     character: Option<Res<CounselorCharacter>>,
     killer: Option<Res<KillerCharacter>>,
@@ -472,6 +476,22 @@ pub(crate) fn animate(
 
         let synced = |n: &str| MOVE.contains(&n) || n == CROUCH_WALK || COMBAT_WALK.iter().any(|(_, m)| *m == n);
         rig.drive(&character.0, &targets, &synced, dt, &mut anim);
+
+        // The Footstep_L / Footstep_R notifies the locomotion cycle that weighs most passed this frame (audio.rs).
+        let (before, after) = (rig.prev_phase, rig.phase);
+        rig.prev_phase = after;
+        if rig.action.is_none() && speed > 1.0 {
+            let main = rig.weights.iter().filter(|(n, _)| synced(n)).max_by(|a, b| a.1.total_cmp(b.1)).map(|(n, _)| n.clone());
+            if let Some(info) = main.and_then(|n| character.info.animations.get(&n)) {
+                for w in info.windows.iter().filter(|w| w.name == "Footstep_L" || w.name == "Footstep_R") {
+                    let t = w.start / info.length.max(1e-3);
+                    let passed = if after >= before { before < t && t <= after } else { t > before || t <= after };
+                    if passed {
+                        commands.trigger(crate::audio::Footstep { owner: parent.parent(), left: w.name == "Footstep_L" });
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -66,7 +66,7 @@ fn transform_tris(tris: &[Tri], m: &bevy::math::Affine3A) -> Vec<Tri> {
     tris.iter()
         .filter_map(|t| {
             let (a, b, c) = (m.transform_point3(t.a), m.transform_point3(t.b), m.transform_point3(t.c));
-            if flip { Tri::new(a, c, b) } else { Tri::new(a, b, c) }
+            if flip { Tri::new(a, c, b) } else { Tri::new(a, b, c) }.map(|n| n.with_surface(t.surface))
         })
         .collect()
 }
@@ -76,6 +76,7 @@ fn hull_tris(shapes: &MeshShapes) -> Vec<Tri> {
         .hulls
         .iter()
         .flat_map(|h| convex_hull(&gltf_points(h).into_iter().map(Vec3::from_array).collect::<Vec<_>>()))
+        .map(|t| t.with_surface(shapes.surface))
         .collect()
 }
 
@@ -101,7 +102,7 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
             .entry(key.clone())
             .or_insert_with(|| match shapes_ref.get(&key) {
                 Some(s) if s.complex_as_simple => f13_data::collision::glb_triangles(&export.0.join(file))
-                    .map(|t| t.iter().filter_map(|t| Tri::new(t[0].into(), t[1].into(), t[2].into())).collect())
+                    .map(|t| t.iter().filter_map(|t| Tri::new(t[0].into(), t[1].into(), t[2].into()).map(|t| t.with_surface(s.surface))).collect())
                     .unwrap_or_default(),
                 Some(s) => hull_tris(s),
                 None => Vec::new(),
@@ -154,7 +155,7 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
                     for t in tris {
                         let [a, b, c] = t.map(|v| xf.transform_point3(Vec3::from_array(v)));
                         // Terrain is one-sided and faces up: order it so the normal points up.
-                        if let Some(t) = Tri::new(a, b, c).map(|t| if t.n.y < 0.0 { Tri::new(a, c, b).unwrap() } else { t }) {
+                        if let Some(t) = Tri::new(a, b, c).map(|t| if t.n.y < 0.0 { Tri::new(a, c, b).unwrap() } else { t }.with_surface(Tri::TERRAIN)) {
                             grid.insert(t);
                         }
                     }

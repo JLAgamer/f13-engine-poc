@@ -139,7 +139,11 @@ Presentation
   the sky's colour; the counselor's flashlight (F; its Blueprint values, attachment, turn rate, wall check; lit for
   fear). Not yet: Enlighten GI, local light shadows, light functions, colour grading LUT/contrast, bloom, the sky
   texture, rain, power cuts
-- [ ] Audio: footsteps, music and Jason's stingers, doors, windows, car
+- [ ] Audio (audio.rs, f13-data::sound): done: SoundCue playback (the cue graph's random, modulator, mixer, looping and
+  attenuation nodes; Unreal's attenuation falloff; left/right panning around the camera) and the counselor's
+  footsteps (her locomotion's Footstep notifies; the surface under her foot: a mesh's physical material or the
+  terrain's heaviest paint layer; Base_Counselor_AnimBP's tables); doors, windows and barricades (their classes' cues).
+  Remaining: landing and wading footsteps, Jason's footsteps, music and Jason's stingers, items, car, voices, ambience
 
 Setup
 - [x] Tools refuse a packed (stock) install with a clear message; they need the content extracted to loose files

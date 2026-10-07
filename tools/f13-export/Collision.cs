@@ -7,6 +7,9 @@
 //
 // Whether a component blocks a counselor comes from its collision profile (the game's DefaultEngine.ini) or its
 // custom responses: blocking needs query collision and a Block response on the Pawn channel.
+//
+// "Surface": the mesh's physical surface type (EPhysicalSurface: SurfaceType1..; 0 the default), from its body setup's
+// PhysMaterial, else its first material's (up its parents): footsteps pick their sound by it.
 using CUE4Parse.UE4.Assets.Exports;
 using CUE4Parse.UE4.Assets.Exports.StaticMesh;
 using CUE4Parse.UE4.Assets.Objects;
@@ -20,6 +23,27 @@ static class Collision
     {
         public List<float[]> Hulls = new();
         public bool ComplexAsSimple;
+        public int Surface;
+    }
+
+    /// A PhysicalMaterial's SurfaceType number (0: none or the default).
+    public static int SurfaceOf(UObject? physMat)
+    {
+        if (physMat == null) return 0;
+        var s = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(physMat))["Properties"]?["SurfaceType"]?.ToString();
+        var m = s == null ? null : System.Text.RegularExpressions.Regex.Match(s, @"SurfaceType(\d+)");
+        return m is { Success: true } ? int.Parse(m.Groups[1].Value) : 0;
+    }
+
+    /// A material's PhysMaterial, looked up its parents.
+    public static UObject? MaterialPhysMat(UObject? material)
+    {
+        for (var depth = 0; material != null && depth < 8; depth++)
+        {
+            if (material.GetOrDefault<FPackageIndex?>("PhysMaterial")?.Load<UObject>() is { } pm) return pm;
+            material = material.GetOrDefault<FPackageIndex?>("Parent")?.Load<UObject>();
+        }
+        return null;
     }
 
     /// Profile name -> (query collision enabled, Pawn channel response).
@@ -77,6 +101,8 @@ static class Collision
         var result = new MeshShapes
         {
             ComplexAsSimple = body.GetOrDefault<string>("CollisionTraceFlag")?.EndsWith("UseComplexAsSimple") == true,
+            Surface = SurfaceOf(body.GetOrDefault<FPackageIndex?>("PhysMaterial")?.Load<UObject>()
+                ?? MaterialPhysMat(mesh.StaticMaterials?.FirstOrDefault()?.MaterialInterface?.Load())),
         };
         var agg = body.AggGeom;
         if (agg != null)

@@ -254,6 +254,17 @@ fn spawn_props(
         let Some(info) = classes.get(&actor.class) else { continue };
         let root = commands.spawn((to_transform(&actor.transform), Visibility::default(), Name::new(actor.class.clone()))).id();
         entities.insert(id, root);
+        // The cues its class names (doors, windows, barricades, cars...): audio.rs plays them.
+        let sounds: HashMap<String, String> = info
+            .props
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(k, v)| Some((k.clone(), crate::audio::cue_name(v)?)))
+            .collect();
+        if !sounds.is_empty() {
+            commands.entity(root).insert(crate::audio::ClassSounds(sounds));
+        }
         let mut drawer = None;
         let is_door = classes.is_child_of(&actor.class, "SCDoor");
         let pivot = is_door.then(|| info.components.iter().find(|c| c.name == "Pivot")).flatten().map(|p| {

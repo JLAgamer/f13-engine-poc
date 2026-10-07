@@ -307,6 +307,9 @@ fn act(
             if keys.just_released(KeyCode::KeyE) && !started && press {
                 let what = door.press(gxf, player_xf.translation);
                 info!("door {what}");
+                if what == "locked" {
+                    commands.trigger(crate::audio::ActorSound { actor: d, prop: "LockedDoorSound" });
+                }
                 interaction.hold = None;
                 return;
             }

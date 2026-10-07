@@ -4,6 +4,7 @@ pub mod character;
 pub mod classes;
 pub mod collision;
 pub mod level;
+pub mod sound;
 mod native_classes;
 pub mod world;
 

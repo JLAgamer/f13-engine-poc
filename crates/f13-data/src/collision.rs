@@ -15,6 +15,9 @@ pub struct MeshShapes {
     /// The mesh collides with its render triangles (CTF_UseComplexAsSimple).
     #[serde(default)]
     pub complex_as_simple: bool,
+    /// Its physical surface type (EPhysicalSurface; 0 the default).
+    #[serde(default)]
+    pub surface: u8,
 }
 
 /// glTF path -> shapes.
@@ -32,10 +35,23 @@ pub fn gltf_points(flat: &[f32]) -> Vec<[f32; 3]> {
 /// Every triangle of a glTF binary's meshes in the file's own space (node transforms applied, scenes ignored).
 pub fn glb_triangles(path: &Path) -> Result<Vec<[[f32; 3]; 3]>, crate::LoadError> {
     let bytes = std::fs::read(path).map_err(crate::LoadError::Io)?;
-    parse_glb(&bytes).ok_or_else(|| crate::LoadError::Invalid(format!("{}: not a glTF binary this reader handles", path.display())))
+    parse_glb(&bytes, &mut |_, _| {}).ok_or_else(|| crate::LoadError::Invalid(format!("{}: not a glTF binary this reader handles", path.display())))
 }
 
-fn parse_glb(b: &[u8]) -> Option<Vec<[[f32; 3]; 3]>> {
+/// Every vertex of a glTF binary's triangle meshes: its position (node transforms applied) and first UV set.
+pub fn glb_vertices(path: &Path) -> Result<Vec<([f32; 3], [f32; 2])>, crate::LoadError> {
+    let bytes = std::fs::read(path).map_err(crate::LoadError::Io)?;
+    let mut out = Vec::new();
+    parse_glb(&bytes, &mut |p, uv| {
+        if let Some(uv) = uv {
+            out.push((p, uv));
+        }
+    })
+    .ok_or_else(|| crate::LoadError::Invalid(format!("{}: not a glTF binary this reader handles", path.display())))?;
+    Ok(out)
+}
+
+fn parse_glb(b: &[u8], on_vertex: &mut dyn FnMut([f32; 3], Option<[f32; 2]>)) -> Option<Vec<[[f32; 3]; 3]>> {
     let u32_at = |o: usize| Some(u32::from_le_bytes(b.get(o..o + 4)?.try_into().ok()?) as usize);
     if b.get(0..4)? != b"glTF" {
         return None;
@@ -145,6 +161,14 @@ fn parse_glb(b: &[u8]) -> Option<Vec<[[f32; 3]; 3]>> {
             }
             let (pos, 3) = accessor(prim["attributes"]["POSITION"].as_u64()? as usize)? else { return None };
             let verts: Vec<[f32; 3]> = pos.chunks_exact(3).map(|p| apply(&m, [p[0], p[1], p[2]])).collect();
+            let uvs: Option<Vec<[f32; 2]>> = prim["attributes"]["TEXCOORD_0"]
+                .as_u64()
+                .and_then(|i| accessor(i as usize))
+                .filter(|(_, comps)| *comps == 2)
+                .map(|(d, _)| d.chunks_exact(2).map(|c| [c[0], c[1]]).collect());
+            for (i, v) in verts.iter().enumerate() {
+                on_vertex(*v, uvs.as_ref().and_then(|u| u.get(i).copied()));
+            }
             let indices: Vec<usize> = match prim["indices"].as_u64() {
                 Some(i) => accessor(i as usize)?.0.into_iter().map(|v| v as usize).collect(),
                 None => (0..verts.len()).collect(),
@@ -199,7 +223,7 @@ mod tests {
 
     #[test]
     fn reads_triangles_with_node_transforms() {
-        let tris = parse_glb(&glb()).unwrap();
+        let tris = parse_glb(&glb(), &mut |_, _| {}).unwrap();
         assert_eq!(tris, vec![[[1.0, 0.0, 0.0], [1.0, 0.0, 1.0], [2.0, 0.0, 0.0]]]);
     }
 
