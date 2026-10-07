@@ -91,6 +91,9 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         public SortedDictionary<string, List<CurveKey>>? Curves;
         /// Sounds by property name, as "SoundCue'Name'" / "SoundWave'Name'" (f13-export sounds exports them).
         public SortedDictionary<string, string>? Sounds;
+        /// The character's music object (MusicObjectClass's defaults: MusicData, idle times, warning cues), object
+        /// references as their names ("SoundCue'Name'").
+        public Newtonsoft.Json.Linq.JObject? Music;
         /// The body mesh's physics asset (the ragdoll): one body per simulated bone, and the joints between them.
         public List<RagdollBody>? Ragdoll;
         public List<RagdollJoint>? Joints;
@@ -218,6 +221,7 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         values["FlashlightLerpSpeed"] = ClassValue<float?>(cls, "FlashlightLerpSpeed") ?? 15f;
         info.Values = values;
         info.Stats = new() { ["NoiseStatMod"] = StatValue(cls, "NoiseStatMod", 1f) };
+        info.Music = MusicObject(cls);
 
         AddSockets(info, body, skeleton);
         AddRagdoll(info, body);
@@ -497,6 +501,22 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
     }
 
     /// A class default, through the Blueprint's parents (each CDO only stores what its class overrides).
+    /// The defaults of a character's MusicObjectClass, with object references flattened to their names.
+    static Newtonsoft.Json.Linq.JObject? MusicObject(UStruct? cls)
+    {
+        if (ClassValue<FPackageIndex>(cls, "MusicObjectClass")?.Load<UStruct>() is not UBlueprintGeneratedClass bp || bp.ClassDefaultObject.Load() is not { } cdo)
+            return null;
+        static Newtonsoft.Json.Linq.JToken Flatten(Newtonsoft.Json.Linq.JToken t) => t switch
+        {
+            Newtonsoft.Json.Linq.JObject o when o["ObjectName"] is { } n => n.DeepClone(),
+            Newtonsoft.Json.Linq.JObject o => new Newtonsoft.Json.Linq.JObject(o.Properties().Select(p => new Newtonsoft.Json.Linq.JProperty(p.Name, Flatten(p.Value)))),
+            Newtonsoft.Json.Linq.JArray a => new Newtonsoft.Json.Linq.JArray(a.Select(Flatten)),
+            _ => t.DeepClone(),
+        };
+        var props = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(cdo))["Properties"];
+        return props == null ? null : Flatten(props) as Newtonsoft.Json.Linq.JObject;
+    }
+
     static T? ClassValue<T>(UStruct? cls, string name)
     {
         for (; cls != null; cls = cls.SuperStruct?.Load<UStruct>())

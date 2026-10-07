@@ -44,6 +44,9 @@ pub struct CharacterInfo {
     /// Sounds by property name ("SoundCue'Name'" / "SoundWave'Name'").
     #[serde(default, deserialize_with = "crate::level::null_as_empty")]
     pub sounds: HashMap<String, String>,
+    /// The music object's defaults (MusicData, idle times, warning cues; references as "SoundCue'Name'").
+    #[serde(default)]
+    pub music: serde_json::Value,
 }
 
 /// A RichCurve key as the exporter writes it.

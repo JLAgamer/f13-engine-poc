@@ -15,7 +15,13 @@
 //! Jason's music (SCMusicComponent's tick on the counselor): his NearCounselorMusic (J2: JasonNearPart2) loops
 //! unpanned; its volume heads for `1 - clamp((distance - NearCounselorMusicMaxVolumeDistance) /
 //! NearCounselorMusicDistance, 0.001, 1)` (full within 3 m, gone 43 m out) at 0.5 per second (FInterpTo_Constant),
-//! or for 0 while his music is silenced (Stalk). Not yet: the other music (tracks, stingers, warnings).
+//! or for 0 while his music is silenced (Stalk); rising, it fades the counselor's music track out over 0.2 s.
+//!
+//! The counselor's music (SCMusicComponent::PlayMusic with Athlete's MusicObjectClass, MusicCounselor): a track starts
+//! at once, or fades the playing one out over its FadeOutTime and fades in over FadeInTime; a finished track is
+//! followed by CounselorIdle after MinIdleMusicTime..MaxIdleMusicTime. MatchStart plays when the match starts; the
+//! TwoMinuteWarningMusic at two minutes left; DeathMusic when she dies, SurviveMusic when she escapes. Not yet:
+//! stingers, the ability-unlock warning, scary sounds.
 //!
 //! PLACEHOLDERS: the listener is the camera; Delay and Concatenator nodes play their first child at once; actor sounds
 //! play 1 m above the actor's origin (the game plays them from the actor or its audio components).
@@ -41,7 +47,8 @@ pub struct AudioPlugin;
 impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_sounds)
-            .add_systems(Update, (add_listener, attenuate, actor_sounds, near_music))
+            .init_resource::<MusicState>()
+            .add_systems(Update, (add_listener, attenuate, actor_sounds, counselor_music, near_music, fades).chain())
             .add_observer(play_sound)
             .add_observer(footstep)
             .add_observer(actor_sound);
@@ -121,6 +128,144 @@ fn actor_sounds(
     }
 }
 
+/// A 2D (unpanned) player of a cue's first voice: the entity and the voice's volume.
+fn spawn_2d(commands: &mut Commands, assets: &AssetServer, sounds: &mut Sounds, rng: &mut crate::GameRng, cue: &str, looping: bool, volume: f32) -> Option<(Entity, f32)> {
+    let c = sounds.cue(cue)?.clone();
+    let (voices, _) = c.play(&mut || rng.0.frand());
+    let v = voices.into_iter().next()?;
+    let mode = if looping || v.looping { PlaybackSettings::LOOP } else { PlaybackSettings::DESPAWN };
+    let settings = PlaybackSettings { volume: Volume::Linear(v.volume * volume), speed: v.pitch, ..mode };
+    Some((commands.spawn((AudioPlayer::new(assets.load(format!("sounds/{}", v.file))), settings)).id(), v.volume))
+}
+
+/// A player's volume heading for `target` (times its cue volume `base`) at `rate` per second; despawned at 0 if asked.
+#[derive(Component)]
+struct Fade {
+    base: f32,
+    level: f32,
+    target: f32,
+    rate: f32,
+    despawn: bool,
+}
+
+fn fades(mut commands: Commands, time: Res<Time>, mut players: Query<(Entity, &mut Fade, Option<&mut bevy::audio::AudioSink>)>) {
+    for (e, mut f, sink) in &mut players {
+        let step = f.rate * time.delta_secs();
+        f.level += (f.target - f.level).clamp(-step, step);
+        if let Some(mut sink) = sink {
+            bevy::audio::AudioSinkPlayback::set_volume(&mut *sink, Volume::Linear(f.base * f.level));
+        }
+        if f.despawn && f.level <= 0.0 {
+            commands.entity(e).despawn();
+        }
+    }
+}
+
+/// The counselor's music track (its player and FadeOutTime), when the idle music is due, and what has played.
+#[derive(Resource, Default)]
+pub struct MusicState {
+    track: Option<(Entity, f32, f32)>,
+    idle_at: Option<f32>,
+    match_started: bool,
+    two_minutes: bool,
+    ended: bool,
+}
+
+impl MusicState {
+    /// Fades the playing track out over `seconds`.
+    fn fade_out(&mut self, commands: &mut Commands, seconds: f32) {
+        if let Some((e, base, _)) = self.track.take() {
+            if let Ok(mut ec) = commands.get_entity(e) {
+                ec.insert(Fade { base, level: 1.0, target: 0.0, rate: 1.0 / seconds.max(0.01), despawn: true });
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn counselor_music(
+    mut commands: Commands,
+    time: Res<Time>,
+    assets: Res<AssetServer>,
+    mut state: ResMut<MusicState>,
+    sounds: Option<ResMut<Sounds>>,
+    counselor: Option<Res<crate::character::CounselorCharacter>>,
+    (game, escaped): (Option<Res<crate::match_flow::GameMatch>>, Option<Res<crate::vehicle::Escaped>>),
+    mut rng: ResMut<crate::GameRng>,
+    players: Query<&Player>,
+    playing: Query<Entity>,
+) {
+    let (Some(mut sounds), Some(counselor)) = (sounds, counselor) else { return };
+    let music = counselor.info.music.clone();
+    if music.is_null() {
+        return;
+    }
+    let now = time.elapsed_secs();
+    // A finished track (checked before anything starts: a new player spawns at the end of the frame): the idle music
+    // a while later.
+    if let Some((e, _, _)) = state.track {
+        if playing.get(e).is_err() {
+            state.track = None;
+            let lo = music["MinIdleMusicTime"].as_f64().unwrap_or(5.0) as f32;
+            let hi = music["MaxIdleMusicTime"].as_f64().unwrap_or(10.0) as f32;
+            state.idle_at = Some(now + lo + (hi - lo) * rng.0.frand());
+        }
+    }
+    // PlayMusic(event), for a MUSICTRACK entry.
+    let play = |state: &mut MusicState, commands: &mut Commands, sounds: &mut Sounds, rng: &mut crate::GameRng, event: &str| {
+        let Some(entry) = music["MusicData"].as_array().into_iter().flatten().find(|d| d["EventName"] == event) else { return };
+        let Some(cue) = cue_name(&entry["MusicTrack"]) else { return };
+        let fade_in = entry["FadeInTime"].as_f64().unwrap_or(0.0) as f32;
+        let fade_out = entry["FadeOutTime"].as_f64().unwrap_or(0.0) as f32;
+        if let Some((_, _, out)) = state.track {
+            state.fade_out(commands, out);
+        }
+        let start = if fade_in > 0.0 { 0.0 } else { 1.0 };
+        if let Some((e, base)) = spawn_2d(commands, &assets, sounds, rng, &cue, false, start) {
+            if fade_in > 0.0 {
+                commands.entity(e).insert(Fade { base, level: 0.0, target: 1.0, rate: 1.0 / fade_in, despawn: false });
+            }
+            state.track = Some((e, base, fade_out));
+            state.idle_at = None;
+            info!("music: {event}");
+        }
+    };
+    let in_progress = game.as_ref().is_some_and(|g| g.state.state == crate::match_flow::MatchState::InProgress);
+    if in_progress && !state.match_started {
+        state.match_started = true;
+        play(&mut state, &mut commands, &mut sounds, &mut rng, "MatchStart");
+    }
+    if state.idle_at.is_some_and(|t| now >= t) && !state.ended {
+        play(&mut state, &mut commands, &mut sounds, &mut rng, "CounselorIdle");
+    }
+    // Two minutes left.
+    if in_progress && !state.two_minutes && game.as_ref().is_some_and(|g| g.state.remaining_time <= 120) {
+        state.two_minutes = true;
+        if let Some(cue) = cue_name(&music["TwoMinuteWarningMusic"]) {
+            spawn_2d(&mut commands, &assets, &mut sounds, &mut rng, &cue, false, 1.0);
+            info!("music: two-minute warning");
+        }
+    }
+    // Her end: death or escape.
+    let Ok(p) = players.single() else { return };
+    let end = if !p.counselor.alive() {
+        Some("DeathMusic")
+    } else if escaped.is_some() {
+        Some("SurviveMusic")
+    } else {
+        None
+    };
+    if let (Some(which), false) = (end, state.ended) {
+        state.ended = true;
+        state.fade_out(&mut commands, 0.5);
+        state.idle_at = None;
+        if let Some(cue) = cue_name(&music[which]) {
+            spawn_2d(&mut commands, &assets, &mut sounds, &mut rng, &cue, false, 1.0);
+            info!("music: {which}");
+        }
+    }
+}
+
 /// Jason's music near the counselor: the looping player, its cue volume and its current volume.
 #[derive(Default)]
 struct NearMusic {
@@ -139,7 +284,7 @@ fn near_music(
     mut rng: ResMut<crate::GameRng>,
     jasons: Query<(&crate::jason::Jason, &GlobalTransform)>,
     players: Query<(&Player, &GlobalTransform)>,
-    mut sinks: Query<&mut bevy::audio::AudioSink>,
+    (mut sinks, mut state): (Query<&mut bevy::audio::AudioSink>, ResMut<MusicState>),
 ) {
     let (Some(mut sounds), Some(killer)) = (sounds, killer) else { return };
     let Some(cue) = killer.info.sounds.get("NearCounselorMusic").and_then(|s| cue_name(&serde_json::Value::String(s.clone()))) else { return };
@@ -164,6 +309,10 @@ fn near_music(
     };
     let step = 0.5 * time.delta_secs();
     music.volume += (target - music.volume).clamp(-step, step);
+    // Rising, it fades the counselor's track out (0.2 s).
+    if target > 0.001 {
+        state.fade_out(&mut commands, 0.2);
+    }
     trace!("near music: {:.0} m, target {target:.2}, volume {:.2}", distance / 100.0, music.volume);
     if let Some((e, base)) = music.player {
         if let Ok(mut sink) = sinks.get_mut(e) {

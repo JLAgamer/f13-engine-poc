@@ -143,9 +143,10 @@ Presentation
   attenuation nodes; Unreal's attenuation falloff; left/right panning around the camera) and the counselor's
   footsteps (her locomotion's Footstep notifies; the surface under her foot: a mesh's physical material or the
   terrain's heaviest paint layer; Base_Counselor_AnimBP's tables); doors, windows and barricades (their classes' cues);
-  Jason's near music (NearCounselorMusic by distance, silenced by Stalk). Remaining: landing and wading footsteps,
-  Jason's footsteps, the counselor's music events (tracks, stingers, the ability and two-minute warnings, death and
-  survival), items, car, voices, ambience
+  Jason's near music (NearCounselorMusic by distance, silenced by Stalk); the counselor's music (MusicCounselor:
+  MatchStart, CounselorIdle after each track, the two-minute warning, death and survival music; fades). Remaining:
+  landing and wading footsteps, Jason's footsteps, stingers, the ability-unlock warning, scary sounds, items, car,
+  voices, ambience
 
 Setup
 - [x] Tools refuse a packed (stock) install with a clear message; they need the content extracted to loose files
