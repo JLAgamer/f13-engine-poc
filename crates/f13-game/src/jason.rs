@@ -30,7 +30,8 @@
 //! otherwise wanders between cabins (hiding spots and cabinets). He picks grab or swing with even odds and holds a
 //! grabbed counselor [`HOLD_BEFORE_KILL`] seconds before killing her. Paths come from f13-core::nav over the
 //! collision (the game uses Recast). The grabbed counselor is placed as SCCounselorCharacter::UpdateGrabTransform
-//! does (see [`place_held`]). No character-to-character collision.
+//! does (see [`place_held`]). No character-to-character collision. Stuns with a minigame (weapon, flare, shotgun,
+//! bear trap) he shakes off with f13-core::stun, mashing at the most the game counts.
 //!
 //! Shift, Morph and Stalk run as the game runs them (f13-core::killer_moves; J2's ShiftSpeed 1000 cm/s and ShiftTime
 //! 4 s, StalkActiveTime, IdleStalkModifier, TeleportScreenTime; the map's SCKillerMorphPoints), once his abilities
@@ -273,6 +274,9 @@ pub struct Jason {
     pub fade: TeleportFade,
     /// Hidden by the fade.
     faded: bool,
+    /// The stun minigame, and when he got out of it (s into the stun).
+    stun_wiggle: f13_core::stun::Wiggle,
+    stun_done: Option<f32>,
 }
 
 impl Jason {
@@ -371,6 +375,19 @@ impl Stun {
         }
     }
 
+    /// The stun's minigame (bPlayMinigame), which he can wiggle out of early: TotalStunTime is [`Stun::seconds`],
+    /// PercentPerWiggle SCStunDamageType's constructor 5, DepletionRate the class's (BaseWeaponStun 0.3, the flare and
+    /// shotgun stuns 0.2, the bear trap's the constructor 0.02). The firecracker and grab-break stuns have none.
+    pub fn minigame(self) -> Option<f13_core::stun::WiggleTuning> {
+        let depletion_rate = match self {
+            Stun::Weapon { .. } => 0.3,
+            Stun::Flare | Stun::Shotgun => 0.2,
+            Stun::BearTrap => 0.02,
+            Stun::Firecracker | Stun::PocketKnife | Stun::GrabBreak => return None,
+        };
+        Some(f13_core::stun::WiggleTuning { total_time: self.seconds(), percent_per_wiggle: 5.0, depletion_rate })
+    }
+
     /// Enter, loop (until the exit is due) and exit animations; a single animation plays once and holds.
     fn anims(self) -> (&'static str, Option<&'static str>, Option<&'static str>) {
         match self {
@@ -399,6 +416,8 @@ pub struct Struggle {
     pub input: f32,
     pub wiggle: f13_core::stun::Wiggle,
 }
+/// AI choice: how fast he mashes out of a stun with a minigame (the most the game counts, MaxWigglesPerSecond).
+const JASON_WIGGLES_PER_SECOND: f32 = 10.0;
 /// SCCharacter InvulnerableStunDuration (constructor): no new stun this long after one ends.
 const STUN_IMMUNE_SECONDS: f32 = 3.0;
 const FLINCH_FRONT: &str = "combat_stand_hit_reaction_front";
@@ -489,6 +508,8 @@ fn spawn_jason(
                 stalk: None,
                 fade: TeleportFade::default(),
                 faded: false,
+                stun_wiggle: default(),
+                stun_done: None,
             },
             Transform { translation: feet, rotation, ..default() },
             Visibility::default(),
@@ -1272,13 +1293,28 @@ pub(crate) fn update_jason(
                 }
             }
             JasonState::Stunned { t: at, stun } => {
+                if at == 0.0 {
+                    j.stun_wiggle = default();
+                    j.stun_done = None;
+                }
                 let at = at + dt;
                 walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, None, dt, &t, &world);
+                // Shaking it off: the AI wiggles at a steady rate (the axis flips every 1 / rate s).
+                if let (Some(game), None) = (stun.minigame(), j.stun_done) {
+                    let input = if ((at * JASON_WIGGLES_PER_SECOND) as i32) % 2 == 0 { -1.0 } else { 1.0 };
+                    if j.stun_wiggle.tick(dt, input, &game) {
+                        info!("Jason: shook off the stun after {at:.1}s");
+                        j.stun_done = Some(at);
+                    }
+                }
                 let (enter, looped, exit) = stun.anims();
                 let len = |n: &str| killer.length(n).unwrap_or(1.0);
-                // The exit plays out the last part of the stun.
-                let exit_at = exit.map_or(stun.seconds(), |e| (stun.seconds() - len(e)).max(len(enter)));
-                let end = exit.map_or(stun.seconds(), |e| exit_at + len(e));
+                // The exit plays out the last part of the stun (from when he shook it off).
+                let exit_at = match j.stun_done {
+                    Some(d) => d,
+                    None => exit.map_or(stun.seconds(), |e| (stun.seconds() - len(e)).max(len(enter))),
+                };
+                let end = exit.map_or(exit_at, |e| exit_at + len(e));
                 let anim = if at < len(enter) {
                     enter
                 } else if at < exit_at {
