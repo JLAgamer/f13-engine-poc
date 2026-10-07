@@ -138,6 +138,7 @@ fn run_match(
     jason: Query<(), With<Jason>>,
     escaped: Option<Res<Escaped>>,
     leave: Res<Leave>,
+    host: Option<ResMut<crate::host::HostRequests>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let Some(t) = tuning else { return };
@@ -166,6 +167,15 @@ fn run_match(
         killer_alive: (!jason.is_empty()).then_some(true),
     };
     let mut entered = g.state.advance(time.delta_secs(), &t.rules, &roster);
+    // The host's start and end (host.rs).
+    if let Some(mut h) = host {
+        if std::mem::take(&mut h.start) {
+            entered.extend(g.state.start(&t.rules));
+        }
+        if std::mem::take(&mut h.end) {
+            entered.extend(g.state.end(&t.rules));
+        }
+    }
     let mut i = 0;
     while i < entered.len() {
         match entered[i] {

@@ -334,6 +334,14 @@ pub struct Jason {
 }
 
 impl Jason {
+    /// Moved by the host (host.rs): plan again from here, on his feet.
+    pub(crate) fn teleported(&mut self) {
+        self.path.clear();
+        self.replan = 0.0;
+        self.vel_y = 0.0;
+        self.progress = (Vec3::ZERO, 0.0);
+    }
+
     pub fn stalking(&self) -> bool {
         self.stalk.is_some()
     }

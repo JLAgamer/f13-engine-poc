@@ -108,12 +108,12 @@ Match
   random when the level loads (`--layout` overrides). Not yet: its rain roll (RainChance, the `rain=` option; the
   rain level isn't used), the randomized pods
 
-Host CLI (`f13-host`)
-- [ ] Spawn items
-- [ ] Teleport players
-- [ ] Make a player Jason, live in game
-- [ ] Force start and end matches
-- [ ] Kick players
+Host CLI (`f13-host`; f13-game `--host`, host.rs: line commands on 127.0.0.1)
+- [x] Spawn items (`give <Class>`: one of the match's items of the class into her hands or pockets)
+- [x] Teleport players (`teleport counselor|jason x y z`)
+- [ ] Make a player Jason, live in game (needs a playable Jason)
+- [x] Force start and end matches (`start`, `end`), `status`
+- [x] Kick players (`kick`: single-player, so the game closes)
 
 Presentation
 - [x] Map, characters and car exported to glTF (`tools/f13-export`)

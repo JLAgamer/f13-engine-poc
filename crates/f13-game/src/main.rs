@@ -25,6 +25,7 @@ mod doors;
 mod fear_events;
 mod interact;
 mod hiding;
+mod host;
 mod items;
 mod kill_camera;
 mod jason;
@@ -83,6 +84,8 @@ struct Args {
     bot_raged: bool,
     /// Log frame time, entity counts and GPU pass times every few seconds.
     perf: bool,
+    /// Take the host's commands on this localhost port (host.rs, `f13-host`).
+    host: Option<u16>,
     give: Vec<String>,
     /// Leave Jason out (the counselor-only bots always do).
     no_jason: bool,
@@ -133,6 +136,7 @@ fn parse_args() -> Args {
     let mut bot_locked_in = None;
     let mut bot_raged = false;
     let mut perf = false;
+    let mut host = None;
     let mut give = Vec::new();
     let mut no_jason = false;
     let mut jason_delay = 0.0;
@@ -179,6 +183,8 @@ fn parse_args() -> Args {
                 bot_raged = true;
             }
             "--perf" => perf = true,
+            "--host" => host = Some(host.unwrap_or(f13_host_port())),
+            "--host-port" => host = it.next().and_then(|v| v.parse().ok()).or(host),
             "--give" => give = it.next().map(|v| v.split(',').map(String::from).collect()).unwrap_or_default(),
             "--no-jason" => no_jason = true,
             "--jason-delay" => jason_delay = it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0f32).max(0.0),
@@ -223,7 +229,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight }
+    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight }
 }
 
 #[derive(Resource)]
@@ -410,6 +416,9 @@ fn main() {
     if !(args.fly || args.aerial) {
         app.add_plugins(ui::UiPlugin);
     }
+    if let Some(port) = args.host.filter(|_| !(args.fly || args.aerial)) {
+        app.add_plugins(host::HostPlugin { port });
+    }
     if args.perf {
         app.add_plugins(perf::PerfPlugin);
     }
@@ -418,6 +427,11 @@ fn main() {
     if exit.is_error() {
         std::process::exit(1);
     }
+}
+
+/// `--host`'s default port (f13-host's too).
+fn f13_host_port() -> u16 {
+    7713
 }
 
 pub(crate) fn to_transform(x: &Xform) -> Transform {

@@ -24,6 +24,7 @@ shipped. They are passed in at runtime, and a loader will read them from the pla
   and builds a match's actors (`world`)
 - `f13-bevy`: Bevy 0.19 plugin (`F13GameplayPlugin`) with components, `FixedUpdate` systems and messages
 - `f13-game`: the game client; for now a viewer for the MVP map built from your own export
+- `f13-host`: sends the host's commands to a running f13-game (see Host commands)
 
 ## Tuning from your own install
 Gameplay values are read from your copy of the game, never shipped here:
@@ -201,6 +202,16 @@ pass times and entity counts (vsync off, to measure the real cost).
 For screenshots: `--screenshot out.png` (after loading; `--screenshot-after s` waits longer), `--camera
 x,y,z,tx,ty,tz` (eye and look-at, relative to her feet), `--pose <animation>@<seconds>` (holds her in one animation).
 `--speed x` runs the game clock faster (bots included; 4 keeps every result the same and cuts a bot run to ~15 s).
+
+## Host commands
+
+Start the game with `--host` (`--host-port n`, default 7713; it listens on 127.0.0.1 only) and drive it with `f13-host`:
+
+```bash
+cargo run -p f13-host --release -- status
+```
+
+Commands: `status`, `give <Class>` (one of the match's items into her hands or pockets), `teleport counselor|jason x y z` (metres, Bevy axes), `start`, `end`, `kick` (the game closes). Without a command, `f13-host` reads them from stdin, one per line.
 
 ## Tests
 ```
