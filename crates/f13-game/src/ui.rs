@@ -6,7 +6,8 @@
 //! (`RUNTIME_VISIBILITY`), the timer's text, the stamina ring's fill (StaminaBarMaterial, `shaders/radial_fill.wgsl`),
 //! the inventory's item widgets (SC_InventoryItem_Widget, the items' ImageOn icons), the breath bars and the
 //! interaction dial (SCInteractMinigame_Widget: the progress circle, the needle, the pips as arcs of the ring, the
-//! mouse button of the next pip). The HUD is rebuilt when the window's size or her pockets change.
+//! mouse button of the next pip), the police timer while they're on their way (ShowPoliceTimer, PoliceTimerText). The
+//! HUD is rebuilt when the window's size or her pockets change, or the police timer shows or hides.
 //!
 //! The counselor HUD has no health or fear meter (the game shows them on her: the limp, the screen's fear effects).
 //! F3 shows the debug text instead (player.rs).
@@ -169,7 +170,8 @@ pub struct Hud {
     textures: HashMap<String, String>,
     regular: Handle<Font>,
     bold: Handle<Font>,
-    built: Option<(Vec2, Vec<String>, bool)>,
+    /// Built for: the window size, her pockets, Jason's HUD, the police timer shown.
+    built: Option<(Vec2, Vec<String>, bool, bool)>,
     root: Option<Entity>,
     /// "<user widget class>.<widget name>" -> entity.
     names: HashMap<String, Entity>,
@@ -285,14 +287,17 @@ fn build_hud(
     mut materials: ResMut<Assets<RadialFill>>,
     mut maps: ResMut<Assets<Minimap>>,
     play: Option<Res<crate::jason_player::PlayJason>>,
+    game: Option<Res<crate::match_flow::GameMatch>>,
 ) {
     let size = window.size();
     let jason = play.is_some() && hud.killer.is_some();
+    // ShowPoliceTimer while they're on their way (HidePoliceTimer once they're here).
+    let police = game.is_some_and(|g| g.state.police_time_remaining > 0);
     if size.x < 1.0 || size.y < 1.0 {
         return;
     }
     let pockets: Vec<String> = player.as_ref().and_then(|p| **p).map_or(vec![], |inv| inv.pockets.iter().filter_map(|&e| items.get(e).ok()).map(|i| i.class.clone()).collect());
-    if hud.built.as_ref().is_some_and(|(s, p, j)| *s == size && *p == pockets && *j == jason) {
+    if hud.built.as_ref().is_some_and(|(s, p, j, c)| *s == size && *p == pockets && *j == jason && *c == police) {
         return;
     }
     if let Some(root) = hud.root.take() {
@@ -304,6 +309,11 @@ fn build_hud(
     let mut tree = if jason { hud.killer.clone().unwrap_or_else(|| hud.hud.clone()) } else { hud.hud.clone() };
     if !jason {
         fill_inventory(&hud, &mut tree, &pockets);
+    }
+    if police {
+        if let Some(w) = tree.find_mut("PoliceTimer") {
+            w.set_visibility(Vis::Visible);
+        }
     }
     let root = commands.spawn((Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, Pickable::IGNORE)).id();
     let mut names = HashMap::new();
@@ -330,7 +340,7 @@ fn build_hud(
     }
     hud.names = names;
     hud.root = Some(root);
-    hud.built = Some((size, pockets, jason));
+    hud.built = Some((size, pockets, jason, police));
 }
 
 /// Puts an item widget in the inventory's Grid for each pocket item (SCInventory_Widget does it as items are
@@ -615,6 +625,14 @@ fn timer(hud: Res<Hud>, game: Res<crate::match_flow::GameMatch>, mut texts: Quer
     let s = format!("{:02}:{:02}", left / 60, left % 60);
     if text.0 != s {
         text.0 = s;
+    }
+    // The police's countdown (PoliceTimerText), while it runs.
+    let police = game.state.police_time_remaining;
+    if let Some(mut text) = hud.names.get("SCCounselorTimerWidget.txtPoliceTimer").and_then(|&e| texts.get_mut(e).ok()).filter(|_| police > 0) {
+        let s = format!("{:02}:{:02}", police / 60, police % 60);
+        if text.0 != s {
+            text.0 = s;
+        }
     }
 }
 

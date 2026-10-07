@@ -4,7 +4,7 @@
 //! with the keys, then drive into a car escape zone. Logs every step; exits when it escapes (or gives up).
 //!
 //! `--bot-police`: fetch the phone box's fuse, put it in, call the police on its phone, then (the countdown cut
-//! to 3 s) walk into the escape volume they open; exits when she escapes.
+//! to 10 s) walk into the escape volume they open; exits when she escapes.
 //! `--bot-heal`: fetch a first aid spray and use it (start hurt with `--health`); exits when healed.
 //! `--bot-door`: doors, barricades and windows ([`FX_STEPS`]): open/close/lock/unlock the nearest lockable door,
 //! barricade the nearest barred door and check it holds from both sides, then open a window, climb in, close it,
@@ -957,10 +957,10 @@ fn run_bot(
                     let Some(phone) = pb.phone.and_then(|e| phones.get(e).ok()) else { return };
                     if phone.called {
                         bot.hold_e = false;
-                        // Test shortcut: the police come in 3 s instead of 300.
+                        // Test shortcut: the police come in 10 s instead of 300.
                         if let Some(g) = game.as_mut() {
-                            info!("bot: police called after {:.1}s; cutting the countdown from {} s to 3", bot.timer, g.state.police_time_remaining);
-                            g.state.police_time_remaining = g.state.police_time_remaining.min(3);
+                            info!("bot: police called after {:.1}s; cutting the countdown from {} s to 10", bot.timer, g.state.police_time_remaining);
+                            g.state.police_time_remaining = g.state.police_time_remaining.min(10);
                         }
                         bot.step = Step::Police(3);
                         bot.timer = 0.0;
@@ -981,6 +981,13 @@ fn run_bot(
                         return;
                     }
                     let Some(a) = &arrived else {
+                        // The HUD's police timer, counting.
+                        if bot.timer > 2.0 && !bot.jason_shots.contains(&"police hud") {
+                            bot.jason_shots.push("police hud");
+                            let path = std::env::temp_dir().join("f13-bot-police-hud.png");
+                            info!("bot: screenshot {}", path.display());
+                            commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+                        }
                         if bot.timer > 20.0 {
                             error!("bot: the police never came");
                             bot.step = Step::Done;
