@@ -71,9 +71,10 @@ fn to_unreal(v: Vec3) -> Vec3 {
 
 /// What was pushed last, for the events the game pushes once and pops once.
 #[derive(Component, Default)]
-struct Pushed {
+pub(crate) struct Pushed {
     lit: Option<bool>,
-    spotted: bool,
+    /// Jason is in her view (JasonSpotted).
+    pub(crate) spotted: bool,
     hidden: bool,
     grabbed: bool,
     items: Vec<(Entity, String)>,

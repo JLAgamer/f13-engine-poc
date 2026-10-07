@@ -1,6 +1,7 @@
 //! Engine-independent gameplay rules. No engine types, no game data: tuning values are passed in,
 //! loaded at runtime from the player's own install.
 
+pub mod breath;
 pub mod collision;
 pub mod counselor;
 pub mod curve;

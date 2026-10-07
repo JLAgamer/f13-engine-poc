@@ -8,7 +8,8 @@
 //! barricade the nearest barred door and check it holds from both sides, then open a window, climb in, close it,
 //! dive out through the glass (20 damage) and climb back in; screenshots to temp f13-bot-fixture-*.png.
 //! `--bot-dodge`: enter combat stance and double-tap S, A, D; logs how far each dodge moved (needs open ground).
-//! `--bot-hide`: hide in the nearest hiding spot while Jason is far off, stay 60 s, come out; passes alive.
+//! `--bot-hide`: hide in the nearest hiding spot while Jason is far off, hold her breath for 4 s, stay 60 s, come
+//! out; passes alive, having held it (her breath fell, then came back).
 //! `--bot-hide-seen`: let Jason see her, then hide in the hiding spot nearest him; passes when he finds and kills
 //! her there. Screenshots f13-bot-hide-*.png.
 //! `--bot-locked-in` / `--bot-barred-in`: shut her in behind the lockable (barricaded) door nearest Jason, locked
@@ -125,11 +126,13 @@ struct Bot {
     fear_seen: Vec<String>,
     /// Her health last frame (--bot-block).
     last_health: f32,
+    /// The least breath she had (--bot-hide).
+    min_breath: f32,
 }
 
 impl Default for Bot {
     fn default() -> Self {
-        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false, hold_e: false, fixtures: [None; 3], door_ok: false, jason_shots: Vec::new(), door_hits: Vec::new(), fear_seen: Vec::new(), last_health: 100.0 }
+        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false, hold_e: false, fixtures: [None; 3], door_ok: false, jason_shots: Vec::new(), door_hits: Vec::new(), fear_seen: Vec::new(), last_health: 100.0, min_breath: f32::MAX }
     }
 }
 
@@ -234,7 +237,7 @@ fn run_bot(
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     (interaction, tuning): (Res<crate::interact::Interaction>, Res<crate::player::PlayerTuning>),
-    mut player: Single<(&mut Transform, &Player, Option<&Inventory>, Has<Driving>, Has<UsingItem>, (Has<crate::jason::Held>, Has<crate::items::ItemAction>, Has<crate::jason::Staggered>, Has<crate::items::Blocking>, Has<crate::items::Trapped>), Option<&mut crate::hiding::Hiding>)>,
+    mut player: Single<(&mut Transform, &Player, Option<&Inventory>, Has<Driving>, Has<UsingItem>, (Has<crate::jason::Held>, Has<crate::items::ItemAction>, Has<crate::jason::Staggered>, Has<crate::items::Blocking>, Has<crate::items::Trapped>, Option<&crate::hiding::Breathing>), Option<&mut crate::hiding::Hiding>)>,
     mut camera: Single<&mut PlayerCamera>,
     items: Query<(Entity, &Item, &GlobalTransform, Option<&InCabinet>), Without<Carried>>,
     carried: Query<&Item, With<Carried>>,
@@ -266,7 +269,7 @@ fn run_bot(
     if !bot.hold_e {
         keys.release(KeyCode::KeyE);
     }
-    for k in [KeyCode::KeyW, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::KeyC, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD] {
+    for k in [KeyCode::Space, KeyCode::KeyW, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::KeyC, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD] {
         keys.release(k);
     }
     let with_jason = matches!(bot.goal, Goal::Jason | Goal::Fight | Goal::Hide | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities | Goal::Block);
@@ -276,7 +279,7 @@ fn run_bot(
         exit.write(AppExit::error());
         return;
     }
-    let (ref mut pxf, p, inv, driving, using, (held, acting, staggered, blocking, trapped), ref mut hiding) = *player;
+    let (ref mut pxf, p, inv, driving, using, (held, acting, staggered, blocking, trapped, breathing), ref mut hiding) = *player;
     let busy = acting || staggered || held;
     let sees = knowledge.iter().next().is_some_and(|k| k.sees);
     // Jason only knows what he perceives: when he hasn't seen her for a while, step out 10 m in front of him.
@@ -1064,6 +1067,15 @@ fn run_bot(
                         if bot.timer >= 5.0 && (bot.timer - dt) as u32 / 10 != bot.timer as u32 / 10 {
                             info!("bot: hidden {:.0}s; Jason {:?}, {jd:.0} m away", bot.timer, j.state);
                         }
+                        // Hold her breath for 4 s.
+                        if bot.goal == Goal::Hide {
+                            if (10.0..14.0).contains(&bot.timer) {
+                                keys.press(KeyCode::Space);
+                            }
+                            if let Some(b) = breathing {
+                                bot.min_breath = bot.min_breath.min(b.breath.current);
+                            }
+                        }
                         if bot.goal == Goal::Hide && bot.timer > 60.0 {
                             info!("bot: leaving the hiding spot");
                             crate::hiding::request_exit(h);
@@ -1153,7 +1165,11 @@ fn run_bot(
                     Goal::Block => !p.counselor.alive() && bot.jason_shots.contains(&"blocked"),
                     Goal::Trap => p.counselor.alive() && bot.last_health == 50.0 && bot.jason_shots.contains(&"free"),
                     Goal::Fight => p.counselor.alive() && bot.jason_shots.contains(&"stun"),
-                    Goal::Hide => p.counselor.alive() && hiding.is_none() && bot.jason_shots.contains(&"inside"),
+                    Goal::Hide => {
+                        let breath = breathing.map_or(0.0, |b| b.breath.current);
+                        info!("bot: breath fell to {:.0}, now {breath:.0}", bot.min_breath);
+                        p.counselor.alive() && hiding.is_none() && bot.jason_shots.contains(&"inside") && bot.min_breath < 80.0 && breath > bot.min_breath
+                    }
                     Goal::HideSeen => !p.counselor.alive() && bot.jason_shots.contains(&"kill"),
                     // A hit per 20 health (the pickaxe), per 10 through a barricade: cabin doors (60) take three or six,
                     // Higgins Haven's outer doors (20) one or two. The first entry is the starting health.

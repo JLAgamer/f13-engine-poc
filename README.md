@@ -142,7 +142,9 @@ progress, and `--nav-debug` draws it around you).
 start and tells him where you are: he Morphs over, Stalks, Shifts at you and kills you. The counselor bots below leave
 him out.
 Hiding: E at a wardrobe, outhouse, bed or tent hides you (the game's enter, idle and exit animations; the view is
-the spot's hiding camera, turned with the mouse), E again leaves. If Jason watched you get in, or lost you nearby, he
+the spot's hiding camera, turned with the mouse), E again leaves. Hold Space to hold your breath (the game's breath
+meter, refilling as you breathe); hiding with your fear at 70 or more and Jason in view nearby, you whimper unless
+you hold it, and he hears it. If Jason watched you get in, or lost you nearby, he
 searches it: an empty spot breaks, an occupied one ends in its hiding spot kill. `--bot-hide` hides out of his sight
 and comes out after 60 s; `--bot-hide-seen` hides where he sees and passes when he finds her. `--bot-locked-in` and
 `--bot-barred-in` shut her in behind a locked or barricaded door and pass when he breaks it down in a hit per 20 of

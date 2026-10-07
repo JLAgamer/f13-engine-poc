@@ -74,8 +74,10 @@ Mechanics: Jason side
   polygon count), tiles on the game's grid; paths pulled taut and shortened along the mesh; the HUD shows the build.
   The cooked navmesh is exported (navmesh-<agent>.json) as a reference. Not ported: detail meshes (heights come from
   the polygon corners), border vertex removal
-- [ ] Jason AI, remaining: the grabbed counselor on his grab socket, kill cameras; playing as Jason;
-  holding breath while hiding
+- [x] Holding breath while hiding (f13-core::breath, hiding.rs): the breath meter's drain, refill, threshold and wait;
+  her HoldBreath / HoldBreathEnd / KillerIsNearWhileHiding voice lines; Jason hears the last within its range
+  (placeholder distance and repeat delay)
+- [ ] Jason AI, remaining: the grabbed counselor on his grab socket, kill cameras; playing as Jason
 - [x] Shift, Morph, Stalk (f13-core::killer_moves, jason.rs): Shift's 0.7 s wind-up, ShiftSpeed and ShiftTime (J2:
   1000 cm/s, 4 s), ending in a grab; Stalk's StalkActiveTimer (IdleStalkModifier standing still); Morph to the
   nearest SCKillerMorphPoint within 30 m of the spot after TeleportScreenTime; the teleport fade (he's hidden below

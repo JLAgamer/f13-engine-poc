@@ -13,6 +13,17 @@
 //!   after which the spot is destroyed (`bDestroyOnSearch`, constructor default true; tents keep it false) when
 //!   `bDestructable`. Destroyed spots can't be used. jason.rs drives his side.
 //!
+//! Holding her breath (f13-core::breath): Space while hidden holds it (CSLR_HoldBreath), letting go releases it; her
+//! breath values are Base_Counselor's (MaxBreath, thresholds, BreathHold/RechargeModifier). Her voice lines
+//! (VoiceOverObjectClass): HoldBreath / HoldBreathEnd as she holds and lets go while hiding; KillerIsNearWhileHiding
+//! when Jason is in her view near her spot while she hides not holding her breath, could hold it, and her fear is at
+//! least 70 (the voice component's check).
+//!
+//! PLACEHOLDERS: the scared line's distance ([`SCARED_LINE_M`]; the game's is an unreflected field) and its repeat
+//! delay ([`SCARED_LINE_SECONDS`]); Jason hears it when he's within the line's audible range (inner radius plus
+//! falloff) and learns her hiding spot (the game's Jason is a player who hears it). Holding her breath doesn't change
+//! her noise here: she's still while hidden, so it's 0 (BreathNoiseMod only lowers a moving counselor's).
+//!
 //! PLACEHOLDERS: the wardrobe doors swing open (100 deg) while someone goes in or out, searches or kills, instead of
 //! following the montage's door curve; the outhouse door and the tent flaps (skeletal animations) don't move.
 //! The hidden counselor's model is hidden (the camera is inside the spot).
@@ -23,6 +34,22 @@ use f13_data::level::ComponentInfo;
 
 use crate::character::{flat, CounselorCharacter, PlayAction, Rig};
 use crate::player::{Player, PlayerCamera};
+
+/// The scared hiding line: Jason within this many metres, and at most once per this many seconds. PLACEHOLDERS.
+const SCARED_LINE_M: f32 = 15.0;
+const SCARED_LINE_SECONDS: f32 = 8.0;
+/// SCCounselorCharacter's voice component: the scared hiding line needs this much fear.
+const SCARED_LINE_FEAR: f32 = 70.0;
+
+/// Her breath (f13-core::breath) and when her scared hiding line may play again.
+#[derive(Component)]
+pub struct Breathing {
+    pub breath: f13_core::breath::Breath,
+    scared_next: f32,
+}
+
+#[derive(Resource)]
+struct BreathTuning(f13_core::breath::BreathTuning);
 
 /// Jason's weapon class: it picks the weapon-specific search and kill moves.
 pub const KILLER_WEAPON: &str = "PickAxe_C";
@@ -222,7 +249,8 @@ pub struct HidingPlugin;
 impl Plugin for HidingPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(FixedUpdate, update_hiding.before(crate::player::move_player))
-            .add_systems(Update, (read_exit, swing_doors))
+            .add_systems(Update, (read_exit, swing_doors, setup_breath))
+            .add_systems(FixedUpdate, breathe.after(update_hiding))
             .add_systems(Update, hiding_camera.after(crate::player::follow_camera));
     }
 }
@@ -265,6 +293,86 @@ fn read_exit(keys: Res<ButtonInput<KeyCode>>, mut hiding: Query<&mut Hiding>) {
 }
 
 /// Exit at the next step (bots).
+/// Her breath values, once her character is loaded.
+fn setup_breath(mut commands: Commands, counselor: Option<Res<CounselorCharacter>>, tuning: Option<Res<BreathTuning>>, players: Query<Entity, (With<Player>, Without<Breathing>)>) {
+    let Some(c) = counselor else { return };
+    let t = match tuning {
+        Some(t) => t.0.clone(),
+        None => {
+            let v = |k: &str, d: f32| c.info.values.get(k).copied().unwrap_or(d);
+            let stat = |k: &str, d: f32| c.info.stat(k).unwrap_or(f13_core::stats::StatModifiedValue::constant(d));
+            let t = f13_core::breath::BreathTuning {
+                max: v("MaxBreath", 100.0),
+                min_hold_threshold: v("MinHoldBreathThreshold", 50.0),
+                min_hold_timer: v("MinHoldBreathTimer", 1.5),
+                hold: stat("BreathHoldModifier", 10.0),
+                recharge: stat("BreathRechargeModifier", 10.0),
+            };
+            commands.insert_resource(BreathTuning(t.clone()));
+            t
+        }
+    };
+    // Her voice lines play as her class's sounds (audio.rs).
+    let lines: std::collections::HashMap<String, String> =
+        c.info.sounds.iter().filter_map(|(k, v)| Some((k.clone(), crate::audio::cue_name(&serde_json::Value::String(v.clone()))?))).collect();
+    for e in &players {
+        commands.entity(e).insert((Breathing { breath: f13_core::breath::Breath::new(&t), scared_next: 0.0 }, crate::audio::ClassSounds(lines.clone())));
+    }
+}
+
+/// Space while hidden holds her breath; her breath ticks (UpdateBreath); her hiding voice lines.
+#[allow(clippy::type_complexity)]
+fn breathe(
+    mut commands: Commands,
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    tuning: Option<Res<BreathTuning>>,
+    mut players: Query<(Entity, &Player, &GlobalTransform, &mut Breathing, Option<&Hiding>, Option<&crate::fear_events::Pushed>, Option<&crate::audio::ClassSounds>)>,
+    mut jasons: Query<(&GlobalTransform, Option<&mut crate::senses::Knowledge>), With<crate::jason::Jason>>,
+    sounds: Option<ResMut<crate::audio::Sounds>>,
+) {
+    let Some(t) = tuning else { return };
+    let Ok((pe, p, pxf, mut b, hiding, pushed, lines)) = players.single_mut() else { return };
+    let dt = time.delta_secs();
+    let now = time.elapsed_secs();
+    let hidden = hiding.is_some_and(|h| h.phase == HidePhase::Hidden);
+    let say = |commands: &mut Commands, line: &'static str| commands.trigger(crate::audio::ActorSound { actor: pe, prop: line });
+    if hidden && keys.pressed(KeyCode::Space) {
+        if b.breath.hold() {
+            info!("holding her breath");
+            say(&mut commands, "VO:HoldBreath");
+        }
+    } else if b.breath.release(&t.0) && hiding.is_some() {
+        info!("lets her breath go");
+        say(&mut commands, "VO:HoldBreathEnd");
+    }
+    if b.breath.tick(dt, &p.counselor.stats, &t.0) {
+        info!("out of breath");
+        if hiding.is_some() {
+            say(&mut commands, "VO:HoldBreathEnd");
+        }
+    }
+    // Her scared line: Jason in view and near, not holding her breath though she could, fear at least 70.
+    let Some((jxf, knowledge)) = jasons.iter_mut().next() else { return };
+    let distance = jxf.translation().distance(pxf.translation());
+    let in_view = pushed.is_some_and(|p| p.spotted);
+    if hidden && in_view && !b.breath.holding && b.breath.can_hold && p.fear >= SCARED_LINE_FEAR && distance <= SCARED_LINE_M && now >= b.scared_next {
+        b.scared_next = now + SCARED_LINE_SECONDS;
+        info!("whimpering in her hiding spot ({distance:.0} m from Jason)");
+        say(&mut commands, "VO:KillerIsNearWhileHiding");
+        // He hears it within its audible range: her hiding spot gives itself away.
+        let cue = lines.and_then(|l| l.0.get("VO:KillerIsNearWhileHiding")).cloned();
+        let range = sounds.zip(cue).and_then(|(mut s, cue)| s.audible_range(&cue));
+        if let (Some(range), Some(mut k), Some(h)) = (range, knowledge, hiding) {
+            if distance * 100.0 <= range {
+                info!("Jason: heard her in her hiding spot");
+                k.hiding_spot = Some(h.spot);
+                k.last_known = Some((pxf.translation(), now, crate::senses::Clue::Heard));
+            }
+        }
+    }
+}
+
 pub fn request_exit(h: &mut Hiding) {
     if h.phase == HidePhase::Hidden {
         h.wants_exit = true;

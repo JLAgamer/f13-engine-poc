@@ -528,7 +528,7 @@ pub(crate) fn follow_camera(
 }
 
 fn update_hud(
-    player: Single<(&Player, &Transform)>,
+    player: Single<(&Player, &Transform, Option<&crate::hiding::Breathing>, Has<crate::hiding::Hiding>)>,
     jason: Query<(&crate::jason::Jason, &Transform), Without<Player>>,
     tuning: Res<PlayerTuning>,
     diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
@@ -538,7 +538,7 @@ fn update_hud(
     use bevy::diagnostic::FrameTimeDiagnosticsPlugin as Ftd;
     let fps = diagnostics.get(&Ftd::FPS).and_then(|d| d.smoothed()).unwrap_or(0.0);
     let frame_ms = diagnostics.get(&Ftd::FRAME_TIME).and_then(|d| d.smoothed()).unwrap_or(0.0);
-    let (player, pxf) = *player;
+    let (player, pxf, breathing, hiding) = *player;
     let c = &player.counselor;
     let gait = if c.sprinting {
         "sprinting"
@@ -576,6 +576,13 @@ fn update_hud(
         player.velocity.length(),
         c.max_speed(&situation, &tuning.counselor),
     );
+    if let (Some(b), true) = (breathing, hiding) {
+        hud.0.push_str(&format!(
+            "\nBreath {:3.0}{}  [Space] hold your breath",
+            b.breath.current,
+            if b.breath.holding { " (holding)" } else if b.breath.can_hold { "" } else { " (catching it)" }
+        ));
+    }
     for (j, jxf) in &jason {
         hud.0.push_str(&format!("
 Jason: {:?}, {:.0} m away", j.state, jxf.translation.distance(pxf.translation)));

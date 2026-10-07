@@ -337,6 +337,14 @@ pub struct Sounds {
 }
 
 impl Sounds {
+    /// How far (cm) a cue can be heard: its attenuation's inner radius plus falloff (None: not attenuated, or no
+    /// such cue). Random nodes don't change it, so one evaluation tells.
+    pub fn audible_range(&mut self, cue: &str) -> Option<f32> {
+        let c = self.cue(cue)?.clone();
+        let (_, att) = c.play(&mut || 0.0);
+        att.filter(|a| a.attenuate).map(|a| a.inner_radius + a.falloff)
+    }
+
     fn cue(&mut self, name: &str) -> Option<&Cue> {
         let dir = &self.dir;
         self.cues

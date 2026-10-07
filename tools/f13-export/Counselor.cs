@@ -221,7 +221,17 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         values["FlashlightLerpSpeed"] = ClassValue<float?>(cls, "FlashlightLerpSpeed") ?? 15f;
         info.Values = values;
         info.Stats = new() { ["NoiseStatMod"] = StatValue(cls, "NoiseStatMod", 1f) };
+        // Holding her breath while hiding (constructor: MaxBreath 100, MinHoldBreathThreshold 50, MinHoldBreathTimer
+        // 1.5; BreathHoldModifier 10 with Stealth 1, BreathRechargeModifier 10 with Composure 1, BreathNoiseMod 1 with
+        // Stealth 0.2).
+        foreach (var (name, fallback) in new[] { ("MaxBreath", 100f), ("MinHoldBreathThreshold", 50f), ("MinHoldBreathTimer", 1.5f) })
+            values[name] = ClassValue<float?>(cls, name) ?? fallback;
+        info.Stats["BreathHoldModifier"] = StatValue(cls, "BreathHoldModifier", 10f, (6, 1f));
+        info.Stats["BreathRechargeModifier"] = StatValue(cls, "BreathRechargeModifier", 10f, (5, 1f));
+        info.Stats["BreathNoiseMod"] = StatValue(cls, "BreathNoiseMod", 1f, (6, 0.2f));
         info.Music = MusicObject(cls);
+        // Her voice lines (VoiceOverObjectClass's VoiceOverData), as Sounds "VO:<name>".
+        info.Sounds = VoiceOvers(cls);
 
         AddSockets(info, body, skeleton);
         AddRagdoll(info, body);
@@ -474,10 +484,11 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
 
     /// A stat-modified value through the Blueprint's parents: [BaseValue, StatModifiers[0..7]] (StatModifiers is a
     /// static array indexed by stat; unset entries are 0). `baseValue` is the C++ constructor's.
-    static float[] StatValue(UStruct cls, string name, float baseValue)
+    static float[] StatValue(UStruct cls, string name, float baseValue, params (int Stat, float Value)[] ctorModifiers)
     {
         var v = new float[8];
         v[0] = baseValue;
+        foreach (var (stat, value) in ctorModifiers) v[1 + stat] = value;
         if (ClassValue<FStructFallback>(cls, name) is not { } s) return v;
         foreach (var p in s.Properties)
         {
@@ -501,6 +512,23 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
     }
 
     /// A class default, through the Blueprint's parents (each CDO only stores what its class overrides).
+    /// A character's voice lines (VoiceOverObjectClass's VoiceOverData: name -> sound), as Sounds "VO:<name>".
+    static SortedDictionary<string, string> VoiceOvers(UStruct? cls)
+    {
+        var result = new SortedDictionary<string, string>();
+        if (ClassValue<FPackageIndex>(cls, "VoiceOverObjectClass")?.Load<UStruct>() is not UBlueprintGeneratedClass bp || bp.ClassDefaultObject.Load() is not { } cdo)
+            return result;
+        var props = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(cdo))["Properties"];
+        foreach (var d in props?["VoiceOverData"] as Newtonsoft.Json.Linq.JArray ?? [])
+        {
+            var name = d["VoiceOverName"]?.ToString();
+            var path = d["VoiceOverFile"]?["AssetPathName"]?.ToString();
+            if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(path) || path == "None") continue;
+            result["VO:" + name] = $"SoundCue'{path.Split('.')[^1]}'";
+        }
+        return result;
+    }
+
     /// The defaults of a character's MusicObjectClass, with object references flattened to their names.
     static Newtonsoft.Json.Linq.JObject? MusicObject(UStruct? cls)
     {
