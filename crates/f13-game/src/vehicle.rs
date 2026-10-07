@@ -32,6 +32,10 @@ const WHEELBASE_CM: f32 = 250.0;
 const MAX_STEER_DEG: f32 = 30.0;
 /// Half the car's length (front bumper distance from the root), metres.
 const HALF_LENGTH_M: f32 = 2.4;
+/// How far beyond the bumper, and how far to either side of the middle, Jason blocks the car (m; the game's
+/// KillerRearCollisionVolume: 20 × 90 cm half extents).
+const BLOCK_DEPTH_M: f32 = 0.6;
+const BLOCK_HALF_WIDTH_M: f32 = 0.9;
 
 /// The player is in a vehicle's driver seat.
 #[derive(Component)]
@@ -69,6 +73,7 @@ fn drive(
     mut ray_cast: MeshRayCast,
     vehicle_parts: Query<&VehiclePart>,
     player_parts: Query<(), With<PlayerPart>>,
+    jasons: Query<&Transform, (With<crate::jason::Jason>, Without<Vehicle>)>,
 ) {
     let dt = time.delta_secs();
     let (ref mut player, ref mut inv, p) = *player;
@@ -142,6 +147,20 @@ fn drive(
                 v.speed = 0.0;
                 return;
             }
+        }
+    }
+    // Jason in front of (or behind) the car stops it dead (KillersInFrontOfCar / KillersBehindCar: the car is blocked
+    // while he's in its KillerFront/RearCollisionVolume).
+    if v.speed != 0.0 {
+        let blocked = jasons.iter().any(|j| {
+            let local = xf.rotation.inverse() * (j.translation - xf.translation);
+            let ahead = local.x * v.speed.signum();
+            ahead > 0.0 && ahead < HALF_LENGTH_M + BLOCK_DEPTH_M && local.z.abs() < BLOCK_HALF_WIDTH_M && local.y.abs() < 2.0
+        });
+        if blocked {
+            info!("Jason stopped the car ({:.0} cm/s)", v.speed);
+            v.speed = 0.0;
+            return;
         }
     }
     let mut pos = xf.translation + step;

@@ -61,6 +61,8 @@ pub enum Goal {
     Trap,
     /// Repair a destroyed fuse box (every one starts destroyed): its grid's power comes back.
     Power,
+    /// Repair a car and sit in it, unstarted, near Jason: he should pull her out of it and kill her.
+    CarGrab,
 }
 
 pub struct BotPlugin(pub Goal);
@@ -281,7 +283,7 @@ fn run_bot(
     for k in [KeyCode::Space, KeyCode::KeyW, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::KeyC, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD] {
         keys.release(k);
     }
-    let with_jason = matches!(bot.goal, Goal::Jason | Goal::Fight | Goal::Hide | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities | Goal::Block);
+    let with_jason = matches!(bot.goal, Goal::CarGrab | Goal::Jason | Goal::Fight | Goal::Hide | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities | Goal::Block);
     let limit = if with_jason { 600.0 } else { 240.0 };
     if bot.total > limit && bot.step != Step::Done {
         error!("bot: gave up at {:?}", bot.step);
@@ -542,6 +544,44 @@ fn run_bot(
             if bot.timer > 0.3 {
                 keys.press(KeyCode::KeyE);
                 bot.timer = 0.0;
+            }
+        }
+        Step::Drive if bot.goal == Goal::CarGrab => {
+            // Waiting in the car, unstarted, near Jason (who's told where she is) for him to pull her out.
+            if !driving {
+                if !bot.jason_shots.contains(&"pulled") {
+                    bot.jason_shots.push("pulled");
+                    info!("bot: pulled out of the car after {:.1}s", bot.timer);
+                }
+                if !p.counselor.alive() {
+                    bot.step = Step::Done;
+                    bot.timer = 0.0;
+                }
+                return;
+            }
+            let Some((_, jxf)) = jasons.iter().next() else { return };
+            let Ok((_, v, _, mut vxf)) = vehicles.get_mut(bot.vehicle.unwrap()) else { return };
+            if !bot.placed_car {
+                bot.placed_car = true;
+                // 8 m from him, the driver's side toward him.
+                let jat = jxf.translation;
+                let seat_dir = (Quat::from_rotation_y(0.0) * v.driver_seat).with_y(0.0).normalize_or_zero();
+                let at = jat + Vec3::new(8.0, 0.0, 0.0);
+                vxf.translation = at + Vec3::Y * 0.5;
+                // Turn the car so its driver side (seat_dir, local) faces him (-X from the car).
+                let want = Vec3::NEG_X;
+                let yaw = want.z.atan2(want.x) - seat_dir.z.atan2(seat_dir.x);
+                vxf.rotation = Quat::from_rotation_y(-yaw);
+                info!("bot: waiting in the car 8 m from Jason");
+            }
+            if let Some(mut k) = knowledge.iter_mut().next() {
+                if !k.sees {
+                    k.last_known = Some((pxf.translation, time.elapsed_secs(), crate::senses::Clue::Heard));
+                }
+            }
+            if bot.timer > 120.0 {
+                error!("bot: Jason never pulled her out");
+                bot.step = Step::Done;
             }
         }
         Step::Drive => {
@@ -1239,6 +1279,7 @@ fn run_bot(
                     Goal::Block => !p.counselor.alive() && bot.jason_shots.contains(&"blocked"),
                     Goal::Trap => p.counselor.alive() && bot.last_health == 50.0 && bot.jason_shots.contains(&"free"),
                     Goal::Fight => p.counselor.alive() && bot.jason_shots.contains(&"stun"),
+                    Goal::CarGrab => !p.counselor.alive() && bot.jason_shots.contains(&"pulled"),
                     Goal::Power => bot.fixtures[0]
                         .and_then(|e| fuse_boxes.get(e).ok())
                         .is_some_and(|(_, f, _)| !f.destroyed && f.grid.is_some_and(|g| grids.as_ref().is_some_and(|p| p.on(g)))),
@@ -1286,7 +1327,7 @@ fn run_bot(
                     Goal::Power => &[&["GridPartRepaired"]],
                     Goal::Fight => &[&["StunJason", "StunJasonShotgun", "StunJasonFlare", "FirecrackerJasonStun", "EscapeJasonGrab", "Trapper"]],
                     // Her death ends the match.
-                    Goal::Jason | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities | Goal::Block => &[&["CompletedMatch"]],
+                    Goal::Jason | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities | Goal::Block | Goal::CarGrab => &[&["CompletedMatch"]],
                     _ => &[],
                 };
                 let mut unscored = Vec::new();

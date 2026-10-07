@@ -109,7 +109,9 @@ Mechanics: Jason side
       walking into it; the AI when it stands between him and her), the door break's montage and timing, his world
       damage against its BaseHealth 60; the section and its collision go. Not yet: the destructible chunks, the wall
       break montages, dust and sounds
-- [ ] Car interactions: stopping and grabbing out of the car
+- [x] Car interactions: Jason in front of (or behind) a moving car stops it dead (KillersInFrontOfCar); with the car
+      under MinUseCarDoorSpeed (50 cm/s), Jason at the driver door pulls her out into his grab (the AI goes for the
+      door; the player grabs). Not yet: the slam and pull-out montages, passengers, the car running counselors over
 
 Match
 - [x] Match flow (f13-core::game_mode, match_flow.rs): the game mode's states and timer, the end (dead or

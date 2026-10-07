@@ -112,6 +112,10 @@ const NECK_GRAB_SOCKET: &str = "NeckGrabSocket";
 const GRAB_HOLD_M: f32 = 0.65;
 /// Seconds Jason holds a grabbed counselor before the kill (a player's choice in the game).
 const HOLD_BEFORE_KILL: f32 = 4.0;
+/// SCDriveableVehicle constructor: MinUseCarDoorSpeed (cm/s).
+const MIN_USE_CAR_DOOR_SPEED: f32 = 50.0;
+/// How near the driver door he pulls her out (m; the special move moves him onto its spot).
+const CAR_DOOR_REACH_M: f32 = 1.2;
 /// Odds of going for a grab rather than a swing, rolled after each attempt (AI choice).
 const GRAB_ODDS: f32 = 0.5;
 /// Paths: re-planned this often (s), with this many cells explored at most.
@@ -930,13 +934,14 @@ pub(crate) fn update_jason(
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
     (mut rng, mut struggle, mut controls, config): (ResMut<crate::GameRng>, ResMut<Struggle>, Option<ResMut<crate::jason_player::JasonControls>>, Res<JasonConfig>),
     (mut jasons, morph_points): (Query<(Entity, &mut Jason, &mut Transform, Option<&HitJason>, Option<&mut crate::senses::Knowledge>), Without<Player>>, Option<Res<MorphPoints>>),
-    (inventories, items, mut fuse_boxes, mut grids): (
+    (inventories, items, mut fuse_boxes, mut grids, vehicles): (
         Query<&crate::interact::Inventory>,
         Query<&crate::props::Item>,
         Query<&mut crate::power::FuseBox>,
         Option<ResMut<crate::power::PowerGrids>>,
+        Query<(&crate::props::Vehicle, &GlobalTransform)>,
     ),
-    mut players: Query<(Entity, &mut Player, &mut Transform, Has<crate::vehicle::Driving>, Option<&mut crate::hiding::Hiding>, Has<crate::items::Blocking>), Without<Jason>>,
+    mut players: Query<(Entity, &mut Player, &mut Transform, Option<&crate::vehicle::Driving>, Option<&mut crate::hiding::Hiding>, Has<crate::items::Blocking>), Without<Jason>>,
     mut doors: Query<(Entity, &mut crate::doors::Door, &GlobalTransform)>,
     (mut barricades, mut walls): (Query<&mut crate::windows::Barricade>, Query<(Entity, &mut crate::doors::Wall, &GlobalTransform)>),
     (mut spots, cabinets): (Query<(Entity, &mut crate::hiding::HidingSpot, &GlobalTransform)>, Query<&GlobalTransform, With<crate::props::Cabinet>>),
@@ -960,7 +965,14 @@ pub(crate) fn update_jason(
         .collect();
     let (grid, lists) = collision.without(&dynamic, |e| open_leaves.contains(&e));
     let world = (grid, lists.as_slice());
-    let Ok((pe, mut p, mut pxf, driving, mut hiding, blocking)) = players.single_mut() else { return };
+    let Ok((pe, mut p, mut pxf, in_car, mut hiding, blocking)) = players.single_mut() else { return };
+    let driving = in_car.is_some();
+    // Her car's driver door (where the game's DriverGrab context kill pulls the driver out) and its speed.
+    let car_door = in_car.and_then(|d| vehicles.get(d.vehicle).ok()).map(|(v, g)| {
+        let seat = v.driver_seat;
+        let out = Vec3::new(seat.x, 0.0, seat.z).normalize_or_zero();
+        (g.transform_point(seat + out), v.speed)
+    });
     for (je, mut j, mut xf, hit, mut know) in &mut jasons {
         j.stun_immune = (j.stun_immune - dt).max(0.0);
         j.knife_cooldown = (j.knife_cooldown - dt).max(0.0);
@@ -1044,6 +1056,25 @@ pub(crate) fn update_jason(
                     continue;
                 }
                 j.cooldown -= dt;
+                // Her in a car that's (nearly) stopped, him at its driver door: he pulls her out into his grab
+                // (DriverGrab; the car door only works under MinUseCarDoorSpeed). The AI does it when he gets there,
+                // the player when they grab.
+                if let Some((door, speed)) = car_door {
+                    let at_door = Vec2::new(door.x - xf.translation.x, door.z - xf.translation.z).length() < CAR_DOOR_REACH_M;
+                    let wants = player_input.map_or(true, |i| i.presses.grab);
+                    if at_door && speed.abs() < MIN_USE_CAR_DOOR_SPEED && wants && alive {
+                        info!("Jason: pulled Vanessa out of the car");
+                        commands.entity(pe).remove::<crate::vehicle::Driving>().insert(Visibility::Inherited);
+                        pxf.translation = Vec3::new(door.x, xf.translation.y, door.z);
+                        struggle.wiggle = default();
+                        j.state = JasonState::Holding { t: 0.0 };
+                        j.velocity = Vec2::ZERO;
+                        commands.entity(je).insert(PlayAction(GRAB_ENTER.into()));
+                        commands.entity(pe).insert((Held, PlayAction(GRABBED_ENTER.into())));
+                        p.velocity = Vec2::ZERO;
+                        continue;
+                    }
+                }
                 // The player's Jason (jason_player.rs): what they pressed, else the AI below.
                 if let Some(i) = player_input {
                     let p = i.presses;
@@ -1138,8 +1169,9 @@ pub(crate) fn update_jason(
                 let sees = know.as_ref().is_none_or(|k| k.sees);
                 // Near the goal but not getting any closer: as good as there.
                 let stalled = j.stall > STALL_SECONDS;
-                // Where to go: her, if he sees her; else the hiding spot he's after, the last clue, or somewhere.
-                let mut goal = to;
+                // Where to go: her (her car's driver door when she drives), if he sees her; else the hiding spot he's
+                // after, the last clue, or somewhere.
+                let mut goal = car_door.map_or(to, |(door, _)| door);
                 // Going for a hiding spot or a clue (not her, not wandering).
                 let mut following = false;
                 if !sees {
