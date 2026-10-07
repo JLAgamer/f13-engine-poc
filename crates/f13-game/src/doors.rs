@@ -11,8 +11,13 @@
 //! - A door with a barricade (windows.rs) uses it instead of the lock: hold from inside toggles it, and a barred door
 //!   doesn't open.
 //!
-//! PLACEHOLDERS: the swing (90 degrees, away from whoever opens it, in [`SWING_SECONDS`]) stands in for the
-//! special-move montages and the door's anim driver.
+//! The swing (SCDoor's OpenCloseDoorDriver, decompiled): as the opener's montage enters its "Driver: OpenCloseDoor"
+//! window, DriverBegin (0x140353c60) sets the Pivot's start and end yaw, 0 to -90 to open, -90 to 0 to close: the
+//! leaf always opens the same way, whoever opens it. DriverTick (0x140353cb0) sets the Pivot's relative yaw to
+//! start + (end - start) x clamp(the opener's DoorRotation curve, 0, 1); OpenCloseDoorCompleted (0x140353b20) snaps
+//! it to the end if the montage ends first.
+//! PLACEHOLDER: the leaf turns at a steady rate over the driver window (or [`SWING_SECONDS`] without one) instead of
+//! along the montage's DoorRotation curve (the montages' curves aren't loaded yet).
 
 use bevy::prelude::*;
 
@@ -69,8 +74,6 @@ pub struct Door {
     pub reach: f32,
     /// Seconds to hold for the lock (the interact component's `HoldTimeLimit`).
     pub hold_time: f32,
-    /// Leaf centre relative to the pivot (to pick the swing direction).
-    pub leaf_center: Vec3,
     /// Current and target swing angle (radians, about the pivot's Y).
     pub angle: f32,
     pub target: f32,
@@ -221,8 +224,9 @@ impl Door {
         (press, hold)
     }
 
-    /// Press: open or close (or nothing when locked). Returns what happened, for the log.
-    pub fn press(&mut self, door: &GlobalTransform, opener: Vec3) -> &'static str {
+    /// Press: open or close (or nothing when locked). Returns what happened, for the log. The leaf opens to the
+    /// Pivot's -90 degree yaw (Unreal; +90 about Bevy's Y) from either side.
+    pub fn press(&mut self, _door: &GlobalTransform, _opener: Vec3) -> &'static str {
         if self.locked {
             return "locked";
         }
@@ -232,14 +236,7 @@ impl Door {
             self.target = 0.0;
             return "closed";
         }
-        // Swing away from the opener: pick the side whose leaf centre ends up farther from them.
-        let pivot = door.transform_point(self.pivot_closed.translation);
-        let far = |a: f32| {
-            let c = door.rotation() * (self.pivot_closed.rotation * (Quat::from_rotation_y(a) * self.leaf_center));
-            (pivot + c).distance(opener)
-        };
-        let a = OPEN_DEGREES.to_radians();
-        self.target = if far(a) >= far(-a) { a } else { -a };
+        self.target = OPEN_DEGREES.to_radians();
         "opened"
     }
 
@@ -335,7 +332,6 @@ mod tests {
             interact: Vec3::ZERO,
             reach: 200.0,
             hold_time: 0.5,
-            leaf_center: Vec3::X,
             angle: 0.0,
             target: 0.0,
             health: 60.0,

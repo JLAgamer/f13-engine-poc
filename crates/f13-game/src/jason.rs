@@ -1221,7 +1221,7 @@ pub(crate) fn update_jason(
                             continue;
                         }
                         let near = |at: Vec3, reach: f32| Vec2::new(at.x - here.x, at.z - here.z).length() * 100.0 <= reach + 100.0;
-                        if let Some((be, b)) = phone_boxes.iter().find(|(_, b)| b.breakable(&phones) && near(b.interact, b.reach)) {
+                        if let Some((be, b)) = phone_boxes.iter().find(|(_, b)| b.breakable() && near(b.interact, b.reach)) {
                             info!("Jason: breaking the phone box");
                             let to = b.interact - xf.translation;
                             xf.rotation = Quat::from_rotation_y(to.x.atan2(to.z));
@@ -1284,7 +1284,7 @@ pub(crate) fn update_jason(
                     let clue = know.as_ref().and_then(|k| k.last_known).filter(|c| c.1 > j.clue_done && unreachable.is_none_or(|u| c.0.distance(u.0) > UNREACHABLE_RADIUS_M));
                     if let Some(s) = j.target_spot {
                         match spots.get_mut(s) {
-                            Ok((_, mut spot, g)) if !spot.destroyed || spot.occupant.is_some() => {
+                            Ok((_, spot, g)) if !spot.destroyed || spot.occupant.is_some() => {
                                 let side = *j.target_side.get_or_insert_with(|| spot.nearest_side(g, xf.translation));
                                 let at = crate::hiding::HidingSpot::world(g, &spot.sides[side].search);
                                 goal = at.translation;
@@ -1307,7 +1307,6 @@ pub(crate) fn update_jason(
                                                 *pxf = c.place(vkill, *pxf).0;
                                             }
                                             commands.entity(pe).insert((PlayAction(vkill.into()), Visibility::Inherited));
-                                            spot.open_until = now + killer.length(kill).unwrap_or(4.0);
                                         }
                                         (false, _, _, Some(search)) => {
                                             info!("Jason: searching a {:?}", spot.kind);
@@ -1315,7 +1314,6 @@ pub(crate) fn update_jason(
                                             *xf = origin;
                                             j.state = JasonState::Searching { spot: s, t: 0.0, end, anim: search };
                                             commands.entity(je).insert(PlayAction(search.into()));
-                                            spot.open_until = now + killer.length(search).unwrap_or(4.0);
                                         }
                                         _ => {
                                             j.searched.push(s);
@@ -1902,7 +1900,7 @@ pub(crate) fn update_jason(
                     commands.entity(je).insert(PlayAction(Stun::GrabBreak.anims().0.into()));
                 } else if let Some(mut pk) = placed_kills
                     .iter_mut()
-                    .find(|k| k.in_reach(xf.translation))
+                    .find(|k| k.in_reach(xf.translation + Vec3::Y * t.capsule.half_height, player_input.map_or(Vec2::new((xf.rotation * Vec3::Z).x, (xf.rotation * Vec3::Z).z), |i| i.forward)))
                     .filter(|_| config.kill.is_none() && player_input.map_or(at >= HOLD_BEFORE_KILL, |i| i.presses.interact))
                 {
                     // A placed kill at hand (the player's E; the AI uses one when it can): he takes its place.

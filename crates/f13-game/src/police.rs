@@ -4,8 +4,9 @@
 //!   HoldTimeLimit, 15 s) and scores its RepairScoreEvent. It enables the phone it's wired to (ConnectedPhone).
 //! - **Jason breaking the box** (Jason_PhoneBox_Destruction_Machete, jason.rs; DestroyBox): it's broken
 //!   (bIsBroken: the phone is disabled and a call in progress is cut off) until a counselor repairs it with its
-//!   Interactable's own minigame (15 s, its pips; no part). PLACEHOLDER: he can break it once its fuse is in and
-//!   until the police have been called (his CanInteractWith isn't read).
+//!   Interactable's own minigame (15 s, its pips; no part). He can break it whenever it works, before or after the
+//!   call (CanInteractWith 0x140375670: a killer not holding a counselor, the box not broken; its BeginPlay
+//!   0x140393360 starts it broken with its Interactable off until the fuse goes in).
 //! - **The phone** (PolicePhone_BP): a 12 s hold (HoldTimeLimit) once enabled. When it's done the phone is used up,
 //!   the police are on their way (StartPoliceTimer: f13-core::game_mode), the world settings' PoliceCalledSFX
 //!   plays, she says her CallPolice line, and the phone's CallPoliceScoreEvent scores.
@@ -22,11 +23,16 @@
 //! - **Jason** entering the active volume (JasonTriggerOnBeginOverlap, then his `FUN_14040a940`): he's set back
 //!   outside it, on the line from its centre through him (toward the spawner's InterceptDirection when there's no
 //!   such line), its radius + his capsule's + 5 cm out, facing it, and the police shoot him
-//!   (PoliceShootJasonStun: a 6 s stun he can wiggle out of, AM_combat_police_stun). PLACEHOLDER: the game traces
-//!   for a free spot (PoliceStunTrace), turning the line PoliceStunIterationAngle at a time; this port doesn't.
+//!   (PoliceShootJasonStun: a 6 s stun he can wiggle out of, AM_combat_police_stun). Where he lands
+//!   (PoliceStunTrace): at that distance along the line, a trace down from the sphere's centre height +- his half
+//!   height finds the ground, and his capsule swept onto it (from 25 cm to 1 cm above it) must be clear; else the
+//!   line turns PoliceStunIterationAngle (4 degrees, Jason_Base doesn't override it) about the up axis and he tries
+//!   again, at most ceil(180 / that) times, jumping to the intercept direction once the line is within 0.95 (dot) of
+//!   it. With no free spot he stays where he is (facing the volume) and is shot all the same.
 //!
-//! PLACEHOLDER: IsUnobstructed is an overlap query whose filter isn't read in full; here a volume is obstructed while
-//! Jason is inside it.
+//! IsUnobstructed (0x1404321d0): an overlap of the volume's sphere (Pawn channel, ignoring the volume) that's
+//! obstructed when any overlapping actor is an SCKillerCharacter: Jason's capsule touching the sphere. Jason entering
+//! the active volume is the sphere's begin overlap with his capsule, the same test.
 
 use crate::props::EscapeZone;
 use bevy::prelude::*;
@@ -189,9 +195,9 @@ impl PhoneBox {
         !self.repaired || self.broken
     }
 
-    /// Jason can break it: it works, and the police haven't been called.
-    pub fn breakable(&self, phones: &Query<&mut Phone>) -> bool {
-        self.repaired && !self.broken && self.phone.and_then(|e| phones.get(e).ok()).is_some_and(|p| !p.called)
+    /// Jason can break it: it works (its fuse in, not broken).
+    pub fn breakable(&self) -> bool {
+        self.repaired && !self.broken
     }
 }
 
@@ -236,6 +242,7 @@ fn arrive(
     mut blockers: Query<(&Name, &mut Visibility), With<Blocker>>,
     mut zones: Query<(Entity, &mut EscapeZone, &GlobalTransform, &Name)>,
     jasons: Query<&Transform, With<crate::jason::Jason>>,
+    tuning: Option<Res<crate::jason::KillerTuning>>,
     export: Res<crate::ExportRoot>,
     assets: Res<AssetServer>,
 ) {
@@ -248,7 +255,7 @@ fn arrive(
         let (s, xf, name) = order.remove(rng.0.index(order.len()));
         let Some((ze, mut zone, zxf, _)) = zones.iter_mut().find(|z| z.3.as_str() == s.zone) else { continue };
         let center = zxf.translation();
-        if jasons.iter().any(|j| j.translation.distance(center) <= zone.radius_m) {
+        if tuning.as_ref().is_some_and(|t| jasons.iter().any(|j| overlaps(j.translation, &t.capsule, center, zone.radius_m))) {
             info!("police: {} is obstructed", s.zone);
             continue;
         }
@@ -329,10 +336,50 @@ fn turn_lights(mut lights: Query<&mut Transform, With<SirenLight>>) {
     }
 }
 
+/// Whether a character's capsule (feet at `feet`) touches the sphere at `center`.
+fn overlaps(feet: Vec3, cap: &f13_core::collision::Capsule, center: Vec3, radius: f32) -> bool {
+    let (lo, hi) = (feet.y + cap.radius, feet.y + (2.0 * cap.half_height - cap.radius).max(cap.radius));
+    let nearest = Vec3::new(feet.x, center.y.clamp(lo, hi), feet.z);
+    nearest.distance(center) <= radius + cap.radius
+}
+
+/// The police's stun traces (FUN_14040a940): where Jason is set down outside the volume, if anywhere.
+fn stun_spot(world: &(impl f13_core::collision::TriSource + ?Sized), center: Vec3, away: Vec3, intercept: Vec3, out: f32, cap: &f13_core::collision::Capsule) -> Option<(Vec3, Vec3)> {
+    // FMath::CeilToInt(180 / PoliceStunIterationAngle) tries.
+    let mut tries = (180.0 / POLICE_STUN_ITERATION_DEG).ceil() as i32;
+    let mut dir = away;
+    loop {
+        let p = center + dir * out;
+        let hh = cap.half_height;
+        if let Some((h, _)) = f13_core::collision::surface_below(world, p.x, p.z, center.y + hh, center.y - hh) {
+            let feet = Vec3::new(p.x, h, p.z);
+            let (bottom, top) = (feet.y + cap.radius + 0.01, feet.y + 2.0 * hh - cap.radius + 0.25);
+            if !f13_core::collision::capsule_blocked(world, feet.with_y(bottom), feet.with_y(top.max(bottom)), cap.radius) {
+                return Some((feet, dir));
+            }
+        }
+        if dir.dot(intercept) <= 0.95 || tries < 3 {
+            // FVector::RotateAngleAxis about Unreal's up: a positive Unreal yaw is negative about Bevy's Y.
+            dir = Quat::from_rotation_y(-POLICE_STUN_ITERATION_DEG.to_radians()) * dir;
+        } else {
+            dir = intercept;
+            tries = 2;
+        }
+        tries -= 1;
+        if tries <= 0 {
+            return None;
+        }
+    }
+}
+
+/// SCKillerCharacter's PoliceStunIterationAngle (constructor; Jason_Base doesn't override it).
+const POLICE_STUN_ITERATION_DEG: f32 = 4.0;
+
 /// Jason doesn't get into the police's escape volume: he's set back outside it, facing it, and stunned.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn turn_back_jason(
     mut commands: Commands,
+    (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
     arrived: Option<Res<PoliceArrived>>,
     zones: Query<(&EscapeZone, &GlobalTransform)>,
     spawners: Query<&PoliceSpawner>,
@@ -345,17 +392,27 @@ fn turn_back_jason(
     let name = names.get(a.zone).map(|n| n.as_str().to_string()).unwrap_or_default();
     let Some(s) = spawners.iter().find(|s| s.zone == name) else { return };
     let center = zxf.translation();
-    let out = zone.radius_m + tuning.map_or(0.4, |t| t.capsule.radius) + 0.05;
+    let Some(tuning) = tuning else { return };
+    let cap = tuning.capsule;
+    let out = zone.radius_m + cap.radius + 0.05;
+    let world = collision.with(&dynamic);
     for (je, jason, mut j) in &mut jasons {
         // Busy (a move he can't be stunned out of): the police wait for him (the game defers it past special moves).
-        if j.translation.with_y(0.0).distance(center.with_y(0.0)) >= zone.radius_m || !jason.stunnable() {
+        if !overlaps(j.translation, &cap, center, zone.radius_m) || !jason.stunnable() {
             continue;
         }
-        let away = (j.translation - center).with_y(0.0).try_normalize().unwrap_or_else(|| (s.intercept - center).with_y(0.0).normalize_or(Vec3::X));
-        let to = center + away * out;
-        info!("police: Jason turned back from the escape and shot");
-        j.translation = Vec3::new(to.x, j.translation.y, to.z);
-        j.rotation = Quat::from_rotation_y((-away.x).atan2(-away.z));
+        let intercept = (s.intercept - center).with_y(0.0).normalize_or(Vec3::X);
+        let away = (j.translation - center).with_y(0.0).try_normalize().unwrap_or(intercept);
+        let face = |d: Vec3| Quat::from_rotation_y((-d.x).atan2(-d.z));
+        j.rotation = face(away);
+        match stun_spot(&world, center, away, intercept, out, &cap) {
+            Some((to, dir)) => {
+                info!("police: Jason turned back from the escape and shot");
+                j.translation = to;
+                j.rotation = face(dir);
+            }
+            None => info!("police: Jason shot (no free spot outside the escape)"),
+        }
         commands.entity(je).insert(crate::jason::HitJason { stun: Some(crate::jason::Stun::Police), from: center });
     }
 }

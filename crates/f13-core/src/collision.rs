@@ -357,6 +357,24 @@ pub fn segment_hit(world: &(impl TriSource + ?Sized), from: Vec3, to: Vec3, step
     None
 }
 
+/// Whether a capsule whose sphere centres run from `a` to `b` with `radius` touches any triangle (checked as spheres
+/// along the segment, a quarter radius apart).
+pub fn capsule_blocked(world: &(impl TriSource + ?Sized), a: Vec3, b: Vec3, radius: f32) -> bool {
+    let n = ((b - a).length() / (radius * 0.25).max(1e-3)).ceil().max(1.0) as usize;
+    let r = Vec3::splat(radius);
+    let mut hit = false;
+    world.for_each_in(a.min(b) - r, a.max(b) + r, &mut |t| {
+        if hit {
+            return;
+        }
+        hit = (0..=n).any(|i| {
+            let p = a.lerp(b, i as f32 / n as f32);
+            t.closest_point(p).distance_squared(p) < radius * radius
+        });
+    });
+    hit
+}
+
 /// The highest surface crossing the vertical line at (x, z) between `bottom` and `top`: (height, normal).
 pub fn surface_below(world: &(impl TriSource + ?Sized), x: f32, z: f32, top: f32, bottom: f32) -> Option<(f32, Vec3)> {
     let mut best: Option<(f32, Vec3)> = None;
@@ -594,6 +612,18 @@ mod tests {
         assert!(segment_hit(&g, eye, Vec3::new(0.0, 1.5, 20.0), 3.0).is_none());
     }
     const WALK: WalkSettings = WalkSettings { max_step: 0.45, walkable_normal_y: 0.71, gravity: 9.8 };
+
+    #[test]
+    fn capsules_are_blocked_by_walls_not_the_floor_under_them() {
+        let mut g = ground();
+        for t in cube(Vec3::new(2.0, 1.0, 0.0), Vec3::new(0.5, 1.0, 5.0)) {
+            g.insert(t);
+        }
+        let clear = |x: f32| !capsule_blocked(&g, Vec3::new(x, 0.35, 0.0), Vec3::new(x, 1.5, 0.0), 0.34);
+        assert!(clear(0.0), "standing just off the floor");
+        assert!(!clear(1.3), "touching the wall's face (x = 1.5)");
+        assert!(clear(5.0), "past the wall");
+    }
 
     #[test]
     fn hull_of_a_cube_has_12_outward_faces() {

@@ -34,20 +34,6 @@ const MONTAGE_BLEND_RATE: f32 = 4.0;
 const IDLE: &str = "F_normal_stand_idle_01";
 const HURT_IDLE: &str = "F_hurt_stand_idle_01";
 const MOVE: [&str; 3] = ["F_normal_stand_walk_forward", "F_normal_stand_run_forward", "F_normal_stand_sprint_forward"];
-/// Starting off forward (BS_F_Start_Normal_*Hemisphere at Direction 0) and stopping (BS_F_Normal_Stop_*): walk, run,
-/// sprint; leading with the left foot, then the right.
-const START: [[&str; 2]; 3] = [
-    ["f_normal_stand_walk_forward_start_lf", "f_normal_stand_walk_forward_start_rf"],
-    ["f_normal_stand_run_forward_start_lf", "f_normal_stand_run_forward_start_rf"],
-    ["f_normal_stand_sprint_forward_start_lf", "f_normal_stand_sprint_forward_start_rf"],
-];
-const STOP: [[&str; 2]; 3] = [
-    ["f_normal_stand_walk_forward_stop_lf", "f_normal_stand_walk_forward_stop_rf"],
-    ["f_normal_stand_run_forward_stop_lf", "f_normal_stand_run_forward_stop_rf"],
-    ["f_normal_stand_sprint_forward_stop_lf", "f_normal_stand_sprint_forward_stop_rf"],
-];
-/// Below this she's standing (cm/s), for starting off and stopping.
-const MOVING_CM_S: f32 = 10.0;
 const CROUCH_IDLE: &str = "f_normal_crouch_idle_01";
 const CROUCH_WALK: &str = "f_normal_crouch_walk_forward";
 /// Swimming: idle, slow, fast, sprint.
@@ -272,12 +258,7 @@ pub struct Rig {
     pub action: Option<(String, f32)>,
     /// Jump straight to the next pose instead of blending (after the owner moved to where a root motion ended).
     snap: bool,
-    /// Starting off or stopping: the take playing (as the action, when nothing else is).
-    transition: Option<&'static str>,
-    /// Her speed last frame, the fastest gait (walk, run, sprint) since she set off, and whether her last footstep
-    /// was the left.
-    last_speed: f32,
-    gait: usize,
+    /// Whether her last footstep was the left.
     left_last: bool,
 }
 
@@ -332,9 +313,6 @@ pub fn spawn_model(commands: &mut Commands, assets: &AssetServer, character: &Ch
         idle_time: 0.0,
         action: None,
         snap: false,
-        transition: None,
-        last_speed: 0.0,
-        gait: 0,
         left_last: false,
     });
     rig
@@ -458,19 +436,10 @@ pub(crate) fn animate(
             (_, _, Some(_)) => Some(FIRST_AID),
             _ => None,
         };
-        // Starting off and stopping (standing upright, nothing else playing). PLACEHOLDER rules (Athlete_AnimBP's
-        // state machine not read): she starts when she sets off within 45 degrees of her facing (the take of her
-        // gait, leading with the left foot), and stops when she comes to a halt (the take of the fastest gait since
-        // she set off, on the foot her last step left forward); either ends when over, or when she halts or sets off.
-        let upright = !matches!(c.stance, Stance::Crouching | Stance::Swimming | Stance::Combat);
-        let transition = if action.is_none() && upright && character.clips.contains_key(START[0][0]) {
-            rig.locomotion_transition(&character, c.sprinting, p.walk_toggle, p.velocity, xf, &[0.0, t.max_walk_speed, t.max_run_speed, t.max_sprint_speed])
-        } else {
-            rig.transition = None;
-            None
-        };
-        rig.last_speed = speed;
-        rig.set_action(action.or(transition), dt);
+        // No start or stop takes: SCAnimInstance's update (FUN_140311d00) runs its start/stop states only with
+        // bUseStartStopTransitions, which nothing sets (no constructor, Blueprint or package), so CurrentMoveState is
+        // just moving (3) or idle (0) and the AnimBP's Default Locomotion goes straight between Idle and Locomotion.
+        rig.set_action(action, dt);
         // Paired takes (kills, the car grab: the same names on both) sound from Jason's side.
         if !rig.action.as_ref().is_some_and(|(a, _)| a.starts_with("cinematic_")) {
             crate::audio::play_anim_sounds(&mut commands, anim_sounds.as_deref(), rig.action_span(dt), xf.translation);
@@ -557,15 +526,6 @@ pub(crate) fn animate(
                     }
                 }
             }
-        } else if let (Some(take), Some((_, at))) = (rig.transition, &rig.action) {
-            // A start or stop: its own footstep notifies.
-            let at = *at;
-            if let Some(info) = character.info.animations.get(take) {
-                for w in info.windows.iter().filter(|w| (w.name == "Footstep_L" || w.name == "Footstep_R") && at - dt < w.start && w.start <= at) {
-                    rig.left_last = w.name == "Footstep_L";
-                    commands.trigger(crate::audio::Footstep { owner: parent.parent(), left: rig.left_last, land: false });
-                }
-            }
         }
     }
 }
@@ -582,37 +542,6 @@ impl Rig {
     /// The next pose replaces the current one at once (no blend).
     pub fn snap(&mut self) {
         self.snap = true;
-    }
-
-    /// Her start or stop take this frame (see `animate`): begins one as she sets off or halts, ends it when it's over
-    /// or she halts (a start) or sets off (a stop).
-    fn locomotion_transition(&mut self, model: &CharacterModel, sprinting: bool, walking: bool, velocity: Vec2, xf: &Transform, marks: &[f32; 4]) -> Option<&'static str> {
-        let speed = velocity.length();
-        let (was, now) = (self.last_speed >= MOVING_CM_S, speed >= MOVING_CM_S);
-        if now {
-            self.gait = self.gait.max((speed_state(speed, marks).round() as usize).clamp(1, 3) - 1);
-        }
-        if !was && now {
-            self.transition = None;
-            let (yaw, _, _) = xf.rotation.to_euler(EulerRot::YXZ);
-            let facing = Vec2::new(yaw.sin(), yaw.cos());
-            self.gait = if sprinting { 2 } else if walking { 0 } else { 1 };
-            if velocity.normalize_or_zero().dot(facing) > std::f32::consts::FRAC_1_SQRT_2 {
-                self.transition = Some(START[self.gait][0]);
-            }
-        } else if was && !now {
-            self.transition = Some(STOP[self.gait][if self.left_last { 0 } else { 1 }]);
-            self.gait = 0;
-        }
-        if let Some(take) = self.transition {
-            let at = self.action.as_ref().filter(|(a, _)| a == take).map_or(0.0, |a| a.1);
-            let starting = START.iter().flatten().any(|s| *s == take);
-            let over = at >= model.clips.get(take).map_or(0.0, |c| c.1);
-            if over || (starting && !now) || (!starting && now) {
-                self.transition = None;
-            }
-        }
-        self.transition
     }
 
     /// The action and the span of its time this frame (from: negative on its first frame), for its sounds.

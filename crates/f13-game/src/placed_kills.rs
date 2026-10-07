@@ -4,10 +4,13 @@
 //! VictimSpecialClass Counselor_*: bDieOnFinish), and its own camera spline (under the ContextKillComponent) films
 //! it. Most can be used once (bOnlyUseableOnce). Their KillInfo scores Jason's Resourceful.
 //!
-//! Reach: its Interactable's DistanceLimit (ILLInteractableComponent's 200 cm unless set), and with bUseYawLimit, the
-//! side it faces within MaxYawOffset. PLACEHOLDER: the interactable checks (distance from what, the yaw test's
-//! exact vectors) aren't read; here it's his distance to the Interactable in the ground plane, and his place within
-//! MaxYawOffset of its forward. The props' own animations (the bird bath, the water pump, the chair) aren't played.
+//! Reach (the Interactable's range test, FUN_14022e940, vtable slot 0x518): his actor's location (his capsule's centre)
+//! within DistanceLimit (ILLInteractableComponent's 200 cm unless set) of the Interactable, in 3D; with bUseYawLimit,
+//! the direction from it to him within MaxYawOffset (15 unless set) of its facing, and (his manager's
+//! bUseCameraRotation, the constructor's true) his view within MaxYawOffset of facing back at it; with bUsePitchLimit
+//! the same in pitch against MaxPitchOffset (90 unless set; here his view's pitch is taken as level). Its
+//! bCheckForOcclusion isn't set on any placed kill. The props' own animations (the bird bath, the water pump, the
+//! chair) aren't played.
 
 use bevy::prelude::*;
 use f13_data::classes::ClassDb;
@@ -40,8 +43,10 @@ pub const KINDS: [(&str, &str, &str, &str); 15] = [
     ("WallHeadPunch_PlacedKill_C", "cinematic_wall_headpunch_01", "cinematic_wall_headpunch_01", "Wall Head Punch"),
 ];
 
-/// ILLInteractableComponent's constructor: DistanceLimit (cm).
+/// ILLInteractableComponent's constructor: DistanceLimit (cm), MaxYawOffset and MaxPitchOffset (degrees).
 const DEFAULT_REACH_CM: f32 = 200.0;
+const DEFAULT_MAX_YAW: f64 = 15.0;
+const DEFAULT_MAX_PITCH: f64 = 90.0;
 
 /// A placed kill in the level.
 #[derive(Component, Debug)]
@@ -54,26 +59,36 @@ pub struct PlacedKill {
     pub spot: Transform,
     /// Its camera spline's frame (world).
     pub camera: Transform,
-    /// Its Interactable: where, facing which way (ground plane), how far it reaches (m), and its yaw limit (degrees).
+    /// Its Interactable: where, facing which way, how far it reaches (m), and its yaw and pitch limits (degrees).
     pub interact: Vec3,
-    pub forward: Vec2,
+    pub forward: Vec3,
     pub reach_m: f32,
     pub yaw_limit: Option<f32>,
+    pub pitch_limit: Option<f32>,
     pub only_once: bool,
     pub used: bool,
 }
 
 impl PlacedKill {
-    /// Jason at `at` can use it.
-    pub fn in_reach(&self, at: Vec3) -> bool {
+    /// Jason, his capsule's centre at `center` and looking along `view` (ground plane), can use it.
+    pub fn in_reach(&self, center: Vec3, view: Vec2) -> bool {
         if self.used && self.only_once {
             return false;
         }
-        let d = Vec2::new(at.x - self.interact.x, at.z - self.interact.z);
-        if d.length() > self.reach_m || (at.y - self.interact.y).abs() > 2.5 {
+        let d = center - self.interact;
+        if d.length() > self.reach_m {
             return false;
         }
-        self.yaw_limit.is_none_or(|limit| d.try_normalize().is_some_and(|d| d.angle_to(self.forward).abs().to_degrees() <= limit))
+        // Yaw and pitch (degrees) of a direction, as Unreal's rotator of it.
+        let yaw = |v: Vec3| v.z.atan2(v.x).to_degrees();
+        let pitch = |v: Vec3| v.y.atan2(Vec2::new(v.x, v.z).length()).to_degrees();
+        let off = |a: f32| ((a + 180.0).rem_euclid(360.0) - 180.0).abs();
+        let back = -self.forward;
+        let view = Vec3::new(view.x, 0.0, view.y);
+        let within = |v: Vec3, f: Vec3| {
+            self.yaw_limit.is_none_or(|l| off(yaw(v) - yaw(f)) <= l) && self.pitch_limit.is_none_or(|l| off(pitch(v) - pitch(f)) <= l)
+        };
+        within(d, self.forward) && (view == Vec3::ZERO || within(view, back))
     }
 
     pub fn takes(&self) -> (&'static str, &'static str, &'static str) {
@@ -95,7 +110,7 @@ fn spawn_placed_kills(mut commands: Commands, level: Res<crate::Level>, export: 
         let Some(interact) = comp("Interactable") else { continue };
         let spot = world(kill);
         let iw = world(interact);
-        let f = iw.rotation * Vec3::X;
+        let f = (iw.rotation * Vec3::X).normalize_or(Vec3::X);
         commands.spawn((
             PlacedKill {
                 kind,
@@ -103,9 +118,10 @@ fn spawn_placed_kills(mut commands: Commands, level: Res<crate::Level>, export: 
                 spot: Transform { rotation: spot.rotation * Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), ..spot },
                 camera: world(camera),
                 interact: iw.translation,
-                forward: Vec2::new(f.x, f.z).normalize_or(Vec2::X),
+                forward: f,
                 reach_m: interact.props["DistanceLimit"].as_f64().map_or(DEFAULT_REACH_CM, |d| d as f32) / 100.0,
-                yaw_limit: interact.props["bUseYawLimit"].as_bool().unwrap_or(false).then(|| interact.props["MaxYawOffset"].as_f64().unwrap_or(15.0) as f32),
+                yaw_limit: interact.props["bUseYawLimit"].as_bool().unwrap_or(false).then(|| interact.props["MaxYawOffset"].as_f64().unwrap_or(DEFAULT_MAX_YAW) as f32),
+                pitch_limit: interact.props["bUsePitchLimit"].as_bool().unwrap_or(false).then(|| interact.props["MaxPitchOffset"].as_f64().unwrap_or(DEFAULT_MAX_PITCH) as f32),
                 only_once: a.props["bOnlyUseableOnce"].as_bool().or(info.props["bOnlyUseableOnce"].as_bool()).unwrap_or(false),
                 used: false,
             },

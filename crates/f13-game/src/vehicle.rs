@@ -13,7 +13,9 @@
 //! needs the ignition part (keys), which then stays in the car.
 //!
 //! Controls in the driver's seat: hold E to start, W/S throttle and reverse, A/D steer, F get out (when nearly
-//! stopped), H horn (its HornAudioComponent); braking hard at speed plays its BrakeAudio.
+//! stopped), H horn (its HornAudioComponent). Not ported: the handbrake; its BrakeAudio is the handbrake's skid
+//! (Chevette_BP's OnHandbrake plays it at 350 cm/s or more, and it fades out over 0.5 s when let go or under 250 cm/s),
+//! so braking with the throttle is silent, as in the game.
 
 use crate::interact::{take_part, Inventory};
 use crate::player::PlayerTuning;
@@ -24,8 +26,6 @@ use crate::props::{EscapeZone, Vehicle, VehiclePart};
 use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings};
 use bevy::prelude::*;
 
-/// Braking faster than this (cm/s) skids audibly (PLACEHOLDER threshold).
-const BRAKE_SOUND_CM_S: f32 = 500.0;
 /// The Chevette's axles, front to back (its wheel bones are about this far apart).
 const WHEELBASE_CM: f32 = 250.0;
 /// Half the car's length (front bumper distance from the root), metres.
@@ -151,11 +151,7 @@ fn drive(
             steer -= 1.0;
         }
     }
-    // The drivetrain: throttle forward or back (against the motion, the brakes): braking hard at speed skids.
-    if throttle != 0.0 && throttle.signum() != v.speed.signum() && v.speed.abs() > BRAKE_SOUND_CM_S && !v.braking {
-        commands.trigger(crate::audio::ActorSound { actor: player.vehicle, prop: "BrakeAudio" });
-    }
-    v.braking = throttle != 0.0 && throttle.signum() != v.speed.signum() && v.speed.abs() > BRAKE_SOUND_CM_S;
+    // The drivetrain: throttle forward or back (against the motion, the brakes).
     let setup = v.setup.clone();
     v.drive.speed = v.speed;
     v.drive.step(&setup, throttle, dt);

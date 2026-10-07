@@ -497,7 +497,7 @@ switch (rest[0])
             Console.WriteLine($"{name}\t{file}\t{props?.ToString(Newtonsoft.Json.Formatting.None)}");
         }
         return 0;
-    case "pseudo": // pseudo <package>: its Blueprint classes' bytecode as pseudo code (reverse engineering)
+    case "pseudo": // pseudo <package> [--lines]: its Blueprint classes' bytecode as pseudo code (reverse engineering); --lines: one statement per line after its code offset
         provider.ReadScriptData = true;
         foreach (var e in provider.LoadPackage(ToFile(rest[1])).GetExports().OfType<UClass>())
         {
@@ -508,7 +508,11 @@ switch (rest[0])
         foreach (var f in provider.LoadPackage(ToFile(rest[1])).GetExports().OfType<UFunction>())
         {
             Console.WriteLine($"// ===== function {f.Name}");
-            Console.WriteLine(Newtonsoft.Json.JsonConvert.SerializeObject(f.ScriptBytecode, Newtonsoft.Json.Formatting.Indented));
+            if (rest.Count > 2 && rest[2] == "--lines") // one statement per line, after its code offset
+                foreach (var x in f.ScriptBytecode)
+                    Console.WriteLine($"@{x.StatementIndex} {Newtonsoft.Json.JsonConvert.SerializeObject(x)}");
+            else
+                Console.WriteLine(Newtonsoft.Json.JsonConvert.SerializeObject(f.ScriptBytecode, Newtonsoft.Json.Formatting.Indented));
         }
         return 0;
     case "debug-type": // debug-type <package> <export name>: CLR type and members of one export

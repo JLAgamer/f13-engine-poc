@@ -56,6 +56,9 @@ pub struct WeaponStats {
     pub stun_chance: f32,
     pub stun: String,
     pub two_handed: bool,
+    /// Its KillVolume (the "DamageVolume" capsule): actor-space transform (its axis is the local Y), radius and half
+    /// height in metres.
+    pub volume: Option<(Transform, f32, f32)>,
 }
 
 impl ItemKind {
@@ -72,6 +75,10 @@ impl ItemKind {
                 stun_chance: f("StunChance", 0.0),
                 stun: w["WeaponStunClass"].as_str().unwrap_or("BaseWeaponStun_C").to_string(),
                 two_handed: p("bIsTwoHanded").as_bool().unwrap_or(false),
+                volume: classes.get(class).and_then(|i| i.components.iter().find(|c| c.name == "DamageVolume")).map(|c| {
+                    let r = |n: &str| c.props[n].as_f64().unwrap_or(0.0) as f32 / 100.0;
+                    (c.local.as_ref().map(crate::to_transform).unwrap_or_default(), r("CapsuleRadius"), r("CapsuleHalfHeight"))
+                }),
             }
         };
         let is = |n: &str| classes.is_child_of(class, n);
@@ -170,8 +177,6 @@ pub struct Vehicle {
     /// Its handling (f13-core::vehicle: the movement component's engine, gearbox and wheels) and drivetrain state.
     pub setup: f13_core::vehicle::VehicleSetup,
     pub drive: f13_core::vehicle::VehicleState,
-    /// Braking (for the brake sound's start).
-    pub braking: bool,
 }
 
 impl Vehicle {
@@ -308,7 +313,6 @@ fn spawn_props(
             let t = local(p);
             (commands.spawn((t, Visibility::default(), ChildOf(root))).id(), t)
         });
-        let mut leaf_center = Vec3::ZERO;
         let mut leaf: Option<(Entity, Transform, Option<crate::materials::MaterialOverrides>)> = None;
         let mut parts: HashMap<&str, Entity> = HashMap::new();
         // Hiding spot doors swing on their pivots (hiding.rs).
@@ -336,7 +340,6 @@ fn spawn_props(
             // Door leaves hang on the pivot (actor-space transforms re-expressed relative to it).
             if let (Some((p, pt)), Some("Pivot")) = (pivot, c.parent.as_deref()) {
                 let rel = Transform::from_matrix(pt.to_matrix().inverse() * local(c).to_matrix());
-                leaf_center = rel.translation;
                 let e = commands.spawn((WorldAssetRoot(scene(mesh)), rel, ChildOf(p))).id();
                 let overrides = crate::materials::MaterialOverrides::new(&c.material_map);
                 if let Some(o) = &overrides {
@@ -433,7 +436,6 @@ fn spawn_props(
                 interact: door_interact.map_or(Vec3::Y, |c| local(c).translation),
                 reach: door_interact.map_or(200.0, |c| reach(c, 200.0)),
                 hold_time: door_interact.and_then(|c| c.props["HoldTimeLimit"].as_f64()).map_or(0.5, |v| v as f32),
-                leaf_center,
                 angle: 0.0,
                 target: 0.0,
                 health: classes.prop(&actor.class, "BaseDoorHealth").as_f64().map_or(100.0, |v| v as f32),
@@ -593,7 +595,6 @@ fn spawn_props(
                 steer: 0.0,
                 setup: f13_data::vehicle::setup(&classes, &actor.class),
                 drive: default(),
-                braking: false,
             });
             let p = to_transform(&actor.transform).translation;
             info!("{} at ({:.0}, {:.0}, {:.0})", actor.class, p.x, p.y, p.z);

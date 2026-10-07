@@ -144,13 +144,18 @@ impl UiMaterial for Minimap {
 }
 
 /// The level's minimap (its SCMiniMapVolume): the map texture (PNG), the area it covers (Unreal cm: min x, min y,
-/// max x, max y) and its DefaultMinimapZoom, taken as the share of the map across the minimap (PLACEHOLDER: the
-/// native widget's use of it isn't read).
+/// max x, max y) and the share of the map across the minimap. The minimap's InitializeMinimap (0x14029c050) takes
+/// the volume's DefaultMinimapZoom as its MinimapZoom and, with bAutoAdjustSize (ILLMinimap's constructor turns it
+/// on), sizes the map to MinimapZoom x 0.1 x the volume's size (cm) in widget units, kept centred on her: across the
+/// minimap widget (CounselorMinimapWidget's slot, [`MINIMAP_SIZE`]) that's this share of the map.
 struct MapInfo {
     file: String,
     area: [f32; 4],
     zoom: f32,
 }
+
+/// SC_MiniMap_Widget's size in CounselorMinimapWidget (its slot's 328 x 328).
+const MINIMAP_SIZE: f32 = 328.0;
 
 /// CircleMask's MinimapRadius (the RetainerBox's effect material).
 const MINIMAP_RADIUS: f32 = 0.39;
@@ -208,7 +213,8 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
     let map = level.layouts.iter().flat_map(|l| &l.actors).find(|a| a.class == "SCMiniMapVolume").and_then(|a| {
         let name = a.props["MapTexture"]["AssetPathName"].as_str()?.rsplit('.').next()?.to_string();
         let b = a.bounds?;
-        Some(MapInfo { file: textures.get(&name)?.clone(), area: [b[0], b[1], b[3], b[4]], zoom: a.props["DefaultMinimapZoom"].as_f64().unwrap_or(0.2) as f32 })
+        let zoom = a.props["DefaultMinimapZoom"].as_f64().unwrap_or(0.2) as f32;
+        Some(MapInfo { file: textures.get(&name)?.clone(), area: [b[0], b[1], b[3], b[4]], zoom: MINIMAP_SIZE / (zoom * 0.1 * (b[3] - b[0])).max(1.0) })
     });
     let mut killer = Widget::load(dir, "KillerHUDWidget");
     if let Some(k) = killer.as_mut() {

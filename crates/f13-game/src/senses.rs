@@ -5,11 +5,12 @@
 //! (`SCCharacter::LineOfSight`); blips, Sense radii and timings are the killer's and the counselor's values (see
 //! f13-core::perception); his abilities unlock and recharge as f13-core::killer_abilities (Sense second, 46 s in).
 //!
-//! PLACEHOLDERS (the game's Jason is a player): he sees within 60 degrees of where he faces (a player turns the
-//! camera) or anywhere within 3 m, from his eyes (1.85 m) to her head or chest, through the world's blocking
-//! collision only (foliage and darkness don't hide her). He uses Sense whenever it's ready and he can't see her.
-//! Indoors (where Sense shows her cabin, not her) is the cabins' SCIndoorComponent volumes (fear_events.rs), or
-//! without them something above her head within 6 m.
+//! AI choices (the game's Jason is a player; his AI was cut): he sees within 62 degrees of where he faces (the cut
+//! AI's SCJasonAIProperties PeripheralVisionAngle) or anywhere within 3 m, from his eyes (APawn's BaseEyeHeight, 64 cm
+//! above his capsule's centre, which no Jason Blueprint overrides: 1.52 m) to her head or chest, through the world's
+//! blocking collision only (foliage and darkness don't hide her). He uses Sense whenever it's ready and he can't see
+//! her. PLACEHOLDER: indoors (where Sense shows her cabin, not her) without the cabins' SCIndoorComponent volumes
+//! (fear_events.rs) is something above her head within 6 m.
 
 use bevy::prelude::*;
 use f13_core::killer_abilities::{Ability, AbilityEvent, Blockers, KillerAbilities, KillerTuning};
@@ -20,8 +21,10 @@ use crate::hiding::{HidePhase, Hiding};
 use crate::jason::{Jason, JasonState};
 use crate::player::Player;
 
-const EYE_M: f32 = 1.85;
-const FIELD_OF_VIEW_DEG: f32 = 60.0;
+/// His capsule's half height (88 cm) plus BaseEyeHeight (64 cm).
+const EYE_M: f32 = 1.52;
+/// SCJasonAIProperties' PeripheralVisionAngle (its constructor).
+const FIELD_OF_VIEW_DEG: f32 = 62.0;
 const NOTICE_M: f32 = 3.0;
 /// Sight checks per second (ray casts over up to 100 m).
 const SIGHT_RATE: f32 = 10.0;

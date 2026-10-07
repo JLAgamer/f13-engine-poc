@@ -18,9 +18,23 @@
 //! ActivationTime 1.5 s, NoiseTimer 20 s and BlastRadius 200 cm, the flare gun's ProjectileVelocity and the
 //! shotgun's NumPellets and MaxSpreadAngle.
 //!
-//! PLACEHOLDERS (not from the game): a swing connects with Jason within [`SWING_REACH_M`] and [`SWING_ANGLE_DEG`] of
-//! her facing (the game traces the weapon mesh); the firecracker's throw speed (its VelocityPitchCurve isn't
-//! exported); when the gun fires in its animation; the shotgun's range; guns hold one shot. Counselors don't step in
+//! A swing (SCCharacter::AttackTraceBegin / AttackTrace, the weapon's sweep FUN_1404501f0): in the swing's
+//! AttackTraceNotify window, each frame sweeps the weapon's KillVolume capsule (its "DamageVolume") from where it was
+//! to where it is, in min(max(its yaw change / 15 degrees (the sc.AttackRotationIteration CVar), its move / its
+//! diameter, 1), 9) steps: step i sweeps from i/n of the way there to its current place, and a line runs from her
+//! to that point. The first actor hit is hit once per swing. PLACEHOLDER: the game's sweeps hit Jason's physics
+//! bodies (his mesh; the Pawn channel is ignored), which aren't exported: his collision capsule stands in, and walls
+//! don't stop the sweeps (only the line from her).
+//!
+//! Guns (SCGun): using one fires it at once (its Use: bHasAmmunition and bIsAiming -> Fire; the flare's OnUseItem
+//! notify is at 0 s too), and one shot spends it (bHasAmmunition false unless infinite ammo). Each shotgun pellet
+//! traces FireDistance / cos(its spread angle): it reaches FireDistance (SCGun's constructor, 2000 cm) ahead.
+//! Not ported: the game fires only while aiming (bIsAiming).
+//!
+//! The firecracker's throw (SCNoiseMaker::ThrowProjectile 0x14039aa60): the control pitch is clamped between two
+//! unreflected fields (+0x5a8 / +0x5ac) that the constructor zeroes and nothing sets, so it's always 0: the pack
+//! leaves level along the camera's yaw at VelocityPitchCurve(0) (FirecrackerVelocityPitch_Curve: 500 cm/s), under
+//! DefaultGravityZ. PLACEHOLDER: it leaves from in front of her chest (the game: the item's own place in her hand).
 //!
 //! Bear traps (SCTrap::OnBeginOverlap and its trigger): an armed trap catches whoever steps into it, its armer too
 //! (bCanArmerTrigger, constructor), but not someone already standing in it when it was armed (it's an overlap's
@@ -40,11 +54,14 @@ use crate::player::{Player, PlayerCamera};
 use crate::props::{Item, ItemKind, WeaponStats};
 use crate::match_flow::{ClassScore, Score};
 
-const SWING_REACH_M: f32 = 1.8;
-const SWING_ANGLE_DEG: f32 = 60.0;
-const SHOTGUN_RANGE_M: f32 = 25.0;
-/// Firecracker throw: forward and up speed (m/s).
-const THROW_SPEED: (f32, f32) = (7.0, 3.0);
+/// sc.AttackRotationIteration: degrees of the weapon's turn per extra sweep step.
+const ATTACK_ROTATION_ITERATION_DEG: f32 = 15.0;
+/// The most sweep steps a frame.
+const ATTACK_TRACE_STEPS: f32 = 9.0;
+/// SCGun's FireDistance (constructor; the shotgun doesn't override it).
+const SHOTGUN_RANGE_M: f32 = 20.0;
+/// Firecracker throw speed (m/s): FirecrackerVelocityPitch_Curve at its pitch, always 0.
+const THROW_SPEED: f32 = 5.0;
 /// BP_Firecracker_Projectile: ActivationTime, NoiseTimer, BlastRadius (m).
 const FIRECRACKER_ACTIVATION: f32 = 1.5;
 const FIRECRACKER_NOISE: f32 = 20.0;
@@ -135,6 +152,75 @@ pub struct ItemAction {
     len: f32,
     at: f32,
     done: bool,
+    /// The weapon's KillVolume as last traced (PreviousTraceLocation / Rotation).
+    trace: Option<Transform>,
+}
+
+/// The closest points' distance between segments `p0..p1` and `q0..q1` (Ericson 5.1.9).
+fn segment_distance(p0: Vec3, p1: Vec3, q0: Vec3, q1: Vec3) -> f32 {
+    let (d1, d2, r) = (p1 - p0, q1 - q0, p0 - q0);
+    let (a, e, f) = (d1.dot(d1), d2.dot(d2), d2.dot(r));
+    let (s, t) = if a <= 1e-9 && e <= 1e-9 {
+        (0.0, 0.0)
+    } else if a <= 1e-9 {
+        (0.0, (f / e).clamp(0.0, 1.0))
+    } else {
+        let c = d1.dot(r);
+        if e <= 1e-9 {
+            ((-c / a).clamp(0.0, 1.0), 0.0)
+        } else {
+            let b = d1.dot(d2);
+            let denom = a * e - b * b;
+            let mut s = if denom > 1e-9 { ((b * f - c * e) / denom).clamp(0.0, 1.0) } else { 0.0 };
+            let mut t = (b * s + f) / e;
+            if t < 0.0 {
+                t = 0.0;
+                s = (-c / a).clamp(0.0, 1.0);
+            } else if t > 1.0 {
+                t = 1.0;
+                s = ((b - c) / a).clamp(0.0, 1.0);
+            }
+            (s, t)
+        }
+    };
+    (p0 + d1 * s).distance(q0 + d2 * t)
+}
+
+/// One frame of a swing's trace (FUN_1404501f0): whether the weapon's KillVolume (`radius`, `half` its half height),
+/// moving from `prev` to `now`, or the line from its owner at `owner` to each step's point, touches the capsule
+/// `body` (its sphere centres) of `body_radius`. A wall in the way stops the line.
+fn swing_hits(prev: Transform, now: Transform, radius: f32, half: f32, owner: Vec3, body: (Vec3, Vec3), body_radius: f32, world: &(impl f13_core::collision::TriSource + ?Sized)) -> bool {
+    use f13_core::camera_spline::rotator;
+    // Unreal's yaw (rotator Y) wraps into -180..180; only a positive change from the last trace counts (as in the game).
+    let yaw = |t: &Transform| rotator(t.rotation).y;
+    let mut dyaw = yaw(&prev) - yaw(&now);
+    if dyaw > 180.0 {
+        dyaw -= 360.0;
+    } else if dyaw < -180.0 {
+        dyaw += 360.0;
+    }
+    let moves = (prev.translation.distance(now.translation) / (radius * 2.0).max(1e-3)).max(1.0).trunc();
+    let steps = (dyaw / ATTACK_ROTATION_ITERATION_DEG).max(moves).min(ATTACK_TRACE_STEPS) as i32;
+    let axis = |at: Vec3, rot: Quat| {
+        let a = rot * Vec3::Y * (half - radius).max(0.0);
+        (at - a, at + a)
+    };
+    let touches = |a: (Vec3, Vec3)| segment_distance(a.0, a.1, body.0, body.1) <= radius + body_radius;
+    for i in 1..=steps.max(1) {
+        let s = i as f32 / steps.max(1) as f32;
+        let (from, rot) = (prev.translation.lerp(now.translation, s), prev.rotation.slerp(now.rotation, s));
+        // The sweep from this step's point to the volume's current place (with this step's rotation).
+        let n = ((from.distance(now.translation) / radius.max(1e-3)).ceil() as usize).max(1);
+        if (0..=n).any(|k| touches(axis(from.lerp(now.translation, k as f32 / n as f32), rot))) {
+            return true;
+        }
+        // The line from her to this step's point, unless a wall comes first.
+        let line = segment_distance(owner, from, body.0, body.1) <= body_radius;
+        if line && f13_core::collision::segment_hit(world, owner, from, 1.0).is_none() {
+            return true;
+        }
+    }
+    false
 }
 
 /// Wear left on a weapon (starts at its Durability).
@@ -315,7 +401,7 @@ fn start_action(
     }
     let len = |n: &str| character.length(n).unwrap_or(1.0);
     let mut start = |what: Use, item: Entity, anim: &str, at: f32| {
-        commands.entity(pe).insert((ItemAction { what, item, t: 0.0, len: len(anim), at, done: false }, PlayAction(anim.into())));
+        commands.entity(pe).insert((ItemAction { what, item, t: 0.0, len: len(anim), at, done: false, trace: None }, PlayAction(anim.into())));
     };
     // Face where the camera looks.
     let (sin, cos) = camera.yaw.sin_cos();
@@ -335,8 +421,8 @@ fn start_action(
             ItemKind::Gun { projectile, .. } => {
                 info!("fire {}", item.name);
                 xf.rotation = face;
-                let (anim, at) = if *projectile { (FLARE_FIRE, 0.25) } else { (SHOTGUN_FIRE, 0.1) };
-                start(Use::Fire { kind: item.kind.clone() }, hand, anim, at);
+                let anim = if *projectile { FLARE_FIRE } else { SHOTGUN_FIRE };
+                start(Use::Fire { kind: item.kind.clone() }, hand, anim, 0.0);
             }
             ItemKind::Trap => {
                 info!("placing {}", item.name);
@@ -369,6 +455,7 @@ fn tick_action(
     items: Query<&Item>,
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
     mut assets: (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>),
+    (globals, killer, character): (Query<&GlobalTransform>, Option<Res<crate::jason::KillerTuning>>, Option<Res<CounselorCharacter>>),
 ) {
     let Ok((pe, mut a, mut inv, xf)) = player.single_mut() else { return };
     a.t += time.delta_secs();
@@ -379,21 +466,31 @@ fn tick_action(
         match a.what.clone() {
             Use::Swing { stats, window } => {
                 if a.t <= window.1 {
-                    if let Some((je, jxf)) = jason {
+                    // The KillVolume where the weapon is now (its hand socket as last posed).
+                    let now = stats.volume.zip(globals.get(a.item).ok()).map(|((local, ..), g)| g.mul_transform(local).compute_transform());
+                    let prev = a.trace.or(now);
+                    a.trace = now;
+                    let world = collision.with(&dynamic);
+                    let hit = jason.filter(|(_, jxf)| {
+                        let (Some(now), Some(prev), Some((_, radius, half)), Some(cap), Some(c)) = (now, prev, stats.volume, killer.as_ref().map(|k| k.capsule), character.as_ref()) else {
+                            return false;
+                        };
+                        // Her actor's location: her capsule's centre.
+                        let owner = xf.translation + Vec3::Y * c.info.capsule_half_height / 100.0;
+                        let body = (jxf.translation + Vec3::Y * cap.radius, jxf.translation + Vec3::Y * (2.0 * cap.half_height - cap.radius).max(cap.radius));
+                        swing_hits(prev, now, radius, half, owner, body, cap.radius, &world)
+                    });
+                    if let Some((je, jxf)) = hit {
                         let to = jxf.translation - xf.translation;
-                        let flat = Vec2::new(to.x, to.z);
-                        let angle = flat.normalize_or_zero().dot(Vec2::new(facing.x, facing.z)).clamp(-1.0, 1.0).acos().to_degrees();
-                        if flat.length() <= SWING_REACH_M && angle <= SWING_ANGLE_DEG {
-                            a.done = true;
-                            let stun = rng.0.frand() * 100.0 < stats.stun_chance;
-                            // Which of his sides she hit: his right is -X of his facing (+Z).
-                            let jfwd = jxf.rotation * Vec3::Z;
-                            let left = Vec2::new(-to.x, -to.z).perp_dot(Vec2::new(jfwd.x, jfwd.z)) < 0.0;
-                            info!("hit Jason ({:.0} damage, {:.0}% stun chance: {})", stats.damage, stats.stun_chance, if stun { "stunned" } else { "no stun" });
-                            commands.entity(je).insert(HitJason { stun: stun.then_some(Stun::Weapon { left }), from: xf.translation });
-                            let name = items.get(a.item).map_or("weapon".to_string(), |i| i.name.clone());
-                            wear_weapon(&mut commands, &mut wear, &mut inv, a.item, stats.durability, stats.attacking_wear, &name);
-                        }
+                        a.done = true;
+                        let stun = rng.0.frand() * 100.0 < stats.stun_chance;
+                        // Which of his sides she hit: his right is -X of his facing (+Z).
+                        let jfwd = jxf.rotation * Vec3::Z;
+                        let left = Vec2::new(-to.x, -to.z).perp_dot(Vec2::new(jfwd.x, jfwd.z)) < 0.0;
+                        info!("hit Jason ({:.0} damage, {:.0}% stun chance: {})", stats.damage, stats.stun_chance, if stun { "stunned" } else { "no stun" });
+                        commands.entity(je).insert(HitJason { stun: stun.then_some(Stun::Weapon { left }), from: xf.translation });
+                        let name = items.get(a.item).map_or("weapon".to_string(), |i| i.name.clone());
+                        wear_weapon(&mut commands, &mut wear, &mut inv, a.item, stats.durability, stats.attacking_wear, &name);
                     }
                 } else {
                     a.done = true; // missed
@@ -444,7 +541,7 @@ fn tick_action(
                 inv.pockets.retain(|&e| e != a.item);
                 commands.entity(a.item).despawn();
                 let (mesh, mat) = (assets.0.add(Cuboid::new(0.06, 0.06, 0.14)), assets.1.add(StandardMaterial { base_color: Color::srgb(0.7, 0.05, 0.05), ..default() }));
-                let vel = facing * THROW_SPEED.0 + Vec3::Y * THROW_SPEED.1;
+                let vel = facing.with_y(0.0).normalize_or_zero() * THROW_SPEED;
                 commands.spawn((Mesh3d(mesh), MeshMaterial3d(mat), Transform::from_translation(chest + facing * 0.4), Firecracker { vel, age: 0.0, stunned: false }));
             }
             Use::PlaceTrap => {

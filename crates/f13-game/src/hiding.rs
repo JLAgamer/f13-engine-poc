@@ -19,15 +19,21 @@
 //! when Jason is in her view near her spot while she hides not holding her breath, could hold it, and her fear is at
 //! least 70 (the voice component's check).
 //!
-//! PLACEHOLDERS: the scared line's distance ([`SCARED_LINE_M`]; the game's is an unreflected field) and its repeat
-//! delay ([`SCARED_LINE_SECONDS`]); Jason hears it when he's within the line's audible range (inner radius plus
-//! falloff) and learns her hiding spot (the game's Jason is a player who hears it). Holding her breath doesn't change
+//! The voice component's constructor (SCVoiceOverComponent_Counselor, unreflected fields): the scared line plays
+//! with Jason within 3 m, then not again for 20 s. Out of hiding she screams (Screams) as he comes into view within
+//! 23 m, once, until he's out of view and farther than that, and then not for 30 s.
+//! AI choice: Jason hears the scared line within its audible range (inner radius plus falloff) and learns her hiding
+//! spot (the game's Jason is a player who hears it). Holding her breath doesn't change
 //! her noise here: she's still while hidden, so it's 0 (BreathNoiseMod only lowers a moving counselor's).
 //!
-//! Doors (the wardrobe's two, the outhouse's): Armoire_C's timelines, opening along ExitOuthouseDoorTimeline's
-//! DoorRotation (0, 100 deg at 0.2 s, 120 at 0.3) and closing along CloseDoorTimeline's (120 to 0 over 0.7 s, eased).
-//! PLACEHOLDER: they open as someone goes in or out, searches or kills and close as that ends (its OpenCloseDoor /
-//! ExitHidingDriver window); the Blueprint's DoorDriver tick in between isn't read. The tent flaps don't move.
+//! Doors (the wardrobe's two, the outhouse's), as Armoire_C / Outhouse_C drive them: while she enters, their Door
+//! Driver follows the enter montage's "Driver: OpenCloseDoor" window (0 to 3.1 s) and turns the left door (DoorPivot;
+//! the outhouse's Mesh) to 90 x the montage's DoorRotation curve, then sets it back to 0. As she comes out
+//! (BlueprintExitStarted) ExitOuthouseDoorTimeline swings them open (the right door the other way) and, when it ends,
+//! CloseDoorTimeline closes them. Nothing else moves them: Jason's search and kill don't (the Blueprints' search and
+//! kill events only set the DestructionFXDriver's owner and turn the hiding camera off, and no spot's
+//! WeaponSpecificSearchAnims is set, so HideSpotSearchStart plays nothing on its mesh). Barn closets' doors have no
+//! pivots and don't move. The tent flaps are prop_anim.rs's.
 //! The hidden counselor's model is hidden (the camera is inside the spot).
 
 use bevy::prelude::*;
@@ -37,9 +43,14 @@ use f13_data::level::ComponentInfo;
 use crate::character::{flat, CounselorCharacter, PlayAction, Rig};
 use crate::player::{Player, PlayerCamera};
 
-/// The scared hiding line: Jason within this many metres, and at most once per this many seconds. PLACEHOLDERS.
-const SCARED_LINE_M: f32 = 15.0;
-const SCARED_LINE_SECONDS: f32 = 8.0;
+/// The scared hiding line: Jason within this many metres, and then not for this many seconds (the voice component's
+/// constructor: 300 cm, a 20 s timer).
+const SCARED_LINE_M: f32 = 3.0;
+const SCARED_LINE_SECONDS: f32 = 20.0;
+/// Her scream as Jason comes into view: within this many metres; re-armed after he's out of view and farther, and
+/// then not for this many seconds (2300 cm, a 30 s timer).
+const SCREAM_M: f32 = 23.0;
+const SCREAM_SECONDS: f32 = 30.0;
 /// SCCounselorCharacter's voice component: the scared hiding line needs this much fear.
 const SCARED_LINE_FEAR: f32 = 70.0;
 
@@ -48,6 +59,8 @@ const SCARED_LINE_FEAR: f32 = 70.0;
 pub struct Breathing {
     pub breath: f13_core::breath::Breath,
     scared_next: f32,
+    screamed: bool,
+    scream_next: f32,
 }
 
 #[derive(Resource)]
@@ -55,25 +68,71 @@ pub(crate) struct BreathTuning(pub(crate) f13_core::breath::BreathTuning);
 
 /// Jason's weapon class: it picks the weapon-specific search and kill moves.
 pub const KILLER_WEAPON: &str = "PickAxe_C";
-/// Door swing (degrees) and speed (degrees per second). PLACEHOLDER (see the module docs).
-/// Armoire_C's DoorRotation timelines (degrees over seconds).
-fn door_opening(t: f32) -> f32 {
-    if t < 0.2 {
-        // A linear key to 100.
-        100.0 * (t / 0.2).max(0.0)
-    } else {
-        hermite(100.0, 497.67, 120.0, 0.0, 0.1, ((t - 0.2) / 0.1).min(1.0))
-    }
+/// The enter montages' "Driver: OpenCloseDoor" window (both start at 0).
+const DOOR_DRIVER_SECONDS: f32 = 3.1;
+/// The timelines' lengths (TimelineLength).
+const EXIT_TIMELINE_SECONDS: f32 = 0.3;
+const CLOSE_TIMELINE_SECONDS: f32 = 0.7;
+
+/// Curve keys: time, value, arrive and leave tangents, linear (else cubic).
+type Keys = &'static [(f32, f32, f32, f32, bool)];
+
+fn rich(keys: Keys) -> f13_core::curve::RichCurve {
+    use f13_core::curve::{Interp, Key};
+    let keys = keys
+        .iter()
+        .map(|&(time, value, arrive_tangent, leave_tangent, linear)| Key { time, value, interp: if linear { Interp::Linear } else { Interp::Cubic }, arrive_tangent, leave_tangent })
+        .collect();
+    f13_core::curve::RichCurve { keys }
 }
 
-fn door_closing(t: f32) -> f32 {
-    hermite(120.0, 0.0, 0.0, -257.89, 0.7, (t / 0.7).clamp(0.0, 1.0))
+/// A spot's door curves: the enter montage's DoorRotation (0..1) and its Blueprint's exit and close timelines
+/// (DoorRotation, degrees).
+struct DoorCurves {
+    enter: f13_core::curve::RichCurve,
+    exit: f13_core::curve::RichCurve,
+    close: f13_core::curve::RichCurve,
 }
 
-/// An Unreal cubic curve segment: values, tangents (per second), its length and where in it (0..1).
-fn hermite(p0: f32, m0: f32, p1: f32, m1: f32, len: f32, s: f32) -> f32 {
-    let (s2, s3) = (s * s, s * s * s);
-    (2.0 * s3 - 3.0 * s2 + 1.0) * p0 + (s3 - 2.0 * s2 + s) * m0 * len + (-2.0 * s3 + 3.0 * s2) * p1 + (s3 - s2) * m1 * len
+/// AM_normal_stand_hidespot_closet_enter's and Armoire_C's.
+static ARMOIRE_DOORS: std::sync::LazyLock<DoorCurves> = std::sync::LazyLock::new(|| DoorCurves {
+    enter: rich(&[
+        (0.2, 0.0, 0.0, 0.0, false), (0.3, 0.03, 0.5, 0.5, false), (0.4, 0.1, 1.0, 1.0, false), (0.5, 0.23, 1.45, 1.45, false),
+        (0.6, 0.39, 1.65, 1.65, false), (0.7, 0.56, 1.55, 1.55, false), (0.8, 0.7, 1.35, 1.35, false), (0.9, 0.83, 1.15, 1.15, false),
+        (1.0, 0.93, 0.8, 0.8, false), (1.1, 0.99, 0.42, 0.42, false), (1.1666666, 1.0, 0.0, 0.0, false), (1.6666666, 1.0, 0.0, 0.0, false),
+        (1.8, 0.97, -0.428571, -0.428571, false), (1.9, 0.9, -0.8, -0.8, false), (2.0, 0.81, -0.95, -0.95, false), (2.1, 0.71, -1.15, -1.15, false),
+        (2.2, 0.58, -1.3, -1.3, false), (2.3, 0.45, -1.3, -1.3, false), (2.4, 0.32, -1.3, -1.3, false), (2.5, 0.19, -1.25, -1.25, false),
+        (2.6, 0.07, -1.14, -1.14, false), (2.6666667, 0.0, -0.984147, 0.0, false),
+    ]),
+    exit: rich(&[(-0.0012225956, 0.0, 0.0, 0.0, true), (0.2, 100.0, 497.67105, 497.6705, false), (0.3, 120.0, 0.0, 31.61652, false)]),
+    close: rich(&[(0.0, 120.0, 0.0, 0.0, false), (0.7, 0.0, -257.89227, -257.88046, false)]),
+});
+
+/// AM_normal_stand_hidespot_outhouse_enter's and Outhouse_C's.
+static OUTHOUSE_DOORS: std::sync::LazyLock<DoorCurves> = std::sync::LazyLock::new(|| DoorCurves {
+    enter: rich(&[
+        (0.2, 0.0, 0.0, 0.0, false), (0.3, 0.03, 0.5, 0.5, false), (0.4, 0.1, 1.0, 1.0, false), (0.5, 0.23, 1.45, 1.45, false),
+        (0.6, 0.39, 1.65, 1.65, false), (0.7, 0.56, 1.55, 1.55, false), (0.8, 0.7, 1.35, 1.35, false), (0.9, 0.83, 1.15, 1.15, false),
+        (1.0, 0.93, 0.8, 0.8, false), (1.1, 0.99, 0.42, 0.42, false), (1.1666666, 1.0, 0.0, 0.0, false), (1.4, 1.0, 0.0, 0.0, false),
+        (1.5, 0.99, 0.0, 0.0, true), (1.6, 0.97, 0.0, 0.0, true), (1.7, 0.92, 0.0, 0.0, true), (1.8, 0.87, -0.6, -0.6, false),
+        (1.9, 0.8, -0.75, -0.75, false), (2.0, 0.72, -0.85, -0.85, false), (2.1, 0.63, -0.95, -0.95, false), (2.2, 0.53, -1.0, -1.0, false),
+        (2.3, 0.43, -1.05, -1.05, false), (2.4, 0.32, -1.15, -1.15, false), (2.5, 0.2, -1.2, -1.2, false), (2.6, 0.08, -1.2, -1.2, false),
+        (2.6666667, 0.0, -0.984147, 0.0, false),
+    ]),
+    exit: rich(&[(0.01, 0.0, 355.91776, 0.0, true), (0.2, 100.0, 487.9916, 487.9993, false), (0.3, 120.0, 0.0, 0.0, false)]),
+    close: rich(&[(0.0, 120.0, 0.0, 0.0, false), (0.7, 0.0, -287.33765, -287.33435, false)]),
+});
+
+/// Where a spot's doors are in their moves.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum DoorMotion {
+    #[default]
+    Still,
+    /// Seconds into the enter move's door driver window.
+    Entering(f32),
+    /// Seconds into the exit timeline, then the close timeline.
+    Exiting(f32),
+    Closing(f32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,15 +176,11 @@ pub struct HidingSpot {
     pub destroyed: bool,
     pub destructible: bool,
     pub destroy_on_search: bool,
-    /// Door pivots: entity, closed transform, opening direction (+1 / -1).
+    /// Door pivots: entity, closed transform, opening direction (+1 / -1: the right door, against the left one and the
+    /// outhouse's).
     pub doors: Vec<(Entity, Transform, f32)>,
-    /// Game time until which the doors stand open.
-    pub open_until: f32,
+    pub door: DoorMotion,
     door_angle: f32,
-    /// When the doors last started opening, the angle they close from, and whether they were open last frame.
-    opened_at: f32,
-    closing_from: f32,
-    was_open: bool,
 }
 
 /// The montage each hiding special move plays (its ContextMontage; for the counselor's enter moves, the female
@@ -213,12 +268,9 @@ impl HidingSpot {
             destructible: classes.prop(class, "bDestructable").as_bool().unwrap_or(false),
             destroy_on_search: classes.prop(class, "bDestroyOnSearch").as_bool().unwrap_or(true),
             doors,
-            open_until: 0.0,
+            door: DoorMotion::Still,
             prop: None,
             door_angle: 0.0,
-            opened_at: 0.0,
-            closing_from: 0.0,
-            was_open: false,
         })
     }
 
@@ -295,7 +347,7 @@ pub fn enter(
     spot: &mut HidingSpot,
     gxf: &GlobalTransform,
     model: &CounselorCharacter,
-    now: f32,
+    _now: f32,
 ) {
     let side = spot.nearest_side(gxf, xf.translation);
     let s = &spot.sides[side];
@@ -307,8 +359,7 @@ pub fn enter(
         p.counselor.stance = f13_core::counselor::Stance::Standing;
     }
     spot.occupant = Some(player);
-    // Its OpenCloseDoor window (3.1 s), closed by its end (the close takes 0.7 s).
-    spot.open_until = now + 2.4;
+    spot.door = DoorMotion::Entering(0.0);
     if let (SpotKind::Tent, Some(prop)) = (spot.kind, spot.prop) {
         commands.entity(prop).insert(crate::prop_anim::PropAnim::new(crate::prop_anim::TENT_ENTER));
     }
@@ -350,7 +401,7 @@ fn setup_breath(mut commands: Commands, counselor: Option<Res<CounselorCharacter
     let lines: std::collections::HashMap<String, String> =
         c.info.sounds.iter().filter_map(|(k, v)| Some((k.clone(), crate::audio::cue_name(&serde_json::Value::String(v.clone()))?))).collect();
     for e in &players {
-        commands.entity(e).insert((Breathing { breath: f13_core::breath::Breath::new(&t), scared_next: 0.0 }, crate::audio::ClassSounds(lines.clone())));
+        commands.entity(e).insert((Breathing { breath: f13_core::breath::Breath::new(&t), scared_next: 0.0, screamed: false, scream_next: 0.0 }, crate::audio::ClassSounds(lines.clone())));
     }
 }
 
@@ -390,6 +441,16 @@ fn breathe(
     let Some((jxf, knowledge)) = jasons.iter_mut().next() else { return };
     let distance = jxf.translation().distance(pxf.translation());
     let in_view = pushed.is_some_and(|p| p.spotted);
+    if !in_view {
+        if b.screamed && distance > SCREAM_M {
+            b.screamed = false;
+            b.scream_next = now + SCREAM_SECONDS;
+        }
+    } else if hiding.is_none() && !b.screamed && distance <= SCREAM_M && now >= b.scream_next {
+        b.screamed = true;
+        info!("screams ({distance:.0} m from Jason)");
+        say(&mut commands, "VO:Screams");
+    }
     if hidden && in_view && !b.breath.holding && b.breath.can_hold && p.fear >= SCARED_LINE_FEAR && distance <= SCARED_LINE_M && now >= b.scared_next {
         b.scared_next = now + SCARED_LINE_SECONDS;
         info!("whimpering in her hiding spot ({distance:.0} m from Jason)");
@@ -425,7 +486,6 @@ fn update_hiding(
 ) {
     let Some(model) = model else { return };
     let dt = time.delta_secs();
-    let now = time.elapsed_secs();
     for (pe, mut h, mut xf, mut p, mut vis) in &mut players {
         h.t += dt;
         p.velocity = Vec2::ZERO;
@@ -454,7 +514,8 @@ fn update_hiding(
                 h.phase = HidePhase::Exiting;
                 h.t = 0.0;
                 *vis = Visibility::Inherited;
-                spot.open_until = now + len(side.exit_anim);
+                // BlueprintExitStarted.
+                spot.door = DoorMotion::Exiting(0.0);
                 if let (SpotKind::Tent, Some(prop)) = (spot.kind, spot.prop) {
                     commands.entity(prop).insert(crate::prop_anim::PropAnim::new(crate::prop_anim::TENT_EXIT));
                 }
@@ -512,23 +573,50 @@ pub(crate) fn hiding_camera(
 }
 
 fn swing_doors(time: Res<Time>, mut spots: Query<&mut HidingSpot>, mut transforms: Query<&mut Transform>) {
-    let now = time.elapsed_secs();
+    let dt = time.delta_secs();
     for mut s in &mut spots {
-        let open = now < s.open_until;
-        if open && !s.was_open {
-            s.opened_at = now;
-        }
-        s.was_open = open;
-        // Open: along the opening curve; then closed from wherever it got to.
-        let angle = if open { door_opening(now - s.opened_at) } else { door_closing(now - s.open_until) * s.closing_from / 120.0 };
-        if open {
-            s.closing_from = angle;
-        }
+        let curves: &DoorCurves = match s.kind {
+            SpotKind::Closet => &ARMOIRE_DOORS,
+            SpotKind::Outhouse => &OUTHOUSE_DOORS,
+            SpotKind::Bed | SpotKind::Tent => continue,
+        };
+        // The door driver turns only the left door (DoorPivot, the outhouse's Mesh); the timelines turn both.
+        let (angle, left_only) = match s.door {
+            DoorMotion::Still => continue,
+            DoorMotion::Entering(t) => {
+                let t = t + dt;
+                if t >= DOOR_DRIVER_SECONDS {
+                    s.door = DoorMotion::Still;
+                    (0.0, true)
+                } else {
+                    s.door = DoorMotion::Entering(t);
+                    (curves.enter.eval(t) * 90.0, true)
+                }
+            }
+            DoorMotion::Exiting(t) => {
+                let t = t + dt;
+                if t >= EXIT_TIMELINE_SECONDS {
+                    s.door = DoorMotion::Closing(0.0);
+                    (curves.close.eval(0.0), false)
+                } else {
+                    s.door = DoorMotion::Exiting(t);
+                    (curves.exit.eval(t), false)
+                }
+            }
+            DoorMotion::Closing(t) => {
+                let t = (t + dt).min(CLOSE_TIMELINE_SECONDS);
+                s.door = if t >= CLOSE_TIMELINE_SECONDS { DoorMotion::Still } else { DoorMotion::Closing(t) };
+                (curves.close.eval(t), false)
+            }
+        };
         if angle == s.door_angle {
             continue;
         }
         s.door_angle = angle;
         for (e, closed, dir) in s.doors.clone() {
+            if left_only && dir > 0.0 {
+                continue;
+            }
             if let Ok(mut t) = transforms.get_mut(e) {
                 t.rotation = closed.rotation * Quat::from_rotation_y(dir * angle.to_radians());
             }
