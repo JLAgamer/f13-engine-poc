@@ -218,6 +218,9 @@ fn end_repair_anim(commands: &mut Commands, player: Entity, base: Option<&String
     commands.entity(player).insert((RepairAnim { base: base.clone(), part, t: 0.0 }, crate::character::PlayAction(format!("{base}_{part}"))));
 }
 
+/// Her take while she drives.
+const DRIVE_TAKE: &str = "f_normal_sit_car_drive_forward";
+
 /// She's playing a door's lock or unlock take while she holds E on it.
 #[derive(Component)]
 pub struct LockAnim;
@@ -629,9 +632,7 @@ fn act(
         Target::Seat(v) if keys.just_pressed(KeyCode::KeyE) => {
             commands.entity(player_entity).insert(Driving { vehicle: v, starting: None });
             info!("got in the driver's seat");
-            if let Ok(mut vis) = visibility.get_mut(player_entity) {
-                *vis = Visibility::Hidden;
-            }
+            commands.entity(player_entity).remove::<RepairAnim>().insert(crate::character::PlayAction(DRIVE_TAKE.into()));
             interaction.target = None;
         }
         _ => {}

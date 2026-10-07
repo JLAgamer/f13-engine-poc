@@ -189,11 +189,12 @@ fn drive(
     xf.rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_z(pitch);
 }
 
-/// Keeps the (hidden) counselor at the car so the camera follows it.
-fn follow_vehicle(mut player: Single<(&Driving, &mut Transform), With<Player>>, vehicles: Query<&Transform, (With<Vehicle>, Without<Player>)>) {
+/// She sits in the driver's seat: her capsule at its socket (her feet a capsule half-height below), facing the car's
+/// forward (its +X; her model faces +Z).
+fn follow_vehicle(mut player: Single<(&Driving, &mut Transform), With<Player>>, vehicles: Query<(&Vehicle, &Transform), Without<Player>>) {
     let (d, ref mut xf) = *player;
-    if let Ok(v) = vehicles.get(d.vehicle) {
-        xf.translation = v.translation;
+    if let Ok((v, vxf)) = vehicles.get(d.vehicle) {
+        **xf = *vxf * v.sitting * Transform::from_xyz(0.0, -crate::player::CAPSULE_HALF_HEIGHT_M, 0.0).with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2));
     }
 }
 
@@ -219,7 +220,10 @@ fn exit_vehicle(
     at.y = gxf.translation().y;
     xf.translation = at;
     **vis = Visibility::Inherited;
-    commands.entity(entity).remove::<Driving>();
+    // Facing out of the door, upright.
+    let (yaw, _, _) = gxf.rotation().to_euler(EulerRot::YXZ);
+    xf.rotation = Quat::from_rotation_y(yaw + outward.x.atan2(outward.z));
+    commands.entity(entity).remove::<(Driving, crate::character::PlayAction)>();
 }
 
 fn check_escape(

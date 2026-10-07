@@ -157,6 +157,8 @@ pub struct Vehicle {
     /// Driver door (Bevy local) and its range in cm.
     pub driver_seat: Vec3,
     pub seat_reach: f32,
+    /// Where she sits driving (Bevy local): the driver's seat's AttachSocket on the car's mesh.
+    pub sitting: Transform,
     pub started: bool,
     /// Forward speed in cm/s and current steering, -1..1.
     pub speed: f32,
@@ -547,6 +549,12 @@ fn spawn_props(
                 ignition,
                 driver_seat: seat.map_or(Vec3::ZERO, |c| local(c).translation),
                 seat_reach: seat.map_or(100.0, |c| reach(c, 100.0)),
+                sitting: seat
+                    .and_then(|s| {
+                        let mesh = info.components.iter().find(|c| Some(&c.name) == s.parent.as_ref())?;
+                        Some(local(mesh) * to_transform(mesh.sockets.get(s.props["AttachSocket"].as_str()?)?))
+                    })
+                    .unwrap_or_else(|| Transform::from_translation(seat.map_or(Vec3::ZERO, |c| local(c).translation))),
                 started: false,
                 speed: 0.0,
                 steer: 0.0,

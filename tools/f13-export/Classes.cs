@@ -10,6 +10,7 @@ using CUE4Parse.UE4.Assets.Exports.Component;
 using CUE4Parse.UE4.Assets.Exports.Component.StaticMesh;
 using CUE4Parse.UE4.Assets.Exports.Component.SkeletalMesh;
 using CUE4Parse.UE4.Assets.Exports.SkeletalMesh;
+using CUE4Parse.UE4.Assets.Exports.Animation;
 using CUE4Parse.UE4.Assets.Exports.StaticMesh;
 using CUE4Parse.UE4.Objects.Core.Math;
 using CUE4Parse.UE4.Objects.Engine;
@@ -211,6 +212,7 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
             {
                 var mesh = Load(t.GetOrDefault<FPackageIndex?>("SkeletalMesh")) as USkeletalMesh;
                 if (mesh != null) { queueMesh(mesh); j["Mesh"] = meshFile(mesh); }
+                if (mesh != null && Sockets(mesh) is { Count: > 0 } sockets) j["Sockets"] = sockets;
                 j["Hidden"] = t.GetOrDefault("bHiddenInGame", false) || !t.GetOrDefault("bVisible", true);
                 return j;
             }
@@ -234,6 +236,27 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
         Add(t.GetOrDefault<FPackageIndex?>("ChildActorClass"));
         foreach (var cls in t.GetOrDefault<FPackageIndex[]>("RequiredPartClasses", [])) Add(cls);
         if (props.Count > 0) j["Props"] = props;
+        return j;
+    }
+
+    /// The mesh's sockets (its skeleton's, the mesh's own winning) in component space, through their bones'
+    /// reference pose: where seats attach (SCVehicleSeatComponent's AttachSocket).
+    static JObject Sockets(USkeletalMesh mesh)
+    {
+        var skeleton = mesh.Skeleton.Load<USkeleton>();
+        var bones = mesh.ReferenceSkeleton.FinalRefBoneInfo;
+        var pose = mesh.ReferenceSkeleton.FinalRefBonePose;
+        var j = new JObject();
+        var all = (skeleton?.GetOrDefault<FPackageIndex[]>("Sockets", []) ?? []).Concat(mesh.GetOrDefault<FPackageIndex[]>("Sockets", []));
+        foreach (var s in all.Select(s => s.Load()))
+        {
+            if (s == null) continue;
+            var bone = s.GetOrDefault<FName>("BoneName").Text;
+            var i = Array.FindIndex(bones, b => b.Name.Text == bone);
+            var xf = new FTransform(s.GetOrDefault<FRotator>("RelativeRotation").Quaternion(), s.GetOrDefault<FVector>("RelativeLocation"), s.GetOrDefault("RelativeScale", FVector.OneVector));
+            for (; i >= 0; i = bones[i].ParentIndex) xf = xf * pose[i];
+            j[s.GetOrDefault<FName>("SocketName").Text] = Xf(xf);
+        }
         return j;
     }
 

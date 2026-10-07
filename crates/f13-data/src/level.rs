@@ -93,6 +93,9 @@ pub struct ComponentInfo {
     pub local: Option<Xform>,
     #[serde(default)]
     pub world: Option<Xform>,
+    /// Skeletal mesh components: the mesh's sockets in component space.
+    #[serde(default)]
+    pub sockets: std::collections::HashMap<String, Xform>,
     /// This is the class's root component; `root_relative` is applied on top of the spawn transform.
     #[serde(default)]
     pub root: bool,
