@@ -22,11 +22,12 @@ Mechanics: counselor side
 - [x] Combat stance and dodge: double-tap, stamina cost, root motion (f13-core::dodge, anims.json)
 - [x] Swimming (water.rs, player.rs): the map's water volume (Swim_PhysicsVolume's brush box); she swims while her
       centre is under its surface (IsInWater), afloat at the surface, out where the bottom comes up; the swim
-      blend (idle, slow, fast, sprint), swimming speed and stamina, the InWater fear event. Not yet: diving, wading
-      sounds, Jason in water
+      blend (idle, slow, fast, sprint), swimming speed and stamina, the InWater fear event
+- [ ] Swimming, remaining: diving, Jason in water
 - [x] Fear events pushed in the client (fear_events.rs): darkness (f13-core::light, the map's point and spot lights),
   indoors (the cabins' indoor volumes, also used by Sense), wounded, Jason near and in view, grabbed, hidden, items
-  held. Not yet: in water (with swimming), near friendlies and corpses (other counselors), blackouts (power)
+  held, in water
+- [ ] Fear events, remaining: near friendlies and corpses (other counselors), blackouts (power)
 - [x] Hit reactions and death animations when Jason hits
 - [x] Collision: the counselor's capsule (34 x 82 cm) against the game's simple collision (convex hulls, boxes,
   spheres, capsules of every mesh whose profile blocks pawns, BlockingVolumes, terrain), doors, windows and cars
@@ -40,15 +41,17 @@ Mechanics: counselor side
 - [x] Car handling from the game's vehicle setup (f13-core::vehicle): the movement component's torque curve,
       MaxRPM, automatic gearbox (ratios, shift points, latency), idle brake, the wheels' radius and steering lock,
       Unreal's defaults (mass, final ratio, brakes, drag, steering curve); a reduced model of the PhysX vehicle (no
-      sliding, grip-capped drive, revs follow the wheels). Not yet: suspension, sliding, collisions' impulses
+      sliding, grip-capped drive, revs follow the wheels)
+- [ ] Car handling, remaining: suspension, sliding, collisions' impulses
 - [x] Cabinets (drawers): search, items inside
 - [x] Doors: leaves exported and swinging on their pivot, open/close, lock/unlock by side (doors.rs; swing timing is a
   placeholder for the special-move montages)
 - [x] Barricades (replace the lock, only on a closed door) and windows: open, close, vault, dive (breaks the glass,
-  DiveDamage); windows.rs. Vault/dive are instant moves for now; barricade mesh placement unverified
+  DiveDamage); windows.rs
 - [x] Hiding: wardrobes, outhouses, beds, tents (hiding.rs: enter/idle/exit montages, hiding camera; Jason's search
-  and hiding spot kills). Door swing is a placeholder; outhouse door and tent flaps don't animate
-- [x] Health, wounded, death, blocking damage, first aid (f13-core::health); limp animation later
+  and hiding spot kills)
+- [ ] Hiding spots' own animation: the wardrobe and outhouse doors and the tent flaps (the door swing is a placeholder)
+- [x] Health, wounded, death, blocking damage, first aid (f13-core::health)
 - [x] Items against Jason (items.rs): weapon swings (stun chance, wear, breaking), flare gun, shotgun, firecrackers,
   bear traps, the map; stun times and animations from the game (swing reach/angle, throw speed and gun fire timing
   are placeholders)
@@ -79,51 +82,55 @@ Mechanics: Jason side
 - [x] Navmesh built at load time from the collision with the game's Recast settings (f13-core::recast/navmesh):
   ChunkyMonotone regions merged as the cooked navmesh shows (93% the same walkable area, a few percent apart in
   polygon count), tiles on the game's grid; paths pulled taut and shortened along the mesh; the HUD shows the build.
-  The cooked navmesh is exported (navmesh-<agent>.json) as a reference. Not ported: detail meshes (heights come from
-  the polygon corners), border vertex removal
+  The cooked navmesh is exported (navmesh-<agent>.json) as a reference
+- [ ] Navmesh, remaining: detail meshes (heights come from the polygon corners), border vertex removal
 - [x] Holding breath while hiding (f13-core::breath, hiding.rs): the breath meter's drain, refill, threshold and wait;
   her HoldBreath / HoldBreathEnd / KillerIsNearWhileHiding voice lines; Jason hears the last within its range
   (placeholder distance and repeat delay)
 - [x] Kill cameras (f13-core::camera_spline, kill_camera.rs): SCSplineCamera riding the kill's camera spline
-      (holds, times to the next point, Unreal InterpCurves, field of view, the handicam shake) in the kill's space.
-      Not ported: its trace in front of walls, blending back
+      (holds, times to the next point, Unreal InterpCurves, field of view, the handicam shake) in the kill's space
+- [ ] Kill cameras, remaining: the trace in front of walls, blending back
 - [x] Playing as Jason (`--play-jason`, jason_player.rs): walk, run, look; swing, heavy swing, grab and kill, knives
       where he looks, traps, Shift, Morph (the point nearest 30 m ahead), Stalk; doors as he walks into them; his
-      camera; the escape bot plays the counselor. Not yet: Jason's HUD (KillerHUDWidget), Sense on demand, the map
-      for Morph, choosing kills
+      camera; the escape bot plays the counselor
+- [ ] Playing as Jason, remaining: Jason's HUD (KillerHUDWidget), Sense on demand, the map for Morph, choosing kills
 - [x] Shift, Morph, Stalk (f13-core::killer_moves, jason.rs): Shift's 0.7 s wind-up, ShiftSpeed and ShiftTime (J2:
   1000 cm/s, 4 s), ending in a grab; Stalk's StalkActiveTimer (IdleStalkModifier standing still); Morph to the
   nearest SCKillerMorphPoint within 30 m of the spot after TeleportScreenTime; the teleport fade (he's hidden below
-  half). When the computer Jason uses them is a placeholder. Not yet: the dissolve and screen effects, Stalk's and
-  Shift's sounds and music, Morph's excluded areas
+  half). When the computer Jason uses them is a placeholder
+- [ ] Shift, Morph, Stalk, remaining: the dissolve and screen effects, Stalk's and Shift's sounds and music, Morph's
+      excluded areas
 - [x] Throwing knives (J2's two, the knife's damage and cooldown, the throw montage and its ThrowKnife notify,
   SCJasonAIProperties' 5..25 m; placeholder knife speed) and Jason's traps (J2's seven KillerTraps, set in doorways
   he opens; they catch counselors, not him; his trap's own mesh isn't exported)
 - [x] Knife pickups: the map's ThrowingKnifePickups (large items) add their StackSize to Jason's knives as he passes
       (AddKnives, no cap); the computer Jason doesn't seek them out, and there's no pick-up move
 - [x] More kills: the pickaxe's five grab kills (Throat Hack, Can Opener, Curb Stomp, Sweep The Leg, Top Popper),
-      paired montages and kill cameras; the AI picks one at random, `--kill <name>` forces one. Not yet: the other
-      weapons' kills, environment (placed) kills, choosing kills as the player
+      paired montages and kill cameras; the AI picks one at random, `--kill <name>` forces one
+- [ ] Kills, remaining: the other weapons' kills, environment (placed) kills, choosing kills as the player
 - [x] Generators (power.rs): the fuse boxes and their power grids; a destroyed fuse box puts out the powered lights
       in its grid's box (and they stop lighting her: darkness fear) and lights its red power-out light; counselors
-      repair it (hold E, 15 s, pips), Jason destroys it (the player's E). Not yet: the power curves, the blackout fear
-      event, the computer Jason cutting the power
+      repair it (hold E, 15 s, pips), Jason destroys it (the player's E)
+- [ ] Generators, remaining: the power curves, the blackout fear event, the computer Jason cutting the power
 - [x] Breaking walls (SCDestructibleWall in the cabin layouts): Jason breaks through a wall in his way (the player
       walking into it; the AI when it stands between him and her), the door break's montage and timing, his world
-      damage against its BaseHealth 60; the section and its collision go. Not yet: the destructible chunks, the wall
-      break montages, dust and sounds
+      damage against its BaseHealth 60; the section and its collision go
+- [ ] Breaking walls, remaining: the destructible chunks, the wall break montages, dust
 - [x] Car interactions: Jason in front of (or behind) a moving car stops it dead (KillersInFrontOfCar); with the car
       under MinUseCarDoorSpeed (50 cm/s), Jason at the driver door pulls her out into his grab (the AI goes for the
-      door; the player grabs). Not yet: the slam and pull-out montages, passengers, the car running counselors over
+      door; the player grabs)
+- [ ] Car interactions, remaining: the slam and pull-out montages, passengers, the car running counselors over
 
 Match
 - [x] Match flow (f13-core::game_mode, match_flow.rs): the game mode's states and timer, the end (dead or
-  escaped, or time out), outro wait, results with the score events' XP (awarded where the game does), leaving.
-  Not yet: lobby, level intro and outro sequences, police and Tommy Jarvis timers, badges, Jason dying
+  escaped, or time out), outro wait, results with the score events' XP (awarded where the game does), leaving
+- [ ] Match flow, remaining: lobby, level intro and outro sequences, police and Tommy Jarvis timers, badges, Jason
+      dying
 - [x] Item and car spawning, as the game mode does it (f13-core::spawn, f13-data::world)
 - [x] How the game chooses one of the four cabin layouts per match: SCWorldSettings' RandomLevels, one picked at
-  random when the level loads (`--layout` overrides). Not yet: its rain roll (RainChance, the `rain=` option; the
-  rain level isn't used), the randomized pods
+  random when the level loads (`--layout` overrides)
+- [ ] Level choices, remaining: the rain roll (RainChance, the `rain=` option; the rain level isn't used), the
+      randomized pods
 
 Host CLI (`f13-host`; f13-game `--host`, host.rs: line commands on 127.0.0.1)
 - [x] Spawn items (`give <Class>`: one of the match's items of the class into her hands or pockets)
@@ -141,7 +148,8 @@ Presentation
       maps), ported from the game's compiled shaders; per-placement material overrides; glass; invisible blockers
       hidden (f13-game materials.rs, shaders/); textures as the game's compressed DDS data with mips
 - [x] Light fixtures' glow: M_Prop_Master_Lights' emissive (Diffuse.rgb * Diffuse.a * Glow, from its compiled base
-      pass); not yet seen in a screenshot, and it doesn't go dark in a power cut
+      pass)
+- [ ] Light fixtures' glow, remaining: seen in a screenshot; going dark in a power cut
 - [ ] Materials, remaining: water (first pass only: colour, gloss, panning ripples; no depth fade, foam or
       reflections), POM parallax, the other emissive masters (signs, the CB tower, the phone box), foliage
       subsurface, the Chevette's paint mask
@@ -186,13 +194,15 @@ Presentation
 - [x] HUD (ui.rs): CounselorHUDWidget from its UMG tree (f13-data::umg lays it out as Slate does), the game's font
       and textures: timer, stamina ring (StaminaBarMaterial as a radial-fill UI material), inventory (item widgets
       with their ImageOn icons, key numbers), breath bars while hiding; the game has no health or fear meter (F3:
-      debug text). Not yet: the minimap's map and icons, the noise meter, help texts, XP popups, ability widgets
+      debug text)
+- [ ] HUD, remaining: the minimap's map and icons, the noise meter, help texts, XP popups, ability widgets
 - [x] Night lighting, fog, flashlight (lighting.rs): the map's point/spot lights (inverse-square lumens, or Unreal's
   falloff-exponent lights matched at a third of their radius; colour temperature; draw-distance fades), the moon and
   height fog of the clear-weather level (CLsm_RainOff), the post-process volume's fixed exposure and ambient cubemap,
   the sky's colour; the counselor's flashlight (F; its Blueprint values, attachment, turn rate, wall check; lit for
-  fear). Not yet: Enlighten GI, local light shadows, light functions, colour grading LUT/contrast, bloom, the sky
-  texture, rain, power cuts
+  fear); power cuts (power.rs)
+- [ ] Lighting, remaining: Enlighten GI, local light shadows, light functions, colour grading LUT/contrast, bloom,
+      the sky texture, rain
 - [ ] Audio (audio.rs, f13-data::sound): done: SoundCue playback (the cue graph's random, modulator, mixer, looping and
   attenuation nodes; Unreal's attenuation falloff; left/right panning around the camera) and the counselor's
   footsteps (her locomotion's Footstep notifies; the surface under her foot: a mesh's physical material or the
