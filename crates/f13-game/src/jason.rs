@@ -76,6 +76,8 @@ const ATTACK: &str = "combat_stand_2h_attack_light";
 const HEAVY_ATTACK: &str = "combat_stand_2h_attack_heavy";
 const GRAB_STARTUP: &str = "normal_grab_startup";
 const GRAB_ENTER: &str = "normal_grab_enter_1";
+/// Pulling the driver out of the car: both sides' take (AM_normal_stand_car_grab_left), played from DriverGrab.
+const CAR_GRAB: &str = "cinematic_car_grab_left";
 const GRAB_IDLE: &str = "normal_grab_idle";
 const GRAB_MISS: &str = "normal_grab_miss";
 /// The pickaxe's grab kills: his and her paired montage (same name), the kill class (its camera), and its KillName.
@@ -112,6 +114,8 @@ const NECK_GRAB_SOCKET: &str = "NeckGrabSocket";
 const GRAB_HOLD_M: f32 = 0.65;
 /// Seconds Jason holds a grabbed counselor before the kill (a player's choice in the game).
 const HOLD_BEFORE_KILL: f32 = 4.0;
+/// Where a hold pulled from a car starts (past the grab's enter takes: the car take ends in the hold).
+const HOLD_AFTER_CAR_GRAB: f32 = 2.0;
 /// NearCounselorMusicDistance + its max-volume distance (m): how near a Morph must land for her stinger.
 const NEAR_MUSIC_M: f32 = 43.0;
 /// SCDriveableVehicle constructor: MinUseCarDoorSpeed (cm/s).
@@ -297,6 +301,8 @@ pub enum JasonState {
     Throwing { t: f32, thrown: bool },
     /// Setting a trap: s into it.
     PlacingTrap { t: f32 },
+    /// Pulling the driver out of her car (DriverGrab's paired take), into his grab.
+    PullingOut { t: f32 },
     /// Destroying a fuse box (Jason_Generator_Destruction_Machete's montage): it goes in the montage's
     /// DestroyGenerator driver window.
     BreakingFuse { t: f32, fuse: Entity, done: bool },
@@ -974,11 +980,17 @@ pub(crate) fn update_jason(
     let world = (grid, lists.as_slice());
     let Ok((pe, mut p, mut pxf, in_car, mut hiding, blocking)) = players.single_mut() else { return };
     let driving = in_car.is_some();
-    // Her car's driver door (where the game's DriverGrab context kill pulls the driver out) and its speed.
+    // Her car's driver door (the game's DriverGrab context kill, where he stands to pull the driver out) and its speed.
     let car_door = in_car.and_then(|d| vehicles.get(d.vehicle).ok()).map(|(v, g)| {
-        let seat = v.driver_seat;
-        let out = Vec3::new(seat.x, 0.0, seat.z).normalize_or_zero();
-        (g.transform_point(seat + out), v.speed)
+        let at = v.driver_grab.map_or_else(
+            || {
+                let seat = v.driver_seat;
+                let out = Vec3::new(seat.x, 0.0, seat.z).normalize_or_zero();
+                Transform::from_translation(g.transform_point(seat + out))
+            },
+            |grab| crate::hiding::HidingSpot::world(g, &grab),
+        );
+        (at, v.speed)
     });
     for (je, mut j, mut xf, hit, mut know) in &mut jasons {
         j.stun_immune = (j.stun_immune - dt).max(0.0);
@@ -1068,18 +1080,27 @@ pub(crate) fn update_jason(
                 // (DriverGrab; the car door only works under MinUseCarDoorSpeed). The AI does it when he gets there,
                 // the player when they grab.
                 if let Some((door, speed)) = car_door {
-                    let at_door = Vec2::new(door.x - xf.translation.x, door.z - xf.translation.z).length() < CAR_DOOR_REACH_M;
+                    let at_door = Vec2::new(door.translation.x - xf.translation.x, door.translation.z - xf.translation.z).length() < CAR_DOOR_REACH_M;
                     let wants = player_input.map_or(true, |i| i.presses.grab);
                     if at_door && speed.abs() < MIN_USE_CAR_DOOR_SPEED && wants && alive {
-                        info!("Jason: pulled Vanessa out of the car");
-                        commands.entity(pe).remove::<crate::vehicle::Driving>().insert(Visibility::Inherited);
-                        pxf.translation = Vec3::new(door.x, xf.translation.y, door.z);
+                        info!("Jason: pulling Vanessa out of the car");
                         struggle.wiggle = default();
-                        j.state = JasonState::Holding { t: 0.0 };
                         j.velocity = Vec2::ZERO;
-                        commands.entity(je).insert(PlayAction(GRAB_ENTER.into()));
-                        commands.entity(pe).insert((Held, PlayAction(GRABBED_ENTER.into())));
                         p.velocity = Vec2::ZERO;
+                        commands.entity(pe).remove::<crate::vehicle::Driving>().insert((Held, Visibility::Inherited));
+                        if killer.info.animations.contains_key(CAR_GRAB) {
+                            // The paired take from DriverGrab: she rides his GrabSocket out of the seat.
+                            *xf = killer.place(CAR_GRAB, door).0;
+                            snap_rig(&mut rigs, je);
+                            j.state = JasonState::PullingOut { t: 0.0 };
+                            commands.entity(je).insert(PlayAction(CAR_GRAB.into()));
+                            commands.entity(pe).insert(PlayAction(CAR_GRAB.into()));
+                        } else {
+                            pxf.translation = Vec3::new(door.translation.x, xf.translation.y, door.translation.z);
+                            j.state = JasonState::Holding { t: 0.0 };
+                            commands.entity(je).insert(PlayAction(GRAB_ENTER.into()));
+                            commands.entity(pe).insert(PlayAction(GRABBED_ENTER.into()));
+                        }
                         continue;
                     }
                 }
@@ -1179,7 +1200,7 @@ pub(crate) fn update_jason(
                 let stalled = j.stall > STALL_SECONDS;
                 // Where to go: her (her car's driver door when she drives), if he sees her; else the hiding spot he's
                 // after, the last clue, or somewhere.
-                let mut goal = car_door.map_or(to, |(door, _)| door);
+                let mut goal = car_door.map_or(to, |(door, _)| door.translation);
                 // Going for a hiding spot or a clue (not her, not wandering).
                 let mut following = false;
                 if !sees {
@@ -1793,6 +1814,27 @@ pub(crate) fn update_jason(
                     commands.entity(pe).insert(PlayAction(anim.into()));
                 } else {
                     j.state = JasonState::Holding { t: at };
+                }
+            }
+            JasonState::PullingOut { t: at } => {
+                let at = at + dt;
+                j.velocity = Vec2::ZERO;
+                let jrig = rigs.iter().find(|(_, c, _)| c.parent() == je);
+                let crig = rigs.iter().find(|(_, c, _)| c.parent() == pe);
+                if let (Some((jr, _, _)), Some((cr, _, cxf)), Some(c)) = (jrig, crig, &counselor_model) {
+                    place_held(pe, &mut pxf, true, jr, (cr, cxf), &killer.info, &c.info, &globals);
+                }
+                if at >= killer.length(CAR_GRAB).unwrap_or(6.0) {
+                    // Out: he stays where the take left him, holding her (past the grab's enter).
+                    if let Some((_, last)) = killer.root_motion(CAR_GRAB) {
+                        *xf = crate::character::flat(Transform::from_matrix(xf.to_matrix() * last.to_matrix()));
+                        snap_rig(&mut rigs, je);
+                    }
+                    j.state = JasonState::Holding { t: HOLD_AFTER_CAR_GRAB };
+                    commands.entity(je).insert(PlayAction(GRAB_IDLE.into()));
+                    commands.entity(pe).insert(PlayAction(GRABBED_IDLE.into()));
+                } else {
+                    j.state = JasonState::PullingOut { t: at };
                 }
             }
             JasonState::Killing { t: at } => {

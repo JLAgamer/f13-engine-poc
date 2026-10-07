@@ -122,7 +122,9 @@ Mechanics: Jason side
 - [x] Car interactions: Jason in front of (or behind) a moving car stops it dead (KillersInFrontOfCar); with the car
       under MinUseCarDoorSpeed (50 cm/s), Jason at the driver door pulls her out into his grab (the AI goes for the
       door; the player grabs)
-- [ ] Car interactions, remaining: the slam and pull-out montages, passengers, the car running counselors over
+- [x] Pulled out of the car: Jason on the car's DriverGrab spot, both sides' paired take (AM_normal_stand_car_grab_left,
+      she on his GrabSocket as in kills), into his grab
+- [ ] Car interactions, remaining: the slam montage, passengers, the car running counselors over
 
 Match
 - [x] Match flow (f13-core::game_mode, match_flow.rs): the game mode's states and timer, the end (dead or

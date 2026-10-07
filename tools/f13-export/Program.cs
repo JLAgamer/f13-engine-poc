@@ -864,6 +864,8 @@ static class Mvp
         "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_ride_idle",
         "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_stand_car_enter_left",
         "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_exit_left",
+        // Pulled out of the car by Jason (the driver seat's CounselorGrabbedMontage).
+        CarGrab[0],
         // Car repairs (the repair components' CounselorInteractAnim): her takes of each montage's sections.
         "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Repair/Car/f_normal_stand_car_repair_gascan_start",
         "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Repair/Car/f_normal_stand_car_repair_gascan_cycle",
@@ -936,8 +938,10 @@ static class Mvp
     public static string[] PairedKills => [.. CounselorKills, .. JasonKills];
     /// Getting in and out of the driver's seat (played from the seat's socket).
     static string[] CarSeat => ["/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_stand_car_enter_left", "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_exit_left"];
+    /// The driver pulled out of the car: her side and his (paired, played from DriverGrab).
+    static string[] CarGrab => ["/Game/Characters/Counselors/Base/Shared/Car/AM_normal_stand_car_grab_left", $"{JasonAnim}/Car/AM_normal_stand_car_grab_left"];
     /// Animations that keep their root translation (played from a fixed spot: paired kills, hiding spots, car seats).
-    public static string[] KeepRoot => [.. PairedKills, .. CounselorHiding, .. JasonHiding, .. CarSeat];
+    public static string[] KeepRoot => [.. PairedKills, .. CounselorHiding, .. JasonHiding, .. CarSeat, .. CarGrab];
     public const string Killer = "/Game/Characters/Killers/Jason/J2/Jason_SackHead";
     /// The kills whose cameras f13-game plays (kill_cameras.json).
     public static readonly string[] KillCameras =
@@ -997,6 +1001,8 @@ static class Mvp
         $"{JasonAnim}/Interaction/Doors/AM_normal_stand_door_break_axe",
         // Destroying a fuse box (Jason_Generator_Destruction_Machete: his weapon isn't the axe).
         $"{JasonAnim}/Interaction/AM_Break_Electronic_Box_Machete",
+        // Pulling the driver out (DriverGrab's paired move).
+        CarGrab[1],
         // Raged, he bursts through a closed door instead (BurstDoorFrom*: Jason_WallSmash).
         $"{JasonAnim}/Abilities/AM_Jason_uber_stand_wall_smash_02",
         .. JasonKills,
