@@ -50,7 +50,7 @@ impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_sounds)
             .init_resource::<MusicState>()
-            .add_systems(Update, (add_listener, attenuate, actor_sounds, counselor_music, near_music, fades).chain())
+            .add_systems(Update, (add_listener, attenuate, actor_sounds, counselor_music, near_music, fades, ambience).chain())
             .add_observer(play_sound)
             .add_observer(footstep)
             .add_observer(actor_sound)
@@ -225,6 +225,60 @@ fn spawn_2d(commands: &mut Commands, assets: &AssetServer, sounds: &mut Sounds, 
     let mode = if looping || v.looping { PlaybackSettings::LOOP } else { PlaybackSettings::DESPAWN };
     let settings = PlaybackSettings { volume: Volume::Linear(v.volume * volume), speed: v.pitch, ..mode };
     Some((commands.spawn((AudioPlayer::new(assets.load(format!("sounds/{}", v.file))), settings)).id(), v.volume))
+}
+
+/// One of the map's ambient loops (its AmbientSounds' AudioComponents): its volume (cue volume times
+/// VolumeMultiplier) and, for a box attenuation override, the box (world, Unreal cm: centre, rotation, extents) and
+/// its falloff: full inside, fading linearly to nothing FalloffDistance outside (flat; the boxes are 2D).
+#[derive(Component)]
+struct Ambient {
+    volume: f32,
+    area: Option<(Vec3, Quat, Vec2, f32)>,
+}
+
+/// Starts the ambient loops once the sounds are in, then keeps the attenuated ones' volume to the listener.
+fn ambience(
+    mut commands: Commands,
+    mut started: Local<bool>,
+    assets: Res<AssetServer>,
+    level: Res<crate::Level>,
+    sounds: Option<ResMut<Sounds>>,
+    mut rng: ResMut<crate::GameRng>,
+    listener: Query<&GlobalTransform, With<SpatialListener>>,
+    mut playing: Query<(&Ambient, &mut bevy::audio::AudioSink)>,
+) {
+    let ear = listener_position(&listener);
+    if *started {
+        let Some(ear) = ear else { return };
+        let ue = Vec3::new(ear.x, ear.z, ear.y) * 100.0;
+        for (a, mut sink) in &mut playing {
+            let Some((centre, rotation, extents, falloff)) = a.area else { continue };
+            let local = rotation.inverse() * (ue - centre);
+            let outside = Vec2::new((local.x.abs() - extents.x).max(0.0), (local.y.abs() - extents.y).max(0.0)).length();
+            sink.set_volume(Volume::Linear(a.volume * (1.0 - outside / falloff.max(1.0)).clamp(0.0, 1.0)));
+        }
+        return;
+    }
+    let Some(mut sounds) = sounds else { return };
+    *started = true;
+    let mut n = 0;
+    for c in level.layouts.iter().flat_map(|l| &l.actors).filter(|a| a.class == "AmbientSound").flat_map(|a| &a.components) {
+        let Some(cue) = cue_name(&c.props["Sound"]) else { continue };
+        let multiplier = c.props["VolumeMultiplier"].as_f64().map_or(1.0, |v| v as f32);
+        let o = &c.props["AttenuationOverrides"];
+        let area = (c.props["bOverrideAttenuation"].as_bool() == Some(true) && o["AttenuationShape"] == "EAttenuationShape::Box")
+            .then(|| c.world)
+            .flatten()
+            .map(|w| {
+                let e = |k: &str| o["AttenuationShapeExtents"][k].as_f64().unwrap_or(0.0) as f32;
+                (Vec3::from_array(w.t), Quat::from_array(w.r), Vec2::new(e("X"), e("Y")), o["FalloffDistance"].as_f64().unwrap_or(0.0) as f32)
+            });
+        if let Some((e, volume)) = spawn_2d(&mut commands, &assets, &mut sounds, &mut rng, &cue, true, multiplier) {
+            commands.entity(e).insert(Ambient { volume: volume * multiplier, area });
+            n += 1;
+        }
+    }
+    info!("ambience: {n} loops");
 }
 
 /// A player's volume heading for `target` (times its cue volume `base`) at `rate` per second; despawned at 0 if asked.
