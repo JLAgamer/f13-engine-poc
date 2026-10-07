@@ -29,6 +29,8 @@ pub struct Wall {
     pub broken: bool,
     pub section: Option<Entity>,
     pub collision: Option<Entity>,
+    /// BurstExplosionForce: how hard its section's chunks fly when it's broken through.
+    pub burst_force: f32,
 }
 
 impl Wall {
@@ -42,8 +44,12 @@ impl Wall {
             return false;
         }
         self.broken = true;
-        for e in [self.section, self.collision].into_iter().flatten() {
-            commands.entity(e).despawn();
+        // The section flies apart (BreakApart copies it), its collision goes.
+        if let Some(s) = self.section {
+            commands.entity(s).insert(Visibility::Hidden);
+        }
+        if let Some(c) = self.collision {
+            commands.entity(c).despawn();
         }
         true
     }
@@ -86,13 +92,13 @@ pub struct Door {
     pub visuals: Option<DoorVisuals>,
 }
 
-/// A door broken down or burst through: its leaf (its destructible mesh's chunks, the `Part` joints) flies apart from
-/// the blow at `from` with `force` (its Break/BurstExplosionForce). PLACEHOLDER: the APEX destructible's simulation
+/// A door broken down or burst through, a wall broken through: the destructible piece (its leaf, its section: the
+/// mesh's chunks, the `Part` joints) flies apart from the blow at `from` with `force` (its Break/BurstExplosionForce). PLACEHOLDER: the APEX destructible's simulation
 /// isn't ported; the chunks fly out from the blow (force / 1000 m/s, upward a little), spin, fall under gravity onto
 /// the door's floor and are gone after a few seconds.
 #[derive(Event, Clone, Copy, Debug)]
 pub struct BreakApart {
-    pub door: Entity,
+    pub piece: Entity,
     pub from: Vec3,
     pub force: f32,
 }
@@ -125,13 +131,15 @@ impl Plugin for DebrisPlugin {
     }
 }
 
-fn break_apart(ev: On<BreakApart>, mut commands: Commands, doors: Query<&Door>, leaves: Query<(&bevy::world_serialization::WorldAssetRoot, &GlobalTransform)>) {
-    let Ok(door) = doors.get(ev.door) else { return };
-    let Some(v) = &door.visuals else { return };
-    let Ok((scene, g)) = leaves.get(v.leaf) else { return };
+fn break_apart(
+    ev: On<BreakApart>,
+    mut commands: Commands,
+    pieces: Query<(&bevy::world_serialization::WorldAssetRoot, &GlobalTransform, Option<&crate::materials::MaterialOverrides>)>,
+) {
+    let Ok((scene, g, overrides)) = pieces.get(ev.piece) else { return };
     let at = g.compute_transform();
     let mut e = commands.spawn((bevy::world_serialization::WorldAssetRoot(scene.0.clone()), at, Debris { t: 0.0, from: ev.from, speed: (ev.force / 1000.0).min(10.0), floor: at.translation.y }));
-    if let Some(o) = &v.overrides {
+    if let Some(o) = overrides {
         e.insert(o.clone());
     }
 }

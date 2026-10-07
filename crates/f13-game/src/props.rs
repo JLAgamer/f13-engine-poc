@@ -401,6 +401,7 @@ fn spawn_props(
                 broken: false,
                 section: parts.get("DestructibleSection").copied(),
                 collision: hulls.get("Collision").copied(),
+                burst_force: classes.prop(&actor.class, "BurstExplosionForce").as_f64().map_or(2000.0, |v| v as f32),
             });
             *counts.entry("walls").or_default() += 1;
             let p = to_transform(&actor.transform);

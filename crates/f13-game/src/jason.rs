@@ -1625,7 +1625,9 @@ pub(crate) fn update_jason(
                     let health = d.health;
                     d.damage(health, false, &mut commands);
                     info!("Jason: burst through the door");
-                    commands.trigger(crate::doors::BreakApart { door: de, from: xf.translation, force: d.burst_force });
+                    if let Some(v) = &d.visuals {
+                        commands.trigger(crate::doors::BreakApart { piece: v.leaf, from: xf.translation, force: d.burst_force });
+                    }
                     commands.entity(d.pivot).insert(Visibility::Hidden);
                     for mut b in barricades.iter_mut().filter(|b| b.door == Some(de)) {
                         b.enabled = false;
@@ -1670,7 +1672,9 @@ pub(crate) fn update_jason(
                         hit = true;
                         if d.damage(t.world_damage, barred, &mut commands) {
                             info!("Jason: broke the door down");
-                            commands.trigger(crate::doors::BreakApart { door: de, from: xf.translation, force: d.break_force });
+                            if let Some(v) = &d.visuals {
+                                commands.trigger(crate::doors::BreakApart { piece: v.leaf, from: xf.translation, force: d.break_force });
+                            }
                             commands.entity(d.pivot).insert(Visibility::Hidden);
                             for mut b in barricades.iter_mut().filter(|b| b.door == Some(de)) {
                                 b.enabled = false;
@@ -1709,6 +1713,9 @@ pub(crate) fn update_jason(
                         hit = true;
                         if w.damage(t.world_damage, &mut commands) {
                             info!("Jason: broke through the wall");
+                            if let Some(s) = w.section {
+                                commands.trigger(crate::doors::BreakApart { piece: s, from: xf.translation, force: w.burst_force });
+                            }
                             commands.trigger(crate::audio::ActorSound { actor: we, prop: "WallDestroySoundCue" });
                         } else {
                             info!("Jason: hit the wall ({:.0} left)", w.health);

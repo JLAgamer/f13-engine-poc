@@ -122,7 +122,7 @@ Mechanics: Jason side
 - [x] Breaking walls (SCDestructibleWall in the cabin layouts): Jason breaks through a wall in his way (the player
       walking into it; the AI when it stands between him and her), the door break's montage and timing, his world
       damage against its BaseHealth 60; the section and its collision go
-- [ ] Breaking walls, remaining: the destructible chunks, the wall break montages, dust
+- [ ] Breaking walls, remaining: the wall break montages, dust (its section's chunks fly as the doors' do)
 - [x] Car interactions: Jason in front of (or behind) a moving car stops it dead (KillersInFrontOfCar); with the car
       under MinUseCarDoorSpeed (50 cm/s), Jason at the driver door pulls her out into his grab (the AI goes for the
       door; the player grabs)
