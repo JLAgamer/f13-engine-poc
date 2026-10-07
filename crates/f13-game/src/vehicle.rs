@@ -100,7 +100,7 @@ fn drive(
     mut ray_cast: MeshRayCast,
     vehicle_parts: Query<&VehiclePart>,
     player_parts: Query<(), With<PlayerPart>>,
-    jasons: Query<&Transform, (With<crate::jason::Jason>, Without<Vehicle>)>,
+    jasons: Query<(Entity, &Transform), (With<crate::jason::Jason>, Without<Vehicle>)>,
 ) {
     let dt = time.delta_secs();
     let (ref mut player, ref mut inv, p) = *player;
@@ -187,13 +187,17 @@ fn drive(
     // Jason in front of (or behind) the car stops it dead (KillersInFrontOfCar / KillersBehindCar: the car is blocked
     // while he's in its KillerFront/RearCollisionVolume).
     if v.speed != 0.0 {
-        let blocked = jasons.iter().any(|j| {
+        let blocked = jasons.iter().find(|(_, j)| {
             let local = xf.rotation.inverse() * (j.translation - xf.translation);
             let ahead = local.x * v.speed.signum();
             ahead > 0.0 && ahead < HALF_LENGTH_M + BLOCK_DEPTH_M && local.z.abs() < BLOCK_HALF_WIDTH_M && local.y.abs() < 2.0
         });
-        if blocked {
-            info!("Jason stopped the car ({:.0} cm/s)", v.speed);
+        if let Some((je, _)) = blocked {
+            // Hit at speed (not just nudged against him): he slams it.
+            if v.speed.abs() > 50.0 {
+                info!("Jason stopped the car ({:.0} cm/s)", v.speed);
+                commands.trigger(crate::jason::CarSlam { jason: je, car: xf.translation });
+            }
             v.speed = 0.0;
             return;
         }

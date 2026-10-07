@@ -1030,8 +1030,9 @@ static class Mvp
         $"{JasonAnim}/Interaction/Doors/AM_normal_stand_door_break_axe",
         // Destroying a fuse box (Jason_Generator_Destruction_Machete: his weapon isn't the axe).
         $"{JasonAnim}/Interaction/AM_Break_Electronic_Box_Machete",
-        // Pulling the driver out (DriverGrab's paired move).
+        // Pulling the driver out (DriverGrab's paired move); stopping a car dead.
         CarGrab[1],
+        $"{JasonAnim}/Car/AM_normal_stand_car_stop_slam",
         // Raged, he bursts through a closed door instead (BurstDoorFrom*: Jason_WallSmash).
         $"{JasonAnim}/Abilities/AM_Jason_uber_stand_wall_smash_02",
         .. JasonKills,

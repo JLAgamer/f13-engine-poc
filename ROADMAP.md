@@ -128,7 +128,8 @@ Mechanics: Jason side
       door; the player grabs)
 - [x] Pulled out of the car: Jason on the car's DriverGrab spot, both sides' paired take (AM_normal_stand_car_grab_left,
       she on his GrabSocket as in kills), into his grab
-- [ ] Car interactions, remaining: the slam montage, passengers, the car running counselors over
+- [x] A car hitting Jason at speed: he slams it (AM_normal_stand_car_stop_slam, its crash sound) as it stops dead
+- [ ] Car interactions, remaining: passengers, the car running counselors over
 
 Match
 - [x] Match flow (f13-core::game_mode, match_flow.rs): the game mode's states and timer, the end (dead or

@@ -486,7 +486,7 @@ fn act(
     mouse: Res<ButtonInput<MouseButton>>,
     tuning: Res<PlayerTuning>,
     mut rng: ResMut<crate::GameRng>,
-    mut player: Single<(Entity, &mut Transform, &mut Inventory, &mut Player), (Without<Driving>, Without<crate::hiding::Hiding>)>,
+    mut player: Single<(Entity, &mut Transform, &mut Inventory, &mut Player), (Without<Driving>, Without<crate::hiding::Hiding>, Without<crate::jason::Held>)>,
     items: Query<&Item>,
     (mut spots, model): (Query<(&mut crate::hiding::HidingSpot, &GlobalTransform)>, Option<Res<crate::character::CounselorCharacter>>),
     mut cabinets: Query<&mut Cabinet>,

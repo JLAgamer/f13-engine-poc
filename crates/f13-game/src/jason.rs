@@ -76,6 +76,29 @@ const ATTACK: &str = "combat_stand_2h_attack_light";
 const HEAVY_ATTACK: &str = "combat_stand_2h_attack_heavy";
 const GRAB_STARTUP: &str = "normal_grab_startup";
 const GRAB_ENTER: &str = "normal_grab_enter_1";
+/// Stopping a car dead: his take (AM_normal_stand_car_stop_slam).
+const CAR_SLAM: &str = "normal_stand_car_stop_slam_01";
+
+/// A car ran into Jason and stopped dead (vehicle.rs): he slams it, facing it, if he's free to.
+#[derive(Event, Clone, Copy, Debug)]
+pub struct CarSlam {
+    pub jason: Entity,
+    pub car: Vec3,
+}
+
+fn car_slam(ev: On<CarSlam>, mut commands: Commands, mut jasons: Query<(&mut Jason, &mut Transform)>) {
+    let Ok((mut j, mut xf)) = jasons.get_mut(ev.jason) else { return };
+    if !matches!(j.state, JasonState::Hunting) {
+        return;
+    }
+    let to = ev.car - xf.translation;
+    xf.rotation = Quat::from_rotation_y(to.x.atan2(to.z));
+    info!("Jason: slams the car");
+    j.state = JasonState::Slamming { t: 0.0 };
+    j.velocity = Vec2::ZERO;
+    commands.entity(ev.jason).insert(PlayAction(CAR_SLAM.into()));
+}
+
 /// Pulling the driver out of the car: both sides' take (AM_normal_stand_car_grab_left), played from DriverGrab.
 const CAR_GRAB: &str = "cinematic_car_grab_left";
 const GRAB_IDLE: &str = "normal_grab_idle";
@@ -185,6 +208,7 @@ impl Plugin for JasonPlugin {
             .add_systems(Startup, spawn_jason)
             .add_systems(FixedUpdate, (update_jason, recover_counselor, fly_knives, pick_up_knives))
             .add_observer(spawn_knife)
+            .add_observer(car_slam)
             .add_systems(Update, (tag_jason_parts, animate_jason));
     }
 }
@@ -301,6 +325,8 @@ pub enum JasonState {
     Throwing { t: f32, thrown: bool },
     /// Setting a trap: s into it.
     PlacingTrap { t: f32 },
+    /// Stopping a car dead (AM_normal_stand_car_stop_slam: his hands on its hood).
+    Slamming { t: f32 },
     /// Pulling the driver out of her car (DriverGrab's paired take), into his grab.
     PullingOut { t: f32 },
     /// Destroying a fuse box (Jason_Generator_Destruction_Machete's montage): it goes in the montage's
@@ -1033,6 +1059,7 @@ pub(crate) fn update_jason(
                         | JasonState::Throwing { .. }
                         | JasonState::PlacingTrap { .. }
                         | JasonState::BreakingFuse { .. }
+                        | JasonState::Slamming { .. }
                 );
             match h.stun {
                 Some(stun) if can_stun => {
@@ -1501,6 +1528,16 @@ pub(crate) fn update_jason(
                     commands.entity(je).remove::<PlayAction>();
                 } else {
                     j.state = JasonState::BreakingFuse { t: at, fuse, done };
+                }
+            }
+            JasonState::Slamming { t: at } => {
+                let at = at + dt;
+                j.velocity = Vec2::ZERO;
+                if at >= killer.length(CAR_SLAM).unwrap_or(1.87) {
+                    j.state = JasonState::Hunting;
+                    commands.entity(je).remove::<PlayAction>();
+                } else {
+                    j.state = JasonState::Slamming { t: at };
                 }
             }
             JasonState::PlacingTrap { t: at } => {
