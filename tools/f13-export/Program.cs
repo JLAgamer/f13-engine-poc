@@ -864,6 +864,10 @@ static class Mvp
         "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_ride_idle",
         "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_stand_car_enter_left",
         "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_exit_left",
+        // The barricade: pulling it down and pushing it up (Counselor_Barricade_Pulldown / PushUp; their UseBarricade
+        // driver windows).
+        $"{Shared}/Interaction/Barricade/AM_normal_stand_barricade_pulldown",
+        $"{Shared}/Interaction/Barricade/AM_normal_stand_barricade_pushup",
         // Pulled out of the car by Jason (the driver seat's CounselorGrabbedMontage).
         CarGrab[0],
         // Car repairs (the repair components' CounselorInteractAnim): her takes of each montage's sections.

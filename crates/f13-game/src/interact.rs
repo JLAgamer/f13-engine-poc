@@ -233,6 +233,44 @@ fn door_anim(opening: bool, inside: bool) -> &'static str {
 }
 
 /// Swings the door at the montage's window, and lets her go at its end.
+/// She's moving a door's barricade (Counselor_Barricade_Pulldown / PushUp): her take, the barricade going up or down
+/// as its UseBarricade driver window ends.
+#[derive(Component)]
+pub struct BarricadeMove {
+    door: Entity,
+    t: f32,
+    flip_at: f32,
+    length: f32,
+    flipped: bool,
+}
+
+/// Her takes pulling a barricade down and pushing it up.
+const BARRICADE_DOWN: &str = "f_normal_stand_barricade_pulldown";
+const BARRICADE_UP: &str = "f_normal_stand_barricade_pushup";
+
+fn barricade_moves(mut commands: Commands, time: Res<Time>, mut players: Query<(Entity, &mut BarricadeMove), With<Player>>, mut barricades: Query<&mut Barricade>) {
+    for (pe, mut m) in &mut players {
+        m.t += time.delta_secs();
+        if !m.flipped && m.t >= m.flip_at {
+            m.flipped = true;
+            if let Some(mut b) = barricades.iter_mut().find(|b| b.door == Some(m.door)) {
+                flip_barricade(&mut commands, &mut b);
+            }
+        }
+        if m.t >= m.length {
+            commands.entity(pe).remove::<(BarricadeMove, crate::character::PlayAction)>();
+        }
+    }
+}
+
+fn flip_barricade(commands: &mut Commands, b: &mut Barricade) {
+    b.enabled = !b.enabled;
+    if b.enabled {
+        commands.trigger(ClassScore::new(BARRICADE, "BarricadeDoorScoreEvent"));
+    }
+    info!("door {}", if b.enabled { "barricaded" } else { "unbarricaded" });
+}
+
 fn door_moves(
     mut commands: Commands,
     time: Res<Time>,
@@ -263,7 +301,7 @@ impl Plugin for InteractPlugin {
             .add_systems(Startup, spawn_prompt)
             .add_systems(
             Update,
-            (add_inventory, crate::windows::link_barricades, choose_target, act, door_moves, window_moves, repair_anims, drop_item, use_item, update_prompt)
+            (add_inventory, crate::windows::link_barricades, choose_target, act, door_moves, window_moves, barricade_moves, repair_anims, drop_item, use_item, update_prompt)
                 .chain()
                 .before(crate::doors::swing_doors),
         )
@@ -564,19 +602,25 @@ fn act(
             }
             if events.contains(&MinigameEvent::Completed) {
                 commands.entity(player_entity).remove::<(LockAnim, crate::character::PlayAction)>();
-                let what = match barricades.iter_mut().find(|b| b.door == Some(d)) {
-                    // A barricade only moves while the door is shut (OnUsedBarricade).
+                match barricades.iter_mut().find(|b| b.door == Some(d)) {
+                    // A barricade only moves while the door is shut (OnUsedBarricade): her take, the barricade moving
+                    // in its UseBarricade window.
                     Some(mut b) if !door.open => {
-                        b.enabled = !b.enabled;
-                        if b.enabled {
-                            commands.trigger(ClassScore::new(BARRICADE, "BarricadeDoorScoreEvent"));
+                        let anim = if b.enabled { BARRICADE_UP } else { BARRICADE_DOWN };
+                        match model.as_ref().and_then(|m| m.info.animations.get(anim)) {
+                            Some(t) => {
+                                let flip_at = t.window("Driver: UseBarricade").map_or(t.length * 0.5, |w| w.1);
+                                commands.entity(player_entity).insert((
+                                    BarricadeMove { door: d, t: 0.0, flip_at, length: t.length, flipped: false },
+                                    crate::character::PlayAction(anim.into()),
+                                ));
+                            }
+                            None => flip_barricade(&mut commands, &mut b),
                         }
-                        if b.enabled { "barricaded" } else { "unbarricaded" }
                     }
-                    Some(_) => "open (can't barricade)",
-                    None => door.toggle_lock(),
-                };
-                info!("door {what}");
+                    Some(_) => info!("door open (can't barricade)"),
+                    None => info!("door {}", door.toggle_lock()),
+                }
                 interaction.hold = None;
                 interaction.hold_done = true;
                 interaction.target = None;
