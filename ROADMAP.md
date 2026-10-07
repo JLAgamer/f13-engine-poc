@@ -169,8 +169,10 @@ Presentation
       her enter and exit takes with their root motion (enter ends in the seat, exit starts there)
 - [x] Starting off and stopping: her forward start (walk, run, sprint) as she sets off ahead, her stop (by her
       fastest gait, on the foot her last step left forward) as she halts; their footstep notifies (PLACEHOLDER rules)
-- [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: root rotation), turn in place
-      (the counselor has no turn takes), foot-marker sync (now normalised time), limp movement, aim offsets
+- [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: root rotation), foot-marker
+      sync (now normalised time), aim offsets (Base_Counselor_AnimBP's AimOffsets, the Hunter's poses on the shared
+      skeleton, by AimPitch while bIsAiming), BS_Run_Lean. Not in the game: turn-in-place takes, limp movement
+      (bShouldPlayWounded only swaps in F_hurt_stand_idle_01, done)
 - [x] Door special moves: her open and close takes (inside or outside), the leaf swinging in the montage's
       OpenCloseDoor driver window; she stands while they play
 - [x] Window special moves: her open and close takes (the pane moving in the montage's WindowMoveDriver window),
