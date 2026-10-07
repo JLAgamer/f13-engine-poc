@@ -2,6 +2,10 @@
 //! - **The phone box** (PhoneJunctionBox_BP) starts without its fuse. Its FuseRepair needs a PhoneBoxFuse_C (the
 //!   match spawns one, f13-core::spawn); installing it is a hold with the repair minigame (its Interactable's
 //!   HoldTimeLimit, 15 s) and scores its RepairScoreEvent. It enables the phone it's wired to (ConnectedPhone).
+//! - **Jason breaking the box** (Jason_PhoneBox_Destruction_Machete, jason.rs; DestroyBox): it's broken
+//!   (bIsBroken: the phone is disabled and a call in progress is cut off) until a counselor repairs it with its
+//!   Interactable's own minigame (15 s, its pips; no part). PLACEHOLDER: he can break it once its fuse is in and
+//!   until the police have been called (his CanInteractWith isn't read).
 //! - **The phone** (PolicePhone_BP): a 12 s hold (HoldTimeLimit) once enabled. When it's done the phone is used up,
 //!   the police are on their way (StartPoliceTimer: f13-core::game_mode), the world settings' PoliceCalledSFX
 //!   plays, she says her CallPolice line, and the phone's CallPoliceScoreEvent scores.
@@ -39,7 +43,12 @@ impl Plugin for PolicePlugin {
 pub struct PhoneBox {
     pub class: String,
     pub phone: Option<Entity>,
+    /// Its fuse is in.
     pub repaired: bool,
+    /// Jason broke it (bIsBroken).
+    pub broken: bool,
+    /// The broken box's own repair (its Interactable's minigame) has pips.
+    pub fix_pips: bool,
     /// Where it's worked on and where she stands (world, Bevy space).
     pub interact: Vec3,
     pub stand: Option<Transform>,
@@ -142,6 +151,8 @@ fn spawn_phones(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
                 class: a.class.clone(),
                 phone,
                 repaired: false,
+                broken: false,
+                fix_pips: classes.get(&a.class).and_then(|c| c.components.iter().find(|c| c.name == "Interactable")).is_some_and(|c| c.props["Pips"].as_array().is_some_and(|p| !p.is_empty())),
                 interact: interact.translation,
                 stand: world_of(&classes, &a.class, "InteractSpecialMove", &t),
                 reach: interact_prop(&classes, &a.class, "Interactable", "DistanceLimit").unwrap_or(150.0),
@@ -169,11 +180,33 @@ fn spawn_phones(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
     }
 }
 
-/// The phone box's fuse is in: its phone works.
+impl PhoneBox {
+    /// A counselor can work on it: to put the fuse in, or to repair it once Jason broke it.
+    pub fn needs_work(&self) -> bool {
+        !self.repaired || self.broken
+    }
+
+    /// Jason can break it: it works, and the police haven't been called.
+    pub fn breakable(&self, phones: &Query<&mut Phone>) -> bool {
+        self.repaired && !self.broken && self.phone.and_then(|e| phones.get(e).ok()).is_some_and(|p| !p.called)
+    }
+}
+
+/// The phone box works again (its fuse in, or repaired after Jason broke it): so does its phone, unless it's been
+/// used.
 pub fn repair_phone_box(b: &mut PhoneBox, phones: &mut Query<&mut Phone>) {
     b.repaired = true;
+    b.broken = false;
     if let Some(mut p) = b.phone.and_then(|e| phones.get_mut(e).ok()) {
-        p.enabled = true;
+        p.enabled = !p.called;
+    }
+}
+
+/// Jason broke the phone box (DestroyBox): its phone stops working.
+pub fn break_phone_box(b: &mut PhoneBox, phones: &mut Query<&mut Phone>) {
+    b.broken = true;
+    if let Some(mut p) = b.phone.and_then(|e| phones.get_mut(e).ok()) {
+        p.enabled = false;
     }
 }
 

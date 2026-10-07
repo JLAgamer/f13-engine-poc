@@ -802,6 +802,8 @@ static class Mvp
         "/Game/Sounds/GamePlay/VHS_SFXCue.VHS_SFXCue",
         // The world settings' PoliceCalledSFX (the call goes through).
         "/Game/Sounds/GamePlay/PoliceCalled.PoliceCalled",
+        // AM_Break_Phone_Box_Machete's (its take is the fuse box break's, whose sound wins by take).
+        "/Game/Sounds/GamePlay/PhoneBoxImpact.PhoneBoxImpact",
     ];
     // Animations f13-game plays on the counselor: Athlete_AnimBP's female overrides of Base_Counselor_AnimBP's
     // locomotion (BS_F_Normal_Move: idle, walk, run, sprint; BS_F_Combat strafing), crouch, wounded idle, and the
@@ -1063,6 +1065,8 @@ static class Mvp
         $"{JasonAnim}/Interaction/Doors/AM_normal_stand_door_break_axe",
         // Destroying a fuse box (Jason_Generator_Destruction_Machete: his weapon isn't the axe).
         $"{JasonAnim}/Interaction/AM_Break_Electronic_Box_Machete",
+        // Breaking the phone box (Jason_PhoneBox_Destruction_Machete).
+        $"{JasonAnim}/Interaction/AM_Break_Phone_Box_Machete",
         // Pulling the driver out (DriverGrab's paired move); stopping a car dead.
         CarGrab[1],
         $"{JasonAnim}/Car/AM_normal_stand_car_stop_slam",

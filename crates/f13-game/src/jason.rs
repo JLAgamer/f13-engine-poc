@@ -184,6 +184,13 @@ const KNIFE_THROW: &str = "normal_stand_knife_throw_01";
 const TRAP_SET: &str = "normal_stand_trap_set";
 /// Destroying a fuse box: AM_Break_Electronic_Box_Machete's take.
 const BREAK_FUSE: &str = "normal_stand_door_break_machete_enter";
+/// Breaking the phone box: the same take in AM_Break_Phone_Box_Machete (its own sound).
+const BREAK_PHONE_BOX: &str = "AM_Break_Phone_Box_Machete";
+
+/// The montage his action plays in, when its take's sounds differ by montage (anim_sounds.json's
+/// "montage/take" entries).
+#[derive(Component)]
+pub struct ActionSounds(pub &'static str);
 const MORPH_MIN_M: f32 = 50.0;
 const STALK_RANGE_M: f32 = 40.0;
 /// He starts a hiding spot's search or kill this close (m) to its spot.
@@ -334,8 +341,9 @@ pub enum JasonState {
     Slamming { t: f32 },
     /// Pulling the driver out of her car (DriverGrab's paired take), into his grab.
     PullingOut { t: f32 },
-    /// Destroying a fuse box (Jason_Generator_Destruction_Machete's montage): it goes in the montage's
-    /// DestroyGenerator driver window.
+    /// Destroying a fuse box (Jason_Generator_Destruction_Machete's montage), or the phone box
+    /// (Jason_PhoneBox_Destruction_Machete's: the same take): it goes in the montage's DestroyGenerator driver
+    /// window.
     BreakingFuse { t: f32, fuse: Entity, done: bool },
     /// The counselor is dead.
     Done,
@@ -978,11 +986,11 @@ pub(crate) fn update_jason(
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
     (mut rng, mut struggle, mut controls, config): (ResMut<crate::GameRng>, ResMut<Struggle>, Option<ResMut<crate::jason_player::JasonControls>>, Res<JasonConfig>),
     (mut jasons, morph_points): (Query<(Entity, &mut Jason, &mut Transform, Option<&HitJason>, Option<&mut crate::senses::Knowledge>), Without<Player>>, Option<Res<MorphPoints>>),
-    (inventories, items, mut fuse_boxes, mut grids, vehicles): (
+    (inventories, items, mut fuse_boxes, (mut grids, mut phone_boxes, mut phones), vehicles): (
         Query<&crate::interact::Inventory>,
         Query<&crate::props::Item>,
         Query<(Entity, &mut crate::power::FuseBox)>,
-        Option<ResMut<crate::power::PowerGrids>>,
+        (Option<ResMut<crate::power::PowerGrids>>, Query<(Entity, &mut crate::police::PhoneBox)>, Query<&mut crate::police::Phone>),
         Query<(&crate::props::Vehicle, &GlobalTransform)>,
     ),
     mut players: Query<(Entity, &mut Player, &mut Transform, Option<&crate::vehicle::Driving>, Option<&mut crate::hiding::Hiding>, Has<crate::items::Blocking>), Without<Jason>>,
@@ -1193,6 +1201,16 @@ pub(crate) fn update_jason(
                             j.state = JasonState::BreakingFuse { t: 0.0, fuse: fe, done: false };
                             j.velocity = Vec2::ZERO;
                             commands.entity(je).insert(PlayAction(BREAK_FUSE.into()));
+                            continue;
+                        }
+                        let near = |at: Vec3, reach: f32| Vec2::new(at.x - here.x, at.z - here.z).length() * 100.0 <= reach + 100.0;
+                        if let Some((be, b)) = phone_boxes.iter().find(|(_, b)| b.breakable(&phones) && near(b.interact, b.reach)) {
+                            info!("Jason: breaking the phone box");
+                            let to = b.interact - xf.translation;
+                            xf.rotation = Quat::from_rotation_y(to.x.atan2(to.z));
+                            j.state = JasonState::BreakingFuse { t: 0.0, fuse: be, done: false };
+                            j.velocity = Vec2::ZERO;
+                            commands.entity(je).insert((PlayAction(BREAK_FUSE.into()), ActionSounds(BREAK_PHONE_BOX)));
                             continue;
                         }
                     }
@@ -1529,10 +1547,14 @@ pub(crate) fn update_jason(
                         crate::power::set_destroyed(&mut f, true, g);
                         info!("Jason: destroyed a fuse box");
                     }
+                    if let Ok((_, mut b)) = phone_boxes.get_mut(fuse) {
+                        crate::police::break_phone_box(&mut b, &mut phones);
+                        info!("Jason: broke the phone box");
+                    }
                 }
                 if at >= killer.length(BREAK_FUSE).unwrap_or(2.0) {
                     j.state = JasonState::Hunting;
-                    commands.entity(je).remove::<PlayAction>();
+                    commands.entity(je).remove::<(PlayAction, ActionSounds)>();
                 } else {
                     j.state = JasonState::BreakingFuse { t: at, fuse, done };
                 }
@@ -2082,7 +2104,7 @@ fn animate_jason(
     time: Res<Time>,
     killer: Option<Res<KillerCharacter>>,
     tuning: Option<Res<KillerTuning>>,
-    jasons: Query<(&Jason, Option<&PlayAction>)>,
+    jasons: Query<(&Jason, Option<&PlayAction>, Option<&ActionSounds>)>,
     players: Query<&Transform, With<Player>>,
     owners: Query<&Transform, With<Jason>>,
     mut rigs: Query<(&ChildOf, &mut Rig, &mut AnimationPlayer)>,
@@ -2094,10 +2116,13 @@ fn animate_jason(
         if rig.model != Model::Killer {
             continue;
         }
-        let Ok((j, action)) = jasons.get(parent.parent()) else { continue };
+        let Ok((j, action, montage)) = jasons.get(parent.parent()) else { continue };
         rig.set_action(action.map(|a| a.0.as_str()), dt);
         if let Ok(at) = owners.get(parent.parent()) {
-            crate::audio::play_anim_sounds(&mut commands, anim_sounds.as_deref(), rig.action_span(dt), at.translation);
+            let span = rig.action_span(dt);
+            let keyed = montage.zip(span).map(|(m, (take, from, to))| (format!("{}/{take}", m.0), from, to));
+            let span = keyed.as_ref().map(|(k, from, to)| (k.as_str(), *from, *to)).or(span);
+            crate::audio::play_anim_sounds(&mut commands, anim_sounds.as_deref(), span, at.translation);
         }
         // BS_Jason_Normal_Move's SpeedState: 0 idle, 1 walk, 2 fast walk, 3 run.
         let speed = j.velocity.length();

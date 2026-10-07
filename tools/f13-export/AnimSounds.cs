@@ -43,7 +43,13 @@ static class AnimSounds
             var obj = Load(provider, path);
             if (obj is UAnimMontage m)
             {
-                foreach (var (seq, segment) in BySegment(m)) Add(seq, segment);
+                // By the sequence, and by the montage too (montages sharing a take can sound different: the fuse
+                // box's and the phone box's breaks).
+                foreach (var (seq, segment) in BySegment(m))
+                {
+                    Add(seq, segment);
+                    Add($"{m.Name}/{seq}", segment);
+                }
                 continue;
             }
             if (obj == null) continue;

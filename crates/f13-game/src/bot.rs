@@ -3,7 +3,8 @@
 //! find the keys and each part the car needs (searching cabinets on the way), install the parts, get in, start it
 //! with the keys, then drive into a car escape zone. Logs every step; exits when it escapes (or gives up).
 //!
-//! `--bot-police`: fetch the phone box's fuse, put it in, call the police on its phone, then (the countdown cut
+//! `--bot-police`: fetch the phone box's fuse, put it in, repair the box once it's broken (as Jason breaks it),
+//! call the police on its phone, then (the countdown cut
 //! to 10 s) walk into the escape volume they open; exits when she escapes.
 //! `--bot-heal`: fetch a first aid spray and use it (start hurt with `--health`); exits when healed.
 //! `--bot-door`: doors, barricades and windows ([`FX_STEPS`]): open/close/lock/unlock the nearest lockable door,
@@ -275,7 +276,7 @@ fn run_bot(
         Query<(Entity, &crate::power::FuseBox, &Transform), (Without<Player>, Without<Vehicle>)>,
         Option<Res<crate::power::PowerGrids>>,
     ),
-    (collision, dynamic, (phone_boxes, phones, arrived, police_cars)): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, (Query<&crate::police::PhoneBox>, Query<&crate::police::Phone>, Option<Res<crate::police::PoliceArrived>>, Query<&Transform, (With<crate::police::PoliceCar>, Without<Player>, Without<Vehicle>)>)),
+    (collision, dynamic, (mut phone_boxes, mut phones, arrived, police_cars)): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<Res<crate::police::PoliceArrived>>, Query<&Transform, (With<crate::police::PoliceCar>, Without<Player>, Without<Vehicle>)>)),
 ) {
     let world = collision.with(&dynamic);
     let dt = time.delta_secs();
@@ -900,6 +901,17 @@ fn run_bot(
             }
         }
         Step::Police(stage) => {
+            // Breaking the box after its fuse is in (as Jason's DestroyBox does), once, so she repairs it too.
+            if stage == 2 && !bot.jason_shots.contains(&"box broken") {
+                if let Some(mut b) = phone_boxes.iter_mut().find(|b| b.phone.is_some()) {
+                    bot.jason_shots.push("box broken");
+                    crate::police::break_phone_box(&mut b, &mut phones);
+                    info!("bot: the phone box is broken; repairing it");
+                    bot.step = Step::Police(1);
+                    bot.timer = 0.0;
+                    return;
+                }
+            }
             let Some(pb) = phone_boxes.iter().find(|b| b.phone.is_some()) else {
                 error!("bot: no phone box");
                 bot.step = Step::Done;
@@ -939,7 +951,7 @@ fn run_bot(
                     }
                 }
                 1 => {
-                    if pb.repaired {
+                    if pb.repaired && !pb.broken {
                         info!("bot: phone box repaired after {:.1}s", bot.timer);
                         bot.hold_e = false;
                         bot.step = Step::Police(2);

@@ -498,7 +498,7 @@ fn choose_target(
         }
     }
     for (e, b) in &phone_boxes {
-        if !b.repaired && has_part(inv, &carried, &b.parts) {
+        if b.broken || (!b.repaired && has_part(inv, &carried, &b.parts)) {
             consider(b.interact, b.reach, Target::PhoneBox(e));
         }
     }
@@ -651,8 +651,15 @@ fn act(
             interaction.target = None;
         }
         Target::PhoneBox(b) => {
-            // Putting the fuse in: a hold with the repair minigame, on its special move's spot.
+            // Putting the fuse in (its FuseRepair) or repairing it after Jason broke it (its Interactable): a hold
+            // with the repair minigame, on its special move's spot.
             let Ok(mut pb) = phone_boxes.get_mut(b) else { return };
+            if !pb.needs_work() {
+                interaction.hold = None;
+                interaction.target = None;
+                return;
+            }
+            let fixing = pb.repaired;
             if !keys.pressed(KeyCode::KeyE) {
                 if interaction.hold.take().is_some_and(|h| h.started) {
                     info!("phone box repair cancelled");
@@ -660,7 +667,7 @@ fn act(
                 }
                 return;
             }
-            let hold = interaction.hold.get_or_insert_with(|| HoldInteraction::new(pb.hold_time, pb.has_pips));
+            let hold = interaction.hold.get_or_insert_with(|| HoldInteraction::new(pb.hold_time, if fixing { pb.fix_pips } else { pb.has_pips }));
             let mut events = Vec::new();
             for (button, key) in [(MouseButton::Right, 0), (MouseButton::Left, 1)] {
                 if mouse.just_pressed(button) {
@@ -669,7 +676,7 @@ fn act(
             }
             hold.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
             if events.contains(&MinigameEvent::Started) {
-                info!("phone box repair started: {} pips, {:.1}s", hold.pips.len(), hold.hold_time);
+                info!("phone box {} started: {} pips, {:.1}s", if fixing { "repair" } else { "fuse" }, hold.pips.len(), hold.hold_time);
                 if let Some(stand) = pb.stand {
                     stand_on(player_xf, stand);
                 }
@@ -678,12 +685,14 @@ fn act(
             if !events.contains(&MinigameEvent::Completed) {
                 return;
             }
-            let parts = pb.parts.clone();
-            let Some(used) = take_part(inv, &items, &parts) else { return };
-            commands.entity(used).despawn();
+            if !fixing {
+                let parts = pb.parts.clone();
+                let Some(used) = take_part(inv, &items, &parts) else { return };
+                commands.entity(used).despawn();
+            }
             crate::police::repair_phone_box(&mut pb, &mut phones);
             end_repair_anim(&mut commands, player_entity, Some(&crate::police::PHONE_BOX_TAKE.to_string()), true);
-            info!("phone box repaired: the phone works");
+            info!("phone box {}: the phone works", if fixing { "repaired" } else { "fused" });
             commands.trigger(crate::audio::ActorSound { actor: player_entity, prop: "VO:AppliedLastPart" });
             commands.trigger(ClassScore::new(&pb.class, "RepairScoreEvent"));
             interaction.hold = None;
@@ -692,6 +701,15 @@ fn act(
         Target::Phone(ph) => {
             // Calling the police: a plain hold (no pips) on the phone's spot.
             let Ok(mut phone) = phones.get_mut(ph) else { return };
+            // Its box broken under her (Jason): the call is cut off.
+            if !phone.enabled {
+                if interaction.hold.take().is_some_and(|h| h.started) {
+                    info!("phone call cut off");
+                    end_repair_anim(&mut commands, player_entity, Some(&crate::police::PHONE_TAKE.to_string()), false);
+                }
+                interaction.target = None;
+                return;
+            }
             if !keys.pressed(KeyCode::KeyE) {
                 if interaction.hold.take().is_some_and(|h| h.started) {
                     info!("phone call cancelled");
@@ -950,7 +968,7 @@ fn update_prompt(
     (windows, barricades): (Query<&Window>, Query<&Barricade>),
     player: Single<(&Inventory, Has<Driving>, &Transform, Option<&UsingItem>, &Player, Has<crate::jason::Held>, Option<&crate::hiding::Hiding>)>,
     items: Query<&Item>,
-    vehicles: Query<&Vehicle>,
+    (vehicles, phone_boxes): (Query<&Vehicle>, Query<&crate::police::PhoneBox>),
     mut text: Single<&mut Text, With<PromptText>>,
 ) {
     let (inv, driving, _, using, p, held, hiding) = *player;
@@ -997,10 +1015,14 @@ fn update_prompt(
             }
             Some(Target::Seat(_)) => lines.push("[E] Get in (driver)".into()),
             Some(Target::Hide(_)) => lines.push("[E] Hide".into()),
-            Some(Target::PhoneBox(_)) => lines.push(match &interaction.hold {
-                Some(h) if h.started => format!("Putting the fuse in: {:.0}%", h.progress(&tuning.minigame) * 100.0),
-                _ => "[Hold E] Put the fuse in the phone box".into(),
-            }),
+            Some(Target::PhoneBox(b)) => {
+                let fixing = phone_boxes.get(b).is_ok_and(|b| b.repaired);
+                lines.push(match &interaction.hold {
+                    Some(h) if h.started => format!("{}: {:.0}%", if fixing { "Repairing the phone box" } else { "Putting the fuse in" }, h.progress(&tuning.minigame) * 100.0),
+                    _ if fixing => "[Hold E] Repair the phone box".into(),
+                    _ => "[Hold E] Put the fuse in the phone box".into(),
+                });
+            }
             Some(Target::Phone(_)) => lines.push(match &interaction.hold {
                 Some(h) if h.started => format!("Calling the police: {:.0}%", h.progress(&tuning.minigame) * 100.0),
                 _ => "[Hold E] Call the police".into(),

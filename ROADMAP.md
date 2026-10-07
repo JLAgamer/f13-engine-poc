@@ -145,9 +145,10 @@ Match
       (AM_normal_stand_use_phone, PoliceCalled, her CallPolice line), PoliceResponseTime's countdown, the police car at a
       random unobstructed spawner (its siren, its turning lights), the level's blocker coming down, its escape volume
       opening, Jason turned back from it, escaping on foot (walking its ExitPath for its 6 s EscapeDelay); the HUD's
-      police timer (ShowPoliceTimer, PoliceTimerText)
-- [ ] Police, remaining: the escape's camera spline, the minimap icon, Jason breaking the phone box
-      (Jason_PhoneBox_Destruction), his police stun (combat_stand_stunned_police)
+      police timer (ShowPoliceTimer, PoliceTimerText); Jason (played) breaking the phone box
+      (AM_Break_Phone_Box_Machete, PhoneBoxImpact): the phone dead, a call cut off, until it's repaired (its own minigame)
+- [ ] Police, remaining: the escape's camera spline, the minimap icon, his police stun (combat_stand_stunned_police),
+      the phone box's broken mesh and lights, the computer Jason breaking boxes
 - [ ] Match flow, remaining: lobby, level intro and outro sequences, the Tommy Jarvis timer, badges, Jason
       dying
 - [x] Item and car spawning, as the game mode does it (f13-core::spawn, f13-data::world)
