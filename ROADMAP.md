@@ -234,8 +234,9 @@ Presentation
   item use (first aid, flare, firecracker, trap), swings, dodges, doors, locks, windows, hiding spots, repairs,
   Jason's swings, door breaking, knives, traps and kills; the cycles' (the swim strokes) by their phase; the map's
   ambience (CrystalLake_Sm_Audio's AmbientSounds: the campground and mood tone loops, the lake's within its box
-  attenuation); the car's horn (H) and brakes (their audio components' cues). Remaining: the other stingers, scary
-  sounds, voices, the audio volumes' reverb
+  attenuation); the car's horn (H) and brakes (their audio components' cues); her voice lines (Impact, Wounded,
+  Choke, Stumble, Died, swings, windows, each kill's, stunning Jason, car parts fitted; PLACEHOLDER triggers). Remaining:
+  the other stingers, scary sounds, the other voice lines (chases, calls, dead bodies), the audio volumes' reverb
 
 Setup
 - [x] Tools refuse a packed (stock) install with a clear message; they need the content extracted to loose files

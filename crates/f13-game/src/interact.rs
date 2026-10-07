@@ -577,6 +577,8 @@ fn act(
             vehicle.repairs[i].done = true;
             end_repair_anim(&mut commands, player_entity, vehicle.repairs[i].anim.as_ref(), true);
             info!("{}: {} installed", vehicle.class, vehicle.repairs[i].name);
+            let last = vehicle.repairs.iter().all(|r| r.done);
+            commands.trigger(crate::audio::ActorSound { actor: player_entity, prop: if last { "VO:AppliedLastPart" } else { "VO:AppliedPart" } });
             commands.trigger(ClassScore::new(&vehicle.class, "PartRepairedScoreEvent"));
             if vehicle.repairs.iter().all(|r| r.done) {
                 commands.trigger(ClassScore::new(&vehicle.class, "VehicleRepairedScoreEvent"));

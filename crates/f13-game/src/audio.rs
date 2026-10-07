@@ -50,7 +50,7 @@ impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_sounds)
             .init_resource::<MusicState>()
-            .add_systems(Update, (add_listener, attenuate, actor_sounds, counselor_music, near_music, fades, ambience).chain())
+            .add_systems(Update, (add_listener, attenuate, actor_sounds, counselor_music, near_music, fades, ambience, voices).chain())
             .add_observer(play_sound)
             .add_observer(footstep)
             .add_observer(actor_sound)
@@ -225,6 +225,63 @@ fn spawn_2d(commands: &mut Commands, assets: &AssetServer, sounds: &mut Sounds, 
     let mode = if looping || v.looping { PlaybackSettings::LOOP } else { PlaybackSettings::DESPAWN };
     let settings = PlaybackSettings { volume: Volume::Linear(v.volume * volume), speed: v.pitch, ..mode };
     Some((commands.spawn((AudioPlayer::new(assets.load(format!("sounds/{}", v.file))), settings)).id(), v.volume))
+}
+
+/// The line her voice object says as an action starts (its take): swings, windows, the kills.
+fn action_line(take: &str) -> Option<&'static str> {
+    Some(match take {
+        t if t.contains("_melee_heavy") => "VO:WeaponSwingHeavy",
+        t if t.contains("_melee_light") => "VO:WeaponSwing",
+        t if t.contains("window_climb") => "VO:ClimbThroughWindow",
+        "f_normal_stand_window_dive" => "VO:WindowDiveStart",
+        "f_normal_dive_land_01" => "VO:WindowDiveLand",
+        "cinematic_pickaxe_throathack" => "VO:PickAxeThroatHackKill",
+        "cinematic_pickaxe_head_canopener" => "VO:CanOpenerKill",
+        "cinematic_pickaxe_curbstomp" => "VO:CurbStompKill",
+        "cinematic_pickaxe_sweeptheleg" => "VO:SweepTheLegKill",
+        "cinematic_pickaxe_toppopper" => "VO:TopPopperKill",
+        "cinematic_hidespot_closet_kill_Axe" => "VO:HIdeSpotClosetAxeKill",
+        "cinematic_hidespot_bed_kill_Axe" => "VO:AxeBedKill",
+        _ => return None,
+    })
+}
+
+/// Her voice lines (her VoiceOverObjectClass's, as her class sounds) on what happens to her: Impact when she's hurt,
+/// Wounded as she becomes wounded, Choke when grabbed, Stumble, Died (a death outside a kill), and each action's line
+/// as it starts (swings, windows, kills: [`action_line`]). PLACEHOLDER: the game's voice component picks these on its
+/// own events, not read; the hiding lines are hiding.rs's.
+#[allow(clippy::type_complexity)]
+fn voices(
+    mut commands: Commands,
+    mut last: Local<Option<(f32, bool, bool, Option<String>, Option<String>, bool)>>,
+    players: Query<(Entity, &Player, Option<&crate::character::PlayAction>, Has<crate::jason::Held>), With<ClassSounds>>,
+) {
+    let Ok((pe, p, action, held)) = players.single() else { return };
+    let c = &p.counselor;
+    let now = (c.health, c.wounded, held, action.map(|a| a.0.clone()), p.montage.clone(), c.alive());
+    let Some((health, wounded, was_held, was_action, was_montage, was_alive)) = last.replace(now.clone()) else { return };
+    let mut say = |line: &'static str| commands.trigger(ActorSound { actor: pe, prop: line });
+    let kill = |a: &Option<String>| a.as_deref().and_then(action_line).is_some_and(|l| l.ends_with("Kill"));
+    let in_kill = kill(&now.3) || kill(&was_action);
+    if !now.5 && was_alive && !in_kill {
+        say("VO:Died");
+    } else if now.0 < health && now.5 {
+        say("VO:Impact");
+    }
+    if now.1 && !wounded && now.5 {
+        say("VO:Wounded");
+    }
+    if now.2 && !was_held {
+        say("VO:Choke");
+    }
+    if now.4.as_deref().is_some_and(|m| m.contains("stumble")) && now.4 != was_montage {
+        say("VO:Stumble");
+    }
+    if now.3 != was_action {
+        if let Some(line) = now.3.as_deref().and_then(action_line) {
+            say(line);
+        }
+    }
 }
 
 /// One of the map's ambient loops (its AmbientSounds' AudioComponents): its volume (cue volume times

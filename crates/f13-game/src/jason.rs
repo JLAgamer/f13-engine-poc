@@ -1038,6 +1038,7 @@ pub(crate) fn update_jason(
                 Some(stun) if can_stun => {
                     info!("Jason: stunned ({stun:?}, {:.0}s)", stun.seconds());
                     commands.trigger(Score(stun.score_event()));
+                    commands.trigger(crate::audio::ActorSound { actor: pe, prop: "VO:JasonStun" });
                     if matches!(j.state, JasonState::Holding { .. }) {
                         release(&mut commands, pe, GRAB_BREAK, counselor_model.as_deref());
                     }

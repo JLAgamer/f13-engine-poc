@@ -471,7 +471,10 @@ pub(crate) fn animate(
         };
         rig.last_speed = speed;
         rig.set_action(action.or(transition), dt);
-        crate::audio::play_anim_sounds(&mut commands, anim_sounds.as_deref(), rig.action_span(dt), xf.translation);
+        // Paired takes (kills, the car grab: the same names on both) sound from Jason's side.
+        if !rig.action.as_ref().is_some_and(|(a, _)| a.starts_with("cinematic_")) {
+            crate::audio::play_anim_sounds(&mut commands, anim_sounds.as_deref(), rig.action_span(dt), xf.translation);
+        }
 
         let mut targets: HashMap<&str, f32> = HashMap::new();
         if rig.action.as_ref().is_some_and(|(a, _)| !character.clips.contains_key(a.as_str())) {
