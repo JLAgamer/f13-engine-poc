@@ -37,7 +37,7 @@
 //! - the colour grading LUT, ColorContrast and bloom;
 //! - the sky's texture (clouds, stars): the sky is its material's ColorTint × Overall;
 //! - rain (CLsm_RainOn);
-//! - power cuts (PoweredSpotLight is always on).
+//! - the power's flicker curves (power.rs turns lights off and on).
 
 use bevy::camera::Exposure;
 use bevy::core_pipeline::tonemapping::Tonemapping;
@@ -69,6 +69,8 @@ pub struct PlacedLight {
     pub kind: LightKind,
     pub world: Xform,
     pub props: Map<String, Value>,
+    /// A Powered{Spot,Point}LightComponent: on while its power grid is (power.rs).
+    pub powered: bool,
 }
 
 impl PlacedLight {
@@ -82,6 +84,21 @@ impl PlacedLight {
 
     pub fn visible(&self) -> bool {
         self.flag("bVisible", true)
+    }
+
+    /// The component's name in its actor.
+    pub fn name(&self) -> &str {
+        self.props.get("ComponentName").and_then(Value::as_str).unwrap_or("")
+    }
+
+    /// The power grid that feeds it (a powered light in a grid's box), or that a fuse box's power-out light watches.
+    pub fn grid(&self, grids: &crate::power::PowerGrids) -> Option<usize> {
+        (self.powered || self.is_power_out()).then(|| grids.grid_at(self.position())).flatten()
+    }
+
+    /// A fuse box's light for a power cut (hidden until then).
+    pub fn is_power_out(&self) -> bool {
+        self.name() == "PowerOutPointLight"
     }
 
     /// Unreal space (cm, Z up): the light's position and the direction it shines (its +X).
@@ -143,7 +160,7 @@ fn unreal_falloff_lumens(intensity: f32, r: f32, exponent: f32) -> f32 {
 }
 
 /// Every component the level places whose type `keep` accepts: (type, world transform, properties), the placed
-/// actor's own values over its class's.
+/// actor's own values over its class's; the properties also hold the component's name (`ComponentName`).
 pub fn placed_components(level: &crate::Level, classes: &ClassDb, keep: impl Fn(&str) -> bool) -> Vec<(String, Xform, Map<String, Value>)> {
     let mut out = Vec::new();
     for a in level.layouts.iter().flat_map(|l| &l.actors) {
@@ -162,6 +179,7 @@ pub fn placed_components(level: &crate::Level, classes: &ClassDb, keep: impl Fn(
                     props.insert(k.clone(), v.clone());
                 }
             }
+            props.insert("ComponentName".into(), Value::String(c.name.clone()));
             out.push((c.kind.clone(), world, props));
         }
     }
@@ -183,7 +201,7 @@ pub fn placed_lights(level: &crate::Level, classes: &ClassDb) -> Vec<PlacedLight
     };
     placed_components(level, classes, |k| kind(k).is_some())
         .into_iter()
-        .map(|(k, world, props)| PlacedLight { kind: kind(&k).unwrap(), world, props })
+        .map(|(k, world, props)| PlacedLight { kind: kind(&k).unwrap(), world, props, powered: k.starts_with("Powered") })
         .collect()
 }
 
@@ -262,9 +280,11 @@ fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
         }
     };
     let lights = placed_lights(&level, &classes);
+    let grids = crate::power::PowerGrids::from_level(&level);
     let mut moon = false;
     let (mut points, mut spots) = (0, 0);
-    for l in lights.iter().filter(|l| l.visible() && l.flag("bAffectsWorld", true)) {
+    for l in lights.iter().filter(|l| (l.visible() || l.is_power_out()) && l.flag("bAffectsWorld", true)) {
+        let grid = l.grid(&grids);
         let at = to_bevy(l.position());
         let dir = to_bevy(l.direction()).normalize_or(Vec3::NEG_Y);
         match l.kind {
@@ -283,18 +303,33 @@ fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
                 let range = l.radius() / 100.0;
                 let fade = DrawDistance { max: l.num("MaxDrawDistance", 0.0) / 100.0, fade: l.num("MaxDistanceFadeRange", 0.0) / 100.0, lumens };
                 let xf = Transform::from_translation(at).looking_to(dir, if dir.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y });
-                if l.kind == LightKind::Point {
+                let e = if l.kind == LightKind::Point {
                     points += 1;
-                    commands.spawn((PointLight { color: l.color().into(), intensity: lumens, range, shadow_maps_enabled: false, ..default() }, xf, fade));
+                    commands.spawn((PointLight { color: l.color().into(), intensity: lumens, range, shadow_maps_enabled: false, ..default() }, xf, fade)).id()
                 } else {
                     spots += 1;
                     let (inner, outer) = l.cone();
                     let outer = outer.clamp(0.5, 89.0).to_radians();
-                    commands.spawn((
-                        SpotLight { color: l.color().into(), intensity: lumens, range, inner_angle: inner.to_radians().min(outer), outer_angle: outer, shadow_maps_enabled: false, ..default() },
-                        xf,
-                        fade,
-                    ));
+                    commands
+                        .spawn((
+                            SpotLight { color: l.color().into(), intensity: lumens, range, inner_angle: inner.to_radians().min(outer), outer_angle: outer, shadow_maps_enabled: false, ..default() },
+                            xf,
+                            fade,
+                        ))
+                        .id()
+                };
+                // Power (power.rs): powered lights follow their grid, a fuse box's power-out light waits for a cut.
+                match (grid, l.is_power_out()) {
+                    (Some(g), true) => {
+                        commands.entity(e).insert((crate::power::PowerOutLight(g), Visibility::Hidden));
+                    }
+                    (Some(g), false) => {
+                        commands.entity(e).insert(crate::power::Powered(g));
+                    }
+                    (None, true) => {
+                        commands.entity(e).despawn();
+                    }
+                    _ => {}
                 }
             }
         }

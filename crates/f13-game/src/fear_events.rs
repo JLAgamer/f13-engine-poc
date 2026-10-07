@@ -44,6 +44,8 @@ pub struct FearTuning {
 #[derive(Resource, Default)]
 pub struct Surroundings {
     pub lights: Vec<Light>,
+    /// Each light's power grid (power.rs): it only lights while that grid is on.
+    light_grids: Vec<Option<usize>>,
     /// SCIndoorComponent boxes: transform and half extent.
     indoors: Vec<(Xform, Vec3)>,
     /// Item class -> its PickedUpFearEvent.
@@ -116,11 +118,11 @@ fn load_surroundings(mut commands: Commands, level: Res<crate::Level>, export: R
         let ext = |k: &str| props.get("BoxExtent").and_then(|e| e.get(k)).and_then(|v| v.as_f64()).map_or(32.0, |v| v as f32);
         s.indoors.push((world, Vec3::new(ext("X"), ext("Y"), ext("Z"))));
     }
-    s.lights = crate::lighting::placed_lights(&level, &classes)
-        .iter()
-        .filter(|l| l.kind != crate::lighting::LightKind::Directional && l.visible())
-        .map(|l| l.rule_light())
-        .collect();
+    let grids = crate::power::PowerGrids::from_level(&level);
+    let placed = crate::lighting::placed_lights(&level, &classes);
+    let lights: Vec<_> = placed.iter().filter(|l| l.kind != crate::lighting::LightKind::Directional && l.visible()).collect();
+    s.lights = lights.iter().map(|l| l.rule_light()).collect();
+    s.light_grids = lights.iter().map(|l| l.powered.then(|| l.grid(&grids)).flatten()).collect();
     for (name, c) in &classes.classes {
         if let Some(e) = classes.prop(name, "PickedUpFearEvent").as_str() {
             s.item_events.insert(c.name.clone(), e.trim_end_matches("_C").to_string());
@@ -164,7 +166,7 @@ fn push_events(
     jasons: Query<&Transform, (With<Jason>, Without<Player>)>,
     camera: Query<&Transform, (With<PlayerCamera>, Without<Player>, Without<Jason>)>,
     items: Query<&Item>,
-    (time, mut next_log): (Res<Time>, Local<f32>),
+    (time, mut next_log, power): (Res<Time>, Local<f32>, Option<Res<crate::power::PowerGrids>>),
 ) {
     let (Some(t), Some(s)) = (tuning, surroundings) else { return };
     let Ok((mut p, xf, mut fear, mut pushed, inventory, hiding, held, flashlight)) = players.single_mut() else { return };
@@ -191,7 +193,9 @@ fn push_events(
     let centre = xf.translation + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M;
 
     // Her tick, in the game's order.
-    let lit = flashlight.is_some_and(|f| f.on) || is_lit(&s.lights, to_unreal(centre), capsule_bounds_radius(r, hh), cv("MinLightStrength", 0.3));
+    // The lights whose power is on.
+    let on: Vec<Light> = s.lights.iter().zip(&s.light_grids).filter(|(_, g)| g.is_none_or(|g| power.as_ref().is_none_or(|p| p.on(g)))).map(|(l, _)| *l).collect();
+    let lit = flashlight.is_some_and(|f| f.on) || is_lit(&on, to_unreal(centre), capsule_bounds_radius(r, hh), cv("MinLightStrength", 0.3));
     if pushed.lit != Some(lit) {
         debug!("fear: {}", if lit { "in the light" } else { "in the dark" });
         set("DarknessFearEvent", !lit, 0.0);

@@ -172,7 +172,7 @@ then the game closes. The game would go back to the lobby here.
 XP comes from the game's score events, where the game awards them: picking up weapons and car parts, repairs,
 first aid, barricading, firecrackers, traps, hitting and stunning Jason, breaking his grab, escaping, and the match's
 own (time bonus, unscathed, match complete, team escaped). Each one shows on the right as it's scored.
-`--round-time s` shortens the match for testing; `--spawn x,y,z` starts her there (metres, Bevy axes). The level intro and outro sequences aren't played.
+`--round-time s` shortens the match for testing; `--cut-power` starts every fuse box destroyed (hold E at one to repair it); `--spawn x,y,z` starts her there (metres, Bevy axes). The level intro and outro sequences aren't played.
 
 Items, cabinets and cars spawn as in the game (`--seed n` repeats a match; the log lists where the cars and parts
 are). E picks up (preferring what the camera looks at), searches drawers and installs parts, G drops the held
@@ -205,7 +205,7 @@ x,y,z,tx,ty,tz` (eye and look-at, relative to her feet), `--pose <animation>@<se
 
 ## Playing as Jason
 
-`--play-jason` puts you in Jason's boots (a bot plays the counselor: the escape bot unless a `--bot-*` is given): WASD walk, Shift run, mouse look; left click swing (and, holding her, kill), middle click heavy swing, right click grab, F throw a knife where you look, T set a trap, 1 Shift, 2 Morph (to the morph point nearest 30 m ahead), 3 Stalk. Doors open or break as you walk into them. `--play-jason-demo` scripts the input (testing).
+`--play-jason` puts you in Jason's boots (a bot plays the counselor: the escape bot unless a `--bot-*` is given): WASD walk, Shift run, mouse look; left click swing (and, holding her, kill), middle click heavy swing, right click grab, F throw a knife where you look, T set a trap, 1 Shift, 2 Morph (to the morph point nearest 30 m ahead), 3 Stalk, E destroy a fuse box (its grid's lights go out). Doors open or break as you walk into them. `--play-jason-demo` scripts the input (testing).
 
 ## Host commands
 

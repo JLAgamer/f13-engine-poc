@@ -300,6 +300,9 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
                 var m = System.Text.RegularExpressions.Regex.Match(s, @"^(\w+)'(.*)'$");
                 if (!m.Success) return null;
                 var (kind, path) = (m.Groups[1].Value, m.Groups[2].Value);
+                // Another actor in the level (e.g. a fuse box's PowerGrid volume): by name.
+                var actor = System.Text.RegularExpressions.Regex.Match(path, @"^[^:]+:PersistentLevel\.([^.:]+)$");
+                if (actor.Success) return $"{kind}'{actor.Groups[1].Value}'";
                 if (path.Contains("Default__") || path.Contains(':') || path.Contains('.')) return null; // subobject
                 return kind.EndsWith("Class") ? path : $"{kind}'{path}'";
             }

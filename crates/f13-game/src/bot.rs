@@ -59,6 +59,8 @@ pub enum Goal {
     Block,
     /// Walk into her own bear trap and wiggle free.
     Trap,
+    /// Repair a destroyed fuse box (every one starts destroyed): its grid's power comes back.
+    Power,
 }
 
 pub struct BotPlugin(pub Goal);
@@ -96,6 +98,8 @@ enum Step {
     LockedIn,
     /// Bear trap test stage.
     Trap(u8),
+    /// Repairing the fuse box (bot.fixtures[0]).
+    Power,
     Done,
 }
 
@@ -257,7 +261,12 @@ fn run_bot(
         Option<Res<crate::match_flow::GameMatch>>,
         Query<&Transform, (With<crate::items::ArmedTrap>, Without<Player>, Without<Vehicle>)>,
     ),
-    (mut exit, play): (MessageWriter<AppExit>, Option<Res<crate::jason_player::PlayJason>>),
+    (mut exit, play, fuse_boxes, grids): (
+        MessageWriter<AppExit>,
+        Option<Res<crate::jason_player::PlayJason>>,
+        Query<(Entity, &crate::power::FuseBox, &Transform), (Without<Player>, Without<Vehicle>)>,
+        Option<Res<crate::power::PowerGrids>>,
+    ),
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
 ) {
     let world = collision.with(&dynamic);
@@ -311,6 +320,21 @@ fn run_bot(
         Step::Start => {
             // Let the map finish loading (in real time: frames hitch while assets stream in, whatever --speed).
             if bot.timer < 3.0 || real.elapsed_secs() < 6.0 {
+                return;
+            }
+            if bot.goal == Goal::Power {
+                // The nearest destroyed fuse box that feeds a grid.
+                let me = pxf.translation;
+                let fuse = fuse_boxes.iter().filter(|(_, f, _)| f.destroyed && f.grid.is_some()).min_by(|a, b| a.2.translation.distance(me).total_cmp(&b.2.translation.distance(me)));
+                let Some((e, f, _)) = fuse else {
+                    error!("bot: no destroyed fuse box");
+                    bot.step = Step::Done;
+                    return;
+                };
+                info!("bot: repairing the fuse box at {:.1}", f.interact);
+                bot.fixtures = [Some(e), None, None];
+                bot.step = Step::Power;
+                bot.timer = 0.0;
                 return;
             }
             if bot.goal == Goal::Door {
@@ -789,6 +813,40 @@ fn run_bot(
                 bot.timer = 0.0;
             }
         }
+        Step::Power => {
+            let Some((_, f, fxf)) = bot.fixtures[0].and_then(|e| fuse_boxes.get(e).ok()) else {
+                bot.step = Step::Done;
+                return;
+            };
+            if !f.destroyed {
+                info!("bot: fuse box repaired after {:.1}s; its grid is {}", bot.timer, if f.grid.is_some_and(|g| grids.as_ref().is_some_and(|p| p.on(g))) { "on" } else { "OFF" });
+                bot.hold_e = false;
+                bot.step = Step::Done;
+                bot.timer = 0.0;
+                return;
+            }
+            // Facing it, a step out from its front, on its floor.
+            let out = Vec3::new(f.interact.x - fxf.translation.x, 0.0, f.interact.z - fxf.translation.z).normalize_or_zero();
+            place(pxf, Vec3::new(f.interact.x, fxf.translation.y, f.interact.z) + out * 0.6);
+            look_at(&mut camera, pxf, f.interact);
+            bot.hold_e = bot.timer > 0.3;
+            if bot.hold_e {
+                keys.press(KeyCode::KeyE);
+            }
+            // The pips: each one's key when the needle is in its middle.
+            if let Some(h) = interaction.hold.as_ref().filter(|h| h.started) {
+                if let Some(p) = h.current.map(|c| h.pips[c]) {
+                    if h.progress(&tuning.minigame) >= (p.position + p.width / 2.0) / 360.0 {
+                        mouse.press(if p.key == 0 { MouseButton::Right } else { MouseButton::Left });
+                    }
+                }
+            }
+            if bot.timer > 60.0 {
+                error!("bot: fuse box repair not progressing");
+                bot.hold_e = false;
+                bot.step = Step::Done;
+            }
+        }
         Step::Trap(stage) => {
             let trap = traps.iter().next().map(|t| t.translation);
             match stage {
@@ -1181,6 +1239,9 @@ fn run_bot(
                     Goal::Block => !p.counselor.alive() && bot.jason_shots.contains(&"blocked"),
                     Goal::Trap => p.counselor.alive() && bot.last_health == 50.0 && bot.jason_shots.contains(&"free"),
                     Goal::Fight => p.counselor.alive() && bot.jason_shots.contains(&"stun"),
+                    Goal::Power => bot.fixtures[0]
+                        .and_then(|e| fuse_boxes.get(e).ok())
+                        .is_some_and(|(_, f, _)| !f.destroyed && f.grid.is_some_and(|g| grids.as_ref().is_some_and(|p| p.on(g)))),
                     Goal::Hide => {
                         let breath = breathing.map_or(0.0, |b| b.breath.current);
                         info!("bot: breath fell to {:.0}, now {breath:.0}", bot.min_breath);
@@ -1222,6 +1283,7 @@ fn run_bot(
                     ],
                     Goal::Heal => &[&["UseFirstAid"]],
                     Goal::Door => &[&["BarricadeDoor"]],
+                    Goal::Power => &[&["GridPartRepaired"]],
                     Goal::Fight => &[&["StunJason", "StunJasonShotgun", "StunJasonFlare", "FirecrackerJasonStun", "EscapeJasonGrab", "Trapper"]],
                     // Her death ends the match.
                     Goal::Jason | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities | Goal::Block => &[&["CompletedMatch"]],

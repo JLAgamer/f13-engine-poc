@@ -66,6 +66,8 @@ enum Target {
     Door(Entity),
     Window(Entity),
     Hide(Entity),
+    /// A destroyed fuse box to repair (power.rs).
+    FuseBox(Entity),
 }
 
 #[derive(Resource, Default)]
@@ -136,7 +138,7 @@ fn choose_target(
     doors: Query<(Entity, &Door, &GlobalTransform)>,
     windows: Query<(Entity, &Window, &GlobalTransform)>,
     barricades: Query<&Barricade>,
-    spots: Query<(Entity, &crate::hiding::HidingSpot, &GlobalTransform)>,
+    (spots, fuse_boxes): (Query<(Entity, &crate::hiding::HidingSpot, &GlobalTransform)>, Query<(Entity, &crate::power::FuseBox)>),
     mut interaction: ResMut<Interaction>,
 ) {
     if interaction.busy() {
@@ -195,6 +197,11 @@ fn choose_target(
             consider(gxf.transform_point(s.interact), s.reach, Target::Hide(e));
         }
     }
+    for (e, f) in &fuse_boxes {
+        if f.destroyed {
+            consider(f.interact, f.reach, Target::FuseBox(e));
+        }
+    }
     let target = best.map(|(_, t)| t);
     if target != interaction.target {
         interaction.hold = None;
@@ -219,7 +226,7 @@ fn act(
     mut vehicles: Query<&mut Vehicle>,
     mut doors: Query<(&mut Door, &GlobalTransform)>,
     (mut windows, mut barricades): (Query<(&mut Window, &GlobalTransform)>, Query<&mut Barricade>),
-    mut visibility: Query<&mut Visibility>,
+    (mut visibility, mut fuse_boxes, mut grids): (Query<&mut Visibility>, Query<&mut crate::power::FuseBox>, Option<ResMut<crate::power::PowerGrids>>),
 ) {
     let Some(target) = interaction.target else { return };
     let (player_entity, ref mut player_xf, ref mut inv, ref mut p) = *player;
@@ -292,6 +299,36 @@ fn act(
             if vehicle.repairs.iter().all(|r| r.done) {
                 commands.trigger(ClassScore::new(&vehicle.class, "VehicleRepairedScoreEvent"));
             }
+            interaction.hold = None;
+            interaction.target = None;
+        }
+        Target::FuseBox(f) => {
+            // Repairing the fuse box: a hold with the minigame (its HoldTimeLimit), like a car part.
+            if !keys.pressed(KeyCode::KeyE) {
+                if interaction.hold.take().is_some_and(|h| h.started) {
+                    info!("fuse box repair cancelled");
+                }
+                return;
+            }
+            let Ok(mut fuse) = fuse_boxes.get_mut(f) else { return };
+            let hold = interaction.hold.get_or_insert_with(|| HoldInteraction::new(fuse.hold_time, fuse.has_pips));
+            let mut events = Vec::new();
+            for (button, key) in [(MouseButton::Right, 0), (MouseButton::Left, 1)] {
+                if mouse.just_pressed(button) {
+                    hold.press(key, &tuning.minigame, &mut events);
+                }
+            }
+            hold.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
+            if events.contains(&MinigameEvent::Started) {
+                info!("fuse box repair started: {} pips, {:.1}s", hold.pips.len(), hold.hold_time);
+            }
+            if !events.contains(&MinigameEvent::Completed) {
+                return;
+            }
+            if let Some(g) = grids.as_mut() {
+                crate::power::set_destroyed(&mut fuse, false, g);
+            }
+            commands.trigger(ClassScore::new(&fuse.class, "RepairScoreEvent"));
             interaction.hold = None;
             interaction.target = None;
         }
@@ -522,6 +559,10 @@ fn update_prompt(
             }
             Some(Target::Seat(_)) => lines.push("[E] Get in (driver)".into()),
             Some(Target::Hide(_)) => lines.push("[E] Hide".into()),
+            Some(Target::FuseBox(_)) => lines.push(match &interaction.hold {
+                Some(h) if h.started => format!("Repairing the fuse box: {:.0}%", h.progress(&tuning.minigame) * 100.0),
+                _ => "[Hold E] Repair the fuse box".into(),
+            }),
             Some(Target::Window(w)) => {
                 if let Ok(window) = windows.get(w) {
                     let press = match window.press_action(p.counselor.sprinting, p.counselor.wounded) {

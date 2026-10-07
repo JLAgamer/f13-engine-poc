@@ -99,7 +99,11 @@ Mechanics: Jason side
 - [x] Knife pickups: the map's ThrowingKnifePickups (large items) add their StackSize to Jason's knives as he passes
       (AddKnives, no cap); the computer Jason doesn't seek them out, and there's no pick-up move
 - [ ] More kills
-- [ ] Breaking walls, generators
+- [x] Generators (power.rs): the fuse boxes and their power grids; a destroyed fuse box puts out the powered lights
+      in its grid's box (and they stop lighting her: darkness fear) and lights its red power-out light; counselors
+      repair it (hold E, 15 s, pips), Jason destroys it (the player's E). Not yet: the power curves, the blackout fear
+      event, the computer Jason cutting the power
+- [ ] Breaking walls (SCDestructibleWall in some cabin layouts)
 - [ ] Car interactions: stopping and grabbing out of the car
 
 Match

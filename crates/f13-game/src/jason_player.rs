@@ -6,7 +6,7 @@
 //!
 //! Keys: WASD walk, Shift run, mouse look; left click swing, middle click heavy swing, right click grab, F throw a
 //! knife, T set a trap, left click again while holding her to kill her, 1 Shift, 2 Morph (to the morph point nearest 30 m ahead of where he looks), 3 Stalk. Doors in
-//! his way open or break as he walks into them. Esc frees the mouse, a click takes it again.
+//! his way open or break as he walks into them; E destroys a fuse box he's at (the power in its grid goes out). Esc frees the mouse, a click takes it again.
 
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::{AccumulatedMouseMotion, MouseButtonInput};
@@ -66,6 +66,8 @@ pub struct Presses {
     pub shift: bool,
     pub morph: bool,
     pub stalk: bool,
+    /// E: destroy the fuse box at hand.
+    pub interact: bool,
 }
 
 /// One fixed step's input.
@@ -139,6 +141,7 @@ fn capture(
     p.shift |= c.keys.just_pressed(KeyCode::Digit1);
     p.morph |= c.keys.just_pressed(KeyCode::Digit2);
     p.stalk |= c.keys.just_pressed(KeyCode::Digit3);
+    p.interact |= c.keys.just_pressed(KeyCode::KeyE);
 }
 
 /// The scripted player: what a player would press, by distance to her.

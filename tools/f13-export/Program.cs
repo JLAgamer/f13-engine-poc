@@ -429,6 +429,10 @@ switch (rest[0])
         if (rest[1] == Mvp.Map) ExportLevel(Mvp.Map, Mvp.Weather);
         else ExportLevel(rest[1]);
         break;
+    case "levels": // the MVP map and its cabin layouts
+        ExportLevel(Mvp.Map, Mvp.Weather);
+        foreach (var l in Mvp.Layouts) ExportLevel(l);
+        break;
     case "materials":
         WriteMaterialIndex();
         return 0;

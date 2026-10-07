@@ -905,7 +905,12 @@ pub(crate) fn update_jason(
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
     (mut rng, mut struggle, mut controls): (ResMut<crate::GameRng>, ResMut<Struggle>, Option<ResMut<crate::jason_player::JasonControls>>),
     (mut jasons, morph_points): (Query<(Entity, &mut Jason, &mut Transform, Option<&HitJason>, Option<&mut crate::senses::Knowledge>), Without<Player>>, Option<Res<MorphPoints>>),
-    (inventories, items): (Query<&crate::interact::Inventory>, Query<&crate::props::Item>),
+    (inventories, items, mut fuse_boxes, mut grids): (
+        Query<&crate::interact::Inventory>,
+        Query<&crate::props::Item>,
+        Query<&mut crate::power::FuseBox>,
+        Option<ResMut<crate::power::PowerGrids>>,
+    ),
     mut players: Query<(Entity, &mut Player, &mut Transform, Has<crate::vehicle::Driving>, Option<&mut crate::hiding::Hiding>, Has<crate::items::Blocking>), Without<Jason>>,
     mut doors: Query<(Entity, &mut crate::doors::Door, &GlobalTransform)>,
     mut barricades: Query<&mut crate::windows::Barricade>,
@@ -1058,6 +1063,19 @@ pub(crate) fn update_jason(
                         j.state = JasonState::PlacingTrap { t: 0.0 };
                         commands.entity(je).insert(PlayAction(TRAP_SET.into()));
                         continue;
+                    }
+                    // A fuse box at hand: a blow cuts its power (the game's Jason_Generator_Destruction move).
+                    if p.interact && j.cooldown <= 0.0 {
+                        let here = xf.translation;
+                        if let Some(mut fuse) = fuse_boxes.iter_mut().filter(|f| !f.destroyed).find(|f| Vec2::new(f.interact.x - here.x, f.interact.z - here.z).length() * 100.0 <= f.reach + 100.0) {
+                            if let Some(g) = grids.as_mut() {
+                                crate::power::set_destroyed(&mut fuse, true, g);
+                            }
+                            info!("Jason: destroyed a fuse box");
+                            j.state = JasonState::Swinging { t: 0.0, hit: true, heavy: false };
+                            commands.entity(je).insert(PlayAction(ATTACK.into()));
+                            continue;
+                        }
                     }
                     if j.cooldown <= 0.0 && p.grab {
                         info!("Jason: grab");
