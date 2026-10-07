@@ -115,6 +115,8 @@ pub struct SpawnWorld {
     /// `SCRepairPartSpawner` actors (their actor spawner).
     pub part_spawners: Vec<usize>,
     pub cabinets: Vec<Cabinet>,
+    /// `SCPhoneJunctionBox` actors: where and which class (their fuse spawns like a car's parts).
+    pub phone_boxes: Vec<([f32; 3], String)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -126,6 +128,9 @@ pub struct SpawnSettings {
     pub min_vehicle_spawn_distance: f32,
     pub min_vehicle_part_spawn_distance: f32,
     pub max_car_part_distance: f32,
+    /// The phone boxes' fuses: MaxFuseDistance, MinFuseSpawnDistance.
+    pub max_fuse_distance: f32,
+    pub min_fuse_spawn_distance: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -184,7 +189,11 @@ impl SpawnWorld {
 pub fn spawn_match(world: &mut SpawnWorld, s: &SpawnSettings, q: &impl ClassQuery, rng: &mut Rng) -> Vec<Spawned> {
     let mut out = Vec::new();
     let vehicles = spawn_vehicles(world, s, q, rng, &mut out);
-    spawn_repair_parts(world, s, q, rng, &vehicles, &mut out);
+    let cars: Vec<([f32; 3], String)> = vehicles.iter().map(|(sp, c)| (world.spawners[*sp].owner_pos, c.clone())).collect();
+    spawn_repair_parts(world, q, rng, &cars, (s.max_car_part_distance, s.min_vehicle_part_spawn_distance), &mut out);
+    // A second pass for the phone boxes' fuses, with their own distances.
+    let boxes = world.phone_boxes.clone();
+    spawn_repair_parts(world, q, rng, &boxes, (s.max_fuse_distance, s.min_fuse_spawn_distance), &mut out);
     spawn_large_items(world, s, q, rng, &mut out);
     spawn_small_items(world, s, q, rng, &mut out);
     out
@@ -229,38 +238,38 @@ fn spawn_vehicles(world: &mut SpawnWorld, s: &SpawnSettings, q: &impl ClassQuery
     placed
 }
 
+/// The parts each target (a car, a phone box) needs: within `max` of it, at least `min` from the others placed in
+/// this pass (0 turns either check off).
 fn spawn_repair_parts(
     world: &mut SpawnWorld,
-    s: &SpawnSettings,
     q: &impl ClassQuery,
     rng: &mut Rng,
-    vehicles: &[(usize, String)],
+    targets: &[([f32; 3], String)],
+    (max, min): (f32, f32),
     out: &mut Vec<Spawned>,
 ) {
-    let max_sq = s.max_car_part_distance.powi(2);
+    let max_sq = max.powi(2);
     let mut placed_parts: Vec<[f32; 3]> = Vec::new();
-    for (vsp, vclass) in vehicles {
-        let vpos = world.spawners[*vsp].owner_pos;
+    for &(vpos, ref vclass) in targets {
         for part in q.required_parts(vclass) {
             let large = q.is_large(&part);
             // Candidate spawn points within range of this vehicle.
             let mut candidates: Vec<usize> = if large {
                 world.part_spawners.iter().copied()
                     .filter(|&i| world.spawners[i].spawned.is_none() && world.spawners[i].can_spawn(&part, q))
-                    .filter(|&i| s.max_car_part_distance == 0.0 || dist_sq(world.spawners[i].owner_pos, vpos) < max_sq)
+                    .filter(|&i| max == 0.0 || dist_sq(world.spawners[i].owner_pos, vpos) < max_sq)
                     .collect()
             } else {
                 (0..world.cabinets.len())
                     .filter(|&c| world.cabinet_accepts(&world.cabinets[c], &part, q) && !world.cabinet_full(&world.cabinets[c]))
-                    .filter(|&c| s.max_car_part_distance == 0.0 || dist_sq(world.cabinets[c].pos, vpos) < max_sq)
+                    .filter(|&c| max == 0.0 || dist_sq(world.cabinets[c].pos, vpos) < max_sq)
                     .collect()
             };
             while !candidates.is_empty() {
                 let k = rng.index(candidates.len());
                 let cand = candidates[k];
                 let pos = if large { world.spawners[cand].owner_pos } else { world.cabinets[cand].pos };
-                let spread = s.min_vehicle_part_spawn_distance <= 0.0
-                    || placed_parts.iter().all(|&p| dist_sq(p, pos) >= s.min_vehicle_part_spawn_distance.powi(2));
+                let spread = min <= 0.0 || placed_parts.iter().all(|&p| dist_sq(p, pos) >= min.powi(2));
                 if !spread {
                     candidates.remove(k);
                     continue;
@@ -421,6 +430,7 @@ mod tests {
             min_vehicle_spawn_distance: 8_000.0,
             min_vehicle_part_spawn_distance: 3_000.0,
             max_car_part_distance: 16_500.0,
+            ..Default::default()
         }
     }
 

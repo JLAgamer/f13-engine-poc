@@ -488,6 +488,20 @@ switch (rest[0])
             Console.WriteLine(Newtonsoft.Json.JsonConvert.SerializeObject(e, Newtonsoft.Json.Formatting.Indented));
         }
         return 0;
+    case "pseudo": // pseudo <package>: its Blueprint classes' bytecode as pseudo code (reverse engineering)
+        provider.ReadScriptData = true;
+        foreach (var e in provider.LoadPackage(ToFile(rest[1])).GetExports().OfType<UClass>())
+        {
+            Console.WriteLine($"// ===== {e.Name}");
+            Console.WriteLine(e.DecompileBlueprintToPseudo(null!));
+        }
+        // And each function's bytecode (its Kismet expressions).
+        foreach (var f in provider.LoadPackage(ToFile(rest[1])).GetExports().OfType<UFunction>())
+        {
+            Console.WriteLine($"// ===== function {f.Name}");
+            Console.WriteLine(Newtonsoft.Json.JsonConvert.SerializeObject(f.ScriptBytecode, Newtonsoft.Json.Formatting.Indented));
+        }
+        return 0;
     case "debug-type": // debug-type <package> <export name>: CLR type and members of one export
         {
             var e = provider.LoadPackage(ToFile(rest[1])).GetExports().First(x => x.Name == rest[2]);
@@ -748,7 +762,9 @@ static class Mvp
     ];
     // Classes the game spawns by reference from native code rather than from level data.
     // Classes no level places but the game reads (the cars' wheels: SCWheeledVehicleMovementComponent WheelSetups).
-    public static readonly string[] Classes = ["CarKeys_C", "Chevette_FrontWheel_C", "Chevette_BackWheel_C"];
+    public static readonly string[] Classes = ["CarKeys_C", "Chevette_FrontWheel_C", "Chevette_BackWheel_C",
+        // The police car SCPoliceSpawner spawns (its PoliceSpawnClass).
+        "Police_C"];
     // Montages whose length or root motion the rules use (anims.json).
     const string Shared = "/Game/Characters/Counselors/Base/Shared";
     public static readonly string[] Montages =
@@ -784,6 +800,8 @@ static class Mvp
         // Jason_Base's ShiftAudioCue and TeleportCueCounselorHears.
         "/Game/Sounds/GamePlay/JasonShift/ShiftTunnelCue.ShiftTunnelCue",
         "/Game/Sounds/GamePlay/VHS_SFXCue.VHS_SFXCue",
+        // The world settings' PoliceCalledSFX (the call goes through).
+        "/Game/Sounds/GamePlay/PoliceCalled.PoliceCalled",
     ];
     // Animations f13-game plays on the counselor: Athlete_AnimBP's female overrides of Base_Counselor_AnimBP's
     // locomotion (BS_F_Normal_Move: idle, walk, run, sprint; BS_F_Combat strafing), crouch, wounded idle, and the
@@ -881,6 +899,16 @@ static class Mvp
         $"{Shared}/Interaction/Barricade/AM_normal_stand_barricade_pushup",
         // Pulled out of the car by Jason (the driver seat's CounselorGrabbedMontage).
         CarGrab[0],
+        // The phone box's fuse (AM_normal_stand_repair_phonebox) and calling the police (AM_normal_stand_use_phone).
+        "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Repair/Misc/f_normal_stand_repair_phonebox_enter",
+        "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Repair/Misc/f_normal_stand_repair_phonebox_cycle",
+        "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Repair/Misc/f_normal_stand_repair_phonebox_exit",
+        "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Repair/Misc/f_normal_stand_repair_phonebox_fail",
+        "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Electronics/f_normal_stand_use_phone_start",
+        "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Electronics/f_normal_stand_use_phone_cycle",
+        "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Electronics/f_normal_stand_use_phone_stop",
+        "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Electronics/f_normal_stand_use_phone_cancel",
+        "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Electronics/f_normal_stand_use_phone_fail",
         // Car repairs (the repair components' CounselorInteractAnim): her takes of each montage's sections.
         "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Repair/Car/f_normal_stand_car_repair_gascan_start",
         "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Repair/Car/f_normal_stand_car_repair_gascan_cycle",

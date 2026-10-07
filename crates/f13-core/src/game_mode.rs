@@ -22,6 +22,10 @@
 //!   - InProgress goes to WaitingPostMatchOutro (each player gets the HUD outro);
 //!   - WaitingPostMatchOutro goes to PostMatchOutro;
 //!   - PostMatchOutro goes to WaitingPostMatch.
+//! - **The police** (SCGameMode StartPoliceTimer, DefaultTimer): calling them sets `police_time_remaining` to
+//!   PoliceResponseTime (SCGameState, DefaultGame.ini: 300 s) x (1 + the caller's perks' modifiers); while the
+//!   match is in progress the timer counts it down, and at 0 the police spawn (SpawnPolice) and the rest of that
+//!   tick is skipped.
 //! - **Ending early** (the offline mode's timer): once the match has run more than 10 s, it ends when no counselor
 //!   is left alive and unescaped, or when Jason is dead.
 //!   - Quick Play (SCGameMode_Hunt) counts dead + escaped against the spawned counselors instead, and waits for a
@@ -70,6 +74,8 @@ pub struct MatchRules {
     pub post_match_outro_wait_time: i32,
     /// PostMatchWaitTime: the results, before the game returns to the lobby.
     pub post_match_wait_time: i32,
+    /// SCGameState PoliceResponseTime (DefaultGame.ini), s.
+    pub police_response_time: i32,
 }
 
 /// Who is still playing, for the early end.
@@ -90,6 +96,10 @@ pub struct Match {
     pub remaining_time: i32,
     /// SCGameState ElapsedInProgressTime, s.
     pub elapsed_in_progress_time: i32,
+    /// SCGameState PoliceTimeRemaining, s: counting while above 0.
+    pub police_time_remaining: i32,
+    /// The police countdown reached 0 (SpawnPolice); taken by [`Match::take_police_due`].
+    police_due: bool,
     /// Game time since the timer last fired, s.
     clock: f32,
 }
@@ -103,7 +113,18 @@ impl Default for Match {
 impl Match {
     /// A match waiting to start (HandleMatchIsWaitingToStart: the hold time is 0, so 1 s).
     pub fn new() -> Self {
-        Self { state: MatchState::WaitingToStart, remaining_time: 1, elapsed_in_progress_time: 0, clock: 0.0 }
+        Self { state: MatchState::WaitingToStart, remaining_time: 1, elapsed_in_progress_time: 0, police_time_remaining: 0, police_due: false, clock: 0.0 }
+    }
+
+    /// StartPoliceTimer: the call went through. `perk_modifiers` is the sum of the caller's perks' modifiers (0
+    /// without perks).
+    pub fn start_police_timer(&mut self, rules: &MatchRules, perk_modifiers: f32) {
+        self.police_time_remaining = ((perk_modifiers + 1.0) * rules.police_response_time as f32) as i32;
+    }
+
+    /// Whether the police are due (the countdown hit 0 since the last call): the caller spawns them.
+    pub fn take_police_due(&mut self) -> bool {
+        std::mem::take(&mut self.police_due)
     }
 
     /// Advances `dt` seconds of game time; the timer fires once per whole second. Returns the states entered, in
@@ -144,6 +165,12 @@ impl Match {
                 self.elapsed_in_progress_time += 1;
                 if self.remaining_time == 0 {
                     self.end_match(rules, entered);
+                } else if self.police_time_remaining > 0 {
+                    self.police_time_remaining -= 1;
+                    if self.police_time_remaining < 1 {
+                        self.police_due = true;
+                        return;
+                    }
                 }
             }
             MatchState::WaitingPostMatchOutro if self.remaining_time == 0 => self.end_match(rules, entered),
@@ -305,7 +332,26 @@ mod tests {
 
     // Synthetic timings (not the game's): exercises the rules only.
     fn rules() -> MatchRules {
-        MatchRules { round_time: 30, pre_match_wait_time: 0, post_match_outro_wait_time: 3, post_match_wait_time: 4 }
+        MatchRules { round_time: 30, pre_match_wait_time: 0, post_match_outro_wait_time: 3, post_match_wait_time: 4, police_response_time: 5 }
+    }
+
+    #[test]
+    fn police_arrive_after_the_response_time() {
+        let mut m = Match::new();
+        run(&mut m, 1, &PLAYING);
+        m.start(&rules());
+        run(&mut m, 2, &PLAYING);
+        assert!(!m.take_police_due());
+        m.start_police_timer(&rules(), 0.0);
+        assert_eq!(m.police_time_remaining, 5);
+        run(&mut m, 4, &PLAYING);
+        assert!(!m.take_police_due());
+        run(&mut m, 1, &PLAYING);
+        assert!(m.take_police_due());
+        assert!(!m.take_police_due());
+        // A perk's +50% makes it 7 (7.5 truncated).
+        m.start_police_timer(&rules(), 0.5);
+        assert_eq!(m.police_time_remaining, 7);
     }
     const PLAYING: Roster = Roster { counselors_left: 1, killer_alive: Some(true) };
 

@@ -352,6 +352,9 @@ def match_section(conv, consts, game):
         or ini_value(ini, "/Script/SummerCamp.SCGameMode_Hunt", "RoundTime")
     if round_time is None:
         sys.exit(f"{ini}: no RoundTime for the offline game mode")
+    police = ini_value(ini, "/Script/SummerCamp.SCGameState", "PoliceResponseTime")
+    if police is None:
+        sys.exit(f"{ini}: no PoliceResponseTime")
     events = {}
     se_dir = os.path.join(conv.content, "Blueprints", "ScoreEvents")
     for f in sorted(os.listdir(se_dir)):
@@ -372,6 +375,7 @@ def match_section(conv, consts, game):
         "round_time": int(round_time),
         "post_match_outro_wait_time": consts["post_match_outro_wait_time"],
         "post_match_wait_time": consts["post_match_wait_time"],
+        "police_response_time": int(police),
         "score_events": events,
     }
 
@@ -454,7 +458,7 @@ def main():
         vehicle = vehicle_section(conv, consts)
         match = match_section(conv, consts, a.game)
         out = {
-            "format": 8,
+            "format": 9,
             "match": match,
             "counselor": {"Base_Counselor": counselor, "characters": characters},
             "items": items,

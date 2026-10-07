@@ -43,6 +43,7 @@ struct MatchSection {
     round_time: i32,
     post_match_outro_wait_time: i32,
     post_match_wait_time: i32,
+    police_response_time: i32,
     score_events: BTreeMap<String, ScoreEventJson>,
 }
 
@@ -307,7 +308,7 @@ pub fn default_path() -> PathBuf {
 }
 
 /// tuning.json format this build reads; older files must be re-extracted.
-pub const FORMAT: u32 = 8;
+pub const FORMAT: u32 = 9;
 
 pub fn load(path: &Path) -> Result<Tuning, LoadError> {
     parse(&std::fs::read_to_string(path).map_err(LoadError::Io)?)
@@ -473,6 +474,7 @@ pub fn parse(text: &str) -> Result<Tuning, LoadError> {
             pre_match_wait_time: 0,
             post_match_outro_wait_time: f.match_.post_match_outro_wait_time,
             post_match_wait_time: f.match_.post_match_wait_time,
+            police_response_time: f.match_.police_response_time,
         },
         score_events: f
             .match_
@@ -498,8 +500,8 @@ mod tests {
 
     // Synthetic values (not the game's): exercises the schema only.
     const SAMPLE: &str = r#"{
-      "format": 8,
-      "match": {"round_time": 60, "post_match_outro_wait_time": 1, "post_match_wait_time": 2,
+      "format": 9,
+      "match": {"round_time": 60, "post_match_outro_wait_time": 1, "post_match_wait_time": 2, "police_response_time": 300,
                 "score_events": {"Win": {"experience": 5, "category": "Escaped", "only_once": true,
                                          "all_counselors": false, "description": "Won +<exp>"}}},
       "items": {"first_aid": {"health_restored": 100, "use_length": 2}},

@@ -187,6 +187,8 @@ pub struct VehiclePart(pub Entity);
 #[derive(Component, Debug)]
 pub struct EscapeZone {
     pub car: bool,
+    /// Open (MULTICAST_ActivateVolume): the cars' from the start, the police's when they arrive (police.rs).
+    pub active: bool,
     pub radius_m: f32,
     /// The volume's trigger root: on the road just before the zone, so (zone - trigger) is roughly the way out.
     pub trigger: Vec3,
@@ -612,7 +614,7 @@ fn spawn_props(
             let trigger = a.components.iter().find(|c| c.name == "TriggerRoot").and_then(|c| c.world).or(a.transform).unwrap_or(at);
             commands.spawn((
                 to_transform(&Xform { r: [0.0, 0.0, 0.0, 1.0], s: [1.0; 3], ..at }),
-                EscapeZone { car, radius_m: radius / 100.0, trigger: to_transform(&trigger).translation },
+                EscapeZone { car, active: car, radius_m: radius / 100.0, trigger: to_transform(&trigger).translation },
                 Name::new(a.name.clone()),
             ));
         }

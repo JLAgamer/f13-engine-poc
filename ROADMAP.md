@@ -140,7 +140,13 @@ Mechanics: Jason side
 Match
 - [x] Match flow (f13-core::game_mode, match_flow.rs): the game mode's states and timer, the end (dead or
   escaped, or time out), outro wait, results with the score events' XP (awarded where the game does), leaving
-- [ ] Match flow, remaining: lobby, level intro and outro sequences, police and Tommy Jarvis timers, badges, Jason
+- [x] Calling the police (police.rs, f13-core::game_mode): the phone box's fuse spawned like a car part (MaxFuseDistance,
+      MinFuseSpawnDistance), put in with the repair minigame (AM_normal_stand_repair_phonebox), the phone's 12 s call
+      (AM_normal_stand_use_phone, PoliceCalled, her CallPolice line), PoliceResponseTime's countdown, the police car at a
+      random unobstructed spawner (its siren), its escape volume opening, Jason turned back from it, escaping on foot
+- [ ] Police, remaining: the car's spinning lights, the 6 s escape delay and its camera, the police HUD timer and minimap
+      icon, Jason breaking the phone box (Jason_PhoneBox_Destruction), his police stun (combat_stand_stunned_police)
+- [ ] Match flow, remaining: lobby, level intro and outro sequences, the Tommy Jarvis timer, badges, Jason
       dying
 - [x] Item and car spawning, as the game mode does it (f13-core::spawn, f13-data::world)
 - [x] How the game chooses one of the four cabin layouts per match: SCWorldSettings' RandomLevels, one picked at

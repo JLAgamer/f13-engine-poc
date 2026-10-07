@@ -3,6 +3,8 @@
 //! find the keys and each part the car needs (searching cabinets on the way), install the parts, get in, start it
 //! with the keys, then drive into a car escape zone. Logs every step; exits when it escapes (or gives up).
 //!
+//! `--bot-police`: fetch the phone box's fuse, put it in, call the police on its phone, then (the countdown cut
+//! to 3 s) walk into the escape volume they open; exits when she escapes.
 //! `--bot-heal`: fetch a first aid spray and use it (start hurt with `--health`); exits when healed.
 //! `--bot-door`: doors, barricades and windows ([`FX_STEPS`]): open/close/lock/unlock the nearest lockable door,
 //! barricade the nearest barred door and check it holds from both sides, then open a window, climb in, close it,
@@ -63,6 +65,8 @@ pub enum Goal {
     Power,
     /// Repair a car and sit in it, unstarted, near Jason: he should pull her out of it and kill her.
     CarGrab,
+    /// Fetch the phone box's fuse, put it in, call the police, and escape with them.
+    Police,
 }
 
 pub struct BotPlugin(pub Goal);
@@ -102,6 +106,8 @@ enum Step {
     Trap(u8),
     /// Repairing the fuse box (bot.fixtures[0]).
     Power,
+    /// Calling the police: fetch the fuse (0), put it in (1), call (2), wait for them and walk in (3).
+    Police(u8),
     Done,
 }
 
@@ -256,11 +262,11 @@ fn run_bot(
         Query<&mut crate::windows::Barricade>,
         Query<(&crate::jason::Jason, &Transform), (Without<Player>, Without<Vehicle>)>,
     ),
-    (escaped, spots, mut knowledge, game, traps): (
+    (escaped, spots, mut knowledge, mut game, traps): (
         Option<Res<Escaped>>,
         Query<(Entity, &crate::hiding::HidingSpot, &GlobalTransform)>,
         Query<&mut crate::senses::Knowledge>,
-        Option<Res<crate::match_flow::GameMatch>>,
+        Option<ResMut<crate::match_flow::GameMatch>>,
         Query<&Transform, (With<crate::items::ArmedTrap>, Without<Player>, Without<Vehicle>)>,
     ),
     (mut exit, play, fuse_boxes, grids): (
@@ -269,7 +275,7 @@ fn run_bot(
         Query<(Entity, &crate::power::FuseBox, &Transform), (Without<Player>, Without<Vehicle>)>,
         Option<Res<crate::power::PowerGrids>>,
     ),
-    (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
+    (collision, dynamic, (phone_boxes, phones, arrived, police_cars)): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, (Query<&crate::police::PhoneBox>, Query<&crate::police::Phone>, Option<Res<crate::police::PoliceArrived>>, Query<&Transform, (With<crate::police::PoliceCar>, Without<Player>, Without<Vehicle>)>)),
 ) {
     let world = collision.with(&dynamic);
     let dt = time.delta_secs();
@@ -322,6 +328,12 @@ fn run_bot(
         Step::Start => {
             // Let the map finish loading (in real time: frames hitch while assets stream in, whatever --speed).
             if bot.timer < 3.0 || real.elapsed_secs() < 6.0 {
+                return;
+            }
+            if bot.goal == Goal::Police {
+                info!("bot: {} phone boxes, {} phones", phone_boxes.iter().count(), phones.iter().count());
+                bot.step = Step::Police(0);
+                bot.timer = 0.0;
                 return;
             }
             if bot.goal == Goal::Power {
@@ -887,6 +899,134 @@ fn run_bot(
                 bot.step = Step::Done;
             }
         }
+        Step::Police(stage) => {
+            let Some(pb) = phone_boxes.iter().find(|b| b.phone.is_some()) else {
+                error!("bot: no phone box");
+                bot.step = Step::Done;
+                return;
+            };
+            // Holding E on a spot (a special move's, or a step out from the interact point), playing the pips.
+            let mut hold_at = |bot: &mut Bot, pxf: &mut Transform, interact: Vec3, stand: Option<Transform>| {
+                let at = stand.map_or(interact - Vec3::Y * 1.0, |s| s.translation + Vec3::Y * 0.9);
+                if !interaction.hold.as_ref().is_some_and(|h| h.started) {
+                    place(pxf, stand_spot(&world, at, 0.5).unwrap_or(at));
+                }
+                look_at(&mut camera, pxf, interact);
+                bot.hold_e = bot.timer > 0.3;
+                if bot.hold_e {
+                    keys.press(KeyCode::KeyE);
+                }
+                if let Some(h) = interaction.hold.as_ref().filter(|h| h.started) {
+                    if let Some(p) = h.current.map(|c| h.pips[c]) {
+                        if h.progress(&tuning.minigame) >= (p.position + p.width / 2.0) / 360.0 {
+                            mouse.press(if p.key == 0 { MouseButton::Right } else { MouseButton::Left });
+                        }
+                    }
+                }
+            };
+            match stage {
+                0 => {
+                    let Some(inv) = inv else { return };
+                    if inv.hand.iter().chain(inv.pockets.iter()).any(|&e| carried.get(e).is_ok_and(|it| pb.parts.contains(&it.class))) {
+                        info!("bot: have the fuse after {:.1}s", bot.total);
+                        bot.step = Step::Police(1);
+                        bot.timer = 0.0;
+                        return;
+                    }
+                    let parts = pb.parts.clone();
+                    if !go_fetch(&world, &mut bot, &mut camera, &parts, pb.interact, pxf, &items, &cabinets, &mut keys) {
+                        bot.step = Step::Done;
+                    }
+                }
+                1 => {
+                    if pb.repaired {
+                        info!("bot: phone box repaired after {:.1}s", bot.timer);
+                        bot.hold_e = false;
+                        bot.step = Step::Police(2);
+                        bot.timer = 0.0;
+                        return;
+                    }
+                    hold_at(&mut bot, pxf, pb.interact, pb.stand);
+                    if bot.timer > 60.0 {
+                        error!("bot: phone box repair not progressing");
+                        bot.hold_e = false;
+                        bot.step = Step::Done;
+                    }
+                }
+                2 => {
+                    let Some(phone) = pb.phone.and_then(|e| phones.get(e).ok()) else { return };
+                    if phone.called {
+                        bot.hold_e = false;
+                        // Test shortcut: the police come in 3 s instead of 300.
+                        if let Some(g) = game.as_mut() {
+                            info!("bot: police called after {:.1}s; cutting the countdown from {} s to 3", bot.timer, g.state.police_time_remaining);
+                            g.state.police_time_remaining = g.state.police_time_remaining.min(3);
+                        }
+                        bot.step = Step::Police(3);
+                        bot.timer = 0.0;
+                        return;
+                    }
+                    hold_at(&mut bot, pxf, phone.interact, phone.stand);
+                    if bot.timer > 60.0 {
+                        error!("bot: phone call not progressing");
+                        bot.hold_e = false;
+                        bot.step = Step::Done;
+                    }
+                }
+                _ => {
+                    if escaped.is_some() {
+                        info!("bot: escaped with the police after {:.1}s", bot.total);
+                        bot.step = Step::Done;
+                        bot.timer = 0.0;
+                        return;
+                    }
+                    let Some(a) = &arrived else {
+                        if bot.timer > 20.0 {
+                            error!("bot: the police never came");
+                            bot.step = Step::Done;
+                        }
+                        return;
+                    };
+                    let Ok((zone, zxf)) = zones.get(a.zone) else { return };
+                    // A look at the police car first (from 7 m behind it, on its road).
+                    if !bot.jason_shots.contains(&"arrived") {
+                        bot.jason_shots.push("arrived");
+                        bot.timer = 0.0;
+                    }
+                    if !bot.jason_shots.contains(&"police") {
+                        if let Some(car) = police_cars.iter().next() {
+                            let side = -(car.rotation * Vec3::X);
+                            let from = car.translation + side * 7.0 + Vec3::Y * 2.0;
+                            place(pxf, stand_spot(&world, from, 3.0).unwrap_or(from));
+                            look_at(&mut camera, pxf, car.translation + Vec3::Y * 0.5);
+                            if bot.timer > 2.0 {
+                                bot.jason_shots.push("police");
+                                let path = std::env::temp_dir().join("f13-bot-police.png");
+                                info!("bot: screenshot {}", path.display());
+                                commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+                            }
+                            return;
+                        }
+                    }
+                    // Start 3 m outside the volume and walk in.
+                    if !bot.placed_car {
+                        bot.placed_car = true;
+                        let c = zxf.translation();
+                        let out = (zone.trigger - c).with_y(0.0).normalize_or(Vec3::X);
+                        let from = c + out * (zone.radius_m + 3.0) + Vec3::Y * 2.0;
+                        let at = stand_spot(&world, from, 2.0).unwrap_or(from);
+                        info!("bot: walking into the police's escape from ({:.0}, {:.0}, {:.0})", at.x, at.y, at.z);
+                        place(pxf, at);
+                        look_at(&mut camera, pxf, c.with_y(at.y + 1.0));
+                    }
+                    keys.press(KeyCode::KeyW);
+                    if bot.timer > 30.0 {
+                        error!("bot: did not reach the police: at ({:.1}, {:.1}, {:.1}), {:.1} m from the volume's centre (radius {:.1})", pxf.translation.x, pxf.translation.y, pxf.translation.z, pxf.translation.distance(zxf.translation()), zone.radius_m);
+                        bot.step = Step::Done;
+                    }
+                }
+            }
+        }
         Step::Trap(stage) => {
             let trap = traps.iter().next().map(|t| t.translation);
             match stage {
@@ -1274,7 +1414,7 @@ fn run_bot(
             }
             if bot.timer > if bot.goal == Goal::Jason { 4.0 } else { 2.0 } {
                 let ok = match bot.goal {
-                    Goal::Escape => escaped.is_some(),
+                    Goal::Escape | Goal::Police => escaped.is_some(),
                     Goal::Heal => p.counselor.health >= 100.0,
                     Goal::Dodge => bot.dodges_ok == 3,
                     Goal::Door => bot.door_ok,
@@ -1329,6 +1469,7 @@ fn run_bot(
                     Goal::Heal => &[&["UseFirstAid"]],
                     Goal::Door => &[&["BarricadeDoor"]],
                     Goal::Power => &[&["GridPartRepaired"]],
+                    Goal::Police => &[&["GridPartRepaired"], &["CallPolice"], &["Escape"]],
                     Goal::Fight => &[&["StunJason", "StunJasonShotgun", "StunJasonFlare", "FirecrackerJasonStun", "EscapeJasonGrab", "Trapper"]],
                     // Her death ends the match.
                     Goal::Jason | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities | Goal::Block | Goal::CarGrab => &[&["CompletedMatch"]],

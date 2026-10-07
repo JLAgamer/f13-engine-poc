@@ -68,6 +68,9 @@ enum Target {
     Hide(Entity),
     /// A destroyed fuse box to repair (power.rs).
     FuseBox(Entity),
+    /// The phone box, to put its fuse in; the phone, to call the police (police.rs).
+    PhoneBox(Entity),
+    Phone(Entity),
 }
 
 #[derive(Resource, Default)]
@@ -219,6 +222,29 @@ pub struct RepairAnim {
     t: f32,
 }
 
+/// Her take of a repair's part ("start", "cycle", "stop", "cancel"): `{base}_{part}`, except the phone box's
+/// (enter, cycle, exit, fail).
+fn repair_take(base: &str, part: &str) -> String {
+    let part = match (base == crate::police::PHONE_BOX_TAKE, part) {
+        (true, "start") => "enter",
+        (true, "stop") => "exit",
+        (true, "cancel") => "fail",
+        _ => part,
+    };
+    format!("{base}_{part}")
+}
+
+fn start_repair_anim(commands: &mut Commands, player: Entity, base: &str) {
+    commands.entity(player).insert((RepairAnim { base: base.to_string(), part: "start", t: 0.0 }, crate::character::PlayAction(repair_take(base, "start"))));
+}
+
+/// On a special move's spot (world), facing its forward (Unreal +X; she faces +Z), on her floor.
+fn stand_on(player: &mut Transform, at: Transform) {
+    let (yaw, _, _) = at.rotation.to_euler(EulerRot::YXZ);
+    player.translation = Vec3::new(at.translation.x, player.translation.y, at.translation.z);
+    player.rotation = Quat::from_rotation_y(yaw + std::f32::consts::FRAC_PI_2);
+}
+
 fn repair_anims(
     mut commands: Commands,
     time: Res<Time>,
@@ -228,13 +254,13 @@ fn repair_anims(
     let len = |n: &str| model.as_ref().and_then(|m| m.length(n)).unwrap_or(1.0);
     for (pe, mut r) in &mut players {
         r.t += time.delta_secs();
-        let name = format!("{}_{}", r.base, r.part);
+        let name = repair_take(&r.base, r.part);
         let over = r.t >= len(&name);
         match r.part {
             "start" if over => {
                 r.part = "cycle";
                 r.t = 0.0;
-                commands.entity(pe).insert(crate::character::PlayAction(format!("{}_cycle", r.base)));
+                commands.entity(pe).insert(crate::character::PlayAction(repair_take(&r.base, "cycle")));
             }
             "stop" | "cancel" if over => {
                 commands.entity(pe).remove::<(RepairAnim, crate::character::PlayAction)>();
@@ -248,7 +274,7 @@ fn repair_anims(
 fn end_repair_anim(commands: &mut Commands, player: Entity, base: Option<&String>, done: bool) {
     let Some(base) = base else { return };
     let part = if done { "stop" } else { "cancel" };
-    commands.entity(player).insert((RepairAnim { base: base.clone(), part, t: 0.0 }, crate::character::PlayAction(format!("{base}_{part}"))));
+    commands.entity(player).insert((RepairAnim { base: base.clone(), part, t: 0.0 }, crate::character::PlayAction(repair_take(base, part))));
 }
 
 /// She's playing a door's lock or unlock take while she holds E on it.
@@ -407,6 +433,7 @@ fn choose_target(
     windows: Query<(Entity, &Window, &GlobalTransform)>,
     barricades: Query<&Barricade>,
     (spots, fuse_boxes): (Query<(Entity, &crate::hiding::HidingSpot, &GlobalTransform)>, Query<(Entity, &crate::power::FuseBox)>),
+    (phone_boxes, phones): (Query<(Entity, &crate::police::PhoneBox)>, Query<(Entity, &crate::police::Phone)>),
     mut interaction: ResMut<Interaction>,
 ) {
     if interaction.busy() {
@@ -470,6 +497,16 @@ fn choose_target(
             consider(f.interact, f.reach, Target::FuseBox(e));
         }
     }
+    for (e, b) in &phone_boxes {
+        if !b.repaired && has_part(inv, &carried, &b.parts) {
+            consider(b.interact, b.reach, Target::PhoneBox(e));
+        }
+    }
+    for (e, p) in &phones {
+        if p.enabled {
+            consider(p.interact, p.reach, Target::Phone(e));
+        }
+    }
     let target = best.map(|(_, t)| t);
     if target != interaction.target {
         interaction.hold = None;
@@ -493,7 +530,7 @@ fn act(
     mut drawers: Query<(&Drawer, &mut Transform), Without<Player>>,
     mut vehicles: Query<&mut Vehicle>,
     mut doors: Query<(&mut Door, &GlobalTransform)>,
-    (windows, mut barricades): (Query<(&mut Window, &GlobalTransform)>, Query<&mut Barricade>),
+    (windows, mut barricades, (mut phone_boxes, mut phones, mut game, match_tuning)): (Query<(&mut Window, &GlobalTransform)>, Query<&mut Barricade>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<ResMut<crate::match_flow::GameMatch>>, Option<Res<crate::match_flow::MatchTuning>>)),
     (mut visibility, mut fuse_boxes, mut grids, vehicle_xfs): (Query<&mut Visibility>, Query<&mut crate::power::FuseBox>, Option<ResMut<crate::power::PowerGrids>>, Query<&GlobalTransform, With<Vehicle>>),
 ) {
     let Some(target) = interaction.target else { return };
@@ -553,13 +590,10 @@ fn act(
                         info!("repair started: {} pips, {:.1}s at x{:.2}", hold.pips.len(), hold.hold_time, tuning.minigame.speed_mod.value(&p.counselor.stats, false));
                         // On its special move's spot, facing its forward (Unreal +X; she faces +Z), on her floor.
                         if let (Some(stand), Ok(vxf)) = (r.stand, vehicle_xfs.get(v)) {
-                            let at = vxf.mul_transform(stand).compute_transform();
-                            let (yaw, _, _) = at.rotation.to_euler(EulerRot::YXZ);
-                            player_xf.translation = Vec3::new(at.translation.x, player_xf.translation.y, at.translation.z);
-                            player_xf.rotation = Quat::from_rotation_y(yaw + std::f32::consts::FRAC_PI_2);
+                            stand_on(player_xf, vxf.mul_transform(stand).compute_transform());
                         }
                         if let Some(base) = &r.anim {
-                            commands.entity(player_entity).insert((RepairAnim { base: base.clone(), part: "start", t: 0.0 }, crate::character::PlayAction(format!("{base}_start"))));
+                            start_repair_anim(&mut commands, player_entity, base);
                         }
                     }
                     MinigameEvent::Hit => info!("pip hit (bonus x{:.1})", hold.bonus),
@@ -613,6 +647,73 @@ fn act(
                 crate::power::set_destroyed(&mut fuse, false, g);
             }
             commands.trigger(ClassScore::new(&fuse.class, "RepairScoreEvent"));
+            interaction.hold = None;
+            interaction.target = None;
+        }
+        Target::PhoneBox(b) => {
+            // Putting the fuse in: a hold with the repair minigame, on its special move's spot.
+            let Ok(mut pb) = phone_boxes.get_mut(b) else { return };
+            if !keys.pressed(KeyCode::KeyE) {
+                if interaction.hold.take().is_some_and(|h| h.started) {
+                    info!("phone box repair cancelled");
+                    end_repair_anim(&mut commands, player_entity, Some(&crate::police::PHONE_BOX_TAKE.to_string()), false);
+                }
+                return;
+            }
+            let hold = interaction.hold.get_or_insert_with(|| HoldInteraction::new(pb.hold_time, pb.has_pips));
+            let mut events = Vec::new();
+            for (button, key) in [(MouseButton::Right, 0), (MouseButton::Left, 1)] {
+                if mouse.just_pressed(button) {
+                    hold.press(key, &tuning.minigame, &mut events);
+                }
+            }
+            hold.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
+            if events.contains(&MinigameEvent::Started) {
+                info!("phone box repair started: {} pips, {:.1}s", hold.pips.len(), hold.hold_time);
+                if let Some(stand) = pb.stand {
+                    stand_on(player_xf, stand);
+                }
+                start_repair_anim(&mut commands, player_entity, crate::police::PHONE_BOX_TAKE);
+            }
+            if !events.contains(&MinigameEvent::Completed) {
+                return;
+            }
+            let parts = pb.parts.clone();
+            let Some(used) = take_part(inv, &items, &parts) else { return };
+            commands.entity(used).despawn();
+            crate::police::repair_phone_box(&mut pb, &mut phones);
+            end_repair_anim(&mut commands, player_entity, Some(&crate::police::PHONE_BOX_TAKE.to_string()), true);
+            info!("phone box repaired: the phone works");
+            commands.trigger(crate::audio::ActorSound { actor: player_entity, prop: "VO:AppliedLastPart" });
+            commands.trigger(ClassScore::new(&pb.class, "RepairScoreEvent"));
+            interaction.hold = None;
+            interaction.target = None;
+        }
+        Target::Phone(ph) => {
+            // Calling the police: a plain hold (no pips) on the phone's spot.
+            let Ok(mut phone) = phones.get_mut(ph) else { return };
+            if !keys.pressed(KeyCode::KeyE) {
+                if interaction.hold.take().is_some_and(|h| h.started) {
+                    info!("phone call cancelled");
+                    end_repair_anim(&mut commands, player_entity, Some(&crate::police::PHONE_TAKE.to_string()), false);
+                }
+                return;
+            }
+            let hold = interaction.hold.get_or_insert_with(|| HoldInteraction::new(phone.hold_time, false));
+            let mut events = Vec::new();
+            hold.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
+            if events.contains(&MinigameEvent::Started) {
+                info!("calling the police: {:.1}s", hold.hold_time);
+                if let Some(stand) = phone.stand {
+                    stand_on(player_xf, stand);
+                }
+                start_repair_anim(&mut commands, player_entity, crate::police::PHONE_TAKE);
+            }
+            if !events.contains(&MinigameEvent::Completed) {
+                return;
+            }
+            end_repair_anim(&mut commands, player_entity, Some(&crate::police::PHONE_TAKE.to_string()), true);
+            crate::police::call_police(&mut commands, &mut phone, game.as_deref_mut(), match_tuning.as_deref(), player_entity);
             interaction.hold = None;
             interaction.target = None;
         }
@@ -896,6 +997,14 @@ fn update_prompt(
             }
             Some(Target::Seat(_)) => lines.push("[E] Get in (driver)".into()),
             Some(Target::Hide(_)) => lines.push("[E] Hide".into()),
+            Some(Target::PhoneBox(_)) => lines.push(match &interaction.hold {
+                Some(h) if h.started => format!("Putting the fuse in: {:.0}%", h.progress(&tuning.minigame) * 100.0),
+                _ => "[Hold E] Put the fuse in the phone box".into(),
+            }),
+            Some(Target::Phone(_)) => lines.push(match &interaction.hold {
+                Some(h) if h.started => format!("Calling the police: {:.0}%", h.progress(&tuning.minigame) * 100.0),
+                _ => "[Hold E] Call the police".into(),
+            }),
             Some(Target::FuseBox(_)) => lines.push(match &interaction.hold {
                 Some(h) if h.started => format!("Repairing the fuse box: {:.0}%", h.progress(&tuning.minigame) * 100.0),
                 _ => "[Hold E] Repair the fuse box".into(),

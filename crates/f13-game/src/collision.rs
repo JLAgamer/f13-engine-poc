@@ -134,6 +134,12 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
             }
         }
         for a in &layout.actors {
+            // The police's blockers come down when they arrive (police.rs): colliders of their own.
+            if crate::police::is_blocker(&a.name) {
+                let tris: Vec<Tri> = a.hulls.iter().flat_map(|h| hull_from_unreal(h)).collect();
+                commands.spawn((Collider(std::sync::Arc::new(tris)), Transform::IDENTITY, Visibility::default(), crate::police::Blocker, Name::new(a.name.clone())));
+                continue;
+            }
             for h in &a.hulls {
                 for t in hull_from_unreal(h) {
                     grid.insert(t);

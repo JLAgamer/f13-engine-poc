@@ -76,6 +76,8 @@ pub fn spawn_settings(world_settings: &serde_json::Value) -> SpawnSettings {
         min_vehicle_spawn_distance: f("MinVehicleSpawnDistance"),
         min_vehicle_part_spawn_distance: f("MinVehiclePartSpawnDistance"),
         max_car_part_distance: f("MaxCarPartDistance"),
+        max_fuse_distance: f("MaxFuseDistance"),
+        min_fuse_spawn_distance: f("MinFuseSpawnDistance"),
     }
 }
 
@@ -150,6 +152,11 @@ impl MatchWorld {
             }
             if s.component == "ActorSpawner" && classes.is_child_of(owner, "SCRepairPartSpawner") {
                 sw.part_spawners.push(i);
+            }
+        }
+        for actor in &w.actors {
+            if classes.is_child_of(&actor.class, "SCPhoneJunctionBox") {
+                sw.phone_boxes.push((actor.transform.t, actor.class.clone()));
             }
         }
         for (a, actor) in w.actors.iter().enumerate() {
@@ -275,7 +282,7 @@ mod export_tests {
                 assert!(worst.1 <= 3, "SL{layout} seed {seed}: {} items at {:?}", worst.1, worst.0);
                 assert!(count(SpawnKind::Vehicle) >= 1);
                 let parts = classes_of(SpawnKind::RepairPart);
-                for p in ["BP_CarBattery_C", "CarGasCan_C", "CarKeys_C"] {
+                for p in ["BP_CarBattery_C", "CarGasCan_C", "CarKeys_C", "PhoneBoxFuse_C"] {
                     assert!(parts.contains(&p), "SL{layout} seed {seed}: no {p}");
                 }
             }
