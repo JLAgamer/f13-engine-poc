@@ -151,7 +151,8 @@ Presentation
       pass); a powered light's fixture glows at 10 while its grid has power and goes dark in a cut (the light
       component's OnVisibilityChanged), seen in screenshots. The fixtures hanging off powered light components were
       exported at their offset from the light (piled near the map origin): now placed in the cabins
-- [ ] Power curves: the powered lights' flicker as power goes and comes back (a curve over intensity and Glow)
+- [x] Power curves: none on Crystal Lake (only Higgins Haven's layouts give lights a PowerOff/PowerOn flicker curve; without
+      one the light component switches at once, as here)
 - [ ] Materials, remaining: water (first pass only: colour, gloss, panning ripples; no depth fade, foam or
       reflections), POM parallax, the other emissive masters (signs, the CB tower, the phone box), foliage
       subsurface, the Chevette's paint mask
