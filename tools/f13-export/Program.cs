@@ -808,8 +808,10 @@ static class Mvp
         "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Doors/f_normal_stand_door_close_outside_forward",
         "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Doors/f_normal_stand_door_lock",
         "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Doors/f_normal_stand_door_unlock",
-        // In the car: sitting (driving, idle), getting in and out on the driver's side.
+        // In the car: sitting (driving, steering, idle), getting in and out on the driver's side.
         "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_drive_forward",
+        "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_drive_forward_turnleft",
+        "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_drive_forward_turnright",
         "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_ride_idle",
         "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_stand_car_enter_left",
         "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_exit_left",

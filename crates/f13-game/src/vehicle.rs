@@ -68,8 +68,9 @@ impl SeatMove {
 
 const ENTER_TAKE: &str = "f_normal_stand_car_enter_left";
 const EXIT_TAKE: &str = "f_normal_sit_car_exit_left";
-/// Her take while she drives.
+/// Her take while she drives, and while she steers left or right.
 pub const DRIVE_TAKE: &str = "f_normal_sit_car_drive_forward";
+const STEER_TAKES: [&str; 2] = ["f_normal_sit_car_drive_forward_turnleft", "f_normal_sit_car_drive_forward_turnright"];
 
 /// The counselor has escaped; the match is over for them.
 #[derive(Resource)]
@@ -227,14 +228,23 @@ fn follow_vehicle(
     mut commands: Commands,
     time: Res<Time>,
     model: Option<Res<crate::character::CounselorCharacter>>,
-    mut player: Single<(Entity, &mut Driving, &mut Transform), With<Player>>,
+    mut player: Single<(Entity, &mut Driving, &mut Transform, Option<&crate::character::PlayAction>), With<Player>>,
     vehicles: Query<(&Vehicle, &Transform), Without<Player>>,
 ) {
-    let (pe, ref mut d, ref mut xf) = *player;
+    let (pe, ref mut d, ref mut xf, action) = *player;
     let Ok((v, vxf)) = vehicles.get(d.vehicle) else { return };
     let seat = *vxf * v.sitting * Transform::from_xyz(0.0, -crate::player::CAPSULE_HALF_HEIGHT_M, 0.0).with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2));
     let Some(m) = d.seat_move.as_mut() else {
         **xf = seat;
+        // Steering: her turn take while the wheel is (mostly) over.
+        let take = match v.steer {
+            s if s < -0.5 => STEER_TAKES[0],
+            s if s > 0.5 => STEER_TAKES[1],
+            _ => DRIVE_TAKE,
+        };
+        if action.is_none_or(|a| a.0 != take) {
+            commands.entity(pe).insert(crate::character::PlayAction(take.into()));
+        }
         return;
     };
     m.t += time.delta_secs();
