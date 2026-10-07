@@ -161,6 +161,7 @@ fn demo(
     mut controls: ResMut<JasonControls>,
     jason: Query<(&crate::jason::Jason, &Transform)>,
     her: Query<&Transform, (With<crate::player::Player>, Without<crate::jason::Jason>)>,
+    fuse_boxes: Query<&crate::power::FuseBox>,
     mut done: Local<(bool, bool, f32)>,
     time: Res<Time>,
 ) {
@@ -186,7 +187,12 @@ fn demo(
     if !matches!(j.state, crate::jason::JasonState::Hunting) || now - *last < 1.0 {
         return;
     }
-    if !*knife && j.knives > 0 && (8.0..20.0).contains(&dist) {
+    // An intact fuse box at hand: break it (E).
+    if fuse_boxes.iter().any(|f| !f.destroyed && Vec2::new(f.interact.x - jxf.translation.x, f.interact.z - jxf.translation.z).length() * 100.0 <= f.reach) {
+        *last = now;
+        controls.latched.interact = true;
+        info!("jason demo: breaking the fuse box at hand");
+    } else if !*knife && j.knives > 0 && (8.0..20.0).contains(&dist) {
         *knife = true;
         *last = now;
         controls.latched.knife = true;

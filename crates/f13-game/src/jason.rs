@@ -150,6 +150,8 @@ const KNIFE_AIM: &str = "normal_stand_knife_aim_01";
 const KNIFE_THROW: &str = "normal_stand_knife_throw_01";
 /// AM_normal_stand_trap_set.
 const TRAP_SET: &str = "normal_stand_trap_set";
+/// Destroying a fuse box: AM_Break_Electronic_Box_Machete's take.
+const BREAK_FUSE: &str = "normal_stand_door_break_machete_enter";
 const MORPH_MIN_M: f32 = 50.0;
 const STALK_RANGE_M: f32 = 40.0;
 /// He starts a hiding spot's search or kill this close (m) to its spot.
@@ -295,6 +297,9 @@ pub enum JasonState {
     Throwing { t: f32, thrown: bool },
     /// Setting a trap: s into it.
     PlacingTrap { t: f32 },
+    /// Destroying a fuse box (Jason_Generator_Destruction_Machete's montage): it goes in the montage's
+    /// DestroyGenerator driver window.
+    BreakingFuse { t: f32, fuse: Entity, done: bool },
     /// The counselor is dead.
     Done,
 }
@@ -939,7 +944,7 @@ pub(crate) fn update_jason(
     (inventories, items, mut fuse_boxes, mut grids, vehicles): (
         Query<&crate::interact::Inventory>,
         Query<&crate::props::Item>,
-        Query<&mut crate::power::FuseBox>,
+        Query<(Entity, &mut crate::power::FuseBox)>,
         Option<ResMut<crate::power::PowerGrids>>,
         Query<(&crate::props::Vehicle, &GlobalTransform)>,
     ),
@@ -1015,6 +1020,7 @@ pub(crate) fn update_jason(
                         | JasonState::Shifting { .. }
                         | JasonState::Throwing { .. }
                         | JasonState::PlacingTrap { .. }
+                        | JasonState::BreakingFuse { .. }
                 );
             match h.stun {
                 Some(stun) if can_stun => {
@@ -1122,16 +1128,16 @@ pub(crate) fn update_jason(
                         commands.entity(je).insert(PlayAction(TRAP_SET.into()));
                         continue;
                     }
-                    // A fuse box at hand: a blow cuts its power (the game's Jason_Generator_Destruction move).
+                    // A fuse box at hand: his Jason_Generator_Destruction move cuts its power.
                     if p.interact && j.cooldown <= 0.0 {
                         let here = xf.translation;
-                        if let Some(mut fuse) = fuse_boxes.iter_mut().filter(|f| !f.destroyed).find(|f| Vec2::new(f.interact.x - here.x, f.interact.z - here.z).length() * 100.0 <= f.reach + 100.0) {
-                            if let Some(g) = grids.as_mut() {
-                                crate::power::set_destroyed(&mut fuse, true, g);
-                            }
-                            info!("Jason: destroyed a fuse box");
-                            j.state = JasonState::Swinging { t: 0.0, hit: true, heavy: false };
-                            commands.entity(je).insert(PlayAction(ATTACK.into()));
+                        if let Some((fe, fuse)) = fuse_boxes.iter().filter(|(_, f)| !f.destroyed).find(|(_, f)| Vec2::new(f.interact.x - here.x, f.interact.z - here.z).length() * 100.0 <= f.reach + 100.0) {
+                            info!("Jason: breaking a fuse box");
+                            let to = fuse.interact - xf.translation;
+                            xf.rotation = Quat::from_rotation_y(to.x.atan2(to.z));
+                            j.state = JasonState::BreakingFuse { t: 0.0, fuse: fe, done: false };
+                            j.velocity = Vec2::ZERO;
+                            commands.entity(je).insert(PlayAction(BREAK_FUSE.into()));
                             continue;
                         }
                     }
@@ -1454,6 +1460,25 @@ pub(crate) fn update_jason(
                     commands.entity(je).remove::<PlayAction>();
                 } else {
                     j.state = JasonState::Throwing { t: at, thrown };
+                }
+            }
+            JasonState::BreakingFuse { t: at, fuse, done } => {
+                let at = at + dt;
+                j.velocity = Vec2::ZERO;
+                let window = killer.info.animations.get(BREAK_FUSE).and_then(|a| a.windows.iter().find(|w| w.name == "Driver: DestroyGenerator")).map_or(1.0, |w| w.start);
+                let mut done = done;
+                if !done && at >= window {
+                    done = true;
+                    if let (Ok((_, mut f)), Some(g)) = (fuse_boxes.get_mut(fuse), grids.as_mut()) {
+                        crate::power::set_destroyed(&mut f, true, g);
+                        info!("Jason: destroyed a fuse box");
+                    }
+                }
+                if at >= killer.length(BREAK_FUSE).unwrap_or(2.0) {
+                    j.state = JasonState::Hunting;
+                    commands.entity(je).remove::<PlayAction>();
+                } else {
+                    j.state = JasonState::BreakingFuse { t: at, fuse, done };
                 }
             }
             JasonState::PlacingTrap { t: at } => {

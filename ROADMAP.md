@@ -110,8 +110,9 @@ Mechanics: Jason side
 - [ ] Kills, remaining: the other weapons' kills, environment (placed) kills, choosing kills as the player
 - [x] Generators (power.rs): the fuse boxes and their power grids; a destroyed fuse box puts out the powered lights
       in its grid's box (and they stop lighting her: darkness fear) and lights its red power-out light; counselors
-      repair it (hold E, 15 s, pips), Jason destroys it (the player's E)
-- [ ] Generators, remaining: the computer Jason cutting the power
+      repair it (hold E, 15 s, pips), Jason destroys it (the player's E: Jason_Generator_Destruction_Machete's
+      montage, the power going in its DestroyGenerator window); its generator hums while it's intact. The game's
+      computer Jason doesn't cut power (its behavior assets don't use fuse boxes)
 - [x] Breaking walls (SCDestructibleWall in the cabin layouts): Jason breaks through a wall in his way (the player
       walking into it; the AI when it stands between him and her), the door break's montage and timing, his world
       damage against its BaseHealth 60; the section and its collision go

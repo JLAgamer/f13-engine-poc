@@ -995,6 +995,8 @@ static class Mvp
         $"{JasonAnim}/Interaction/Doors/AM_normal_stand_door_open_inside",
         $"{JasonAnim}/Interaction/Doors/AM_normal_stand_door_open_outside",
         $"{JasonAnim}/Interaction/Doors/AM_normal_stand_door_break_axe",
+        // Destroying a fuse box (Jason_Generator_Destruction_Machete: his weapon isn't the axe).
+        $"{JasonAnim}/Interaction/AM_Break_Electronic_Box_Machete",
         // Raged, he bursts through a closed door instead (BurstDoorFrom*: Jason_WallSmash).
         $"{JasonAnim}/Abilities/AM_Jason_uber_stand_wall_smash_02",
         .. JasonKills,

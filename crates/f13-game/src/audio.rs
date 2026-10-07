@@ -55,6 +55,7 @@ impl Plugin for AudioPlugin {
             .add_observer(footstep)
             .add_observer(actor_sound)
             .add_observer(actor_loop)
+            .add_observer(stop_loop)
             .add_observer(music_stinger)
             .add_observer(dropped);
     }
@@ -104,6 +105,25 @@ pub struct ActorLoop {
     pub prop: &'static str,
 }
 
+/// Stop the loop `actor` plays under `prop` (see [`ActorLoop`]).
+#[derive(Event, Clone, Copy, Debug)]
+pub struct StopLoop {
+    pub actor: Entity,
+    pub prop: &'static str,
+}
+
+/// A voice of the loop an actor plays under this property.
+#[derive(Component)]
+struct LoopOf(&'static str);
+
+fn stop_loop(ev: On<StopLoop>, mut commands: Commands, voices: Query<(Entity, &LoopOf, &ChildOf)>) {
+    for (e, l, parent) in &voices {
+        if parent.parent() == ev.actor && l.0 == ev.prop {
+            commands.entity(e).despawn();
+        }
+    }
+}
+
 /// An item put down (its class's DroppedSoundCue, where it lands).
 #[derive(Event, Clone, Copy, Debug)]
 pub struct Dropped {
@@ -132,7 +152,7 @@ fn actor_loop(
     for v in voices {
         let settings = PlaybackSettings { mode: PlaybackMode::Loop, speed: v.pitch, volume: Volume::Linear(v.volume), ..PlaybackSettings::LOOP };
         let source = AudioPlayer::new(assets.load(format!("sounds/{}", v.file)));
-        let mut e = commands.spawn((source, settings, Transform::from_translation(Vec3::Y), ChildOf(ev.actor)));
+        let mut e = commands.spawn((source, settings, Transform::from_translation(Vec3::Y), ChildOf(ev.actor), LoopOf(ev.prop)));
         if let Some(att) = att.clone().filter(|a| a.attenuate || a.spatialize) {
             e.insert((PlaybackSettings { spatial: att.spatialize, spatial_scale: Some(SpatialScale::new(SPATIAL_SCALE)), ..settings }, Emitter { volume: v.volume, attenuation: att }));
         }

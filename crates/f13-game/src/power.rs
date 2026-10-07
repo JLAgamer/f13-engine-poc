@@ -25,7 +25,7 @@ impl Plugin for PowerPlugin {
         app.insert_resource(CutPower(self.cut))
             .init_resource::<PowerGrids>()
             .add_systems(Startup, spawn_fuse_boxes)
-            .add_systems(Update, (find_fixtures, mark_fixtures, apply_power, dim_fixtures).chain());
+            .add_systems(Update, (find_fixtures, mark_fixtures, apply_power, dim_fixtures, hum).chain());
     }
 }
 
@@ -115,6 +115,13 @@ fn spawn_fuse_boxes(mut commands: Commands, level: Res<crate::Level>, export: Re
         let at = crate::to_transform(&local.then(&t)).translation;
         let props = interact.map(|c| &c.props);
         let destroyed = cut.0 || a.props["bStartDestroyed"].as_bool().unwrap_or(false);
+        // Its generator's hum (the GeneratorIdleSound audio component).
+        let sounds: std::collections::HashMap<String, String> = info
+            .into_iter()
+            .flat_map(|c| &c.components)
+            .filter(|c| c.kind == "AudioComponent")
+            .filter_map(|c| Some((c.name.clone(), crate::audio::cue_name(&c.props["Sound"])?)))
+            .collect();
         commands.spawn((
             FuseBox {
                 class: a.class.clone(),
@@ -127,6 +134,8 @@ fn spawn_fuse_boxes(mut commands: Commands, level: Res<crate::Level>, export: Re
             },
             crate::to_transform(&t),
             Name::new(a.name.clone()),
+            crate::audio::ClassSounds(sounds),
+            Humming(false),
         ));
         if let (Some(g), true) = (grid, destroyed) {
             grids.grids[g].on = false;
@@ -199,6 +208,24 @@ fn dim_fixtures(grids: Res<PowerGrids>, fixtures: Query<(&Fixture, &MeshMaterial
             if let Some(mut mat) = materials.get_mut(&m.0) {
                 mat.extension.set_glow(glow);
             }
+        }
+    }
+}
+
+/// The fuse box's generator hums while it's intact.
+#[derive(Component)]
+struct Humming(bool);
+
+fn hum(mut commands: Commands, mut boxes: Query<(Entity, &FuseBox, &mut Humming)>) {
+    for (e, f, mut h) in &mut boxes {
+        if h.0 == !f.destroyed {
+            continue;
+        }
+        h.0 = !f.destroyed;
+        if h.0 {
+            commands.trigger(crate::audio::ActorLoop { actor: e, prop: "GeneratorIdleSound" });
+        } else {
+            commands.trigger(crate::audio::StopLoop { actor: e, prop: "GeneratorIdleSound" });
         }
     }
 }
