@@ -142,6 +142,8 @@ pub struct JasonInput {
     /// The attack and knife buttons held.
     pub attack_held: bool,
     pub knife_held: bool,
+    /// The right mouse button held (CMBT_KLR_Block in combat stance).
+    pub block_held: bool,
     pub presses: Presses,
 }
 
@@ -165,6 +167,7 @@ impl JasonControls {
             look,
             attack_held: self.mouse.pressed(MouseButton::Left),
             knife_held: self.mouse.pressed(MouseButton::Middle),
+            block_held: self.mouse.pressed(MouseButton::Right),
             presses: std::mem::take(&mut self.latched),
         }
     }

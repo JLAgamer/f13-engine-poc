@@ -115,8 +115,9 @@ pub struct CharacterModel {
 
 /// Takes the anim Blueprints play in a layered bone blend's layer (sampled here: [`layered_blend`]): Jason_AnimBP's
 /// GrabState machine's Idle (its Struggle state needs the counselor's bIsStruggling, which nothing sets: its only
-/// setter, SCCharacter::SetStruggling, is called by no code or Blueprint); her block idle's CombatUpperBody track.
-const LAYER_TAKES: [&str; 2] = ["normal_grab_idle", BLOCK_IDLE];
+/// setter, SCCharacter::SetStruggling, is called by no code or Blueprint); her block idle's CombatUpperBody track;
+/// his (Jason_AnimBP's CombatUpperBody).
+const LAYER_TAKES: [&str; 3] = ["normal_grab_idle", BLOCK_IDLE, crate::jason::BLOCK];
 
 /// Base_Counselor_AnimBP's CombatUpperBody slot: a LayeredBoneBlend over her stance pose (spine_01, BlendDepth 2,
 /// bMeshSpaceRotationBlend), chosen over the CombatFullBody slot while she moves (BlendListByBool on bIsMoving:
@@ -711,6 +712,15 @@ pub struct LayeredBlend {
 impl LayeredBlend {
     pub fn new(filters: &'static [(&'static str, i32)], mesh_space: bool, take: &'static str) -> Self {
         LayeredBlend { weight: 0.0, filters, mesh_space, take, t: 0.0 }
+    }
+
+    /// Another layer in the same node's place (its take, from the start, and its branch filters).
+    pub fn switch(&mut self, filters: &'static [(&'static str, i32)], take: &'static str) {
+        if self.take != take {
+            self.take = take;
+            self.t = 0.0;
+        }
+        self.filters = filters;
     }
 }
 

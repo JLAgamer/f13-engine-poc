@@ -1253,6 +1253,10 @@ static class Mvp
         $"{JasonAnim}/Grab/normal_grab_idle",
         $"{JasonAnim}/Grab/normal_grab_miss",
         $"{JasonAnim}/Grab/AM_Jason_normal_grab_break",
+        // His block (Jason_AnimBP's BlockMontages) and the reactions to a blocked hit (BlockingHitMontages).
+        $"{JasonAnim}/Combat/Block/AM_Jason_Combat_Block",
+        $"{JasonAnim}/Combat/Block/AM_combat_stand_1h_block_reaction_01",
+        $"{JasonAnim}/Combat/Block/AM_combat_stand_1h_block_reaction_02",
         // Stuns (BaseWeaponStun_C / FlareWeaponStun_C, FirecrackerKillerStun_C, the pocket knife, bear traps) and
         // hit reactions.
         $"{JasonStun}/Stun/AM_combat_Falling_stun",

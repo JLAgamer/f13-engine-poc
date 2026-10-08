@@ -126,6 +126,11 @@ const GRAB_IDLE: &str = "normal_grab_idle";
 /// space (bMeshSpaceRotationBlend); its layer is the GrabState machine's Idle (GRAB_IDLE).
 const GRAB_LAYER_FILTERS: &[(&str, i32)] = &[("spine_01", 3), ("target_jnt", 0)];
 const GRAB_MISS: &str = "normal_grab_miss";
+/// Jason_AnimBP's CombatUpperBody layer (LayeredBoneBlend_36EE: spine_01 BlendDepth 1, target_jnt 0, BlendWeights
+/// 0.8, mesh-space rotation), chosen over CombatFullBody while he moves (BlendListByBool on bIsMoving, 0.1 s).
+const BLOCK_LAYER_FILTERS: &[(&str, i32)] = &[("spine_01", 1), ("target_jnt", 0)];
+const BLOCK_LAYER_WEIGHT: f32 = 0.8;
+const BLOCK_LAYER_BLEND_S: f32 = 0.1;
 /// The pickaxe's grab kills: his and her paired montage (same name), the kill class (its camera), and its KillName.
 /// The grab kills on the player's four kill keys (SCKillerCharacter's grab kill slots: UseRightGrabKill 0,
 /// UseBottomGrabKill 1, UseLeftGrabKill 2, UseTopGrabKill 3, picked by FUN_1403ffa80; a click while holding her uses
@@ -413,8 +418,8 @@ pub enum JasonState {
     Searching { spot: Entity, t: f32, end: Transform, anim: &'static str },
     /// Killing the counselor in a hiding spot (his animation, and hers).
     HideKill { spot: Entity, t: f32, end: Transform, anim: &'static str, victim: &'static str },
-    /// Hit without being stunned: a short flinch.
-    Flinching { t: f32 },
+    /// Hit without being stunned: a short flinch (its hit reaction, or a blocked hit's).
+    Flinching { t: f32, anim: &'static str },
     /// Shifting (f13-core::killer_moves).
     Shifting { shift: Shift },
     /// Morphing: s into it, and where he'll be.
@@ -464,6 +469,8 @@ pub struct Jason {
     pub state: JasonState,
     /// In combat stance (the player's C, GLB_Combat_PC: CurrentStance 5).
     pub combat: bool,
+    /// Blocking (BlockData.bIsBlocking): CMBT_KLR_Block held in combat stance.
+    pub blocking: bool,
     /// The attack button's hold in combat stance (SCCharacter +0xf4c / +0xf50: from a press that swung).
     attack_hold: Option<f32>,
     /// Horizontal velocity, cm/s.
@@ -949,6 +956,10 @@ const AI_WIGGLE_INTERVAL: (f32, f32) = (0.15, 0.2);
 /// SCCharacter InvulnerableStunDuration (constructor): no new stun this long after one ends.
 const STUN_IMMUNE_SECONDS: f32 = 3.0;
 const FLINCH_FRONT: &str = "combat_stand_hit_reaction_front";
+/// Jason_AnimBP's BlockMontages (AM_Jason_Combat_Block: its block idle, looped) and BlockingHitMontages (each ends
+/// at its OnEndBlockReaction notify: OnEndBlockReation -> OnRep_Block, the block montage again).
+pub(crate) const BLOCK: &str = "combat_stand_1h_block_idle_01";
+const BLOCK_REACTIONS: [&str; 2] = ["combat_stand_1h_block_reaction_01", "combat_stand_1h_block_reaction_02"];
 const FLINCH_BACK: &str = "combat_stand_hit_reaction_back";
 const GRAB_BREAK: &str = "f_normal_grab_break_rev";
 const KNIFE_BREAK: &str = "f_normal_grab_pocketknife_break";
@@ -1014,6 +1025,7 @@ fn spawn_jason(
             Jason {
                 state: JasonState::Waiting(config.delay),
                 combat: false,
+                blocking: false,
                 attack_hold: None,
                 velocity: Vec2::ZERO,
                 vel_y: 0.0,
@@ -1372,7 +1384,18 @@ pub(crate) fn update_jason(
                 commands.trigger(Score("DamageJason"));
             }
             let can_stun = j.stunnable();
+            // Blocking (SCKillerCharacter's TakeDamage 0x14040b600): a hit whose damage type can be blocked
+            // (bCanBeBlocked: only BaseWeaponStun among his stuns; a shotgun never) doesn't stun him, takes
+            // BlockedHitDamageModifier of its damage (his health isn't modelled), and plays one of his
+            // BlockingHitMontages (FUN_1402fdbb0 with BlockData.bIsBlocking).
+            let blocked = j.blocking && matches!(h.stun, None | Some(Stun::Weapon { .. }));
             match h.stun {
+                _ if blocked => {
+                    let anim = BLOCK_REACTIONS[rng.0.index(BLOCK_REACTIONS.len())];
+                    info!("Jason: blocked the hit");
+                    j.state = JasonState::Flinching { t: 0.0, anim };
+                    commands.entity(je).insert(PlayAction(anim.into()));
+                }
                 Some(stun) if can_stun => {
                     info!("Jason: stunned ({stun:?}, {:.0}s)", stun.seconds());
                     if let Some(event) = stun.score_event() {
@@ -1389,8 +1412,9 @@ pub(crate) fn update_jason(
                 _ if matches!(j.state, JasonState::Hunting) => {
                     let front = angle_to(xf.rotation, Vec2::new(h.from.x - xf.translation.x, h.from.z - xf.translation.z)) < 90.0;
                     info!("Jason: hit, not stunned");
-                    j.state = JasonState::Flinching { t: 0.0 };
-                    commands.entity(je).insert(PlayAction(if front { FLINCH_FRONT } else { FLINCH_BACK }.into()));
+                    let anim = if front { FLINCH_FRONT } else { FLINCH_BACK };
+                    j.state = JasonState::Flinching { t: 0.0, anim };
+                    commands.entity(je).insert(PlayAction(anim.into()));
                 }
                 _ => info!("Jason: hit, shrugged it off ({:?})", j.state),
             }
@@ -1580,7 +1604,16 @@ pub(crate) fn update_jason(
                             continue;
                         }
                     }
-                    if j.cooldown <= 0.0 && p.grab {
+                    // CMBT_KLR_Block (right mouse in combat stance): OnStartBlock while CanBlock (FUN_1402ded00: not
+                    // attacking, stunned, interacting or in a special move: here, hunting), OnEndBlock as it's let go.
+                    // PLACEHOLDER: leaving combat stance ends it (the combat input's release isn't read then).
+                    let block = j.combat && i.block_held;
+                    if block != j.blocking {
+                        j.blocking = block;
+                        info!("Jason: {}", if block { "blocking" } else { "block ends" });
+                    }
+                    // KLR_Grab: not in combat stance (FUN_1403e6e80), where the button blocks.
+                    if j.cooldown <= 0.0 && p.grab && !j.combat {
                         info!("Jason: grab");
                         j.state = JasonState::Reaching { t: 0.0 };
                         commands.entity(je).insert(PlayAction(GRAB_STARTUP.into()));
@@ -1588,7 +1621,8 @@ pub(crate) fn update_jason(
                     }
                     // CMBT_KLR_Attack (0x1403f89a0 -> 0x1402e5aa0): the NeutralAttack; in combat stance the button's
                     // hold starts counting (the heavy attack after 0.1 s, below).
-                    if j.cooldown <= 0.0 && p.attack {
+                    // Not while blocking (0x1402e5aa0).
+                    if j.cooldown <= 0.0 && p.attack && !j.blocking {
                         info!("Jason: swing");
                         j.state = JasonState::Swinging { t: 0.0, hit: false, heavy: false };
                         j.attack_hold = j.combat.then_some(0.0);
@@ -2477,14 +2511,15 @@ pub(crate) fn update_jason(
                     j.state = JasonState::HideKill { spot, t: at, end, anim, victim };
                 }
             }
-            JasonState::Flinching { t: at } => {
+            JasonState::Flinching { t: at, anim } => {
                 let at = at + dt;
                 walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, None, dt, &t, &world);
-                if at >= killer.length(FLINCH_FRONT).unwrap_or(0.5) {
+                let end = killer.info.animations.get(anim).and_then(|a| a.windows.iter().find(|w| w.name == "OnEndBlockReaction")).map(|w| w.start);
+                if at >= end.or(killer.length(anim)).unwrap_or(0.5) {
                     j.state = JasonState::Hunting;
                     commands.entity(je).remove::<PlayAction>();
                 } else {
-                    j.state = JasonState::Flinching { t: at };
+                    j.state = JasonState::Flinching { t: at, anim };
                 }
             }
             JasonState::Done => {
@@ -2593,9 +2628,21 @@ fn teleport_mix(mut commands: Commands, time: Res<Time>, effect: Option<ResMut<T
 }
 
 /// GrabWeight (the anim instance's copy of GrabValue): the grab layer while he holds her.
-fn grab_layer(mut jasons: Query<(&Jason, &mut crate::character::LayeredBlend)>) {
+fn grab_layer(time: Res<Time>, mut jasons: Query<(&Jason, &mut crate::character::LayeredBlend)>) {
     for (j, mut l) in &mut jasons {
-        let w = if j.holding() { 1.0 } else { 0.0 };
+        // Holding her: the grab layer at once. Blocking on the move (bIsMoving): his block over his walk, its
+        // BlendListByBool's 0.1 s blend in and out.
+        let w = if j.holding() {
+            l.switch(GRAB_LAYER_FILTERS, GRAB_IDLE);
+            1.0
+        } else {
+            if j.blocking {
+                l.switch(BLOCK_LAYER_FILTERS, BLOCK);
+            }
+            let target = if j.blocking && j.velocity.length_squared() > 1e-8 { BLOCK_LAYER_WEIGHT } else { 0.0 };
+            let step = BLOCK_LAYER_WEIGHT * time.delta_secs() / BLOCK_LAYER_BLEND_S;
+            l.weight + (target - l.weight).clamp(-step, step)
+        };
         if l.weight != w {
             l.weight = w;
         }
@@ -2637,7 +2684,15 @@ fn animate_jason(
         let state = speed_state(speed, &marks);
         // Squared up to a counselor nearby: the pickaxe's combat idle.
         let near = owners.get(parent.parent()).ok().zip(players.iter().next()).is_some_and(|(a, b)| a.translation.distance(b.translation) < 4.0);
-        let idle = if near && j.state != JasonState::Done { COMBAT_IDLE } else { IDLE };
+        // His block (the combat slots): standing, full body (CombatFullBody); on the move, the upper body over his
+        // walk (CombatUpperBody: the block layer, below).
+        let idle = if j.blocking && killer.info.animations.contains_key(BLOCK) {
+            BLOCK
+        } else if (near || j.combat) && j.state != JasonState::Done {
+            COMBAT_IDLE
+        } else {
+            IDLE
+        };
         let mut targets: HashMap<&str, f32> = HashMap::new();
         for (k, name) in [idle, MOVE[0], MOVE[1], MOVE[2]].iter().enumerate() {
             let w = (1.0 - (state - k as f32).abs()).max(0.0);
