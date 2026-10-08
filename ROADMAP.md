@@ -247,8 +247,6 @@ Match
       opening, Jason turned back from it and shot (PoliceShootJasonStun), escaping on foot (walking its ExitPath for its 6 s EscapeDelay); the HUD's
       police timer (ShowPoliceTimer, PoliceTimerText); Jason (played) breaking the phone box
       (AM_Break_Phone_Box_Machete, PhoneBoxImpact): the phone dead, a call cut off, until it's repaired (its own minigame)
-- [ ] Match flow, remaining: the level intro and outro sequences. (Badges: their award sites and classes are read,
-      see MODLOG; the game shows them in the lobby's SCMatchEndLobbyWidget, so with the lobby in Milestone 3)
 - [x] Item and car spawning, as the game mode does it (f13-core::spawn, f13-data::world)
 - [x] How the game chooses one of the four cabin layouts per match: SCWorldSettings' RandomLevels, one picked at
   random when the level loads (`--layout` overrides)
@@ -279,15 +277,10 @@ Presentation
       exported at their offset from the light (piled near the map origin): now placed in the cabins
 - [x] Power curves: none on Crystal Lake (only Higgins Haven's layouts give lights a PowerOff/PowerOn flicker curve; without
       one the light component switches at once, as here)
-- [ ] Materials, remaining: water (first pass only: colour, gloss, panning ripples; no depth fade, foam or
-      reflections), POM parallax, the other emissive masters (signs, the CB tower, the phone box), foliage
-      subsurface, the Chevette's paint mask
 - [x] Car, furniture, doors (frames and leaves), windows, barricades and items placed in the scene
 - [x] Each placement's CastShadow and cull distance (foliage InstanceEndCullDistance, max draw distance); sun shadows
       to 100 m in 3 cascades
 - [x] Door damage states (the Light/Medium/Heavy destructible meshes at 75/50/25% health); Jason's rage burst
-- [ ] Particle effects (Cascade ParticleSystems): none ported yet. The walls' and doors' hit dust (HitParticle), the
-      knife's trail (P_Jason_ThrowingKnife_01), blood, the campfires and fireplaces, the cars' exhaust, rain
 - [x] Door break effects: the leaf's destructible chunks fly from the blow (Break/BurstExplosionForce; PLACEHOLDER
       flight, not the APEX simulation), fall to the floor and clear after a few seconds; the break's sounds (the door's
       DoorDestroySoundCue, the montage's notifies)
@@ -295,8 +288,6 @@ Presentation
   `_01_a` mesh; the leaning `_01_b` stands against the frame when it's down)
 - [x] Counselor model: Vanessa's base body, default outfit (master pose), face on the head bone, hair on the face, skin
       clipped under the clothes by the outfit's skin mask (f13-game character.rs, shaders/skin.wgsl)
-- [ ] Counselor model, remaining: facial animation and hair dynamics (their own anim Blueprints), the eyes' iris and
-      lid overlays, outfit choice
 - [x] Jason model (Part 2): body, sack mask (master pose), pickaxe on weapon_attach_r; locomotion
   (BS_Jason_Normal_Move), combat idle, swing, grab, grab kill
 - [x] Characters placed in the scene (Vanessa at a counselor start, Jason at the killer start)
@@ -310,11 +301,6 @@ Presentation
       her enter and exit takes with their root motion (enter ends in the seat, exit starts there)
 - [x] Starting off and stopping: none (the game's start/stop states need bUseStartStopTransitions, which nothing
       sets: the counselor goes straight between idle and moving)
-- [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: their root doesn't turn, the body turns about it; how the actor turns with them is unread), foot-marker
-      sync (now normalised time), aim offsets (Base_Counselor_AnimBP's AimOffsets, the Hunter's poses on the shared
-      skeleton, by AimPitch while bIsAiming), BS_Run_Lean, the rest of the anim Blueprints' graphs (f13-rs plays their
-      locomotion and the grab and block layers; their look-at, IK and additive nodes aren't ported). Not in the game:
-      turn-in-place takes, limp movement
 - [x] Upper-body layers: Jason's grab layer while he holds her, her block idle on the move (Base_Counselor_AnimBP's
       CombatUpperBody slot over her stance pose when bIsMoving, its CombatFullBody track standing)
       (bShouldPlayWounded only swaps in F_hurt_stand_idle_01, done)
@@ -380,8 +366,6 @@ Presentation
   height fog of the clear-weather level (CLsm_RainOff), the post-process volume's fixed exposure and ambient cubemap,
   the sky's colour; the counselor's flashlight (F; its Blueprint values, attachment, turn rate, wall check; lit for
   fear); power cuts (power.rs)
-- [ ] Lighting, remaining: Enlighten GI, local light shadows, light functions, the sky texture, rain (the colour
-      grading and bloom: Decomp audit's post-processing)
 - [ ] Audio (audio.rs, f13-data::sound): done: SoundCue playback (the cue graph's random, modulator, mixer, looping, delay
   and attenuation nodes; Unreal's attenuation falloff; left/right panning around the camera) and the counselor's
   footsteps (her locomotion's Footstep notifies; the surface under her foot: a mesh's physical material or the
@@ -405,10 +389,6 @@ Presentation
 
 Setup
 - [x] Tools refuse a packed (stock) install with a clear message; they need the content extracted to loose files
-- [ ] Read the stock pak directly, so users don't need to extract it first (with the host CLI's first-run setup).
-      Its footer is known (an encrypted-index flag, magics 'Atae' and 'kcid', version 5, index offset and size,
-      hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold
-      for a decision on that
 
 Decomp audit (nothing guessed: every rule read from the decomp or the game's data)
 - [ ] Check each PLACEHOLDER (9 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
@@ -456,9 +436,6 @@ Decomp audit (nothing guessed: every rule read from the decomp or the game's dat
       f13-core::color_grading): the map volume baked into the engine's 32³ LUT (white balance, colour correction, the
       filmic curve, LutTestHorror at 0.25), the tonemap pass (vignette, grain quantization), bloom (six Gaussian stages
       as AddBloom builds them at Epic)
-- [ ] Post-processing, remaining: SSAO (FPostProcessAmbientOcclusion*: it darkens indirect light only; settings and
-      cvars read, see MODLOG "SSAO (started)"); then compare
-      against the game's own screenshots. (Bloom's fast blur: ported, ComputeOutputDesc's half-width X pass)
 
 ## Milestone 2: more escapes
 Police, 4-seat car, boat, then the others, one at a time.
@@ -471,6 +448,31 @@ Moved out of Milestone 1 (they need more than one counselor; M1 has Vanessa alon
 - [ ] Car passengers, and the car running counselors over
 - [ ] The lobby (M3), the Tommy Jarvis timer and Jason dying (killing him needs Tommy and other counselors;
       Tommy is in "Afterwards")
+
+Moved from Milestone 1 (not tied to gameplay):
+- [ ] Match flow, remaining: the level intro and outro sequences. (Badges: their award sites and classes are read,
+      see MODLOG; the game shows them in the lobby's SCMatchEndLobbyWidget, so with the lobby in Milestone 3)
+- [ ] Materials, remaining: water (first pass only: colour, gloss, panning ripples; no depth fade, foam or
+      reflections), POM parallax, the other emissive masters (signs, the CB tower, the phone box), foliage
+      subsurface, the Chevette's paint mask
+- [ ] Particle effects (Cascade ParticleSystems): none ported yet. The walls' and doors' hit dust (HitParticle), the
+      knife's trail (P_Jason_ThrowingKnife_01), blood, the campfires and fireplaces, the cars' exhaust, rain
+- [ ] Counselor model, remaining: facial animation and hair dynamics (their own anim Blueprints), the eyes' iris and
+      lid overlays, outfit choice
+- [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: their root doesn't turn, the body turns about it; how the actor turns with them is unread), foot-marker
+      sync (now normalised time), aim offsets (Base_Counselor_AnimBP's AimOffsets, the Hunter's poses on the shared
+      skeleton, by AimPitch while bIsAiming), BS_Run_Lean, the rest of the anim Blueprints' graphs (f13-rs plays their
+      locomotion and the grab and block layers; their look-at, IK and additive nodes aren't ported). Not in the game:
+      turn-in-place takes, limp movement
+- [ ] Lighting, remaining: Enlighten GI, local light shadows, light functions, the sky texture, rain (the colour
+      grading and bloom: Decomp audit's post-processing)
+- [ ] Read the stock pak directly, so users don't need to extract it first (with the host CLI's first-run setup).
+      Its footer is known (an encrypted-index flag, magics 'Atae' and 'kcid', version 5, index offset and size,
+      hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold
+      for a decision on that
+- [ ] Post-processing, remaining: SSAO (FPostProcessAmbientOcclusion*: it darkens indirect light only; settings and
+      cvars read, see MODLOG "SSAO (started)"); then compare
+      against the game's own screenshots. (Bloom's fast blur: ported, ComputeOutputDesc's half-width X pass)
 
 ## Milestone 3: networking
 Server-authoritative netcode, tested with bots, then an 8-player lobby.
