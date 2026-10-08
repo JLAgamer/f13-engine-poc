@@ -275,8 +275,8 @@ Presentation
 - [x] Small items as the game handles them: the selected pocket (mouse wheel, 1-3, G to use), Z to drop (held for
       DropItemHoldTime: the large item), a small item taken with full pockets swapping places with the selected one
       (dropped where it lay, or left in its drawer, TakeClose), the map kept apart (special items); the HUD's active
-      pocket; the drop montages (the item goes at their DropLargeItem / DropSmallItem notify). Not yet: the uses-left
-      count
+      pocket; the drop montages (the item goes at their DropLargeItem / DropSmallItem notify). The uses-left count never
+      shows (it needs NumUses - TimesUsed > 1; SCItem's constructor sets NumUses 1 and nothing overrides it)
 - [ ] HUD, remaining: the items' minimap icons (they start hidden; what shows them isn't read)
 - [x] Night lighting, fog, flashlight (lighting.rs): the map's point/spot lights (inverse-square lumens, or Unreal's
   falloff-exponent lights matched at a third of their radius; colour temperature; draw-distance fades), the moon and
