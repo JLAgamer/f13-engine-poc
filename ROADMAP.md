@@ -179,9 +179,11 @@ Mechanics: Jason side
 - [x] Shift's fade (killer_fade.rs): his materials' 0_AlphaDelta eased over a second as Shift starts and ends,
       turned into each master's exact opacity-mask cutoff (the base pass's temporal dither isn't drawn: no TAA);
       Morph has no fade (EnableTeleportEffect is Shift's and Paranoia's)
-- [ ] Shift, Morph, Stalk, remaining: the counselor's SenseEffect emitter (particles); Shift hides Jason_Hair and
-      shakes the camera (ED_Shake) on his ShiftCamera (Jason_Base OnShiftChange) (Morph's
-      excluded areas: the map's Boundary image has no texture in this level's widget, so none refuse a click)
+- [x] Shift, Morph, Stalk, remaining: Sense's light (SenseLight); Shift's ShiftCamera and ED_Shake were in
+      already; OnShiftChange's Jason_Hair toggle only runs with the mask off (bMaskOn is true from the constructor,
+      0x1403e08b4; J2's j2_Hair starts hidden), so nothing changes. The counselor's SenseEffect emitter is with the
+      particle effects below. (Morph's excluded areas: the map's Boundary image has no texture in this level's
+      widget, so none refuse a click)
 - [x] The level's bounded post-process volume (underwater_PostProcessVolume: Gaussian DOF, fringe 1.5): checked;
       its box tops out at -242 cm (blend radius 53 cm), the lake's surface is at -185 cm and no camera goes below it
       (Jason's water camera: 10 cm over the surface), so it never applies
