@@ -344,7 +344,7 @@ Setup
       for a decision on that
 
 Decomp audit (nothing guessed: every rule read from the decomp or the game's data)
-- [ ] Check each PLACEHOLDER (11 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
+- [ ] Check each PLACEHOLDER (10 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
       them, in jason.rs, are the AI's own choices and stay) and each "guess"/"assumed"/"not read" note (about 10)
       against the decomp and the export (Ghidra, MODLOG, f13-export `debug-json` / `pseudo` / `cdo` / `grep`); port
       what the game does, or record in MODLOG why it can't be found. Most are in jason.rs, hiding.rs, audio.rs,
@@ -389,8 +389,8 @@ Decomp audit (nothing guessed: every rule read from the decomp or the game's dat
       f13-core::color_grading): the map volume baked into the engine's 32³ LUT (white balance, colour correction, the
       filmic curve, LutTestHorror at 0.25), the tonemap pass (vignette, grain quantization), bloom (six Gaussian stages
       as AddBloom builds them at Epic)
-- [ ] Post-processing, remaining: SSAO (FPostProcessAmbientOcclusion*: it darkens indirect light only), bloom's fast
-      blur on its two largest stages; then compare against the game's own screenshots
+- [ ] Post-processing, remaining: SSAO (FPostProcessAmbientOcclusion*: it darkens indirect light only); then compare
+      against the game's own screenshots. (Bloom's fast blur: ported, ComputeOutputDesc's half-width X pass)
 
 ## Milestone 2: more escapes
 Police, 4-seat car, boat, then the others, one at a time.

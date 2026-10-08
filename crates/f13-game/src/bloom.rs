@@ -14,8 +14,11 @@
 //!
 //! The tonemapper adds the result x BloomIntensity (its ColorScale1; the dirt mask's intensity is 0).
 //!
-//! PLACEHOLDER: the two largest stages would take the fast path (r.FastBlurThreshold 100 at Epic: the X pass at half
-//! height); here every stage blurs at full size. The textures are R11G11B10 floats, as the engine's PF_FloatRGB.
+//! The fast blur (FRCPassPostProcessWeightedSampleSum's DoFastBlur FUN_140d19fc0 and ComputeOutputDesc
+//! FUN_140d19260): an X pass whose 0.02 x source width x size reaches r.FastBlurThreshold (100 at Epic) writes half
+//! the width; its Y pass, seeing a source narrower than 0.75 x the buffer's aspect, writes twice the width, its radius
+//! doubled (the large stages at the usual resolutions). The textures are R11G11B10 floats, as the engine's
+//! PF_FloatRGB.
 
 use bevy::asset::{embedded_asset, load_embedded_asset};
 use bevy::core_pipeline::schedule::{Core3d, Core3dSystems};
@@ -33,6 +36,8 @@ use bevy::shader::Shader;
 pub const FORMAT: TextureFormat = TextureFormat::Rg11b10Ufloat;
 /// The most samples a weighted sample sum takes on SM5 (r.Filter.LoopMode 0).
 const MAX_SAMPLES: usize = 32;
+/// r.FastBlurThreshold at the Epic scalability level.
+const FAST_BLUR_THRESHOLD: f32 = 100.0;
 
 /// The bloom's settings (FPostProcessSettings', the volume's where it overrides them).
 #[derive(Clone, Debug, PartialEq)]
@@ -179,6 +184,8 @@ pub struct BloomTextures {
     half: CachedTexture,
     levels: Vec<CachedTexture>,
     x: Vec<CachedTexture>,
+    /// The fast blur's X results (half the level's width).
+    x_half: Vec<CachedTexture>,
     y: Vec<CachedTexture>,
     /// A 1 x 1 black texture standing in for "no second input".
     black: CachedTexture,
@@ -224,9 +231,10 @@ fn prepare_textures(
         let half = tex(&mut cache, "bloom_half", half_size);
         let levels = sizes.iter().map(|s| tex(&mut cache, "bloom_level", *s)).collect();
         let x = sizes.iter().map(|s| tex(&mut cache, "bloom_x", *s)).collect();
+        let x_half = sizes.iter().map(|s| tex(&mut cache, "bloom_x_half", UVec2::new(s.x.div_ceil(2), s.y))).collect();
         let y = sizes.iter().map(|s| tex(&mut cache, "bloom_y", *s)).collect();
         let black = tex(&mut cache, "bloom_black", UVec2::ONE);
-        commands.entity(e).insert(BloomTextures { half, levels, x, y, black });
+        commands.entity(e).insert(BloomTextures { half, levels, x, x_half, y, black });
     }
 }
 
@@ -303,23 +311,31 @@ pub(crate) fn game_bloom(
         }
         let level = &textures.levels[stage];
         let src = size_of(level);
-        // The source's scale against the full-size buffer (DivideAndRoundUp), and the radius from the view's width.
-        let src_x = (src.x as u32).max(1);
-        let scale = view_size.x.div_ceil(src_x).max(1) as f32;
-        let radius = size * b.size_scale * (view_size.x as f32 / scale) * 0.004999999888241291;
-        let kernel = gaussian_kernel(radius);
-        let fill = |u: &mut PassUniform, axis: Vec2, tint: Vec4| {
+        let size = size * b.size_scale;
+        // The source's scale against the full-size buffer (DivideAndRoundUp), and the radius from the view's width
+        // (twice that for a fast blur's Y pass).
+        let radius = |input: Vec2, fast_y: bool| {
+            let scale = view_size.x.div_ceil((input.x as u32).max(1)).max(1) as f32;
+            size * (view_size.x as f32 / scale) * if fast_y { 2.0 } else { 1.0 } * 0.004999999888241291
+        };
+        let fill = |u: &mut PassUniform, kernel: &[(f32, f32)], axis: Vec2, tint: Vec4| {
             u.params.x = kernel.len() as f32;
             for (k, (o, w)) in kernel.iter().enumerate() {
                 u.offsets[k] = (axis * *o).extend(0.0).extend(0.0);
                 u.weights[k] = tint * *w;
             }
         };
+        // DoFastBlur, X: 0.02 x the source's width x size against the threshold.
+        let fast_x = 0.02 * src.x * size >= FAST_BLUR_THRESHOLD;
+        let x_out = if fast_x { &textures.x_half[stage] } else { &textures.x[stage] };
         let mut ux = empty_uniform(Vec2::ONE / src);
-        fill(&mut ux, Vec2::new(1.0 / src.x, 0.0), Vec4::ONE);
-        run_pass(&mut ctx, &cache, &pipelines, filter, &level.default_view, black, &textures.x[stage].default_view, &ux);
-        let mut uy = empty_uniform(Vec2::ONE / src);
-        fill(&mut uy, Vec2::new(0.0, 1.0 / src.y), b.tints[stage] * 0.1666666716337204);
+        fill(&mut ux, &gaussian_kernel(radius(src, false)), Vec2::new(1.0 / src.x, 0.0), Vec4::ONE);
+        run_pass(&mut ctx, &cache, &pipelines, filter, &level.default_view, black, &x_out.default_view, &ux);
+        // DoFastBlur, Y: a source narrower than 0.75 x the buffer's aspect (the half-width X result).
+        let y_src = size_of(x_out);
+        let fast_y = y_src.x / y_src.y < view_size.x as f32 / view_size.y.max(1) as f32 * 0.75;
+        let mut uy = empty_uniform(Vec2::ONE / y_src);
+        fill(&mut uy, &gaussian_kernel(radius(y_src, fast_y)), Vec2::new(0.0, 1.0 / y_src.y), b.tints[stage] * 0.1666666716337204);
         let second = match previous {
             Some(p) => {
                 uy.params.y = 1.0;
@@ -327,7 +343,7 @@ pub(crate) fn game_bloom(
             }
             None => black,
         };
-        run_pass(&mut ctx, &cache, &pipelines, filter, &textures.x[stage].default_view, second, &textures.y[stage].default_view, &uy);
+        run_pass(&mut ctx, &cache, &pipelines, filter, &x_out.default_view, second, &textures.y[stage].default_view, &uy);
         previous = Some(stage);
     }
 }
