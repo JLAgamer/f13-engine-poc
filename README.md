@@ -190,7 +190,7 @@ a car escape zone; F gets out. `--near-car` starts you next to a car. `--bot-esc
 automatically (teleporting between goals), waits for the match's results and exits; `--bot-heal` fetches and uses a first aid spray;
 `--bot-dodge` dodges in each direction and checks the distance and stamina; `--bot-door` runs 16 checks on a door, a
 barricaded door and a window.
-Against Jason: left mouse swings the weapon in your hands (W + left mouse: the heavy swing; each weapon's stun chance
+Against Jason: left mouse swings the weapon in your hands (held in combat stance: the heavy swing; each weapon's stun chance
 and durability are the game's), fires the flare gun or shotgun at what the middle of the screen shows (one shot), or
 places a bear trap in front of you; 1-3 throw firecrackers from that pocket (they go off 1.5 s later and stun him if
 he comes within 2 m). In combat stance, hold right mouse to block with a weapon: his blow does a fraction of its
@@ -208,7 +208,7 @@ x,y,z,tx,ty,tz` (eye and look-at, relative to her feet), `--pose <animation>@<se
 
 ## Playing as Jason
 
-`--play-jason` puts you in Jason's boots (a bot plays the counselor: the escape bot unless a `--bot-*` is given): WASD walk, Shift run, mouse look; left click swing (and, holding her, kill), middle click heavy swing, right click grab, F throw a knife where you look, T set a trap, 1 Shift, 2 Morph (to the morph point nearest 30 m ahead), 3 Stalk, E destroy a fuse box (its grid's lights go out). Doors open or break, and destructible walls break, as you walk into them. `--play-jason-demo` scripts the input (testing).
+`--play-jason` puts you in Jason's boots (the counselor stands idle unless a `--bot-*` plays her), with the game's keys: WASD walk, Left Shift fast walk, mouse look; left click attack (held in combat stance: the heavy attack), right click grab, middle click held aims a knife and letting go throws it (right click puts it away), C combat stance, R set a trap, 1 Morph (to the morph point nearest 30 m ahead), 2 Sense, 3 Shift, 4 Stalk, E destroy a fuse box (its grid's lights go out) or, holding her, use a placed kill; holding her, 1-4 (on release) pick a grab kill and a click does the default one. F3 shows a debug readout. Doors open or break, and destructible walls break, as you walk into them. `--play-jason-demo` scripts the input (testing).
 
 ## Host commands
 

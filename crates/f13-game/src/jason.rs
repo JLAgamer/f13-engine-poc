@@ -123,6 +123,13 @@ const CAR_GRAB: &str = "cinematic_car_grab_left";
 const GRAB_IDLE: &str = "normal_grab_idle";
 const GRAB_MISS: &str = "normal_grab_miss";
 /// The pickaxe's grab kills: his and her paired montage (same name), the kill class (its camera), and its KillName.
+/// The grab kills on the player's four kill keys (SCKillerCharacter's grab kill slots: UseRightGrabKill 0,
+/// UseBottomGrabKill 1, UseLeftGrabKill 2, UseTopGrabKill 3, picked by FUN_1403ffa80; a click while holding her uses
+/// slot 1), as indexes into [`KILLS`]. PLACEHOLDER: the game fills the slots from the player's saved picks
+/// (SCCharacterSelectionsSaveGame::GetKillerGrabKills), not read; the weapon's DefaultGrabKill (the throat hack) is
+/// put on the click.
+pub const GRAB_KILL_SLOTS: [usize; 4] = [1, 0, 2, 3];
+
 pub const KILLS: [(&str, &str, &str); 5] = [
     ("cinematic_pickaxe_throathack", "Pickaxe_ThroatHack_GrabKill", "Pickaxe Throat Hack"),
     ("cinematic_pickaxe_head_canopener", "Pickaxe_Canopener_GrabKill", "Pickaxe Can Opener"),
@@ -202,6 +209,8 @@ pub(crate) struct DrownKillCamera(Transform);
 const KNIFE_START_M: f32 = 1.2;
 /// PLACEHOLDERS (see the module docs): how long he aims, his traps' spacing (m).
 const KNIFE_AIM_SECONDS: f32 = 0.6;
+/// SCCharacter's tick: how long the attack is held in combat stance before it's the heavy attack (DAT_14207a200).
+const HEAVY_HOLD_S: f32 = 0.1;
 const TRAP_SPACING_M: f32 = 10.0;
 /// ThrowingKnife_C's ProjectileGravityScale; SCThrowable's TimeToDestroy (s).
 const KNIFE_GRAVITY: f32 = 9.8 * 8.0;
@@ -302,6 +311,8 @@ pub struct KillerTuning {
     /// UnderwaterFullSpeedDepth and UnderwaterKillDepth (cm).
     pub underwater_speed: f32,
     pub slow_run_speed: f32,
+    /// MaxCombatSpeed (cm/s): his speed in combat stance.
+    pub combat_speed: f32,
     pub underwater_full_speed_depth: f32,
     pub underwater_kill_depth: f32,
     pub teleport_screen_time: f32,
@@ -343,6 +354,7 @@ impl KillerTuning {
             idle_stalk_modifier: v("IdleStalkModifier", 0.1),
             underwater_speed: v("UnderwaterSpeed", 400.0),
             slow_run_speed: v("MaxSlowRunSpeed", 200.0),
+            combat_speed: v("MaxCombatSpeed", 200.0),
             underwater_full_speed_depth: v("UnderwaterFullSpeedDepth", 275.0),
             underwater_kill_depth: v("UnderwaterKillDepth", 290.0),
             teleport_screen_time: v("TeleportScreenTime", 1.0),
@@ -383,7 +395,7 @@ pub enum JasonState {
     /// Morphing: s into it, and where he'll be.
     Morphing { t: f32, to: Transform },
     /// Throwing a knife: s into it, and whether it has left his hand.
-    Throwing { t: f32, thrown: bool },
+    Throwing { t: f32, thrown: bool, release: Option<f32> },
     /// Setting a trap: s into it.
     PlacingTrap { t: f32 },
     /// Stopping a car dead (AM_normal_stand_car_stop_slam: his hands on its hood).
@@ -425,6 +437,10 @@ impl Jason {
 #[derive(Component)]
 pub struct Jason {
     pub state: JasonState,
+    /// In combat stance (the player's C, GLB_Combat_PC: CurrentStance 5).
+    pub combat: bool,
+    /// The attack button's hold in combat stance (SCCharacter +0xf4c / +0xf50: from a press that swung).
+    attack_hold: Option<f32>,
     /// Horizontal velocity, cm/s.
     pub velocity: Vec2,
     vel_y: f32,
@@ -894,6 +910,8 @@ fn spawn_jason(
         .spawn((
             Jason {
                 state: JasonState::Waiting(config.delay),
+                combat: false,
+                attack_hold: None,
                 velocity: Vec2::ZERO,
                 vel_y: 0.0,
                 grounded: true,
@@ -1392,9 +1410,15 @@ pub(crate) fn update_jason(
                         info!("Jason: Stalk");
                         j.stalk = Some(Stalk::start(t.stalk_active_time));
                     }
+                    // GLB_Combat_PC: in or out of combat stance.
+                    if p.combat {
+                        j.combat = !j.combat;
+                        info!("Jason: combat stance {}", j.combat);
+                    }
+                    // KLR_KnifeThrow held (PressKnifeThrow): he takes a knife out and aims until it's let go.
                     if p.knife && j.knives > 0 && j.knife_cooldown <= 0.0 {
-                        info!("Jason: throwing a knife ({} left)", j.knives);
-                        j.state = JasonState::Throwing { t: 0.0, thrown: false };
+                        info!("Jason: aiming a knife ({} left)", j.knives);
+                        j.state = JasonState::Throwing { t: 0.0, thrown: false, release: None };
                         j.velocity = Vec2::ZERO;
                         commands.entity(je).insert(PlayAction(KNIFE_SELECT.into()));
                         continue;
@@ -1434,11 +1458,13 @@ pub(crate) fn update_jason(
                         commands.entity(je).insert(PlayAction(GRAB_STARTUP.into()));
                         continue;
                     }
-                    if j.cooldown <= 0.0 && (p.attack || p.heavy) {
-                        let heavy = p.heavy && killer.info.animations.contains_key(HEAVY_ATTACK);
-                        info!("Jason: {}swing", if heavy { "heavy " } else { "" });
-                        j.state = JasonState::Swinging { t: 0.0, hit: false, heavy };
-                        commands.entity(je).insert(PlayAction(if heavy { HEAVY_ATTACK } else { ATTACK }.into()));
+                    // CMBT_KLR_Attack (0x1403f89a0 -> 0x1402e5aa0): the NeutralAttack; in combat stance the button's
+                    // hold starts counting (the heavy attack after 0.1 s, below).
+                    if j.cooldown <= 0.0 && p.attack {
+                        info!("Jason: swing");
+                        j.state = JasonState::Swinging { t: 0.0, hit: false, heavy: false };
+                        j.attack_hold = j.combat.then_some(0.0);
+                        commands.entity(je).insert(PlayAction(ATTACK.into()));
                         continue;
                     }
                     let raged = know.as_ref().is_some_and(|k| k.abilities.rage_active);
@@ -1457,8 +1483,10 @@ pub(crate) fn update_jason(
                             continue;
                         }
                     }
-                    let speed = if i.run && t.can_run { t.run_speed } else { t.walk_speed };
-                    walk(&mut j, &mut xf, i.movement, speed, None, dt, &t, &world);
+                    // In combat stance he walks at MaxCombatSpeed, facing where the player looks.
+                    let speed = if j.combat { t.combat_speed } else if i.run && t.can_run { t.run_speed } else { t.walk_speed };
+                    let face = j.combat.then_some(i.forward);
+                    walk(&mut j, &mut xf, i.movement, speed, face, dt, &t, &world);
                     continue;
                 }
                 let sees = know.as_ref().is_none_or(|k| k.sees);
@@ -1623,7 +1651,8 @@ pub(crate) fn update_jason(
                 // A knife at her when she's in throwing range.
                 if sees && !driving && alive && j.knives > 0 && j.knife_cooldown <= 0.0 && (KNIFE_RANGE_M.0..=KNIFE_RANGE_M.1).contains(&dist) {
                     info!("Jason: throwing a knife ({dist:.0} m, {} left)", j.knives);
-                    j.state = JasonState::Throwing { t: 0.0, thrown: false };
+                    let aim_at = killer.length(KNIFE_SELECT).unwrap_or(0.37);
+                    j.state = JasonState::Throwing { t: 0.0, thrown: false, release: Some(aim_at + KNIFE_AIM_SECONDS) };
                     j.velocity = Vec2::ZERO;
                     commands.entity(je).insert(PlayAction(KNIFE_SELECT.into()));
                     continue;
@@ -1736,18 +1765,32 @@ pub(crate) fn update_jason(
                     }
                 }
             }
-            JasonState::Throwing { t: at, thrown } => {
+            JasonState::Throwing { t: at, thrown, release } => {
                 let at = at + dt;
                 walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(face_dir), dt, &t, &world);
                 let len = |n: &str, d: f32| killer.length(n).unwrap_or(d);
                 let aim_at = len(KNIFE_SELECT, 0.37);
-                let throw_at = aim_at + KNIFE_AIM_SECONDS;
-                let release = throw_at + 0.18f32.min(len(KNIFE_THROW, 0.72));
+                // The player's knife: thrown when the button's let go (after the select section), put away by
+                // KLR_KnifeCancel (right mouse).
+                let mut release = release;
+                if let Some(i) = player_input.filter(|_| release.is_none()) {
+                    if i.presses.grab {
+                        info!("Jason: knife put away");
+                        j.state = JasonState::Hunting;
+                        commands.entity(je).remove::<PlayAction>();
+                        continue;
+                    }
+                    if !i.knife_held {
+                        release = Some(at.max(aim_at));
+                    }
+                }
+                let throw_at = release.unwrap_or(f32::MAX);
+                let let_go = throw_at + 0.18f32.min(len(KNIFE_THROW, 0.72));
                 let end = throw_at + len(KNIFE_THROW, 0.72);
                 let anim = if at < aim_at { KNIFE_SELECT } else if at < throw_at { KNIFE_AIM } else { KNIFE_THROW };
                 commands.entity(je).insert(PlayAction(anim.into()));
                 let mut thrown = thrown;
-                if !thrown && at >= release {
+                if !thrown && at >= let_go {
                     thrown = true;
                     j.knives -= 1;
                     j.knife_cooldown = t.knife_cooldown;
@@ -1765,7 +1808,7 @@ pub(crate) fn update_jason(
                     j.cooldown = t.attack_delay;
                     commands.entity(je).remove::<PlayAction>();
                 } else {
-                    j.state = JasonState::Throwing { t: at, thrown };
+                    j.state = JasonState::Throwing { t: at, thrown, release };
                 }
             }
             JasonState::BreakingFuse { t: at, fuse, done } => {
@@ -1844,7 +1887,22 @@ pub(crate) fn update_jason(
                 }
             }
             JasonState::Swinging { t: at, hit, heavy } => {
-                let at = at + dt;
+                let mut at = at + dt;
+                let mut heavy = heavy;
+                // SCCharacter's tick: the attack held over 0.1 s in combat stance is the heavy attack (vt+0xd38 ->
+                // MULTICAST_Attack(true)): the light swing playing turns into the weapon's ForwardAttack at the same
+                // fraction of it.
+                if let Some(h) = j.attack_hold {
+                    let held = player_input.is_some_and(|i| i.attack_held) && j.combat;
+                    j.attack_hold = held.then_some(h + dt);
+                    if held && h + dt > HEAVY_HOLD_S && !heavy && killer.info.animations.contains_key(HEAVY_ATTACK) {
+                        j.attack_hold = None;
+                        heavy = true;
+                        at = t.heavy_length * (at / t.attack_length.max(1e-3)).min(1.0);
+                        info!("Jason: heavy swing");
+                        commands.entity(je).insert((PlayAction(HEAVY_ATTACK.into()), crate::character::SeekAction(at)));
+                    }
+                }
                 walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(face_dir), dt, &t, &world);
                 let mut hit = hit;
                 let (window, length) = if heavy { (t.heavy_window, t.heavy_length) } else { (t.attack_window, t.attack_length) };
@@ -2139,9 +2197,9 @@ pub(crate) fn update_jason(
                     commands.entity(pe).insert(PlayAction(hers.into()));
                     snap_rig(&mut rigs, je);
                 } else if player_input.map_or(at >= HOLD_BEFORE_KILL, |i| i.presses.attack || i.presses.kill.is_some()) {
-                    // The AI kills after a while; the player when they pick a kill (1-5) or click (one at random).
+                    // The AI kills after a while; the player with a kill key (1-4, its slot) or a click (slot 1).
                     // One of the weapon's grab kills.
-                    let picked = player_input.and_then(|i| i.presses.kill).filter(|&k| k < KILLS.len());
+                    let picked = player_input.map(|i| GRAB_KILL_SLOTS[i.presses.kill.unwrap_or(1).min(3)]);
                     j.kill = picked.or(config.kill).unwrap_or_else(|| rng.0.index(KILLS.len()));
                     let (anim, class, name) = KILLS[j.kill];
                     info!("Jason: {name}");
@@ -2360,7 +2418,7 @@ fn animate_jason(
     time: Res<Time>,
     killer: Option<Res<KillerCharacter>>,
     tuning: Option<Res<KillerTuning>>,
-    jasons: Query<(&Jason, Option<&PlayAction>, Option<&ActionSounds>)>,
+    jasons: Query<(&Jason, Option<&PlayAction>, Option<&ActionSounds>, Option<&crate::character::SeekAction>)>,
     players: Query<&Transform, With<Player>>,
     owners: Query<&Transform, With<Jason>>,
     mut rigs: Query<(&ChildOf, &mut Rig, &mut AnimationPlayer)>,
@@ -2372,8 +2430,12 @@ fn animate_jason(
         if rig.model != Model::Killer {
             continue;
         }
-        let Ok((j, action, montage)) = jasons.get(parent.parent()) else { continue };
+        let Ok((j, action, montage, seek)) = jasons.get(parent.parent()) else { continue };
         rig.set_action(action.map(|a| a.0.as_str()), dt);
+        if let Some(s) = seek {
+            rig.seek_action(s.0);
+            commands.entity(parent.parent()).remove::<crate::character::SeekAction>();
+        }
         if let Ok(at) = owners.get(parent.parent()) {
             let span = rig.action_span(dt);
             let keyed = montage.zip(span).map(|(m, (take, from, to))| (format!("{}/{take}", m.0), from, to));

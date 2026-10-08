@@ -60,22 +60,42 @@ const PIP_WAITING: [f32; 4] = [0.854993, 0.030713, 0.017642, 1.0];
 const PIP_HIT: [f32; 4] = [0.552012, 0.527115, 0.434154, 1.0];
 const PIP_MISSED: [f32; 4] = [0.854993, 0.030713, 0.017642, 0.2];
 
-/// The keys ActionMapWidgets show (the game picks a key glyph or name from the input settings); the others (gamepad
-/// item cycling) are hidden.
+/// The keys ActionMapWidgets show for their PrimaryAction (the game picks a key glyph or name from the input
+/// settings: DefaultInput.ini's keyboard mappings here); the others (the gamepad's item cycling and powers, the
+/// mouse wheel's item cycling) are hidden.
 const ACTION_KEYS: &[(&str, &str)] = &[
-    ("ItemOneActionMap", "1"),
-    ("ItemTwoActionMap", "2"),
-    ("ItemThreeActionMap", "3"),
-    ("ActionMapWidget_103", "Space"),
+    ("CSLR_SmallItem_1", "1"),
+    ("CSLR_SmallItem_2", "2"),
+    ("CSLR_SmallItem_3", "3"),
+    ("CSLR_HoldBreath", "Space"),
+    ("CSLR_UseAbility", "Q"),
     // The dial's pip keys (pip key 0 / 1).
-    ("Interact1", "RMB"),
-    ("Interact2", "LMB"),
+    ("MG_InteractSkill1", "RMB"),
+    ("MG_InteractSkill2", "LMB"),
+    ("GLB_Wiggle", "E"),
+    ("GLB_Map", "M"),
+    // Jason's.
+    ("KLR_Grab", "RMB"),
+    ("KLR_Morph_PC", "1"),
+    ("KLR_Sense_PC", "2"),
+    ("KLR_Shift_PC", "3"),
+    ("KLR_Stalk_PC", "4"),
+    ("CMBT_KLR_GrabKillRight", "1"),
+    ("CMBT_KLR_GrabKillBottom", "2"),
+    ("CMBT_KLR_GrabKillLeft", "3"),
+    ("CMBT_KLR_GrabKillTop", "4"),
+    ("KLR_Morph_Activate", "LMB"),
+    ("KLR_Morph_Cancel", "1"),
+    ("KLR_KnifeThrow", "MMB"),
+    ("KLR_KnifeCancel", "RMB"),
+    ("KLR_PlaceTrap", "R"),
 ];
 
-/// Shows `key` on an ActionMapWidget (its TextWidget; no glyph image), or hides the widget.
+/// Shows its action's key on an ActionMapWidget (its TextWidget; no glyph image), or hides the widget.
 fn action_keys(w: &mut Widget) {
     if matches!(w.class.as_deref(), Some("ActionMapWidget" | "MinigameActionMapWidget")) {
-        match ACTION_KEYS.iter().find(|(n, _)| *n == w.name) {
+        let action = w.props["PrimaryAction"].as_str().unwrap_or_default().to_string();
+        match ACTION_KEYS.iter().find(|(a, _)| *a == action) {
             Some((_, key)) => {
                 if let Some(t) = w.find_mut("TextWidget") {
                     t.props["Text"] = json!({ "LocalizedString": key });
@@ -103,7 +123,7 @@ impl Plugin for UiPlugin {
         app.add_plugins((UiMaterialPlugin::<RadialFill>::default(), UiMaterialPlugin::<Minimap>::default()))
             .init_resource::<PlayingAnims>()
             .add_systems(Startup, load_hud)
-            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, jason_hud, noise_meter, xp_lines), widget_anims, content_alpha, hide_for_jason).chain().run_if(resource_exists::<Hud>));
+            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, jason_hud, noise_meter, xp_lines), widget_anims, content_alpha, widget_colors, hide_for_jason).chain().run_if(resource_exists::<Hud>));
     }
 }
 
@@ -162,6 +182,9 @@ const MINIMAP_SIZE: f32 = 328.0;
 
 /// CircleMask's MinimapRadius (the RetainerBox's effect material).
 const MINIMAP_RADIUS: f32 = 0.39;
+
+/// The minimap's RetainerBox (Jason's HUD has none: his trap counter has a RetainerBox_0 of its own).
+const MINIMAP_RETAINER: &str = "SC_MiniMap_Widget.RetainerBox_0";
 
 /// The HUD's trees and what it was last built for.
 #[derive(Resource)]
@@ -368,7 +391,7 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         names: HashMap::new(),
         map,
         scale: 1.0,
-        anims: ["SCCounselorTimerWidget", "SCBreathWidget"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
+        anims: ["SCCounselorTimerWidget", "SCBreathWidget", "KillerHUDWidget"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
         time_to_show: std::fs::read_to_string(dir.join("ui/SCCounselorTimerWidget.json"))
             .ok()
             .and_then(|t| serde_json::from_str::<Value>(&t).ok())
@@ -458,20 +481,21 @@ fn build_hud(
     let full = Rect { x: 0.0, y: 0.0, w: virt.x, h: virt.y };
     let laid = tree.layout(full);
     b.spawn(&laid, root, full, if jason { "KillerHUDWidget" } else { "CounselorHUDWidget" });
-    if let Some(breath) = &hud.breath {
+    // Her breath meter and interaction dial are hers (Jason's HUD has neither).
+    if let Some(breath) = hud.breath.as_ref().filter(|_| !jason) {
         let laid = breath.layout(full);
         let e = b.spawn(&laid, root, full, "SCBreathWidget");
         b.commands.entity(e).insert(Visibility::Hidden);
         b.names.insert("SCBreathWidget".into(), e);
     }
-    if let Some(dial) = &hud.dial {
+    if let Some(dial) = hud.dial.as_ref().filter(|_| !jason) {
         let laid = dial.layout(full);
         let e = b.spawn(&laid, root, full, "SCInteractMinigame_Widget");
         b.commands.entity(e).insert(Visibility::Hidden);
         b.names.insert("SCInteractMinigame_Widget".into(), e);
     }
     // The map behind the minimap's icons and frame, in its RetainerBox.
-    if let (Some(map), Some((_, &e))) = (&hud.map, names.iter().find(|(k, _)| k.ends_with(".RetainerBox_0"))) {
+    if let (Some(map), Some((_, &e))) = (&hud.map, names.iter().find(|(k, _)| k.as_str() == MINIMAP_RETAINER)) {
         let m = maps.add(Minimap { view: Vec4::new(0.5, 0.5, map.zoom, MINIMAP_RADIUS), dir: Vec4::new(0.0, -1.0, 0.0, 0.0), map: assets.load(map.file.clone()) });
         commands.entity(e).insert(MaterialNode(m));
     }
@@ -554,6 +578,59 @@ fn fill_xp_lines(hud: &Hud, tree: &mut Widget, scores: &[(String, String, f32)])
 #[derive(Component, PartialEq)]
 struct ContentAlpha(f32);
 
+/// A widget's ColorAndOpacity as widget animations play it: an Image's own colour (over [`ColorBase`]: its brush's
+/// tint and the borders' around it), or a user widget's, which multiplies everything in it (over each one's
+/// [`TintBase`], its colour before).
+#[derive(Component, PartialEq, Clone, Copy)]
+struct WidgetColor([f32; 4]);
+
+#[derive(Component)]
+struct ColorBase([f32; 4]);
+
+#[derive(Component)]
+struct TintBase([f32; 4]);
+
+/// Applies each changed [`WidgetColor`].
+fn widget_colors(
+    mut commands: Commands,
+    colors: Query<(Entity, Ref<WidgetColor>, Option<&ColorBase>)>,
+    children: Query<&Children>,
+    mut nodes: Query<(Option<&mut ImageNode>, Option<&mut TextColor>, Option<&TintBase>)>,
+) {
+    for (e, c, base) in &colors {
+        if !c.is_changed() {
+            continue;
+        }
+        if let Some(b) = base {
+            // An Image is built with its design colour (and the borders' alpha over it since): only a played one changes.
+            if c.is_added() {
+                continue;
+            }
+            if let Ok((Some(mut i), _, _)) = nodes.get_mut(e) {
+                i.color = linear(mul(b.0, c.0));
+            }
+            continue;
+        }
+        for d in children.iter_descendants(e) {
+            let Ok((image, text, tb)) = nodes.get_mut(d) else { continue };
+            let Some(current) = image.as_ref().map(|i| i.color.to_linear().to_f32_array()).or(text.as_ref().map(|t| t.0.to_linear().to_f32_array())) else { continue };
+            let b = match tb {
+                Some(b) => b.0,
+                None => {
+                    commands.entity(d).insert(TintBase(current));
+                    current
+                }
+            };
+            if let Some(mut i) = image {
+                i.color = linear(mul(b, c.0));
+            }
+            if let Some(mut t) = text {
+                t.0 = linear(mul(b, c.0));
+            }
+        }
+    }
+}
+
 /// The alpha a widget's colour was built with, under a Border's ContentAlpha.
 #[derive(Component)]
 struct BaseAlpha(f32);
@@ -590,13 +667,16 @@ fn content_alpha(
     }
 }
 
-/// A widget animation (UWidgetAnimation): its length and each Border's content alpha curve, by widget name.
+/// A widget animation (UWidgetAnimation): its length, each Border's content alpha curve and each widget's
+/// ColorAndOpacity curves (red, green, blue, alpha), by widget name.
 struct WidgetAnim {
     length: f32,
     tracks: Vec<(String, f13_core::curve::RichCurve)>,
+    colors: Vec<(String, [f13_core::curve::RichCurve; 4])>,
 }
 
-/// Loads a widget class's animations' ContentColorAndOpacity alpha tracks (ui/<class>.json "Animations").
+/// Loads a widget class's animations' ContentColorAndOpacity alpha tracks and ColorAndOpacity tracks
+/// (ui/<class>.json "Animations").
 fn load_anims(dir: &std::path::Path, class: &str) -> HashMap<String, WidgetAnim> {
     let Some(v) = std::fs::read_to_string(dir.join(format!("ui/{class}.json"))).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { return HashMap::new() };
     let Some(anims) = v["Animations"].as_object() else { return HashMap::new() };
@@ -610,7 +690,18 @@ fn load_anims(dir: &std::path::Path, class: &str) -> HashMap<String, WidgetAnim>
                 .filter(|t| t["Property"] == "ContentColorAndOpacity")
                 .map(|t| (t["Widget"].as_str().unwrap_or("").to_string(), f13_data::character::ue_rich_curve(&t["Sections"][0]["Channels"]["AlphaCurve"])))
                 .collect();
-            (name.clone(), WidgetAnim { length: a["Length"].as_f64().unwrap_or(0.0) as f32, tracks })
+            let colors = a["Tracks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|t| t["Property"] == "ColorAndOpacity")
+                .map(|t| {
+                    let ch = &t["Sections"][0]["Channels"];
+                    let c = |k: &str| f13_data::character::ue_rich_curve(&ch[k]);
+                    (t["Widget"].as_str().unwrap_or("").to_string(), [c("RedCurve"), c("GreenCurve"), c("BlueCurve"), c("AlphaCurve")])
+                })
+                .collect();
+            (name.clone(), WidgetAnim { length: a["Length"].as_f64().unwrap_or(0.0) as f32, tracks, colors })
         })
         .collect()
 }
@@ -628,7 +719,7 @@ impl PlayingAnims {
 }
 
 /// Plays the widget animations: each track's Border content alpha at the animation's time (backwards when reversed).
-fn widget_anims(time: Res<Time>, hud: Res<Hud>, playing: Res<PlayingAnims>, mut borders: Query<&mut ContentAlpha>) {
+fn widget_anims(time: Res<Time>, hud: Res<Hud>, playing: Res<PlayingAnims>, mut borders: Query<&mut ContentAlpha>, mut colors: Query<&mut WidgetColor>) {
     let now = time.elapsed_secs();
     for (owner, name, start, reverse) in &playing.0 {
         let Some(anim) = hud.anims.get(owner).and_then(|a| a.get(name)) else { continue };
@@ -637,6 +728,11 @@ fn widget_anims(time: Res<Time>, hud: Res<Hud>, playing: Res<PlayingAnims>, mut 
         for (widget, curve) in &anim.tracks {
             if let Some(mut a) = hud.names.get(&format!("{owner}.{widget}")).and_then(|&e| borders.get_mut(e).ok()) {
                 a.set_if_neq(ContentAlpha(curve.eval(x)));
+            }
+        }
+        for (widget, curves) in &anim.colors {
+            if let Some(mut c) = hud.names.get(&format!("{owner}.{widget}")).and_then(|&e| colors.get_mut(e).ok()) {
+                c.set_if_neq(WidgetColor(curves.each_ref().map(|k| k.eval(x))));
             }
         }
     }
@@ -710,7 +806,12 @@ impl Builder<'_, '_, '_> {
             self.commands.entity(e).insert(UiTransform { scale: Vec2::new(s("X"), s("Y")), rotation: Rot2::degrees(angle), ..default() });
         }
         match w.kind.as_str() {
-            "Image" => self.brush(e, &p["Brush"], mul(color(&p["ColorAndOpacity"], [1.0; 4]), self.content)),
+            "Image" => {
+                // Its ColorAndOpacity can be played (WidgetColor), over its brush's tint and the borders' around it.
+                let cao = color(&p["ColorAndOpacity"], [1.0; 4]);
+                self.commands.entity(e).insert((ColorBase(mul(color(&p["Brush"]["TintColor"], [1.0; 4]), self.content)), WidgetColor(cao)));
+                self.brush(e, &p["Brush"], mul(cao, self.content));
+            }
             "Border" => self.brush(e, &p["Background"], mul(color(&p["BrushColor"], [1.0; 4]), self.content)),
             "TextBlock" => {
                 let font = if p["Font"]["TypefaceFontName"].as_str() == Some("Bold") { self.hud.bold.clone() } else { self.hud.regular.clone() };
@@ -747,6 +848,10 @@ impl Builder<'_, '_, '_> {
             }
             _ => {}
         }
+        // A user widget's ColorAndOpacity tints what's in it.
+        if w.class.is_some() && p["ColorAndOpacity"].is_object() {
+            self.commands.entity(e).insert(WidgetColor(color(&p["ColorAndOpacity"], [1.0; 4])));
+        }
         let owner = w.class.as_deref().unwrap_or(owner).to_string();
         // A scale box fits its content (ScaleToFit).
         let outer = self.text_scale;
@@ -779,10 +884,8 @@ impl Builder<'_, '_, '_> {
         if b["DrawAs"].as_str() == Some("ESlateBrushDrawType::NoDrawType") {
             return;
         }
+        // Drawn even when transparent (a widget animation can show it).
         let c = mul(color(&b["TintColor"], [1.0; 4]), tint);
-        if c[3] <= 0.0 {
-            return;
-        }
         let res = &b["ResourceObject"];
         let textures: Vec<&str> = res["Textures"].as_array().map_or(vec![], |t| t.iter().filter_map(|t| t.as_str()).collect());
         if res["Parent"].as_str() == Some("ProgressCircle") && !textures.is_empty() {
@@ -835,7 +938,7 @@ fn minimap(
     mut maps: ResMut<Assets<Minimap>>,
 ) {
     let (Some(map), Some(player), Some(camera)) = (&hud.map, player, camera) else { return };
-    let Some(&e) = hud.names.iter().find(|(k, _)| k.ends_with(".RetainerBox_0")).map(|(_, e)| e) else { return };
+    let Some(&e) = hud.names.iter().find(|(k, _)| k.as_str() == MINIMAP_RETAINER).map(|(_, e)| e) else { return };
     let Ok(node) = nodes.get(e) else { return };
     let [x0, y0, x1, y1] = map.area;
     // Unreal x, y (cm) from Bevy x, z (m).
@@ -914,7 +1017,7 @@ fn map_icons(
     mut images: Local<HashMap<String, Option<(String, Vec2)>>>,
 ) {
     let Some(map) = &hud.map else { return };
-    let Some(&retainer) = hud.names.iter().find(|(k, _)| k.ends_with(".RetainerBox_0")).map(|(_, e)| e) else { return };
+    let Some(&retainer) = hud.names.iter().find(|(k, _)| k.as_str() == MINIMAP_RETAINER).map(|(_, e)| e) else { return };
     let Ok((node, computed)) = maps.get(retainer) else { return };
     let Some(m) = all_maps.get(&node.0) else { return };
     // A rebuilt HUD took the old icons with it.
@@ -1064,20 +1167,73 @@ fn timer(
 /// Jason's HUD: his knives and traps left, each ability's unlock bar filling and its icon's glow while it's ready
 /// (its charge bar as it recharges), and his rage building.
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 fn jason_hud(
     mut commands: Commands,
+    time: Res<Time>,
     hud: Res<Hud>,
     play: Option<Res<crate::jason_player::PlayJason>>,
-    jasons: Query<(&crate::jason::Jason, Option<&crate::senses::Knowledge>)>,
+    jasons: Query<(&crate::jason::Jason, Option<&crate::senses::Knowledge>, &Transform)>,
+    her: Query<(&Player, &Transform, Has<crate::jason::Held>, Has<Hiding>), Without<crate::jason::Jason>>,
+    tuning: Option<Res<crate::jason::KillerTuning>>,
     mut texts: Query<&mut Text>,
     bars: Query<&Progress>,
     mut vis: Query<&mut Visibility>,
+    mut playing: ResMut<PlayingAnims>,
+    mut shown: Local<(bool, bool, f32)>,
 ) {
     use f13_core::killer_abilities::{Ability, Blockers};
     if play.is_none() || hud.built.as_ref().is_none_or(|b| !b.2) {
         return;
     }
-    let Some((j, know)) = jasons.iter().next() else { return };
+    let Some((j, know, jxf)) = jasons.iter().next() else { return };
+    let now = time.elapsed_secs();
+    // GetCombatVisibility: in combat stance or a kill, these hide.
+    let combat = j.combat || matches!(j.state, crate::jason::JasonState::Killing { .. });
+    for name in ["KillerAbilityWidget_521", "GrabIconWidget_121", "RageWidget_190", "KillerKnifeWidget_77", "KillerTrapWidget_184"] {
+        if let Some(mut v) = hud.names.get(&format!("KillerHUDWidget.{name}")).and_then(|&e| vis.get_mut(e).ok()) {
+            v.set_if_neq(if combat { Visibility::Hidden } else { Visibility::Inherited });
+        }
+    }
+    let (grab_shown, reticle, next_check) = &mut *shown;
+    // UpdateGrabIcon, every 0.5 s: IsCharacterInGrabRange (a living counselor, not held or hidden, within
+    // MaxGrabDistance and MinGrabAngle of where he faces) shows the grab icon (ShowGrabIcon, then PulseGrabIcon),
+    // else hides it (ShowGrabIcon reversed).
+    if now >= *next_check {
+        *next_check = now + 0.5;
+        let in_range = tuning.as_ref().is_some_and(|t| {
+            her.iter().any(|(p, xf, held, hiding)| {
+                let d = xf.translation - jxf.translation;
+                let facing = jxf.rotation * Vec3::Z;
+                p.counselor.alive() && !held && !hiding && d.length() < t.grab_max_m && facing.dot(d.normalize_or_zero()) > t.grab_angle_deg.to_radians().cos()
+            })
+        });
+        if in_range != *grab_shown {
+            *grab_shown = in_range;
+            playing.play("KillerHUDWidget", "ShowGrabIcon", now, !in_range);
+            if !in_range {
+                playing.0.retain(|(o, a, _, _)| !(o == "KillerHUDWidget" && a == "PulseGrabIcon"));
+            }
+        }
+    }
+    if *grab_shown && !playing.0.iter().any(|(o, a, _, _)| o == "KillerHUDWidget" && a == "PulseGrabIcon") {
+        if playing.0.iter().any(|(o, a, s, _)| o == "KillerHUDWidget" && a == "ShowGrabIcon" && now - s >= 0.5) {
+            playing.play("KillerHUDWidget", "PulseGrabIcon", now, false);
+        }
+    }
+    // PulseGrabIcon loops.
+    if let Some(p) = playing.0.iter_mut().find(|(o, a, _, _)| o == "KillerHUDWidget" && a == "PulseGrabIcon") {
+        if now - p.2 >= 1.0 {
+            p.2 += 1.0;
+        }
+    }
+    // The knife's reticle while he aims (PressKnifeThrow -> OnShowKnifeReticle: ReticleFade; let go or put away,
+    // reversed).
+    let aiming = matches!(j.state, crate::jason::JasonState::Throwing { release: None, .. });
+    if aiming != *reticle {
+        *reticle = aiming;
+        playing.play("KillerHUDWidget", "ReticleFade", now, !aiming);
+    }
     let mut set_text = |name: &str, s: String| {
         if let Some(mut t) = hud.names.get(name).and_then(|&e| texts.get_mut(e).ok()) {
             if t.0 != s {

@@ -156,7 +156,8 @@ impl Plugin for PlayerPlugin {
                     aim_demo,
                     crate::counselor_camera::chase,
                     crate::counselor_camera::look,
-                    crate::counselor_camera::counselor_camera,
+                    // Her cameras, not when Jason's played (jason_player.rs has the view).
+                    crate::counselor_camera::counselor_camera.run_if(not(resource_exists::<crate::jason_player::PlayJason>)),
                     update_hud,
                     toggle_debug_hud,
                 )

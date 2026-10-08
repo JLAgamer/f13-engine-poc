@@ -520,6 +520,13 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         foreach (var name in new[] { "SenseFearRadiusCurve", "SenseFearHidingRadiusCurve", "RageSenseDistanceCurve" })
             if (CurveValue(cls, name) is { } keys) info.Curves[name] = keys;
 
+        // His cameras (Jason_Base's ILLDynamicCameraComponents) and Shift's camera shake (OnShiftChange: ED_Shake).
+        info.Cameras = DynamicCameras(cls);
+        info.CameraShakes = new Newtonsoft.Json.Linq.JObject();
+        foreach (var shake in new[] { "SummerCamp/Content/Cameras/CameraShakes/ED_Shake" })
+            if (provider.LoadPackageObject<UBlueprintGeneratedClass>(shake + "." + shake.Split('/')[^1] + "_C").ClassDefaultObject.Load() is { } shakeCdo)
+                info.CameraShakes[shake.Split('/')[^1]] = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(shakeCdo))["Properties"] ?? new Newtonsoft.Json.Linq.JObject();
+
         AddBones(info, body, skeleton);
         AddSockets(info, body, skeleton);
         WriteAnimations(info, skeleton, animations, "anims/jason", keepRoot);
@@ -630,8 +637,9 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         return result;
     }
 
-    /// A Blueprint class's ILLDynamicCameraComponents (construction-script nodes of it and its Blueprint parents, a
-    /// subclass's InheritableComponentHandler override first), by variable name.
+    /// A Blueprint class's ILLDynamicCameraComponents (construction-script nodes of it and its Blueprint parents), by
+    /// variable name. A subclass's InheritableComponentHandler override holds only what it changes: its properties (and
+    /// its spring arm's and camera's) go over the parent's template's.
     static Newtonsoft.Json.Linq.JObject? DynamicCameras(UStruct? cls)
     {
         var chain = new List<UBlueprintGeneratedClass>();
@@ -653,17 +661,26 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             {
                 if (idx.Load() is not { } node) return;
                 var name = node.GetOrDefault<FName>("InternalVariableName").Text;
-                var t = overrides.GetValueOrDefault(name) ?? node.GetOrDefault<FPackageIndex?>("ComponentTemplate")?.Load();
-                if (t?.ExportType == "ILLDynamicCameraComponent" && result[name] == null)
+                var b = node.GetOrDefault<FPackageIndex?>("ComponentTemplate")?.Load();
+                var o = overrides.GetValueOrDefault(name);
+                if ((o ?? b)?.ExportType == "ILLDynamicCameraComponent" && result[name] == null)
                 {
-                    var p = Props(t);
+                    Newtonsoft.Json.Linq.JObject Merged(Func<UObject, UObject?> pick)
+                    {
+                        var m = new Newtonsoft.Json.Linq.JObject();
+                        foreach (var t in new[] { b, o })
+                            if (t != null && Props(pick(t)) is Newtonsoft.Json.Linq.JObject p)
+                                m.Merge(p, new Newtonsoft.Json.Linq.JsonMergeSettings { MergeArrayHandling = Newtonsoft.Json.Linq.MergeArrayHandling.Replace });
+                        return m;
+                    }
+                    var p = Merged(t => t);
                     result[name] = new Newtonsoft.Json.Linq.JObject
                     {
                         ["Settings"] = p["MovementBasedSettings"] ?? new Newtonsoft.Json.Linq.JArray(),
                         // The constructor's bUse2DVelocity is true.
                         ["Use2DVelocity"] = p["bUse2DVelocity"] ?? true,
-                        ["SpringArm"] = Props(t.GetOrDefault<FPackageIndex?>("SpringArm")?.Load()),
-                        ["Camera"] = Props(t.GetOrDefault<FPackageIndex?>("Camera")?.Load()),
+                        ["SpringArm"] = Merged(t => t.GetOrDefault<FPackageIndex?>("SpringArm")?.Load()),
+                        ["Camera"] = Merged(t => t.GetOrDefault<FPackageIndex?>("Camera")?.Load()),
                     };
                 }
                 foreach (var child in node.GetOrDefault<FPackageIndex[]>("ChildNodes", [])) Walk(child);

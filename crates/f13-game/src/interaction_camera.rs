@@ -1,5 +1,6 @@
 //! Interaction cameras (SCSpecialMoveComponent, decompiled): a special move whose handler has bTakeCameraControl
-//! (doors' open and close moves; not cabinets', whose handlers leave it at the constructor's false) takes the view to
+//! (the constructor's true, at +0x2f1 of its word write 0x100 at +0x2f0; the hiding spots' search handlers turn it
+//! off: doors' open and close moves, cabinets' drawers, windows' open and close) takes the view to
 //! one of the SCSplineCameras attached under the handler when she reaches the move's place (NativeDestinationReached ->
 //! PlayInteractionCamera 0x1403548d0), and hands it back when the move completes or is aborted (StopInteractionCamera
 //! 0x14035fbd0 -> ReturnCameraToCharacter).
@@ -28,7 +29,10 @@ impl Plugin for InteractionCameraPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(play).add_observer(stop).add_systems(
             Update,
-            interaction_camera.after(crate::counselor_camera::counselor_camera).before(crate::kill_camera::kill_camera),
+            interaction_camera
+                .after(crate::counselor_camera::counselor_camera)
+                .before(crate::kill_camera::kill_camera)
+                .run_if(not(resource_exists::<crate::jason_player::PlayJason>)),
         );
     }
 }
@@ -50,7 +54,7 @@ impl InteractionCameras {
     pub fn new(components: &[f13_data::level::ComponentInfo]) -> Option<Self> {
         let num = |c: &f13_data::level::ComponentInfo, k: &str, d: f32| c.props.get(k).and_then(|v| v.as_f64()).map_or(d, |v| v as f32);
         let mut out = std::collections::HashMap::new();
-        for h in components.iter().filter(|c| c.kind == "SCSpecialMoveComponent" && c.props.get("bTakeCameraControl").and_then(|v| v.as_bool()) == Some(true)) {
+        for h in components.iter().filter(|c| c.kind == "SCSpecialMoveComponent" && c.props.get("bTakeCameraControl").and_then(|v| v.as_bool()) != Some(false)) {
             let cameras: Vec<(Transform, f32)> = components
                 .iter()
                 .filter(|c| c.kind == "SCSplineCamera" && c.parent.as_deref() == Some(h.name.as_str()))

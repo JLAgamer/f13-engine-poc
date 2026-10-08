@@ -280,6 +280,10 @@ pub struct Rig {
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct PlayAction(pub String);
 
+/// Puts the PlayAction this far in (s), once (a montage switched to another at the same fraction).
+#[derive(Component)]
+pub struct SeekAction(pub f32);
+
 /// Plays the current PlayAction again from its start (a montage section that repeats its segment).
 #[derive(Component)]
 pub struct RestartAction;
@@ -420,7 +424,7 @@ pub(crate) fn animate(
     tuning: Res<PlayerTuning>,
     forced: Option<Res<ForcedPose>>,
     anim_sounds: Option<Res<crate::audio::AnimSounds>>,
-    players: Query<(Entity, &Player, &Transform, Option<&crate::interact::UsingItem>, Option<&PlayAction>, Has<crate::items::Blocking>, Has<RestartAction>)>,
+    players: Query<(Entity, &Player, &Transform, Option<&crate::interact::UsingItem>, Option<&PlayAction>, Has<crate::items::Blocking>, Has<RestartAction>, Option<&SeekAction>)>,
     mut rigs: Query<(&ChildOf, &mut Rig, &mut AnimationPlayer), Without<crate::ragdoll::Ragdolled>>,
 ) {
     let Some(character) = character else { return };
@@ -440,7 +444,7 @@ pub(crate) fn animate(
         return;
     }
     for (parent, mut rig, mut anim) in &mut rigs {
-        let Ok((pe, p, xf, using, scripted, blocking, restart)) = players.get(parent.parent()) else { continue };
+        let Ok((pe, p, xf, using, scripted, blocking, restart, seek)) = players.get(parent.parent()) else { continue };
         if restart {
             rig.action = None;
             commands.entity(pe).remove::<RestartAction>();
@@ -461,6 +465,10 @@ pub(crate) fn animate(
         // bUseStartStopTransitions, which nothing sets (no constructor, Blueprint or package), so CurrentMoveState is
         // just moving (3) or idle (0) and the AnimBP's Default Locomotion goes straight between Idle and Locomotion.
         rig.set_action(action, dt);
+        if let Some(s) = seek {
+            rig.seek_action(s.0);
+            commands.entity(pe).remove::<SeekAction>();
+        }
         // Paired takes (kills, the car grab: the same names on both) sound from Jason's side.
         if !rig.action.as_ref().is_some_and(|(a, _)| a.starts_with("cinematic_")) {
             crate::audio::play_anim_sounds(&mut commands, anim_sounds.as_deref(), rig.action_span(dt), xf.translation);
@@ -568,6 +576,13 @@ impl Rig {
     /// The action and the span of its time this frame (from: negative on its first frame), for its sounds.
     pub fn action_span(&self, dt: f32) -> Option<(&str, f32, f32)> {
         self.action.as_ref().map(|(a, at)| (a.as_str(), if *at == 0.0 { -1.0 } else { at - dt }, *at))
+    }
+
+    /// Puts the action playing this far in (s).
+    pub fn seek_action(&mut self, at: f32) {
+        if let Some((_, t)) = &mut self.action {
+            *t = at;
+        }
     }
 
     /// Starts, continues or ends the full-body action.

@@ -416,8 +416,8 @@ fn main() {
             .add_plugins(match_flow::MatchPlugin { leave: !bot || args.play_jason })
             .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }, collision::CollisionPlugin, audio::AudioPlugin, water::WaterPlugin, power::PowerPlugin { cut: args.cut_power }, kill_camera::KillCameraPlugin, prop_anim::PropAnimPlugin, doors::DebrisPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin, navigation::NavigationPlugin { debug: args.nav_debug }))
             .add_plugins((police::PolicePlugin, placed_kills::PlacedKillsPlugin, interaction_camera::InteractionCameraPlugin, counselor_camera::CounselorCameraPlugin, cabinets::CabinetsPlugin, weather::WeatherPlugin));
-        // Playing Jason without a --bot-*: the escape bot plays her (the scripted Jason's test leaves her idle).
-        if args.bot_escape || (args.play_jason && !bot && !args.play_jason_demo) {
+        // Playing Jason without a --bot-*, she stands idle (time to try him out).
+        if args.bot_escape {
             app.add_plugins(bot::BotPlugin(bot::Goal::Escape));
         } else if args.bot_car_grab {
             app.add_plugins(bot::BotPlugin(bot::Goal::CarGrab));

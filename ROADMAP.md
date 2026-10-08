@@ -104,21 +104,26 @@ Mechanics: Jason side
 - [x] Kill cameras' CameraTrace (SCSplineCamera's tick): something between the camera and what it looks at pulls the
       camera to it and widens its field of view (indoor kills no longer film from behind walls)
 - [x] Kill cameras blend back (0.5 s, their special moves' BlendBackTime) to the follow camera
-- [x] Playing as Jason (`--play-jason`, jason_player.rs): walk, run, look; swing, heavy swing, grab and kill, knives
-      where he looks, traps, Shift, Morph (the point nearest 30 m ahead), Stalk; doors as he walks into them; his
-      camera; the escape bot plays the counselor
+- [x] Playing as Jason (`--play-jason`, jason_player.rs): walk, fast walk, look; attack (held in combat stance: the
+      heavy attack), grab and kill, knives (aimed while held), traps, Shift, Morph (the point nearest 30 m ahead),
+      Stalk; doors as he walks into them; the counselor stands idle unless a `--bot-*` plays her
+- [x] Jason's keys as the game binds them (SetupPlayerInputComponent 0x140407900 and DefaultInput.ini): LMB attack,
+      RMB grab, MMB held aims a knife and letting go throws it (RMB puts it away), C combat stance (MaxCombatSpeed,
+      facing the view), R trap, 1 Morph, 2 Sense, 3 Shift, 4 Stalk, Left Shift fast walk, E interact; holding her, 1-4
+      let go are the right / bottom / left / top grab kills and a click the bottom one
+- [x] Jason's cameras when he's played: Jason_Base's dynamic cameras (Outdoor, Indoor, Combat, Shift with its shake,
+      Water at the surface, ThrowingKnife, Choke) switched as its graph does, through the counselor's camera stack and
+      spring arms (they collide with the level: his old fixed camera went through his shack's walls). His start is
+      the layout's SCKillerPlayerStart, in his shack, as in the game
 - [x] Jason's HUD when he's played (KillerHUDWidget): his timer, knives and traps left, the abilities' unlock bars and
-      ready glows, rage
-- [x] Sense on demand when Jason's played (4; the computer Jason uses it when ready and she's out of sight)
-- [x] Choosing kills when Jason's played: 1-5 while holding her (a click: one at random)
-- [ ] Playing as Jason, remaining: the map for Morph
-- [ ] Playing as Jason: the counselor bot should idle instead of running the escape bot, so there's time to try Jason
-      out
-- [ ] Bug: Jason's camera and spawn point seem wrong when he's played
-- [ ] Jason's HUD is unfinished (compare against KillerHUDWidget's full layout)
-- [ ] Jason's keybinds are wrong (e.g. middle click swings instead of throwing a knife): take them from the game's
-      DefaultInput.ini
-- [ ] Bug: when Jason's played, the counselor bot's prompts (the repair dial and such) show on his HUD
+      ready glows, rage; the action keys (ActionMapWidgets by their PrimaryAction); hidden in combat stance or a kill
+      (GetCombatVisibility); the grab icon when a counselor's in grab range (UpdateGrabIcon); the knife's reticle while
+      aiming (ReticleFade). Her prompts, dial and breath meter stay off his screen
+- [x] Sense on demand when Jason's played (2; the computer Jason uses it when ready and she's out of sight)
+- [ ] Playing as Jason, remaining: the map for Morph (KillerHUDWidget's Map_Overylay); the grab kill choices while
+      holding her (KillerGrabWidget); KillerHelpTextWidget; his score lines (XPDisplayWidget); his block in combat
+      stance (CMBT_KLR_Block); the doors' and walls' special move cameras for him (KillerOpenDoor, BreakDownFrom*);
+      the grab kill slots are the save game's picks (unread: the throat hack on the click)
 - [x] Shift, Morph, Stalk (f13-core::killer_moves, jason.rs): Shift's 0.7 s wind-up, ShiftSpeed and ShiftTime (J2:
   1000 cm/s, 4 s), ending in a grab; Stalk's StalkActiveTimer (IdleStalkModifier standing still); Morph to the
   nearest SCKillerMorphPoint within 30 m of the spot after TeleportScreenTime; the teleport fade (he's hidden below
@@ -254,8 +259,9 @@ Presentation
 - [x] Cabinet special moves (cabinets.rs, decompiled): Counselor_OpenDrawer / OpenDrawerLow's montage (Open, Idle,
       Close, Take), the drawer following her target_jnt bone (SCCabinet's tick), ready after the Open section; a press
       closes it, a 1 s hold takes the item (at OnPickupItem); emptied drawers stay open; desks' two drawers
-- [ ] Bug: the counselor's camera doesn't move when she opens a drawer (check the drawer special move's camera in the
-      decomp)
+- [x] The drawers' and windows' interaction cameras: SCSpecialMoveComponent's bTakeCameraControl is true by default
+      (its constructor's word write at +0x2f0; it was read as false), so the cabinets' CabinetCam and the windows'
+      open / close cameras take the view as the doors' do
 - [x] Through windows on the takes' own root motion: the climb, the dive and its landing play from the window's
       CounselorVault / CounselorDive special move spot on her side (a window's inside is its +X side:
       SCWindow::IsInteractorInside is the door's test reversed)
@@ -333,7 +339,7 @@ Setup
       for a decision on that
 
 Decomp audit (nothing guessed: every rule read from the decomp or the game's data)
-- [ ] Check each PLACEHOLDER (15 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
+- [ ] Check each PLACEHOLDER (16 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
       them, in jason.rs, are the AI's own choices and stay) and each "guess"/"assumed"/"not read" note (about 10)
       against the decomp and the export (Ghidra, MODLOG, f13-export `debug-json` / `pseudo` / `cdo` / `grep`); port
       what the game does, or record in MODLOG why it can't be found. Most are in jason.rs, hiding.rs, audio.rs,

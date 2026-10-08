@@ -2,7 +2,7 @@
 //! placing a bear trap; the pocket knife (breaks a grab) and the grab struggle are in jason.rs. The held item hangs
 //! off its hand socket. The map shows the camp from above, with a dot where she is.
 //!
-//! Controls: left mouse uses the item in the hands (swing; moving forward swings the heavy ForwardAttack), 1-3 the
+//! Controls: left mouse uses the item in the hands (swing; held 0.1 s in combat stance, the heavy ForwardAttack), 1-3 the
 //! pocket items (first aid in interact.rs, firecrackers here), M the map (when carried). In combat stance, right
 //! mouse blocks with a weapon in the hands.
 //!
@@ -137,7 +137,8 @@ pub struct InHand;
 
 #[derive(Clone, Debug)]
 enum Use {
-    Swing { stats: WeaponStats, window: (f32, f32) },
+    /// A swing: light (NeutralAttack) or heavy (ForwardAttack).
+    Swing { stats: WeaponStats, window: (f32, f32), heavy: bool },
     Fire { kind: ItemKind },
     Throw,
     PlaceTrap,
@@ -154,7 +155,12 @@ pub struct ItemAction {
     done: bool,
     /// The weapon's KillVolume as last traced (PreviousTraceLocation / Rotation).
     trace: Option<Transform>,
+    /// The attack button's hold in combat stance (SCCharacter +0xf4c / +0xf50, from the press that swung).
+    hold: Option<f32>,
 }
+
+/// SCCharacter's tick: the attack held this long in combat stance is the heavy attack (DAT_14207a200).
+const HEAVY_HOLD_S: f32 = 0.1;
 
 /// The closest points' distance between segments `p0..p1` and `q0..q1` (Ericson 5.1.9).
 fn segment_distance(p0: Vec3, p1: Vec3, q0: Vec3, q1: Vec3) -> f32 {
@@ -384,7 +390,6 @@ fn hold_in_hand(
 fn start_action(
     mut commands: Commands,
     mouse: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<KeyCode>>,
     character: Option<Res<CounselorCharacter>>,
     interaction: Res<crate::interact::Interaction>,
     camera: Single<&PlayerCamera>,
@@ -400,8 +405,11 @@ fn start_action(
         return;
     }
     let len = |n: &str| character.length(n).unwrap_or(1.0);
+    let combat = p.counselor.stance == f13_core::counselor::Stance::Combat;
     let mut start = |what: Use, item: Entity, anim: &str, at: f32| {
-        commands.entity(pe).insert((ItemAction { what, item, t: 0.0, len: len(anim), at, done: false, trace: None }, PlayAction(anim.into())));
+        // A swing in combat stance: the button's hold counts toward the heavy attack.
+        let hold = (combat && matches!(what, Use::Swing { .. })).then_some(0.0);
+        commands.entity(pe).insert((ItemAction { what, item, t: 0.0, len: len(anim), at, done: false, trace: None, hold }, PlayAction(anim.into())));
     };
     // Face where the camera looks.
     let (sin, cos) = camera.yaw.sin_cos();
@@ -411,12 +419,13 @@ fn start_action(
         let Ok(item) = items.get(hand) else { return };
         match &item.kind {
             ItemKind::Weapon(stats) => {
-                let heavy = keys.pressed(KeyCode::KeyW) as usize;
-                let anim = if stats.two_handed { SWING_2H[heavy] } else { SWING_1H[heavy] };
+                // The NeutralAttack (0x1402e5aa0: MULTICAST_Attack(false)); in combat stance the button's hold starts
+                // counting (the heavy attack after 0.1 s, in tick_action).
+                let anim = if stats.two_handed { SWING_2H[0] } else { SWING_1H[0] };
                 let window = character.info.animations.get(anim).and_then(|a| a.window("AttackTraceNotify")).unwrap_or((0.6, 0.8));
-                info!("swing {} ({})", item.name, if heavy == 1 { "heavy" } else { "light" });
+                info!("swing {} (light)", item.name);
                 xf.rotation = face;
-                start(Use::Swing { stats: stats.clone(), window }, hand, anim, window.0);
+                start(Use::Swing { stats: stats.clone(), window, heavy: false }, hand, anim, window.0);
             }
             ItemKind::Gun { projectile, .. } => {
                 info!("fire {}", item.name);
@@ -448,22 +457,43 @@ fn tick_action(
     time: Res<Time>,
     camera: Single<(&PlayerCamera, &GlobalTransform)>,
     mut rng: ResMut<crate::GameRng>,
-    mut player: Query<(Entity, &mut ItemAction, &mut Inventory, &Transform), With<Player>>,
+    mut player: Query<(Entity, &mut ItemAction, &mut Inventory, &Transform, &Player)>,
     jasons: Query<(Entity, &Transform), (With<Jason>, Without<Player>)>,
+    mouse: Res<ButtonInput<MouseButton>>,
     mut wear: Query<Option<&mut Wear>>,
     items: Query<&Item>,
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
     mut assets: (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>),
     (globals, killer, character, rigs): (Query<&GlobalTransform>, Option<Res<crate::jason::KillerTuning>>, Option<Res<CounselorCharacter>>, Query<(&ChildOf, &Rig)>),
 ) {
-    let Ok((pe, mut a, mut inv, xf)) = player.single_mut() else { return };
+    let Ok((pe, mut a, mut inv, xf, p)) = player.single_mut() else { return };
     a.t += time.delta_secs();
+    // SCCharacter's tick: held past 0.1 s in combat stance, the light swing becomes the weapon's ForwardAttack
+    // (MULTICAST_Attack(true): the anim instance switches to it at the same fraction of the swing).
+    if let (Some(h), Use::Swing { stats, heavy: false, .. }) = (a.hold, a.what.clone()) {
+        let held = mouse.pressed(MouseButton::Left) && p.counselor.stance == f13_core::counselor::Stance::Combat;
+        a.hold = held.then_some(h + time.delta_secs());
+        if held && h + time.delta_secs() > HEAVY_HOLD_S && !a.done {
+            a.hold = None;
+            let anim = if stats.two_handed { SWING_2H[1] } else { SWING_1H[1] };
+            if let Some(c) = character.as_ref().filter(|c| c.info.animations.contains_key(anim)) {
+                let window = c.info.animations.get(anim).and_then(|x| x.window("AttackTraceNotify")).unwrap_or((0.6, 0.8));
+                let len = c.length(anim).unwrap_or(1.0);
+                a.t = len * (a.t / a.len.max(1e-3)).min(1.0);
+                a.len = len;
+                a.at = window.0;
+                a.what = Use::Swing { stats, window, heavy: true };
+                info!("swing (heavy)");
+                commands.entity(pe).insert((PlayAction(anim.into()), crate::character::SeekAction(a.t)));
+            }
+        }
+    }
     let chest = xf.translation + Vec3::Y * crate::interact::CHEST_M;
     let facing = xf.rotation * Vec3::Z;
     let jason = jasons.iter().next();
     if !a.done && a.t >= a.at {
         match a.what.clone() {
-            Use::Swing { stats, window } => {
+            Use::Swing { stats, window, .. } => {
                 if a.t <= window.1 {
                     // The KillVolume where the weapon is now (its hand socket as last posed).
                     let now = stats.volume.zip(globals.get(a.item).ok()).map(|((local, ..), g)| g.mul_transform(local).compute_transform());

@@ -80,11 +80,11 @@ pub struct Chase {
 }
 
 /// Unreal (cm, Z up) from Bevy (m, Y up), and back.
-fn to_unreal(v: Vec3) -> Vec3 {
+pub(crate) fn to_unreal(v: Vec3) -> Vec3 {
     Vec3::new(v.x, v.z, v.y) * 100.0
 }
 
-fn to_bevy(v: Vec3) -> Vec3 {
+pub(crate) fn to_bevy(v: Vec3) -> Vec3 {
     Vec3::new(v.x, v.z, v.y) / 100.0
 }
 
@@ -150,15 +150,31 @@ pub(crate) fn chase(
 }
 
 /// The view's horizontal field of view (degrees) from the camera's projection.
-fn horizontal_fov(proj: &Projection, aspect: f32) -> f32 {
+pub(crate) fn horizontal_fov(proj: &Projection, aspect: f32) -> f32 {
     match proj {
         Projection::Perspective(p) => (2.0 * ((p.fov / 2.0).tan() * aspect).atan()).to_degrees(),
         _ => 90.0,
     }
 }
 
-fn aspect(windows: &Query<&Window>) -> f32 {
+pub(crate) fn aspect(windows: &Query<&Window>) -> f32 {
     windows.iter().next().map_or(16.0 / 9.0, |w| w.width() / w.height().max(1.0))
+}
+
+/// Turn / LookUp's change to the control rotation (yaw, pitch degrees) for a mouse movement.
+pub(crate) fn mouse_turn(delta: Vec2, proj: &Projection, windows: &Query<&Window>) -> (f32, f32) {
+    let fov = horizontal_fov(proj, aspect(windows));
+    // UPlayerInput: the raw counts x sensitivity x FOV scaling; MouseY's LookUp mapping has scale -1 (and Bevy's y
+    // grows downward).
+    let turn = delta.x * MOUSE_SENSITIVITY * FOV_SCALE * fov;
+    let look_up = delta.y * MOUSE_SENSITIVITY * FOV_SCALE * fov;
+    (turn * INPUT_YAW_SCALE, look_up * INPUT_PITCH_SCALE)
+}
+
+/// Adds to the control rotation, its pitch held to the camera manager's limits.
+pub(crate) fn add_control_rotation(cam: &mut PlayerCamera, yaw: f32, pitch: f32) {
+    let (uyaw, upitch) = control_rotation(cam);
+    set_control_rotation(cam, uyaw + yaw, (upitch + pitch).clamp(-VIEW_PITCH_LIMIT, VIEW_PITCH_LIMIT));
 }
 
 /// Turn / LookUp: the mouse turns her control rotation (and her car look offset).
@@ -176,16 +192,8 @@ pub(crate) fn look(
         return;
     }
     let (ref mut cam, proj) = *camera;
-    let fov = horizontal_fov(proj, aspect(&windows));
-    // UPlayerInput: the raw counts x sensitivity x FOV scaling; MouseY's LookUp mapping has scale -1 (and Bevy's y
-    // grows downward).
-    let turn = motion.delta.x * MOUSE_SENSITIVITY * FOV_SCALE * fov;
-    let look_up = motion.delta.y * MOUSE_SENSITIVITY * FOV_SCALE * fov;
-    let (yaw, pitch) = (turn * INPUT_YAW_SCALE, look_up * INPUT_PITCH_SCALE);
-    let (mut uyaw, mut upitch) = control_rotation(cam);
-    uyaw += yaw;
-    upitch = (upitch + pitch).clamp(-VIEW_PITCH_LIMIT, VIEW_PITCH_LIMIT);
-    set_control_rotation(cam, uyaw, upitch);
+    let (yaw, pitch) = mouse_turn(motion.delta, proj, &windows);
+    add_control_rotation(cam, yaw, pitch);
     // Her own handlers: the look offset a car uses, clamped while she's in one.
     if let (Some(rig), Some(c)) = (rig.as_mut(), counselor) {
         let scale = Vec2::new(value(&c.info, "CameraRotateScaleX", 0.5), value(&c.info, "CameraRotateScaleY", 0.5));
@@ -209,13 +217,102 @@ pub fn set_control_rotation(cam: &mut PlayerCamera, yaw: f32, pitch: f32) {
     cam.pitch = pitch.to_radians();
 }
 
-/// Her cameras and their stack.
-#[derive(Resource)]
-pub struct Rig {
+/// A character's ILLDynamicCameraComponents and ILLCharacter's camera stack over them.
+pub struct Cameras {
     names: Vec<String>,
     cameras: Vec<DynamicCamera>,
     active: Vec<bool>,
     stack: CameraStack,
+    /// What the stack asked of the cameras since the last tick (applied at its start).
+    pending: Vec<CameraEvent>,
+}
+
+impl Cameras {
+    pub fn new(info: &f13_data::character::CharacterInfo) -> Self {
+        let mut names: Vec<String> = info.cameras.keys().cloned().collect();
+        names.sort();
+        let cameras = names.iter().map(|n| {
+            let c = &info.cameras[n];
+            DynamicCamera::new(c.settings(), c.use_2d_velocity, c.spring_arm())
+        }).collect();
+        Cameras { active: vec![false; names.len()], names, cameras, stack: CameraStack::default(), pending: Vec::new() }
+    }
+
+    pub fn index(&self, name: &str) -> Option<usize> {
+        self.names.iter().position(|n| n == name)
+    }
+
+    /// ILLCharacter::SetActiveCamera.
+    pub fn set_active(&mut self, name: &str, now: f32) -> bool {
+        let Some(i) = self.index(name) else { return false };
+        self.stack.set_active(i, now, &mut self.pending);
+        true
+    }
+
+    /// ILLCharacter::SetActiveCameraWithBlend.
+    pub fn set_active_with_blend(&mut self, name: &str, blend: f32, now: f32) {
+        if let Some(i) = self.index(name) {
+            debug!("camera: {name} over {blend} s");
+            self.stack.set_active_with_blend(i, blend, now, &mut self.pending);
+        }
+    }
+
+    /// SCCharacter::ResetCameras: every stacked camera reactivates, its arm snapping (on the next tick).
+    pub fn reset(&mut self) {
+        let cams: Vec<usize> = self.stack.entries.iter().map(|e| e.camera).collect();
+        self.pending.extend(cams.into_iter().map(CameraEvent::Activate));
+    }
+
+    /// A frame: the stack's events, each active camera's settings for the character's velocity (cm/s) and its arm
+    /// from `origin(camera name)` (Unreal cm), then the stack's blend of their views.
+    #[allow(clippy::too_many_arguments)]
+    pub fn tick(
+        &mut self,
+        now: f32,
+        dt: f32,
+        velocity: Vec3,
+        component_rot: Vec3,
+        control: Vec3,
+        origin: impl Fn(&str) -> Vec3,
+        sweep: impl Fn(Vec3, Vec3, f32) -> Option<Vec3>,
+    ) -> Option<View> {
+        let apply = |c: &mut Cameras| {
+            for e in std::mem::take(&mut c.pending) {
+                match e {
+                    CameraEvent::Activate(i) => {
+                        // The dynamic camera's Activate (0x140216330): its arm snaps with what it last had (a camera's
+                        // first time, the fresh USpringArmComponent its OnComponentCreated made: 300 cm, no offsets).
+                        c.active[i] = true;
+                        let o = origin(&c.names[i]);
+                        c.cameras[i].arm.snap(o, component_rot, control);
+                    }
+                    CameraEvent::Deactivate(i) => c.active[i] = false,
+                }
+            }
+        };
+        apply(self);
+        for i in 0..self.cameras.len() {
+            if !self.active[i] {
+                continue;
+            }
+            let o = origin(&self.names[i]);
+            self.cameras[i].tick(now, velocity);
+            self.cameras[i].arm.tick(o, component_rot, control, dt, &sweep);
+        }
+        let active = self.active.clone();
+        let mut events = Vec::new();
+        self.stack.update(now, |i| active[i], &mut events);
+        self.pending = events;
+        apply(self);
+        let views: Vec<View> = self.cameras.iter().map(|c| View { location: c.arm.socket.0, rotation: c.arm.socket.1, fov: c.arm.settings.field_of_view }).collect();
+        self.stack.view(|i| views[i])
+    }
+}
+
+/// Her cameras and their stack.
+#[derive(Resource)]
+pub struct Rig {
+    cams: Cameras,
     /// What last called ChangeCamera, as the graph keeps it: her stance, indoors, chased; the last stance and indoors
     /// events' values.
     stance: Stance,
@@ -227,8 +324,6 @@ pub struct Rig {
     /// Her look offset in a car (yaw, pitch degrees).
     pub vehicle_look: Vec2,
     pub view: View,
-    /// What the stack asked of the cameras when the rig was made (applied on its first frame).
-    pending: Vec<CameraEvent>,
     /// The chase's camera shake while it plays.
     shake: Option<f13_core::dynamic_camera::ShakeInstance>,
 }
@@ -237,16 +332,11 @@ impl Rig {
     /// SCCharacter::ResetCameras (from ReturnCameraToCharacter): every stacked camera reactivates, its arm snapping
     /// (on the next frame here).
     pub fn reset_cameras(&mut self) {
-        let cams: Vec<usize> = self.stack.entries.iter().map(|e| e.camera).collect();
-        self.pending.extend(cams.into_iter().map(CameraEvent::Activate));
-    }
-
-    fn index(&self, name: &str) -> Option<usize> {
-        self.names.iter().position(|n| n == name)
+        self.cams.reset();
     }
 
     /// The Blueprint's ChangeCamera.
-    fn change_camera(&mut self, blend: f32, now: f32, events: &mut Vec<CameraEvent>) {
+    fn change_camera(&mut self, blend: f32, now: f32) {
         // In a boat the stance's camera is skipped (ShouldUseDrivingCamera); the Chevette is a car.
         let stance_camera = match self.stance {
             Stance::Crouching => Some(CROUCHING),
@@ -257,32 +347,20 @@ impl Rig {
             _ => None,
         };
         let chase = self.chased && !(self.indoors || self.stance == Stance::Combat || self.stance == Stance::Driving);
-        let name = match stance_camera.filter(|n| self.index(n).is_some()) {
+        let name = match stance_camera.filter(|n| self.cams.index(n).is_some()) {
             Some(n) => n,
             None if chase => CHASE,
             None if self.indoors => INDOOR,
             None => OUTDOOR,
         };
-        if let Some(i) = self.index(name) {
-            debug!("camera: {name} over {blend} s");
-            self.stack.set_active_with_blend(i, blend, now, events);
-        }
+        self.cams.set_active_with_blend(name, blend, now);
     }
 }
 
 /// Builds her rig from the counselor's cameras, the Outdoor camera active (OnPossessed).
-fn new_rig(info: &f13_data::character::CharacterInfo, now: f32, events: &mut Vec<CameraEvent>) -> Option<Rig> {
-    let mut names: Vec<String> = info.cameras.keys().cloned().collect();
-    names.sort();
-    let cameras: Vec<DynamicCamera> = names.iter().map(|n| {
-        let c = &info.cameras[n];
-        DynamicCamera::new(c.settings(), c.use_2d_velocity, c.spring_arm())
-    }).collect();
+fn new_rig(info: &f13_data::character::CharacterInfo, now: f32) -> Option<Rig> {
     let mut rig = Rig {
-        active: vec![false; names.len()],
-        names,
-        cameras,
-        stack: CameraStack::default(),
+        cams: Cameras::new(info),
         stance: Stance::Standing,
         indoors: false,
         chased: false,
@@ -291,13 +369,23 @@ fn new_rig(info: &f13_data::character::CharacterInfo, now: f32, events: &mut Vec
         indoors_event: false,
         vehicle_look: Vec2::ZERO,
         view: View::default(),
-        pending: Vec::new(),
         shake: None,
     };
-    let outdoor = rig.index(OUTDOOR)?;
-    rig.stack.set_active(outdoor, now, events);
-    rig.pending = std::mem::take(events);
-    Some(rig)
+    rig.cams.set_active(OUTDOOR, now).then_some(rig)
+}
+
+/// The spring arms' probe sweep (Unreal cm) against what blocks the camera.
+pub(crate) fn camera_sweep<'a>(
+    collision: Option<&'a crate::collision::WorldCollision>,
+    dynamic: &'a crate::collision::DynamicColliders,
+    blockers: &'a Query<(), With<crate::collision::CameraBlocker>>,
+) -> impl Fn(Vec3, Vec3, f32) -> Option<Vec3> + 'a {
+    move |from: Vec3, to: Vec3, radius: f32| -> Option<Vec3> {
+        let world = collision?;
+        let lists: Vec<&f13_core::collision::TriList> = dynamic.iter().filter(|(e, _)| blockers.contains(*e)).map(|(_, l)| l).collect();
+        let f = f13_core::collision::sphere_sweep(&(&*world.camera_grid, lists.as_slice()), to_bevy(from), to_bevy(to), radius / 100.0)?;
+        Some(from + (to - from) * f)
+    }
 }
 
 /// Unreal rotator of a Bevy rotation of an actor exported through `to_transform` (its +X is Unreal's forward).
@@ -329,11 +417,10 @@ pub(crate) fn counselor_camera(
         return;
     }
     let now = time.elapsed_secs();
-    let mut events = Vec::new();
     let mut rig = match rig {
         Some(r) => r,
         None => {
-            let Some(r) = counselor.as_ref().and_then(|c| new_rig(&c.info, now, &mut events)) else { return };
+            let Some(r) = counselor.as_ref().and_then(|c| new_rig(&c.info, now)) else { return };
             // Possession turns her view to her facing, level (AController::Possess).
             let f = to_unreal(pxf.rotation * Vec3::Z);
             set_control_rotation(cam, f.y.atan2(f.x).to_degrees(), 0.0);
@@ -342,7 +429,6 @@ pub(crate) fn counselor_camera(
         }
     };
     let rig = &mut *rig;
-    events.append(&mut rig.pending);
 
     // Her stance as the game keeps it (Driving in a seat, Grabbed in his hands, Trapped in a bear trap).
     let stance = if driving.is_some() {
@@ -371,12 +457,12 @@ pub(crate) fn counselor_camera(
     if stance != rig.stance {
         rig.stance = stance;
         rig.stance_event = stance;
-        rig.change_camera(if stance == Stance::Driving { 0.0 } else { 0.5 }, now, &mut events);
+        rig.change_camera(if stance == Stance::Driving { 0.0 } else { 0.5 }, now);
     }
     if indoors != rig.indoors {
         rig.indoors = indoors;
         rig.indoors_event = indoors;
-        rig.change_camera(if indoors { 0.5 } else { 1.5 }, now, &mut events);
+        rig.change_camera(if indoors { 0.5 } else { 1.5 }, now);
     }
     if chase.chased != rig.chased {
         rig.chased = chase.chased;
@@ -392,7 +478,7 @@ pub(crate) fn counselor_camera(
         } else {
             1.5
         };
-        rig.change_camera(blend, now, &mut events);
+        rig.change_camera(blend, now);
     }
 
     // The arms hang off her capsule's centre.
@@ -403,41 +489,8 @@ pub(crate) fn counselor_camera(
     let control = Vec3::new(pitch, yaw, 0.0);
     let velocity = Vec3::new(p.velocity.x, p.velocity.y, p.vel_y * 100.0);
     let dt = time.delta_secs();
-
-    let apply = |rig: &mut Rig, events: &mut Vec<CameraEvent>| {
-        for e in events.drain(..) {
-            match e {
-                CameraEvent::Activate(i) => {
-                    // The dynamic camera's Activate (0x140216330): its arm snaps with what it last had (a camera's
-                    // first time, the fresh USpringArmComponent its OnComponentCreated made: 300 cm, no offsets).
-                    rig.active[i] = true;
-                    rig.cameras[i].arm.snap(origin, component_rot, control);
-                }
-                CameraEvent::Deactivate(i) => rig.active[i] = false,
-            }
-        }
-    };
-    apply(rig, &mut events);
-
-    // Each active camera: its settings for her speed, then its arm.
-    let sweep = |from: Vec3, to: Vec3, radius: f32| -> Option<Vec3> {
-        let world = collision.as_ref()?;
-        let lists: Vec<&f13_core::collision::TriList> = dynamic.iter().filter(|(e, _)| blockers.contains(*e)).map(|(_, l)| l).collect();
-        let f = f13_core::collision::sphere_sweep(&(&*world.camera_grid, lists.as_slice()), to_bevy(from), to_bevy(to), radius / 100.0)?;
-        Some(from + (to - from) * f)
-    };
-    for i in 0..rig.cameras.len() {
-        if !rig.active[i] {
-            continue;
-        }
-        rig.cameras[i].tick(now, velocity);
-        rig.cameras[i].arm.tick(origin, component_rot, control, dt, sweep);
-    }
-    let active = rig.active.clone();
-    rig.stack.update(now, |i| active[i], &mut events);
-    apply(rig, &mut events);
-    let views: Vec<View> = rig.cameras.iter().map(|c| View { location: c.arm.socket.0, rotation: c.arm.socket.1, fov: c.arm.settings.field_of_view }).collect();
-    let Some(mut view) = rig.stack.view(|i| views[i]) else { return };
+    let sweep = camera_sweep(collision.as_deref(), &dynamic, &blockers);
+    let Some(mut view) = rig.cams.tick(now, dt, velocity, component_rot, control, |_| origin, sweep) else { return };
     rig.view = view;
     // The camera manager's shakes, in the camera's own space.
     if let Some(s) = rig.shake.as_mut() {

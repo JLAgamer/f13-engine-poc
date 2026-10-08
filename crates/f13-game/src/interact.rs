@@ -682,12 +682,18 @@ fn door_move_ended(_: On<Remove, DoorMove>, mut commands: Commands) {
     commands.trigger(crate::interaction_camera::StopInteractionCamera);
 }
 
+/// The same for a window's open or close move (its vault and dive handlers have no camera).
+fn window_move_ended(_: On<Remove, WindowMove>, mut commands: Commands) {
+    commands.trigger(crate::interaction_camera::StopInteractionCamera);
+}
+
 pub struct InteractPlugin;
 
 impl Plugin for InteractPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Interaction>()
             .add_observer(door_move_ended)
+            .add_observer(window_move_ended)
             .add_systems(Startup, (spawn_prompt, load_special_moves))
             .add_systems(
             Update,
@@ -1268,7 +1274,12 @@ fn act(
                 interaction.hold = None;
                 let action = window.press_action(p.counselor.sprinting, p.counselor.wounded);
                 match action {
-                    WindowAction::Open => start_window_move(&mut commands, player_entity, w, WindowMoveKind::Open, player_xf.translation, player_xf.translation),
+                    WindowAction::Open => {
+                        start_window_move(&mut commands, player_entity, w, WindowMoveKind::Open, player_xf.translation, player_xf.translation);
+                        // Its handler for her side takes the view (bTakeCameraControl).
+                        let handler = if Window::is_inside(gxf, player_xf.translation) { "CounselorOpenInside" } else { "CounselorOpenOutside" };
+                        commands.trigger(crate::interaction_camera::PlayInteractionCamera { actor: w, handler });
+                    }
                     _ => {
                         // Through the window (her climb or dive take carries her over), taking any damage.
                         let damage = window.damage(action);
@@ -1316,6 +1327,8 @@ fn act(
             h.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
             if events.contains(&MinigameEvent::Completed) {
                 start_window_move(&mut commands, player_entity, w, WindowMoveKind::Close, player_xf.translation, player_xf.translation);
+                let handler = if Window::is_inside(gxf, player_xf.translation) { "CounselorCloseInside" } else { "CounselorCloseOutside" };
+                commands.trigger(crate::interaction_camera::PlayInteractionCamera { actor: w, handler });
                 info!("window Close");
                 interaction.hold = None;
                 interaction.hold_done = true;
@@ -1541,7 +1554,15 @@ fn update_prompt(
     items: Query<&Item>,
     (vehicles, phone_boxes, cabinets, jasons): (Query<&Vehicle>, Query<&crate::police::PhoneBox>, Query<&Cabinet>, Query<&crate::jason::Jason>),
     mut text: Single<&mut Text, With<PromptText>>,
+    play: Option<Res<crate::jason_player::PlayJason>>,
 ) {
+    // Her prompts are hers: none on Jason's screen.
+    if play.is_some() {
+        if !text.0.is_empty() {
+            text.0.clear();
+        }
+        return;
+    }
     let (inv, driving, _, using, p, held, hiding) = *player;
     let name = |e: Entity| items.get(e).map_or("?".to_string(), |i| i.name.clone());
     let mut lines = vec![format!(

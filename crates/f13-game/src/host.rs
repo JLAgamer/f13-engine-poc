@@ -130,8 +130,8 @@ fn serve(
                 "kicked: the game closes".into()
             }
             ["jason"] => match jasons.iter().next() {
-                Some((_, xf)) if play.is_none() => {
-                    crate::jason_player::become_jason(&mut commands, xf.rotation);
+                Some(_) if play.is_none() => {
+                    crate::jason_player::become_jason(&mut commands);
                     "you're Jason now".into()
                 }
                 Some(_) => "already Jason".into(),

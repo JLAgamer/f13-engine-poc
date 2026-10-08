@@ -333,7 +333,8 @@ impl Plugin for HidingPlugin {
         app.add_systems(FixedUpdate, update_hiding.before(crate::player::move_player))
             .add_systems(Update, (read_exit, swing_doors, setup_breath))
             .add_systems(FixedUpdate, breathe.after(update_hiding))
-            .add_systems(Update, hiding_camera.after(crate::counselor_camera::counselor_camera));
+            // Her cameras, not when Jason's played (jason_player.rs has the view).
+            .add_systems(Update, hiding_camera.after(crate::counselor_camera::counselor_camera).run_if(not(resource_exists::<crate::jason_player::PlayJason>)));
     }
 }
 

@@ -158,6 +158,7 @@ impl Plugin for CabinetsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DrawerPoses>()
             .add_observer(close_cabinet)
+            .add_observer(cabinet_move_ended)
             .add_systems(Update, link_items);
     }
 }
@@ -187,8 +188,17 @@ pub fn search(commands: &mut Commands, player: Entity, from: Transform, cabinet:
         let open = w.get_resource::<crate::character::CounselorCharacter>().and_then(|m| m.info.animations.get(&take)).and_then(|a| a.section("Open"));
         let ready_in = open.map_or(0.0, |(a, b)| b - a);
         w.entity_mut(player).insert((CabinetUse { cabinet, slot, section: Section::Open, t: 0.0, ready_in: Some(ready_in), end_in: None, picked: false, take_close: false }, PlayAction(take)));
+        // NativeDestinationReached: the handler takes the view (bTakeCameraControl: the constructor's true) to its
+        // CabinetCam.
+        let handler = if slot == 0 { "UseCabinet_SpecialMoveHandler" } else { "UseCabinet_SpecialMoveHandler2" };
+        w.trigger(crate::interaction_camera::PlayInteractionCamera { actor: cabinet, handler });
         info!("searching a cabinet from ({:.2}, {:.2}, {:.2})", at.x, at.y, at.z);
     });
+}
+
+/// OpenCloseCabinetCompleted / UseCabinetAborted: however her drawer move ends, the view goes back to her.
+fn cabinet_move_ended(_: On<Remove, CabinetUse>, mut commands: Commands) {
+    commands.trigger(crate::interaction_camera::StopInteractionCamera);
 }
 
 /// MULTICAST_Close: not ready any more; the montage to Close or Take, or (empty, not taking) the move ends.
