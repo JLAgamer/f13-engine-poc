@@ -47,8 +47,8 @@ static class Collision
         return null;
     }
 
-    /// Profile name -> (query collision enabled, Pawn channel response, Camera channel response).
-    static readonly Dictionary<string, (bool Query, string Pawn, string Camera)> profiles = new(StringComparer.OrdinalIgnoreCase);
+    /// Profile name -> (query collision enabled, Pawn, Camera and WorldDynamic channel responses).
+    static readonly Dictionary<string, (bool Query, string Pawn, string Camera, string WorldDynamic)> profiles = new(StringComparer.OrdinalIgnoreCase);
     static readonly HashSet<string> unknown = new(StringComparer.OrdinalIgnoreCase);
     /// How often each profile decided BlocksPawn (summary for the log).
     public static readonly SortedDictionary<string, int> Used = new();
@@ -70,7 +70,7 @@ static class Collision
                 var m = System.Text.RegularExpressions.Regex.Match(line, "\\(Channel=\"" + channel + "\",Response=(ECR_\\w+)\\)");
                 return m.Success ? m.Groups[1].Value : "ECR_Block";
             }
-            profiles[name] = (enabled.StartsWith("Query"), Response("Pawn"), Response("Camera"));
+            profiles[name] = (enabled.StartsWith("Query"), Response("Pawn"), Response("Camera"), Response("WorldDynamic"));
         }
     }
 
@@ -87,7 +87,16 @@ static class Collision
     /// Whether a primitive component blocks the camera channel (spring arm probes).
     public static bool BlocksCamera(UObject component, string defaultProfile = "BlockAll") => Blocks(component, "Camera", defaultProfile, false);
 
-    static bool Blocks(UObject component, string channel, string defaultProfile, bool count)
+    /// Whether an overlap query on WorldDynamic finds the component (its response isn't Ignore): SCDoor's BeginPlay
+    /// finds its barricade that way.
+    public static bool QueriedByWorldDynamic(UObject component, string defaultProfile = "BlockAll") =>
+        Response(component, "WorldDynamic", defaultProfile, false) is { } r && r != "ECR_Ignore";
+
+    static bool Blocks(UObject component, string channel, string defaultProfile, bool count) =>
+        Response(component, channel, defaultProfile, count) == "ECR_Block";
+
+    /// The component's response to a channel, null when it has no query collision.
+    static string? Response(UObject component, string channel, string defaultProfile, bool count)
     {
         var bi = component.GetOrDefault<FStructFallback?>("BodyInstance");
         var profile = bi?.GetOrDefault<FName>("CollisionProfileName").Text;
@@ -96,14 +105,15 @@ static class Collision
         if (profile == "Custom")
         {
             var enabled = bi?.GetOrDefault<string>("CollisionEnabled") ?? "ECollisionEnabled::QueryAndPhysics";
-            if (!enabled.Contains("Query")) return false;
+            if (!enabled.Contains("Query")) return null;
             foreach (var r in bi?.GetOrDefault<FStructFallback?>("CollisionResponses")?.GetOrDefault<FStructFallback[]>("ResponseArray", []) ?? [])
-                if (r.GetOrDefault<FName>("Channel").Text == channel) return r.GetOrDefault<string>("Response") == "ECR_Block";
-            return true; // the engine channels' default response is Block
+                if (r.GetOrDefault<FName>("Channel").Text == channel) return r.GetOrDefault<string>("Response");
+            return "ECR_Block"; // the engine channels' default response is Block
         }
-        if (profiles.TryGetValue(profile, out var p)) return p.Query && (channel == "Pawn" ? p.Pawn : p.Camera) == "ECR_Block";
+        if (profiles.TryGetValue(profile, out var p))
+            return p.Query ? channel switch { "Pawn" => p.Pawn, "Camera" => p.Camera, _ => p.WorldDynamic } : null;
         if (unknown.Add(profile)) Console.WriteLine($"  collision profile {profile} not in DefaultEngine.ini: treated as blocking");
-        return true;
+        return "ECR_Block";
     }
 
     public static MeshShapes? Shapes(UStaticMesh mesh)

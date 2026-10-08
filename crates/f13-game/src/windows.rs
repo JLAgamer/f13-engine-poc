@@ -16,12 +16,16 @@
 //! montage, UseBarricadeDriverTick (0x140364d10) sets it to [`PLANK_PITCH`] x clamp(her "Barricade" curve, 0, 1) on
 //! the plank's own rotation; OnRep_Enabled (0x140352c40) sets it to [`PLANK_PITCH`] when barred, 0 when not.
 //!
-//! PLACEHOLDERS: the vault/dive/open animations are instant (the counselor is moved through the window, 1.2 m past
-//! it); linking a barricade to the nearest door is a guess.
+//! A barricade finds its door in its BeginPlay (FUN_140337260, decompiled): unless already linked, an overlap of a
+//! [`LINK_RADIUS_CM`] sphere on WorldDynamic at its root; of the doors found, the one whose root is nearest in the
+//! horizontal plane, under the same radius, becomes its LinkedDoor and the door's LinkedBarricade (FUN_14035adb0).
+//! (SCDoor's BeginPlay, FUN_140337740, overlaps the same sphere at its own root for a barricade, but none of the
+//! barricade's components is found: its visible meshes are NoCollision and DestroyedMesh has no simple collision.)
 
 use bevy::prelude::*;
 
-/// How far past the window plane the counselor lands after a vault or dive.
+/// How far past the window plane the counselor lands after a vault or dive without her model's take (headless runs;
+/// otherwise the take's root motion carries her over).
 const THROUGH_M: f32 = 1.2;
 /// The plank's pitch across the door (DAT_142121618, degrees).
 pub const PLANK_PITCH: f32 = -90.0;
@@ -94,7 +98,7 @@ impl Window {
 #[derive(Component, Debug)]
 pub struct Barricade {
     pub enabled: bool,
-    /// The door it bars (nearest door, linked after spawning).
+    /// The door it bars (its LinkedDoor, found by [`link_barricades`]).
     pub door: Option<Entity>,
     /// The plank and its relative transform (Unreal, in the barricade's space) as placed: stood on end.
     pub plank: Option<(Entity, f13_data::level::Xform)>,
@@ -146,21 +150,27 @@ pub fn update_window_visuals(
     }
 }
 
-/// Links each barricade to the nearest door (within 3 m) once both exist.
+/// The sphere a barricade finds its door with (DAT_142121600, 150 cm).
+pub const LINK_RADIUS_CM: f32 = 150.0;
+
+/// Links each barricade to its door once both exist (SCBarricade's BeginPlay).
 pub fn link_barricades(
     mut barricades: Query<(&mut Barricade, &GlobalTransform)>,
-    doors: Query<(Entity, &GlobalTransform), With<crate::doors::Door>>,
+    doors: Query<(Entity, &GlobalTransform, &crate::collision::QueryShapes), With<crate::doors::Door>>,
     mut done: Local<bool>,
 ) {
     if *done || doors.is_empty() || barricades.is_empty() {
         return;
     }
     *done = true;
+    let radius = LINK_RADIUS_CM / 100.0;
     for (mut b, bxf) in &mut barricades {
+        let at = bxf.translation();
         b.door = doors
             .iter()
-            .map(|(e, d)| (e, d.translation().distance(bxf.translation())))
-            .filter(|(_, d)| *d < 3.0)
+            .filter(|(_, d, shapes)| shapes.overlaps_sphere(d, at, radius))
+            .map(|(e, d, _)| (e, d.translation().xz().distance(at.xz())))
+            .filter(|(_, d)| *d < radius)
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(e, _)| e);
     }

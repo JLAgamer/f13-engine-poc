@@ -123,6 +123,10 @@ pub struct ComponentInfo {
     /// Whether the hull also blocks the camera channel.
     #[serde(default = "yes")]
     pub hull_blocks_camera: bool,
+    /// Box, sphere and capsule components an overlap query on WorldDynamic finds: a convex point set in component
+    /// space (Unreal cm).
+    #[serde(default)]
+    pub query_hull: Option<Vec<f32>>,
 }
 
 impl ComponentInfo {

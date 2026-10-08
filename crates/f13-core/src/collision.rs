@@ -375,6 +375,13 @@ pub fn capsule_blocked(world: &(impl TriSource + ?Sized), a: Vec3, b: Vec3, radi
     hit
 }
 
+/// Whether a sphere overlaps a convex hull (its triangles, normals outward): the centre inside it, or a triangle
+/// within `radius`.
+pub fn sphere_overlaps_hull(hull: &[Tri], centre: Vec3, radius: f32) -> bool {
+    !hull.is_empty()
+        && (hull.iter().all(|t| (centre - t.a).dot(t.n) <= 0.0) || hull.iter().any(|t| t.closest_point(centre).distance_squared(centre) < radius * radius))
+}
+
 /// Where a sphere of `radius` moving from `from` to `to` first touches a triangle, as a fraction of the way (0 when it
 /// starts touching one): the spring arm's probe (SweepSingleByChannel with a sphere). Found in steps of a quarter
 /// radius, then refined by halving.
@@ -608,6 +615,15 @@ mod tests {
             .map(|i| center + Vec3::new(if i & 1 != 0 { half.x } else { -half.x }, if i & 2 != 0 { half.y } else { -half.y }, if i & 4 != 0 { half.z } else { -half.z }))
             .collect();
         convex_hull(&pts)
+    }
+
+    #[test]
+    fn sphere_overlaps_hull_inside_and_near() {
+        let c = cube(Vec3::ZERO, Vec3::splat(1.0));
+        assert!(sphere_overlaps_hull(&c, Vec3::ZERO, 0.1));
+        assert!(sphere_overlaps_hull(&c, Vec3::new(2.4, 0.0, 0.0), 1.5));
+        assert!(!sphere_overlaps_hull(&c, Vec3::new(2.6, 0.0, 0.0), 1.5));
+        assert!(!sphere_overlaps_hull(&[], Vec3::ZERO, 1.0));
     }
 
     fn ground() -> TriGrid {

@@ -54,6 +54,18 @@ pub struct Collider(pub std::sync::Arc<Vec<Tri>>);
 #[derive(Component, Clone, Copy)]
 pub struct CameraBlocker;
 
+/// An actor's shapes that overlap queries on WorldDynamic find (convex hulls in the actor's space, as placed).
+#[derive(Component, Clone)]
+pub struct QueryShapes(pub Vec<Vec<Tri>>);
+
+impl QueryShapes {
+    /// Whether a sphere overlapping queries on WorldDynamic (an overlap of the actor at `at`) finds the actor.
+    pub fn overlaps_sphere(&self, at: &GlobalTransform, centre: Vec3, radius: f32) -> bool {
+        let m = at.affine();
+        self.0.iter().any(|h| f13_core::collision::sphere_overlaps_hull(&transform_tris(h, &m), centre, radius))
+    }
+}
+
 /// World-space triangles of every active `Collider`.
 #[derive(Resource, Default)]
 pub struct DynamicColliders {
@@ -68,7 +80,7 @@ impl DynamicColliders {
     }
 }
 
-fn transform_tris(tris: &[Tri], m: &bevy::math::Affine3A) -> Vec<Tri> {
+pub(crate) fn transform_tris(tris: &[Tri], m: &bevy::math::Affine3A) -> Vec<Tri> {
     let flip = m.matrix3.determinant() < 0.0;
     tris.iter()
         .filter_map(|t| {

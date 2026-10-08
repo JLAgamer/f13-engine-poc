@@ -206,6 +206,7 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
                 j["Hidden"] = t.GetOrDefault("bHiddenInGame", false) || !t.GetOrDefault("bVisible", true);
                 j["BlocksPawn"] = Collision.BlocksPawn(t);
                 j["BlocksCamera"] = Collision.BlocksCamera(t);
+                j["QueriedByWorldDynamic"] = Collision.QueriedByWorldDynamic(t);
                 return j;
             }
             case USkeletalMeshComponent:
@@ -236,6 +237,9 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
             j["Hull"] = new JArray(hull);
             j["HullBlocksCamera"] = Collision.BlocksCamera(t, "OverlapAllDynamic");
         }
+        // Shapes an overlap query on WorldDynamic finds (a barricade's BeginPlay finds its door that way).
+        if (Collision.ShapeComponent(t, FVector.OneVector) is { } shape && Collision.QueriedByWorldDynamic(t, "OverlapAllDynamic"))
+            j["QueryHull"] = new JArray(shape);
         foreach (var cls in t.GetOrDefault<FPackageIndex[]>("ActorList", [])) Add(cls);
         Add(t.GetOrDefault<FPackageIndex?>("ChildActorClass"));
         foreach (var cls in t.GetOrDefault<FPackageIndex[]>("RequiredPartClasses", [])) Add(cls);

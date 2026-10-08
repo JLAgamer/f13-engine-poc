@@ -486,6 +486,18 @@ fn spawn_props(
                 *counts.entry("hiding spots").or_default() += 1;
             }
         }
+        if is_door {
+            // What a barricade's overlap finds of the door (SCBarricade's BeginPlay links its door that way).
+            let shapes: Vec<_> = info
+                .components
+                .iter()
+                .filter_map(|c| {
+                    let tris = crate::collision::hull_from_unreal(c.query_hull.as_deref()?);
+                    (!tris.is_empty()).then(|| crate::collision::transform_tris(&tris, &local(c).compute_affine()))
+                })
+                .collect();
+            commands.entity(root).insert(crate::collision::QueryShapes(shapes));
+        }
         if classes.is_child_of(&actor.class, "SCBarricade") {
             // "Mesh" (`..._01_b`) is the plank, stood on end beside the door; the component named
             // `S_Interactive_Door_Barricade_01_b` (mesh `..._01_a`) is the wall brackets it drops into.
