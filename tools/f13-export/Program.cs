@@ -418,6 +418,11 @@ void WriteClasses()
 {
     foreach (var c in Mvp.Classes) AddClassByName(c);
     classes.Run();
+    // The kills' KillInfo damage types (their ScoreEvent: the killer's Resourceful, Versatile or Seeker).
+    var killInfos = classes.Classes.Values.SelectMany(c => c["Components"] as Newtonsoft.Json.Linq.JArray ?? [])
+        .Select(c => c["Props"]?["KillInfo"]?.ToString()).Where(n => n != null && n.EndsWith("_C") && !classes.Classes.ContainsKey(n)).Distinct().ToList();
+    foreach (var k in killInfos) AddClassByName(k!);
+    classes.Run();
     var path = Path.Combine(outDir!, "classes.json");
     File.WriteAllText(path, Newtonsoft.Json.JsonConvert.SerializeObject(classes.Classes));
     Console.WriteLine($"{path}: {classes.Classes.Count} classes");
@@ -888,8 +893,8 @@ static class Mvp
     public static readonly string[] Classes = ["CarKeys_C", "Chevette_FrontWheel_C", "Chevette_BackWheel_C",
         // The police car SCPoliceSpawner spawns (its PoliceSpawnClass).
         "Police_C",
-        // Jason's throwing knife (his ThrowingKnifeClass).
-        "ThrowingKnife_C",
+        // Jason's throwing knife (his ThrowingKnifeClass) and his trap (his TrapClass: its TrapScoreEvent).
+        "ThrowingKnife_C", "KillerTrap_C",
         // The storm (CLsm_RainOn's).
         "SCZeus_BP_C",
         // Jason under water: his drowning kill and the shape he shows on the surface.

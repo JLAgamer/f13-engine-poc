@@ -471,6 +471,8 @@ pub struct Jason {
     pub combat: bool,
     /// Blocking (BlockData.bIsBlocking): CMBT_KLR_Block held in combat stance.
     pub blocking: bool,
+    /// The context kill under way: its actor's class and kill component (its KillInfo: his score as she dies).
+    kill_score: Option<(String, &'static str)>,
     /// The attack button's hold in combat stance (SCCharacter +0xf4c / +0xf50: from a press that swung).
     attack_hold: Option<f32>,
     /// Horizontal velocity, cm/s.
@@ -855,6 +857,8 @@ fn fly_knives(
                 let r = p.counselor.take_damage(Hit { amount: k.damage, blocked_with_weapon: false }, &ptuning.counselor);
                 info!("Jason's knife hit Vanessa for {:.0} (health {:.0})", r.dealt, p.counselor.health);
                 if r.died {
+                    commands.trigger(crate::match_flow::KillerScore("Butcher"));
+                    commands.trigger(crate::match_flow::KillerScore("KillCounselor"));
                     commands.entity(pe).insert(PlayAction(DEATH.into())).remove::<(Staggered, crate::items::ItemAction)>();
                 } else {
                     let reaction = hit_reaction(pxf, from);
@@ -956,6 +960,8 @@ const AI_WIGGLE_INTERVAL: (f32, f32) = (0.15, 0.2);
 /// SCCharacter InvulnerableStunDuration (constructor): no new stun this long after one ends.
 const STUN_IMMUNE_SECONDS: f32 = 3.0;
 const FLINCH_FRONT: &str = "combat_stand_hit_reaction_front";
+/// The level's fuse boxes' class (power.rs).
+const FUSE_BOX_CLASS: &str = "PowerGridFuseBox_C";
 /// Jason_AnimBP's BlockMontages (AM_Jason_Combat_Block: its block idle, looped) and BlockingHitMontages (each ends
 /// at its OnEndBlockReaction notify: OnEndBlockReation -> OnRep_Block, the block montage again).
 pub(crate) const BLOCK: &str = "combat_stand_1h_block_idle_01";
@@ -1026,6 +1032,7 @@ fn spawn_jason(
                 state: JasonState::Waiting(config.delay),
                 combat: false,
                 blocking: false,
+                kill_score: None,
                 attack_hold: None,
                 velocity: Vec2::ZERO,
                 vel_y: 0.0,
@@ -1379,6 +1386,7 @@ pub(crate) fn update_jason(
         // A counselor's item hit him.
         if let Some(h) = hit {
             commands.entity(je).remove::<HitJason>();
+            commands.trigger(crate::match_flow::JasonDamaged);
             // Her weapon's damage (the item stuns below score their own).
             if matches!(h.stun, None | Some(Stun::Weapon { .. })) {
                 commands.trigger(Score("DamageJason"));
@@ -1498,6 +1506,7 @@ pub(crate) fn update_jason(
                         j.velocity = Vec2::ZERO;
                         p.velocity = Vec2::ZERO;
                         j.kill_move = DROWN_KILL;
+                        j.kill_score = Some((format!("{DROWN_KILL_KEY}_C"), "ContextKillComponent"));
                         j.kill_holds = false;
                         *xf = killer.place(DROWN_KILL.0, spot).0;
                         snap_rig(&mut rigs, je);
@@ -1586,6 +1595,8 @@ pub(crate) fn update_jason(
                         let here = xf.translation;
                         if let Some((fe, fuse)) = fuse_boxes.iter().filter(|(_, f)| !f.destroyed).find(|(_, f)| Vec2::new(f.interact.x - here.x, f.interact.z - here.z).length() * 100.0 <= f.reach + 100.0) {
                             info!("Jason: breaking a fuse box");
+                            // OnInteract (0x14038c950): its DestroyScoreEvent as the destroy move begins.
+                            commands.trigger(crate::match_flow::ClassScore::killer(FUSE_BOX_CLASS, "DestroyScoreEvent"));
                             let to = fuse.interact - xf.translation;
                             xf.rotation = Quat::from_rotation_y(to.x.atan2(to.z));
                             j.state = JasonState::BreakingFuse { t: 0.0, fuse: fe, done: false };
@@ -1688,6 +1699,7 @@ pub(crate) fn update_jason(
                                             let (origin, end) = killer.place(kill, crate::hiding::HidingSpot::world(g, &s_.kill));
                                             *xf = origin;
                                             j.state = JasonState::HideKill { spot: s, t: 0.0, end, anim: kill, victim: vkill };
+                                            j.kill_score = Some((spot.class.clone(), s_.kill_component));
                                             commands.entity(je).insert(PlayAction(kill.into()));
                                             if let (Some(h), Some(c)) = (hiding.as_mut(), counselor_model.as_ref()) {
                                                 h.phase = crate::hiding::HidePhase::Killed;
@@ -2078,6 +2090,9 @@ pub(crate) fn update_jason(
                     }
                     if r.died {
                         info!("Vanessa: killed by Jason's swing");
+                        // Not a context kill: JasonWeaponKillScoreEvent (Butcher), then KillCounselor.
+                        commands.trigger(crate::match_flow::KillerScore("Butcher"));
+                        commands.trigger(crate::match_flow::KillerScore("KillCounselor"));
                         commands.entity(pe).insert(PlayAction(DEATH.into())).remove::<(Staggered, crate::items::ItemAction)>();
                     } else if r.dealt > 0.0 {
                         let reaction = if blocking { BLOCK_REACT } else { hit_reaction(&pxf, xf.translation) };
@@ -2355,6 +2370,7 @@ pub(crate) fn update_jason(
                         }
                     }
                     j.kill_move = (his, hers, name);
+                    j.kill_score = Some((crate::placed_kills::KINDS[pk.kind].0.to_string(), "ContextKillComponent"));
                     *xf = killer.place(his, pk.spot).0;
                     j.state = JasonState::Killing { t: 0.0 };
                     commands.entity(je).insert((PlayAction(his.into()), crate::kill_camera::KillCam::at(&pk.camera_key, pk.camera)));
@@ -2370,6 +2386,7 @@ pub(crate) fn update_jason(
                     let (anim, class, name) = KILLS[j.kill];
                     info!("Jason: {name}");
                     j.kill_move = (anim, anim, name);
+                    j.kill_score = Some((format!("{class}_C"), "ContextKillComponent"));
                     j.state = JasonState::Killing { t: 0.0 };
                     commands.entity(je).insert((PlayAction(anim.into()), crate::kill_camera::KillCam::new(class, *xf)));
                     commands.entity(pe).insert(PlayAction(anim.into()));
@@ -2413,6 +2430,9 @@ pub(crate) fn update_jason(
                         p.counselor.take_damage(Hit { amount: health, blocked_with_weapon: false }, &ptuning.counselor);
                         commands.entity(pe).remove::<(Held, PlayAction)>();
                         info!("Vanessa: killed by Jason ({kill_name})");
+                        if let Some((class, component)) = j.kill_score.take() {
+                            commands.trigger(crate::match_flow::ContextKillScore { class, component });
+                        }
                     }
                 }
                 if at >= killer.length(kill).unwrap_or(12.0) {
@@ -2496,6 +2516,9 @@ pub(crate) fn update_jason(
                     let health = p.counselor.health;
                     p.counselor.take_damage(Hit { amount: health, blocked_with_weapon: false }, &ptuning.counselor);
                     info!("Vanessa: killed by Jason in her hiding spot");
+                    if let Some((class, component)) = j.kill_score.take() {
+                        commands.trigger(crate::match_flow::ContextKillScore { class, component });
+                    }
                 }
                 if at >= killer.length(anim).unwrap_or(4.0) {
                     *xf = end;

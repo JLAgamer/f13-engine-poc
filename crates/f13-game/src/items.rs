@@ -364,6 +364,9 @@ pub struct ArmedTrap {
     pub killer: bool,
 }
 
+/// Jason's trap class (his TrapClass).
+const KILLER_TRAP_CLASS: &str = "KillerTrap_C";
+
 /// Jason sets a trap here (jason.rs).
 #[derive(Event, Clone, Copy, Debug)]
 pub struct SetKillerTrap(pub Transform);
@@ -780,6 +783,10 @@ fn spring_traps(
                 let foot = if left { 0 } else { 1 };
                 let enter = if p.counselor.sprinting { TRAP_RUN[foot] } else { TRAP_WALK[foot] };
                 let r = p.counselor.take_damage(f13_core::health::Hit { amount: TRAP_DAMAGE, blocked_with_weapon: false }, &tuning.counselor);
+                // The trap's TrapScoreEvent to its armer when the armer or she is a killer (FUN_14039c670): his.
+                if trap.killer {
+                    commands.trigger(crate::match_flow::ClassScore::killer(KILLER_TRAP_CLASS, "TrapScoreEvent"));
+                }
                 info!("Vanessa stepped in a bear trap ({} foot): {:.0} damage (health {:.0})", if left { "left" } else { "right" }, r.dealt, p.counselor.health);
                 commands.entity(te).remove::<ArmedTrap>().insert(crate::prop_anim::PropAnim::new(crate::prop_anim::TRAP_SPRUNG));
                 p.velocity = Vec2::ZERO;

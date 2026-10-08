@@ -326,9 +326,30 @@ pub fn end_of_match_awards(record: &CounselorRecord, all_escaped: bool, elapsed:
     out
 }
 
+/// The killer's awards as the match ends (the Hunt mode's WaitingPostMatchOutro handler FUN_140384230):
+/// KillAllCounselors when every counselor that spawned is dead (SpawnedCounselorCount <= the dead count), Unscathed
+/// if he never took damage, CompletedMatch always.
+pub fn killer_end_of_match_awards(spawned: u32, dead: u32, taken_damage: bool) -> Vec<(&'static str, f32)> {
+    let mut out = Vec::new();
+    if spawned <= dead {
+        out.push(("KillAllCounselors", 1.0));
+    }
+    if !taken_damage {
+        out.push(("Unscathed", 1.0));
+    }
+    out.push(("CompletedMatch", 1.0));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_killer_is_awarded_for_no_survivors() {
+        assert_eq!(killer_end_of_match_awards(1, 1, false), vec![("KillAllCounselors", 1.0), ("Unscathed", 1.0), ("CompletedMatch", 1.0)]);
+        assert_eq!(killer_end_of_match_awards(1, 0, true), vec![("CompletedMatch", 1.0)]);
+    }
 
     // Synthetic timings (not the game's): exercises the rules only.
     fn rules() -> MatchRules {

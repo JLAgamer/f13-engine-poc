@@ -19,7 +19,7 @@
 
 use bevy::prelude::*;
 pub use f13_core::game_mode::MatchState;
-use f13_core::game_mode::{end_of_match_awards, escape_awards, CounselorRecord, Match, MatchRules, PlayerScore, Roster, ScoreEvent};
+use f13_core::game_mode::{end_of_match_awards, escape_awards, killer_end_of_match_awards, CounselorRecord, Match, MatchRules, PlayerScore, Roster, ScoreEvent};
 use f13_data::classes::ClassDb;
 use std::collections::BTreeMap;
 
@@ -41,20 +41,42 @@ pub struct MatchTuning {
 #[derive(Event, Clone, Debug)]
 pub struct Score(pub &'static str);
 
-/// The score event a class names in one of its properties (e.g. an item's "PickupScoreEvent").
+/// A score event for Jason (e.g. "KillCounselor").
+#[derive(Event, Clone, Debug)]
+pub struct KillerScore(pub &'static str);
+
+/// The score event a class names in one of its properties (e.g. an item's "PickupScoreEvent"), for her or for Jason.
 #[derive(Event, Clone, Debug)]
 pub struct ClassScore {
     pub class: String,
     pub property: &'static str,
+    pub killer: bool,
 }
 
 impl ClassScore {
     pub fn new(class: &str, property: &'static str) -> Self {
-        Self { class: class.to_string(), property }
+        Self { class: class.to_string(), property, killer: false }
+    }
+
+    /// Jason's (a fuse box's DestroyScoreEvent, a kill's KillInfo ScoreEvent).
+    pub fn killer(class: &str, property: &'static str) -> Self {
+        Self { class: class.to_string(), property, killer: true }
     }
 }
 
-/// The match, and what the counselor scored in it.
+/// A context kill by Jason (SCGameMode's kill handler FUN_140376a60: the kill's damage type, its KillInfo, scores
+/// its ScoreEvent for him: Resourceful, Versatile or Seeker): the kill actor's class and its kill component.
+#[derive(Event, Clone, Debug)]
+pub struct ContextKillScore {
+    pub class: String,
+    pub component: &'static str,
+}
+
+/// Jason took damage (bHasTakenDamage: his Unscathed).
+#[derive(Event, Clone, Copy, Debug)]
+pub struct JasonDamaged;
+
+/// The match, and what the counselor and Jason scored in it.
 #[derive(Resource, Default)]
 pub struct GameMatch {
     pub state: Match,
@@ -63,6 +85,10 @@ pub struct GameMatch {
     last_health: Option<f32>,
     /// Score texts on the HUD, with their category and the game time they were scored.
     popups: Vec<(String, String, f32)>,
+    /// Jason's: his score, his score texts, and whether he took damage.
+    pub killer_score: PlayerScore,
+    killer_popups: Vec<(String, String, f32)>,
+    killer_damaged: bool,
 }
 
 impl GameMatch {
@@ -78,9 +104,40 @@ impl GameMatch {
         }
     }
 
+    fn award_killer(&mut self, name: &str, scale: f32, events: &BTreeMap<String, ScoreEvent>, now: f32) {
+        let Some(event) = events.get(name) else {
+            warn!("match: no score event {name}");
+            return;
+        };
+        if let Some(xp) = self.killer_score.award(name, event, scale) {
+            let text = event.text(xp);
+            info!("match: Jason scored {name}: {text}");
+            self.killer_popups.push((text, event.category.clone(), now));
+        }
+    }
+
     /// The score texts shown so far: (text, EScoreEventCategory name, game time).
     pub fn score_lines(&self) -> &[(String, String, f32)] {
         &self.popups
+    }
+
+    /// Jason's.
+    pub fn killer_score_lines(&self) -> &[(String, String, f32)] {
+        &self.killer_popups
+    }
+
+    /// The results' headline: hers, or (Jason played) what became of her.
+    fn outcome_for(&self, killer: bool) -> &'static str {
+        if killer {
+            return if self.record.escaped {
+                "VANESSA ESCAPED"
+            } else if self.record.dead {
+                "VANESSA IS DEAD"
+            } else {
+                "VANESSA SURVIVED"
+            };
+        }
+        self.outcome()
     }
 
     fn outcome(&self) -> &'static str {
@@ -114,7 +171,10 @@ impl Plugin for MatchPlugin {
             .add_systems(FixedUpdate, run_match)
             .add_systems(Update, update_hud)
             .add_observer(on_score)
-            .add_observer(on_class_score);
+            .add_observer(on_class_score)
+            .add_observer(on_killer_score)
+            .add_observer(on_context_kill_score)
+            .add_observer(|_: On<JasonDamaged>, mut game: ResMut<GameMatch>| game.killer_damaged = true);
     }
 }
 
@@ -128,10 +188,29 @@ fn on_score(score: On<Score>, tuning: Option<Res<MatchTuning>>, mut game: ResMut
     game.award(score.0, 1.0, &t.events, time.elapsed_secs());
 }
 
+fn on_killer_score(score: On<KillerScore>, tuning: Option<Res<MatchTuning>>, mut game: ResMut<GameMatch>, time: Res<Time>) {
+    let Some(t) = tuning else { return };
+    game.award_killer(score.0, 1.0, &t.events, time.elapsed_secs());
+}
+
+fn on_context_kill_score(score: On<ContextKillScore>, tuning: Option<Res<MatchTuning>>, classes: Res<ScoreClasses>, mut game: ResMut<GameMatch>, time: Res<Time>) {
+    let (Some(t), Some(db)) = (tuning, &classes.0) else { return };
+    let info = db.get(&score.class).and_then(|c| c.components.iter().find(|c| c.name == score.component)).and_then(|c| c.props["KillInfo"].as_str());
+    match info.and_then(|i| db.prop(i, "ScoreEvent").as_str()) {
+        Some(event) => game.award_killer(event.trim_end_matches("_C"), 1.0, &t.events, time.elapsed_secs()),
+        None => warn!("match: no KillInfo ScoreEvent for {}'s {} (re-export: f13-export levels)", score.class, score.component),
+    }
+}
+
 fn on_class_score(score: On<ClassScore>, tuning: Option<Res<MatchTuning>>, classes: Res<ScoreClasses>, mut game: ResMut<GameMatch>, time: Res<Time>) {
     let (Some(t), Some(db)) = (tuning, &classes.0) else { return };
     if let Some(event) = db.prop(&score.class, score.property).as_str() {
-        game.award(event.trim_end_matches("_C"), 1.0, &t.events, time.elapsed_secs());
+        let name = event.trim_end_matches("_C");
+        if score.killer {
+            game.award_killer(name, 1.0, &t.events, time.elapsed_secs());
+        } else {
+            game.award(name, 1.0, &t.events, time.elapsed_secs());
+        }
     }
 }
 
@@ -196,6 +275,12 @@ fn run_match(
                 for (name, scale) in end_of_match_awards(&g.record, g.record.escaped, g.state.elapsed_in_progress_time) {
                     g.award(name, scale, &t.events, now);
                 }
+                if !jason.is_empty() {
+                    // One counselor spawned.
+                    for (name, scale) in killer_end_of_match_awards(1, u32::from(g.record.dead), g.killer_damaged) {
+                        g.award_killer(name, scale, &t.events, now);
+                    }
+                }
             }
             MatchState::PostMatchOutro => {
                 let ended = g.state.end(&t.rules);
@@ -204,6 +289,10 @@ fn run_match(
             MatchState::WaitingPostMatch => {
                 let list: Vec<String> = g.score.awards.iter().map(|a| format!("{} {}", a.event, a.xp)).collect();
                 info!("match: results: {} XP ({})", g.score.total(), list.join(", "));
+                if !g.killer_score.awards.is_empty() {
+                    let list: Vec<String> = g.killer_score.awards.iter().map(|a| format!("{} {}", a.event, a.xp)).collect();
+                    info!("match: Jason's results: {} XP ({})", g.killer_score.total(), list.join(", "));
+                }
             }
             MatchState::LeavingMap if leave.0 => {
                 info!("match: leaving");
@@ -271,8 +360,12 @@ fn update_hud(
     mut overlay: Single<(&mut Visibility, &mut BackgroundColor), With<MatchOverlay>>,
     mut overlay_text: Single<&mut Text, (With<MatchOverlayText>, Without<MatchClock>, Without<ScorePopups>)>,
     game_hud: Option<Res<crate::ui::Hud>>,
+    play_jason: Option<Res<crate::jason_player::PlayJason>>,
 ) {
     let m = &game.state;
+    // The played character's results: Jason's or hers.
+    let killer = play_jason.is_some();
+    let score = if killer { &game.killer_score } else { &game.score };
     // The game's HUD has its own timer (ui.rs).
     let clock_text = if m.state == MatchState::InProgress && game_hud.is_none() { format!("{}:{:02}", m.remaining_time / 60, m.remaining_time % 60) } else { String::new() };
     if clock.0 != clock_text {
@@ -288,17 +381,17 @@ fn update_hud(
     let text = match m.state {
         MatchState::WaitingPostMatchOutro | MatchState::PostMatchOutro => {
             bg.0 = Color::srgba(0.0, 0.0, 0.0, 0.25);
-            format!("MATCH OVER\n{}", game.outcome())
+            format!("MATCH OVER\n{}", game.outcome_for(killer))
         }
         MatchState::WaitingPostMatch | MatchState::LeavingMap => {
             bg.0 = Color::srgba(0.0, 0.0, 0.0, 0.92);
-            let mut s = format!("{}\nmatch time {}:{:02}\n\n", game.outcome(), m.elapsed_in_progress_time / 60, m.elapsed_in_progress_time % 60);
-            for a in &game.score.awards {
+            let mut s = format!("{}\nmatch time {}:{:02}\n\n", game.outcome_for(killer), m.elapsed_in_progress_time / 60, m.elapsed_in_progress_time % 60);
+            for a in &score.awards {
                 let line = tuning.as_ref().and_then(|t| t.events.get(&a.event)).map_or_else(|| format!("{} +{}", a.event, a.xp), |e| e.text(a.xp));
                 s.push_str(&line);
                 s.push('\n');
             }
-            s.push_str(&format!("\nTOTAL XP  {}\n\nclosing in {} s", game.score.total(), m.remaining_time));
+            s.push_str(&format!("\nTOTAL XP  {}\n\nclosing in {} s", score.total(), m.remaining_time));
             s
         }
         _ => String::new(),

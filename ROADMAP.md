@@ -142,8 +142,15 @@ Mechanics: Jason side
 - [x] His door moves' cameras (interaction_camera.rs for the played character only): KillerOpenDoorInside / Outside
       (1 s in, 0.5 s back) and BreakDownFromInside / Outside (at once, 0.25 s back); the walls' and a raged burst's
       handlers have none
-- [ ] Playing as Jason, remaining: KillerHelpTextWidget; his score lines (XPDisplayWidget);
-      the grab kill slots are the save game's picks (unread: the throat hack on the click)
+- [x] Jason's XP (match_flow.rs): his own score; a swing or knife kill: Butcher and KillCounselor (SCGameMode's kill
+      handler FUN_140376a60); a context kill: its KillInfo's ScoreEvent (grab kills Versatile, placed kills, doors,
+      windows and drowning Resourceful, hiding spots Seeker); a fuse box's DestroyScoreEvent (ShutdownElectrical) as
+      he starts breaking it; his trap's TrapScoreEvent (JasonTrapper) when it catches her; at the end
+      KillAllCounselors, Unscathed (he took no damage) and CompletedMatch. His XPDisplayWidget lines on his HUD, his
+      results at the end. KillerHelpTextWidget never shows (its Construct jumps to its end; nothing calls
+      ShowHelpText), as hers
+- [ ] Playing as Jason, remaining: the grab kill slots are the save game's picks (unread: the throat hack on the
+      click)
 - [x] Shift, Morph, Stalk (f13-core::killer_moves, jason.rs): Shift's 0.7 s wind-up, ShiftSpeed and ShiftTime (J2:
   1000 cm/s, 4 s), ending in a grab; Stalk's StalkActiveTimer (IdleStalkModifier standing still); Morph to the
   nearest SCKillerMorphPoint within 30 m of the spot after TeleportScreenTime; the teleport fade (he's hidden below

@@ -155,10 +155,13 @@ pub struct Side {
     pub search_anim: Option<&'static str>,
     pub killer_kill: Option<&'static str>,
     pub victim_kill: Option<&'static str>,
+    /// Its kill's component (HidingSpotKill or RightSideContextKill: its KillInfo, the killer's score).
+    pub kill_component: &'static str,
 }
 
 #[derive(Component, Debug)]
 pub struct HidingSpot {
+    pub class: String,
     pub kind: SpotKind,
     /// Its own animated part (the tent), if any.
     pub prop: Option<Entity>,
@@ -227,7 +230,7 @@ impl HidingSpot {
             _ => SpotKind::Closet,
         };
         let anim = |m: Option<String>| m.as_deref().and_then(special_move_anims);
-        let side = |enter: &str, search: &str, kill: &str| -> Option<Side> {
+        let side = |enter: &str, search: &str, kill: &'static str| -> Option<Side> {
             let (e, s, k) = (comp(enter)?, comp(search)?, comp(kill)?);
             let (enter_anim, exit_anim) = anim(e.props["SpecialMove"].as_str().map(str::to_string))?;
             Some(Side {
@@ -239,6 +242,7 @@ impl HidingSpot {
                 search_anim: anim(special_move(s, "WeaponSpecificMoves", "SpecialMove", KILLER_WEAPON)).map(|a| a.0),
                 killer_kill: anim(special_move(k, "KillerWeaponKillClasses", "InteractorSpecialClass", KILLER_WEAPON)).map(|a| a.0),
                 victim_kill: anim(special_move(k, "VictimWeaponKillClasses", "VictimSpecialClass", KILLER_WEAPON)).map(|a| a.0),
+                kill_component: kill,
             })
         };
         let mut sides: Vec<Side> = side("EnterSpecialMove", "SearchComponent", "HidingSpotKill").into_iter().collect();
@@ -251,6 +255,7 @@ impl HidingSpot {
         let cam = comp("Hiding Camera");
         let look = &classes.prop(class, "MaxHidingRotationOffset");
         Some(HidingSpot {
+            class: class.to_string(),
             kind,
             sides,
             idle_anim: match kind {

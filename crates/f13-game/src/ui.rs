@@ -348,11 +348,10 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
     });
     let mut killer = Widget::load(dir, "KillerHUDWidget");
     if let Some(k) = killer.as_mut() {
-        // Shown by things not ported: the rage overlay, help texts, XP.
+        // Shown by things not ported: the rage overlay; the help text never shows (see the module docs).
         for name in [
             "RageBorder",
             "KillerHelpTextWidget",
-            "XPDisplayWidget_81",
             "SaveGameThreadActiveIcon_0",
             "HUDLaggingIconWidget",
             "HUDActiveMicWidget",
@@ -451,7 +450,10 @@ fn build_hud(
     let selected = player.as_ref().and_then(|p| **p).map_or(0, |inv| inv.selected);
     // Rebuilt when they or the selection change.
     let pocket_key: Vec<String> = pockets.iter().cloned().chain([format!("#{selected}")]).collect();
-    let lines = game.as_ref().map_or(0, |g| g.score_lines().len());
+    // His score lines on his HUD, hers on hers.
+    let score_lines = |g: &crate::match_flow::GameMatch| if jason { g.killer_score_lines().to_vec() } else { g.score_lines().to_vec() };
+    let scores = game.as_ref().map_or(vec![], |g| score_lines(g));
+    let lines = scores.len();
     if hud.built.as_ref().is_some_and(|(s, p, j, c, l)| *s == size && *p == pocket_key && *j == jason && *c == (police, game_timer) && *l == lines) {
         return;
     }
@@ -464,8 +466,8 @@ fn build_hud(
     let mut tree = if jason { hud.killer.clone().unwrap_or_else(|| hud.hud.clone()) } else { hud.hud.clone() };
     if !jason {
         fill_inventory(&hud, &mut tree, &pockets, selected);
-        fill_xp_lines(&hud, &mut tree, game.as_ref().map_or(&[], |g| g.score_lines()));
     }
+    fill_xp_lines(&hud, &mut tree, &scores);
     if police {
         if let Some(w) = tree.find_mut("PoliceTimer") {
             w.set_visibility(Vis::Visible);
@@ -743,9 +745,15 @@ fn widget_anims(time: Res<Time>, hud: Res<Hud>, playing: Res<PlayingAnims>, mut 
 
 /// XPDisplayWidget's lines fading: each line's Border_0 content by its FadeIn / FadeOut (an empty line stays at its
 /// design alpha, 0).
-fn xp_lines(time: Res<Time>, hud: Res<Hud>, game: Option<Res<crate::match_flow::GameMatch>>, mut borders: Query<&mut ContentAlpha>) {
+fn xp_lines(
+    time: Res<Time>,
+    hud: Res<Hud>,
+    game: Option<Res<crate::match_flow::GameMatch>>,
+    play: Option<Res<crate::jason_player::PlayJason>>,
+    mut borders: Query<&mut ContentAlpha>,
+) {
     let (Some(xp), Some(game)) = (&hud.xp, game) else { return };
-    let scores = game.score_lines();
+    let scores = if play.is_some() && hud.killer.is_some() { game.killer_score_lines() } else { game.score_lines() };
     let shown = &scores[scores.len().saturating_sub(xp.slots)..];
     let now = time.elapsed_secs();
     for i in 0..xp.slots {
