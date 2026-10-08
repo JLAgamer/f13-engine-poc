@@ -519,7 +519,7 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             values["SoundBlipLifeSpan"] = ClassValue<float?>(blip, "InitialLifeSpan") ?? 0;
         info.Values = values;
         info.Curves = new();
-        foreach (var name in new[] { "SenseFearRadiusCurve", "SenseFearHidingRadiusCurve", "RageSenseDistanceCurve" })
+        foreach (var name in new[] { "SenseFearRadiusCurve", "SenseFearHidingRadiusCurve", "RageSenseDistanceCurve", "TeleportJitterCurve" })
             if (CurveValue(cls, name) is { } keys) info.Curves[name] = keys;
 
         // His cameras (Jason_Base's ILLDynamicCameraComponents) and Shift's camera shake (OnShiftChange: ED_Shake).

@@ -954,9 +954,10 @@ fn distortion(
     let flat = |a: Vec3| Vec2::new(a.x - xf.translation.x, a.z - xf.translation.z).length();
     let near = flat(ev.at) <= t.max_teleport_view_m || ev.dest.is_some_and(|d| flat(d) <= t.max_teleport_view_m);
     if near || pushed.is_some_and(|p| p.spotted) {
+        info!("Vanessa: hears Jason's distortion (the teleport static)");
         commands.trigger(crate::audio::PlaySound { cue: TELEPORT_HEARD_CUE.into(), at: None });
         commands.trigger(crate::audio::PushMix("TeleportCounselorHearsSoundMix"));
-        commands.insert_resource(TeleportEffect(t.teleport_screen_time));
+        commands.insert_resource(TeleportEffect { left: t.teleport_screen_time, total: t.teleport_screen_time });
     }
 }
 
@@ -2652,12 +2653,16 @@ fn jason_mixes(mut commands: Commands, play: Option<Res<crate::jason_player::Pla
 /// PlayDistortionEffect): his tick, as it runs out with the effect on, clears the sound mixes
 /// (ClearSoundMixModifiers: TeleportCounselorHearsMix with the rest).
 #[derive(Resource)]
-struct TeleportEffect(f32);
+pub struct TeleportEffect {
+    /// Its time left and its TeleportScreenTime (s).
+    pub left: f32,
+    pub total: f32,
+}
 
 fn teleport_mix(mut commands: Commands, time: Res<Time>, effect: Option<ResMut<TeleportEffect>>) {
     let Some(mut e) = effect else { return };
-    e.0 -= time.delta_secs();
-    if e.0 <= 0.0 {
+    e.left -= time.delta_secs();
+    if e.left <= 0.0 {
         commands.remove_resource::<TeleportEffect>();
         commands.trigger(crate::audio::ClearMixes);
     }
