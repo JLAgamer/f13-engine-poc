@@ -156,6 +156,10 @@ fn drive(
     v.drive.speed = v.speed;
     v.drive.step(&setup, throttle, dt);
     v.speed = v.drive.speed;
+    // Its engine sound's RPM (SCDriveableVehicle's tick: GetEngineRotationSpeed, while started).
+    if v.started {
+        commands.entity(player.vehicle).insert(crate::audio::CueParams([("RPM".to_string(), v.drive.rpm)].into()));
+    }
     v.steer += (steer - v.steer) * (dt * 6.0).min(1.0);
 
     let me = player.vehicle;

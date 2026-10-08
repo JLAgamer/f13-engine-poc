@@ -245,7 +245,8 @@ Presentation
       CounselorVault / CounselorDive special move spot on her side
 - [x] Doors on root motion: her open and close takes play from the door's special move spots (opening from outside
       carries her into the doorway, closing from outside walks her back out); locks and unlocks on theirs
-- [ ] Special moves, remaining: the repairs' own root motion (they play on the repair spot)
+- [x] The repairs' own root motion (montages' root motion): the phone box's enter carries her 42.6 cm to the box
+      and its exit back, the gas can's cancel 56 cm back; cut off part-way, she's left where its root got to
 - [x] Repair minigame dial UI: SCInteractMinigame_Widget (its progress circle filled clockwise, the needle turned, the
       pips as red arcs of its ring, the next pip's mouse button in the middle), for every hold interaction
 - [x] HUD (ui.rs): CounselorHUDWidget from its UMG tree (f13-data::umg lays it out as Slate does), the game's font
@@ -274,7 +275,8 @@ Presentation
   MatchStart, CounselorIdle after each track, the two-minute warning, death and survival music; fades); Jason's
   footsteps (Jason_AnimBP's tables, a step each half of his locomotion cycle); her landing (GetLandingSound, down
   from a fall) and wading steps (GetFootstepInWater: shallow or deep); items put down (DroppedSoundCue); the car's
-  key turning and engine running (EngineStartCue, EngineCue, on the car); walls' hit and break cues; the
+  key turning and engine running (EngineStartCue, EngineCue, on the car; the engine's RPM parameter, as the car's
+  tick sets it, through V6Engine's ParamCrossFade bands and continuous pitch modulators); walls' hit and break cues; the
   ability-unlock warning (KiKiKiMaMaMa) and JasonTeleportedNearStinger; the animations' own sounds (their
   AnimNotify_PlaySound notifies, from each take's sequence and the montage segments playing it: anim_sounds.json):
   item use (first aid, flare, firecracker, trap), swings, dodges, doors, locks, windows, hiding spots, repairs,

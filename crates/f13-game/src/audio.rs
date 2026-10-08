@@ -25,7 +25,8 @@
 //! near music's reach (NearCounselorMusicDistance; PLACEHOLDER rule). JasonAbilityUnlockWarning when he unlocks an
 //! ability. Not yet: the other stingers' triggers (OpenDoorStinger, SeeCounselorDeadBody), scary sounds.
 //!
-//! Delay nodes start their voices late (started paused). PLACEHOLDERS: the listener is the camera; actor sounds
+//! Delay nodes start their voices late (started paused). Continuous modulators and param / distance cross-fades follow
+//! the sound's parameters (`CueParams` on its actor, as AudioComponent::SetFloatParameter sets them) while it plays. PLACEHOLDERS: the listener is the camera; actor sounds
 //! play 1 m above the actor's origin (the game plays them from the actor or its audio components).
 
 use bevy::asset::RenderAssetUsages;
@@ -50,7 +51,7 @@ impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_sounds)
             .init_resource::<MusicState>()
-            .add_systems(Update, (add_listener, attenuate, actor_sounds, counselor_music, near_music, fades, ambience, voices, start_delayed).chain())
+            .add_systems(Update, (add_listener, modulate, attenuate, actor_sounds, counselor_music, near_music, fades, ambience, voices, start_delayed).chain())
             .add_observer(play_sound)
             .add_observer(footstep)
             .add_observer(actor_sound)
@@ -158,6 +159,54 @@ fn actor_loop(
         let mut e = commands.spawn((source, settings, Transform::from_translation(Vec3::Y), ChildOf(ev.actor), LoopOf(ev.prop)));
         if let Some(att) = att.clone().filter(|a| a.attenuate || a.spatialize) {
             e.insert((PlaybackSettings { spatial: att.spatialize, spatial_scale: Some(SpatialScale::new(SPATIAL_SCALE)), ..settings }, Emitter { volume: v.volume, attenuation: att }));
+        }
+        if v.delay > 0.0 {
+            e.insert(StartAfter(v.delay));
+        }
+        if !v.mods.is_empty() {
+            e.insert(Modulated { volume: v.volume, pitch: v.pitch, mods: v.mods.clone() });
+        }
+    }
+}
+
+/// A sound's parameters (AudioComponent::SetFloatParameter): on the actor its voices play from.
+#[derive(Component, Clone, Debug, Default)]
+pub struct CueParams(pub HashMap<String, f32>);
+
+/// A voice whose volume and pitch follow its sound's parameters (continuous modulators, cross-fades): its base volume
+/// and pitch, and what changes them.
+#[derive(Component)]
+struct Modulated {
+    volume: f32,
+    pitch: f32,
+    mods: Vec<f13_data::sound::VoiceMod>,
+}
+
+/// Applies each modulated voice's parameters (its actor's CueParams, the listener's distance) to its volume and pitch.
+#[allow(clippy::type_complexity)]
+fn modulate(
+    listener: Query<&GlobalTransform, With<SpatialListener>>,
+    params: Query<&CueParams>,
+    mut voices: Query<(&Modulated, &GlobalTransform, Option<&ChildOf>, Option<&mut Emitter>, Option<&mut AudioSink>, Option<&mut SpatialAudioSink>)>,
+) {
+    let ear = listener_position(&listener);
+    for (m, g, parent, emitter, mut sink, spatial) in &mut voices {
+        let p = parent.and_then(|c| params.get(c.parent()).ok());
+        let lookup = |name: &str| p.and_then(|p| p.0.get(name).copied());
+        let distance_cm = ear.map_or(0.0, |e| e.distance(g.translation()) * 100.0);
+        let (gain, pitch) = m.mods.iter().map(|x| x.factors(&lookup, distance_cm)).fold((1.0, 1.0), |a, b| (a.0 * b.0, a.1 * b.1));
+        use bevy::audio::AudioSinkPlayback;
+        // Attenuated voices: the gain goes through their emitter (attenuate sets the sink).
+        if let Some(mut e) = emitter {
+            e.volume = m.volume * gain;
+        } else if let Some(s) = sink.as_deref_mut() {
+            s.set_volume(Volume::Linear(m.volume * gain));
+        }
+        if let Some(s) = sink.as_deref_mut() {
+            s.set_speed(m.pitch * pitch);
+        }
+        if let Some(s) = spatial {
+            s.set_speed(m.pitch * pitch);
         }
     }
 }

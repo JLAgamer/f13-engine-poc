@@ -1106,7 +1106,14 @@ static class Mvp
     ];
     /// Animations that keep their root translation (played from a fixed spot: paired kills, hiding spots, car seats,
     /// windows).
-    public static string[] KeepRoot => [.. PairedKills, .. CounselorHiding, .. JasonHiding, .. CarSeat, .. CarGrab, .. WindowMoves, .. DoorMoves];
+    public static string[] KeepRoot => [.. PairedKills, .. CounselorHiding, .. JasonHiding, .. CarSeat, .. CarGrab, .. WindowMoves, .. DoorMoves, .. RepairMoves];
+    /// The repair takes that carry root motion (bEnableRootMotion: the phone box's, the phone's, the gas can's cancel).
+    static string[] RepairMoves =>
+    [
+        .. new[] { "enter", "cycle", "exit" }.Select(m => $"/Game/Characters/Counselors/Base/Female/Animation/Interaction/Repair/Misc/f_normal_stand_repair_phonebox_{m}"),
+        .. new[] { "start", "cycle", "stop", "cancel", "fail" }.Select(m => $"/Game/Characters/Counselors/Base/Female/Animation/Interaction/Electronics/f_normal_stand_use_phone_{m}"),
+        "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Repair/Car/f_normal_stand_car_repair_gascan_cancel",
+    ];
     /// Her door moves (open, close, lock, unlock; played from the door's special move spots).
     static string[] DoorMoves => [.. new[] { "open_inside_forward", "open_outside_forward", "close_inside_forward", "close_outside_forward", "lock", "unlock" }
         .Select(m => $"/Game/Characters/Counselors/Base/Female/Animation/Interaction/Doors/f_normal_stand_door_{m}")];

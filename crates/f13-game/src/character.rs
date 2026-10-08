@@ -106,8 +106,8 @@ pub struct CharacterModel {
     pub info: CharacterInfo,
     graph: Handle<AnimationGraph>,
     clips: HashMap<String, (AnimationNodeIndex, f32)>,
-    /// Animations that keep their root motion: the root bone's first and last pose (rig space).
-    roots: HashMap<String, (Transform, Transform)>,
+    /// Animations that keep their root motion: the root bone's pose at each frame (rig space), and the length.
+    roots: HashMap<String, (Vec<Transform>, f32)>,
 }
 
 #[derive(Resource, Deref)]
@@ -152,8 +152,8 @@ impl CharacterModel {
                         rotation: t.rotation.get(i).map_or(Quat::IDENTITY, |q| Quat::from_array(*q).normalize()),
                         ..default()
                     };
-                    let last = t.rotation.len().max(t.translation.as_ref().map_or(0, |v| v.len())).saturating_sub(1);
-                    roots.insert(name.clone(), (at(0), at(last)));
+                    let frames = t.rotation.len().max(t.translation.as_ref().map_or(0, |v| v.len())).max(1);
+                    roots.insert(name.clone(), ((0..frames).map(at).collect(), a.length));
                 }
             }
             let clip = build_clip(&data, a.length, &animated);
@@ -173,10 +173,23 @@ impl CharacterModel {
     /// Root motion of an animation that keeps it: its root's first and last pose as moves of the owner (identity
     /// when the root is where it normally is).
     pub fn root_motion(&self, name: &str) -> Option<(Transform, Transform)> {
-        let (first, last) = self.roots.get(name)?;
+        let (frames, _) = self.roots.get(name)?;
+        Some((self.owner_move(&frames[0]), self.owner_move(frames.last()?)))
+    }
+
+    /// An animation's root (one that keeps it) at `t` s as a move of the owner, like [`Self::root_motion`]; its last
+    /// pose once over.
+    pub fn root_at(&self, name: &str, t: f32) -> Option<Transform> {
+        let (frames, length) = self.roots.get(name)?;
+        let x = if *length > 0.0 { (t / length).clamp(0.0, 1.0) * (frames.len() - 1) as f32 } else { 0.0 };
+        let (i, f) = (x.floor() as usize, x.fract());
+        let (a, b) = (frames[i], frames[(i + 1).min(frames.len() - 1)]);
+        Some(self.owner_move(&Transform { translation: a.translation.lerp(b.translation, f), rotation: a.rotation.slerp(b.rotation, f), ..default() }))
+    }
+
+    fn owner_move(&self, root: &Transform) -> Transform {
         let rig = self.rig_transform().to_matrix();
-        let owner = |root: &Transform| Transform::from_matrix(rig * root.to_matrix() * rig.inverse());
-        Some((owner(first), owner(last)))
+        Transform::from_matrix(rig * root.to_matrix() * rig.inverse())
     }
 
     /// The owner transform that plays `name` (keeping its root motion) so its first frame stands at `at`, and where

@@ -353,16 +353,54 @@ fn moves_to_spots(mut commands: Commands, time: Res<Time>, mut players: Query<(E
     }
 }
 
+/// A repair take playing on its own root motion (the montage's: Unreal's default RootMotionFromMontagesOnly): she
+/// stays at `origin` while its root carries her mesh, and is left where it got to when it ends or is cut off. The
+/// phone box's enter (42.6 cm towards the box) and exit (back), the gas can's cancel (56 cm back).
+#[derive(Component)]
+struct RepairRoot {
+    name: String,
+    origin: Transform,
+    t: f32,
+}
+
+#[allow(clippy::type_complexity)]
 fn repair_anims(
     mut commands: Commands,
     time: Res<Time>,
     model: Option<Res<crate::character::CounselorCharacter>>,
-    mut players: Query<(Entity, &mut RepairAnim), With<Player>>,
+    mut players: Query<(Entity, &mut Transform, &mut RepairAnim, Option<&mut RepairRoot>), With<Player>>,
+    loose: Query<Entity, (With<RepairRoot>, Without<RepairAnim>)>,
 ) {
+    // Taken off her repair by something else (a car seat, a grab): that places her.
+    for e in &loose {
+        commands.entity(e).remove::<RepairRoot>();
+    }
+    let dt = time.delta_secs();
     let len = |n: &str| model.as_ref().and_then(|m| m.length(n)).unwrap_or(1.0);
-    for (pe, mut r) in &mut players {
-        r.t += time.delta_secs();
+    for (pe, mut xf, mut r, root) in &mut players {
+        r.t += dt;
         let name = repair_take(&r.base, r.part);
+        // Only while she still stands at its origin: anything else that moved her (a move onto another spot) places her.
+        let rooted = root.as_ref().filter(|rr| rr.origin.translation == xf.translation).map(|rr| rr.name.clone());
+        if let Some(model) = model.as_ref() {
+            let settle = |rr: &RepairRoot| model.root_at(&rr.name, rr.t).map(|m| crate::character::flat(Transform::from_matrix(rr.origin.to_matrix() * m.to_matrix())));
+            match root {
+                Some(mut rr) if rr.name == name => rr.t += dt,
+                other => {
+                    if let Some(at) = other.as_deref().filter(|_| rooted.is_some()).and_then(settle) {
+                        *xf = at;
+                    }
+                    if other.is_some() {
+                        commands.entity(pe).remove::<RepairRoot>();
+                    }
+                    if model.root_motion(&name).is_some() {
+                        let (origin, _) = model.place(&name, *xf);
+                        *xf = origin;
+                        commands.entity(pe).insert(RepairRoot { name: name.clone(), origin, t: dt });
+                    }
+                }
+            }
+        }
         let over = r.t >= len(&name);
         match r.part {
             "start" if over => {
@@ -371,7 +409,12 @@ fn repair_anims(
                 commands.entity(pe).insert(crate::character::PlayAction(repair_take(&r.base, "cycle")));
             }
             "stop" | "cancel" if over => {
-                commands.entity(pe).remove::<(RepairAnim, crate::character::PlayAction)>();
+                // Where its root motion left her.
+                // Where its root motion left her (she's stood at its origin while it played).
+                if let Some((_, last)) = model.as_ref().filter(|_| rooted.as_ref() == Some(&name)).and_then(|m| m.root_motion(&name)) {
+                    *xf = crate::character::flat(Transform::from_matrix(xf.to_matrix() * last.to_matrix()));
+                }
+                commands.entity(pe).remove::<(RepairAnim, RepairRoot, crate::character::PlayAction)>();
             }
             _ => {}
         }

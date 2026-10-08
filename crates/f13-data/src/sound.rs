@@ -95,6 +95,11 @@ pub enum Node {
     Looping { child: Option<Box<Node>> },
     /// USoundNodeDelay: its child starts after a random delay in [DelayMin, DelayMax] s.
     Delay { range: (f32, f32), child: Option<Box<Node>> },
+    /// USoundNodeModulatorContinuous: volume and pitch from the sound's parameters, while it plays.
+    ModulatorContinuous { volume: ParamMap, pitch: ParamMap, child: Option<Box<Node>> },
+    /// USoundNodeParamCrossFade (`param` Some: by that parameter) and USoundNodeDistanceCrossFade (None: by the
+    /// listener's distance, cm): each child's volume by its input's band.
+    CrossFade { param: Option<String>, bands: Vec<CrossFadeBand>, children: Vec<Node> },
     /// A wave file (under sounds/), its volume and pitch, and whether it loops.
     Wave { file: Option<String>, volume: f32, pitch: f32, looping: bool },
     Other { kind: String, children: Vec<Node> },
@@ -129,6 +134,16 @@ impl Node {
             }
             "Looping" => Node::Looping { child: first() },
             "Delay" => Node::Delay { range: (f("DelayMin", 0.0), f("DelayMax", 0.0)), child: first() },
+            "ModulatorContinuous" => Node::ModulatorContinuous {
+                volume: ParamMap::from_json(&p["VolumeModulationParams"]),
+                pitch: ParamMap::from_json(&p["PitchModulationParams"]),
+                child: first(),
+            },
+            "ParamCrossFade" | "DistanceCrossFade" => Node::CrossFade {
+                param: (v["Type"] == "ParamCrossFade").then(|| p["ParamName"].as_str().unwrap_or("").to_string()),
+                bands: p["CrossFadeInput"].as_array().into_iter().flatten().map(CrossFadeBand::from_json).collect(),
+                children,
+            },
             "WavePlayer" => Node::Wave {
                 file: v["Wave"].as_str().filter(|s| !s.is_empty()).map(str::to_string),
                 volume: v["WaveVolume"].as_f64().unwrap_or(1.0) as f32,
@@ -157,6 +172,109 @@ pub struct Voice {
     pub looping: bool,
     /// Seconds to wait before it starts (its Delay nodes').
     pub delay: f32,
+    /// What changes its volume and pitch while it plays (continuous modulators, cross-fades).
+    pub mods: Vec<VoiceMod>,
+}
+
+/// FModulatorContinuousParams (its constructor: Default 1, inputs 0..1, outputs 0..1, MPM_Normal).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParamMap {
+    pub name: String,
+    pub default: f32,
+    pub min_in: f32,
+    pub max_in: f32,
+    pub min_out: f32,
+    pub max_out: f32,
+    /// MPM_Abs: the parameter's magnitude; MPM_Direct: the parameter itself.
+    pub abs: bool,
+    pub direct: bool,
+}
+
+impl ParamMap {
+    fn from_json(v: &Value) -> ParamMap {
+        let f = |k: &str, d: f32| v[k].as_f64().map_or(d, |x| x as f32);
+        let mode = v["ParamMode"].as_str().unwrap_or("MPM_Normal");
+        ParamMap {
+            name: v["ParameterName"].as_str().filter(|n| *n != "None").unwrap_or("").to_string(),
+            default: f("Default", 1.0),
+            min_in: f("MinInput", 0.0),
+            max_in: f("MaxInput", 1.0),
+            min_out: f("MinOutput", 0.0),
+            max_out: f("MaxOutput", 1.0),
+            abs: mode == "MPM_Abs",
+            direct: mode == "MPM_Direct",
+        }
+    }
+
+    /// FModulatorContinuousParams::GetValue: the parameter (else Default), its magnitude for MPM_Abs, clamped to the
+    /// input range and mapped onto the output range (MPM_Direct: as is).
+    pub fn value(&self, param: Option<f32>) -> f32 {
+        let mut x = param.filter(|_| !self.name.is_empty()).unwrap_or(self.default);
+        if self.direct {
+            return x;
+        }
+        if self.abs {
+            x = x.abs();
+        }
+        let gradient = if self.max_in <= self.min_in { 0.0 } else { (self.max_out - self.min_out) / (self.max_in - self.min_in) };
+        self.min_out + (x.clamp(self.min_in, self.max_in) - self.min_in) * gradient
+    }
+}
+
+/// A cross-fade input (FDistanceDatum): its fade-in and fade-out bands and its volume.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CrossFadeBand {
+    pub fade_in: (f32, f32),
+    pub fade_out: (f32, f32),
+    pub volume: f32,
+}
+
+impl CrossFadeBand {
+    fn from_json(v: &Value) -> CrossFadeBand {
+        let f = |k: &str, d: f32| v[k].as_f64().map_or(d, |x| x as f32);
+        CrossFadeBand {
+            fade_in: (f("FadeInDistanceStart", 0.0), f("FadeInDistanceEnd", 0.0)),
+            fade_out: (f("FadeOutDistanceStart", 0.0), f("FadeOutDistanceEnd", 0.0)),
+            volume: f("Volume", 1.0),
+        }
+    }
+
+    /// The input's volume at `x` (USoundNodeDistanceCrossFade::ParseNodes): rising across the fade-in band, falling
+    /// across the fade-out band, full between them, silent outside. (An empty band, start = end, counts as full:
+    /// Unreal divides by zero there.)
+    pub fn gain(&self, x: f32) -> f32 {
+        let ramp = |(a, b): (f32, f32)| if b > a { (x - a) / (b - a) } else { 1.0 };
+        if x >= self.fade_in.0 && x <= self.fade_in.1 {
+            self.volume * ramp(self.fade_in)
+        } else if x >= self.fade_out.0 && x <= self.fade_out.1 {
+            self.volume * (1.0 - ramp(self.fade_out))
+        } else if x >= self.fade_in.1 && x <= self.fade_out.0 {
+            self.volume
+        } else {
+            0.0
+        }
+    }
+}
+
+/// A playing voice's change by the sound's parameters (`param` None: the listener's distance, cm).
+#[derive(Clone, Debug, PartialEq)]
+pub enum VoiceMod {
+    Volume(ParamMap),
+    Pitch(ParamMap),
+    Band { param: Option<String>, band: CrossFadeBand },
+}
+
+impl VoiceMod {
+    /// (volume, pitch) multipliers for these parameters and listener distance (cm).
+    pub fn factors(&self, params: &dyn Fn(&str) -> Option<f32>, distance_cm: f32) -> (f32, f32) {
+        match self {
+            VoiceMod::Volume(m) => (m.value(params(&m.name)), 1.0),
+            VoiceMod::Pitch(m) => (1.0, m.value(params(&m.name))),
+            // USoundNodeParamCrossFade: a missing parameter reads 0.
+            VoiceMod::Band { param: Some(p), band } => (band.gain(params(p).unwrap_or(0.0)), 1.0),
+            VoiceMod::Band { param: None, band } => (band.gain(distance_cm), 1.0),
+        }
+    }
 }
 
 impl Cue {
@@ -178,14 +296,14 @@ impl Cue {
         let mut voices = Vec::new();
         let mut att = None;
         if let Some(root) = &self.root {
-            walk(root, self.volume, self.pitch, false, 0.0, rand, &mut voices, &mut att);
+            walk(root, self.volume, self.pitch, false, 0.0, &[], rand, &mut voices, &mut att);
         }
         (voices, att.or_else(|| self.attenuation.clone()))
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn walk(n: &Node, volume: f32, pitch: f32, looping: bool, delay: f32, rand: &mut dyn FnMut() -> f32, out: &mut Vec<Voice>, att: &mut Option<Attenuation>) {
+fn walk(n: &Node, volume: f32, pitch: f32, looping: bool, delay: f32, mods: &[VoiceMod], rand: &mut dyn FnMut() -> f32, out: &mut Vec<Voice>, att: &mut Option<Attenuation>) {
     let lerp = |(a, b): (f32, f32), t: f32| a + (b - a) * t;
     match n {
         Node::Attenuation { settings, child } => {
@@ -193,13 +311,13 @@ fn walk(n: &Node, volume: f32, pitch: f32, looping: bool, delay: f32, rand: &mut
                 *att = settings.clone();
             }
             if let Some(c) = child {
-                walk(c, volume, pitch, looping, delay, rand, out, att);
+                walk(c, volume, pitch, looping, delay, mods, rand, out, att);
             }
         }
         Node::Modulator { volume: v, pitch: p, child } => {
             let (vm, pm) = (lerp(*v, rand()), lerp(*p, rand()));
             if let Some(c) = child {
-                walk(c, volume * vm, pitch * pm, looping, delay, rand, out, att);
+                walk(c, volume * vm, pitch * pm, looping, delay, mods, rand, out, att);
             }
         }
         Node::Random { weights, children } => {
@@ -217,33 +335,46 @@ fn walk(n: &Node, volume: f32, pitch: f32, looping: bool, delay: f32, rand: &mut
                 }
                 pick -= w(i);
             }
-            walk(&children[chosen], volume, pitch, looping, delay, rand, out, att);
+            walk(&children[chosen], volume, pitch, looping, delay, mods, rand, out, att);
         }
         Node::Mixer { volumes, children } => {
             for (i, c) in children.iter().enumerate() {
-                walk(c, volume * volumes.get(i).copied().unwrap_or(1.0), pitch, looping, delay, rand, out, att);
+                walk(c, volume * volumes.get(i).copied().unwrap_or(1.0), pitch, looping, delay, mods, rand, out, att);
             }
         }
         Node::Delay { range, child } => {
             // USoundNodeDelay::ParseNodes: DelayMax + (DelayMin - DelayMax) x FRand, at least 0.
             let d = (range.1 + (range.0 - range.1) * rand()).max(0.0);
             if let Some(c) = child {
-                walk(c, volume, pitch, looping, delay + d, rand, out, att);
+                walk(c, volume, pitch, looping, delay + d, mods, rand, out, att);
+            }
+        }
+        Node::ModulatorContinuous { volume: v, pitch: p, child } => {
+            if let Some(c) = child {
+                let m: Vec<VoiceMod> = mods.iter().cloned().chain([VoiceMod::Volume(v.clone()), VoiceMod::Pitch(p.clone())]).collect();
+                walk(c, volume, pitch, looping, delay, &m, rand, out, att);
+            }
+        }
+        Node::CrossFade { param, bands, children } => {
+            for (i, c) in children.iter().enumerate() {
+                let band = bands.get(i).cloned().unwrap_or(CrossFadeBand { fade_in: (0.0, 0.0), fade_out: (0.0, 0.0), volume: 0.0 });
+                let m: Vec<VoiceMod> = mods.iter().cloned().chain([VoiceMod::Band { param: param.clone(), band }]).collect();
+                walk(c, volume, pitch, looping, delay, &m, rand, out, att);
             }
         }
         Node::Looping { child } => {
             if let Some(c) = child {
-                walk(c, volume, pitch, true, delay, rand, out, att);
+                walk(c, volume, pitch, true, delay, mods, rand, out, att);
             }
         }
         Node::Wave { file, volume: wv, pitch: wp, looping: wl } => {
             if let Some(file) = file {
-                out.push(Voice { file: file.clone(), volume: volume * wv, pitch: pitch * wp, looping: looping || *wl, delay });
+                out.push(Voice { file: file.clone(), volume: volume * wv, pitch: pitch * wp, looping: looping || *wl, delay, mods: mods.to_vec() });
             }
         }
         Node::Other { children, .. } => {
             if let Some(c) = children.first() {
-                walk(c, volume, pitch, looping, delay, rand, out, att);
+                walk(c, volume, pitch, looping, delay, mods, rand, out, att);
             }
         }
     }
@@ -297,6 +428,25 @@ mod tests {
         assert_eq!(a.factor(100.0), 1.0);
         assert_eq!(a.factor(550.0), 0.5);
         assert_eq!(a.factor(900.0), 0.0);
+    }
+
+    #[test]
+    fn engine_rpm_bands_and_pitch() {
+        // V6Engine's idle and middle bands, and its pitch by RPM (MPM_Abs, 20..2400 -> 1.0..1.1).
+        let idle = CrossFadeBand { fade_in: (0.0, 0.0), fade_out: (500.0, 800.0), volume: 1.0 };
+        let mid = CrossFadeBand { fade_in: (10.0, 100.0), fade_out: (2000.0, 2400.0), volume: 0.6 };
+        assert_eq!(idle.gain(0.0), 1.0);
+        assert_eq!(idle.gain(650.0), 0.5);
+        assert_eq!(idle.gain(900.0), 0.0);
+        assert!((mid.gain(55.0) - 0.3).abs() < 1e-6);
+        assert_eq!(mid.gain(1000.0), 0.6);
+        assert_eq!(mid.gain(5.0), 0.0);
+        let pitch = ParamMap { name: "RPM".into(), default: 1.0, min_in: 20.0, max_in: 2400.0, min_out: 1.0, max_out: 1.1, abs: true, direct: false };
+        assert_eq!(pitch.value(Some(-2400.0)), 1.1);
+        assert_eq!(pitch.value(Some(0.0)), 1.0);
+        // An unnamed map reads its Default: full volume.
+        let none = ParamMap { name: String::new(), ..pitch.clone() };
+        assert_eq!(none.value(Some(5.0)), none.min_out + (1.0f32.clamp(20.0, 2400.0) - 20.0) * (0.1 / 2380.0));
     }
 
     #[test]
