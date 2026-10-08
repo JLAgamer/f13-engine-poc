@@ -178,8 +178,9 @@ Mechanics: Jason side
       Tent) turns on custom depth at stencil 0, which neither Sense material shows: nothing to draw
 - [ ] Shift, Morph, Stalk, remaining: the dissolve; the counselor's SenseEffect emitter (particles) (Morph's
       excluded areas: the map's Boundary image has no texture in this level's widget, so none refuse a click)
-- [ ] The level's bounded post-process volume (its Gaussian DOF and fringe 1.5 inside its box; tonemap.rs reads
-      only the unbound one)
+- [x] The level's bounded post-process volume (underwater_PostProcessVolume: Gaussian DOF, fringe 1.5): checked;
+      its box tops out at -242 cm (blend radius 53 cm), the lake's surface is at -185 cm and no camera goes below it
+      (Jason's water camera: 10 cm over the surface), so it never applies
 - [x] Throwing knives (J2's two, the knife's damage and cooldown, the throw montage and its ThrowKnife notify,
   SCJasonAIProperties' 5..25 m; placeholder knife speed) and Jason's traps (J2's seven KillerTraps, set in doorways
   he opens; they catch counselors, not him; his trap's own mesh isn't exported)
