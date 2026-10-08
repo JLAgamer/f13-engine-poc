@@ -27,9 +27,10 @@
 //!
 //! The chase shakes the camera (ED_Shake2 at 0.08 from OnChaseStart until OnChaseEnd; UCameraShake's oscillators).
 //!
-//! PLACEHOLDERS: her seat is taken as
-//! she starts getting in (Driving from its enter take on); dead, the arm stays on her capsule (the game's death and
-//! spectating cameras aren't ported).
+//! Her seat is hers from the end of her enter take (OnEnterVehicleComplete -> SetCurrentSeat) to the start of her exit
+//! (MULTICAST_ExitVehicle -> SetCurrentSeat(none)): her Driving stance, the car's view and the look offset's clamp.
+//!
+//! PLACEHOLDER: dead, the arm stays on her capsule (the game's death and spectating cameras aren't ported).
 
 use crate::player::{Player, PlayerCamera};
 use bevy::input::mouse::AccumulatedMouseMotion;
@@ -184,7 +185,7 @@ pub(crate) fn look(
     play_jason: Option<Res<crate::jason_player::PlayJason>>,
     counselor: Option<Res<crate::character::CounselorCharacter>>,
     mut rig: Option<ResMut<Rig>>,
-    driving: Query<(), (With<Player>, With<crate::vehicle::Driving>)>,
+    driving: Query<&crate::vehicle::Driving, With<Player>>,
     mut camera: Single<(&mut PlayerCamera, &Projection)>,
     windows: Query<&Window>,
 ) {
@@ -199,7 +200,7 @@ pub(crate) fn look(
         let scale = Vec2::new(value(&c.info, "CameraRotateScaleX", 0.5), value(&c.info, "CameraRotateScaleY", 0.5));
         rig.vehicle_look.x += yaw * scale.y;
         rig.vehicle_look.y += pitch * scale.x;
-        if !driving.is_empty() {
+        if driving.iter().any(|d| d.seat_move.is_none()) {
             let (max_yaw, max_pitch) = (value(&c.info, "MaxVehicleCameraYawAngle", 70.0), value(&c.info, "MaxVehicleCameraPitchAngle", 40.0));
             rig.vehicle_look.x = rig.vehicle_look.x.clamp(-max_yaw, max_yaw);
             rig.vehicle_look.y = rig.vehicle_look.y.clamp(-max_pitch, max_pitch);
@@ -410,6 +411,8 @@ pub(crate) fn counselor_camera(
     mut rng: ResMut<crate::GameRng>,
 ) {
     let (p, pxf, driving, held, trapped) = *player;
+    // In her seat (SetCurrentSeat): not while getting in or out.
+    let driving = driving.filter(|d| d.seat_move.is_none());
     let (ref mut cam, ref mut xf, ref mut proj) = *camera;
     if let Some((eye, target)) = config.camera {
         xf.translation = pxf.translation + eye;

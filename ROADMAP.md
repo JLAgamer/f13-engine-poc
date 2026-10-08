@@ -367,7 +367,8 @@ Decomp audit (nothing guessed: every rule read from the decomp or the game's dat
       cameras); the counselor's heavy swing (held in combat stance, not W); bIsStruggling (never set: Jason's grab
       layer is always its Idle); the doors', windows' and barricades' cues (played on state changes: the windows'
       as her move starts, the barricades' as she starts using one, the doors' open / close cues never by code); weapon
-      sweeps against Jason's physics bodies (his PhysicsAsset, exported; his capsule stood in)
+      sweeps against Jason's physics bodies (his PhysicsAsset, exported; his capsule stood in); her seat (taken at the
+      enter take's end, OnEnterVehicleComplete, left at the exit's start: it was taken as she started getting in)
 - [x] Audit of hiding.rs, doors.rs, police.rs, items.rs, placed_kills.rs, character.rs, senses.rs, ui.rs, vehicle.rs
       (MODLOG "Decomp audit (worktree session)"): hiding voice lines and spot doors, the door's opening side, the
       police volume's obstruction, stun spot search and phone box rule, melee sweeps, guns, the firecracker throw,
