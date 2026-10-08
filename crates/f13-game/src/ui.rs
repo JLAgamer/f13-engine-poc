@@ -6,8 +6,12 @@
 //! (`RUNTIME_VISIBILITY`), the timer's text, the stamina ring's fill (StaminaBarMaterial, `shaders/radial_fill.wgsl`),
 //! the inventory's item widgets (SC_InventoryItem_Widget, the items' ImageOn icons), the breath bars and the
 //! interaction dial (SCInteractMinigame_Widget: the progress circle, the needle, the pips as arcs of the ring, the
-//! mouse button of the next pip), the police timer while they're on their way (ShowPoliceTimer, PoliceTimerText). The
-//! HUD is rebuilt when the window's size or her pockets change, or the police timer shows or hides.
+//! mouse button of the next pip), the police timer while they're on their way (ShowPoliceTimer, PoliceTimerText), the
+//! minimap's noise rings (SC_Noise_Widget), the XP lines (XPDisplayWidget, XPLineWidget). The HUD is rebuilt when the
+//! window's size or her pockets change, the police timer shows or hides, or she scores.
+//!
+//! The help texts (CounselorHelpTextWidget, KillerHelpTextWidget) never show: their Construct jumps to its end and
+//! nothing else calls ShowHelpText (no native caller), so Border_0's content stays at its alpha 0.
 //!
 //! The counselor HUD has no health or fear meter (the game shows them on her: the limp, the screen's fear effects).
 //! F3 shows the debug text instead (player.rs).
@@ -34,10 +38,8 @@ const DESIGN: Vec2 = Vec2::new(1920.0, 1080.0);
 /// Widgets the game's code hides or shows before the player sees them (gamepad prompts, other modes' widgets,
 /// messages that come and go).
 const RUNTIME_VISIBILITY: &[(&str, Vis)] = &[
-    ("GameTimer", Vis::Visible),
     ("MatchStartText", Vis::Collapsed),
     ("Image_106", Vis::Collapsed),
-    ("XPDisplayWidget_81", Vis::Collapsed),
     ("HUDLaggingIconWidget", Vis::Collapsed),
     ("SaveGameThreadActiveIcon_0", Vis::Collapsed),
     ("HUDChatNotificationOverlayWidget_269", Vis::Collapsed),
@@ -99,8 +101,9 @@ impl Plugin for UiPlugin {
         embedded_asset!(app, "shaders/radial_fill.wgsl");
         embedded_asset!(app, "shaders/minimap.wgsl");
         app.add_plugins((UiMaterialPlugin::<RadialFill>::default(), UiMaterialPlugin::<Minimap>::default()))
+            .init_resource::<PlayingAnims>()
             .add_systems(Startup, load_hud)
-            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, jason_hud, noise_meter), hide_for_jason).chain().run_if(resource_exists::<Hud>));
+            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, jason_hud, noise_meter, xp_lines), widget_anims, content_alpha, hide_for_jason).chain().run_if(resource_exists::<Hud>));
     }
 }
 
@@ -175,8 +178,9 @@ pub struct Hud {
     textures: HashMap<String, String>,
     regular: Handle<Font>,
     bold: Handle<Font>,
-    /// Built for: the window size, her pockets, Jason's HUD, the police timer shown.
-    built: Option<(Vec2, Vec<String>, bool, bool)>,
+    /// Built for: the window size, her pockets, Jason's HUD, the police timer and the game timer shown, the score
+    /// lines shown.
+    built: Option<(Vec2, Vec<String>, bool, (bool, bool), usize)>,
     root: Option<Entity>,
     /// "<user widget class>.<widget name>" -> entity.
     names: HashMap<String, Entity>,
@@ -184,6 +188,81 @@ pub struct Hud {
     /// Design units to pixels, as last built.
     scale: f32,
     noise: Option<NoiseWidget>,
+    xp: Option<XpLines>,
+    /// The widget animations of the user widgets whose code plays them, by class.
+    anims: HashMap<String, HashMap<String, WidgetAnim>>,
+    /// SCCounselorTimerWidget's TimeToShow (its class's default; SCTimerWidget's constructor leaves it 0).
+    time_to_show: i32,
+}
+
+/// XPDisplayWidget's lines: an XPLineWidget per score shown (AddNewXPLine), MaxAmountOfSlots of them (Construct adds
+/// that many empty ones; each new line removes the first), each faded in by its FadeIn, out by its FadeOut 5 s later.
+struct XpLines {
+    line: Widget,
+    slots: usize,
+    /// FadeIn and FadeOut: Border_0's content alpha, and their lengths.
+    fade_in: (f13_core::curve::RichCurve, f32),
+    fade_out: (f13_core::curve::RichCurve, f32),
+    /// The textures its SetIconImage sets, by name.
+    textures: HashMap<String, String>,
+}
+
+/// XPLineWidget's Delay between its FadeIn and its FadeOut, s.
+const XP_LINE_HOLD_S: f32 = 5.0;
+
+/// XPLineWidget's SetIconImage: the icon of each EScoreEventCategory (none: the template's stays).
+const XP_ICONS: &[(&str, &str)] = &[
+    ("Offense", "Img_Hud_Counselor_XP_Icon_Offense_01"),
+    ("Defense", "Img_Hud_Counselor_XP_Icon_Defense_01"),
+    ("Fixer", "Img_Hud_Counselor_XP_Icon_Fixer_01"),
+    ("Escaped", "Img_Hud_Counselor_XP_Icon_Escaped_01"),
+    ("TeamEscaped", "Img_Hud_Counselor_XP_Icon_TeamEscaped_01"),
+    ("Reinforcements", "Img_Hud_Counselor_XP_Icon_Reinforcements_01"),
+    ("CompletedMatch", "Img_Hud_Counselor_XP_Icon_MatchComplete_01"),
+    ("TimeBonus", "Img_Hud_Counselor_XP_Icon_TimeBonus_01"),
+    ("Demasking", "Img_Hud_Counselor_XP_Icon_Demasking_01"),
+    ("Kill", "Img_Hud_Jason_XP_Icon_CounselorKill_01"),
+    ("NoSurvivors", "Img_Hud_Jason_XP_Icon_TeamKilled"),
+    ("Resourceful", "Img_Hud_Jason_XP_Icon_EnvironmentContextKill_01"),
+    ("Versatile", "Img_Hud_Jason_XP_Icon_GrabKill_01"),
+    ("Seeker", "Img_Hud_Jason_XP_Icon_Seeker_01"),
+    ("DemolitionMan", "Img_Hud_Counselor_XP_IconTemp_01"),
+    ("BoatKill", "Img_Hud_Jason_XP_Icon_BoatKill_01"),
+    ("Butcher", "Img_Hud_Jason_XP_Icon_WeaponSwingKill_01"),
+    ("Trapper", "Img_HUD_Jason_XP_Icon_Counselor_Trapped"),
+    ("PartyCrasher", "Img_HUD_Jason_XP_Icon_Shutdown_Electricity"),
+    ("DefeatedJason", "Img_Hud_Counselor_XP_Icon_JasonKilled_01"),
+];
+
+impl XpLines {
+    fn load(dir: &std::path::Path) -> Option<Self> {
+        let line = Widget::load(dir, "XPLineWidget")?;
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("ui/XPLineWidget.json")).ok()?).ok()?;
+        let display: Value = std::fs::read_to_string(dir.join("ui/XPDisplayWidget.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        // An animation's Border_0 content alpha channel.
+        let anim = |name: &str| {
+            let a = &v["Animations"][name];
+            let track = a["Tracks"].as_array()?.iter().find(|t| t["Widget"] == "Border_0" && t["Property"] == "ContentColorAndOpacity")?;
+            Some((f13_data::character::ue_rich_curve(&track["Sections"][0]["Channels"]["AlphaCurve"]), a["Length"].as_f64()? as f32))
+        };
+        Some(XpLines {
+            line,
+            slots: display["Defaults"]["MaxAmountOfSlots"].as_u64().unwrap_or(0) as usize,
+            fade_in: anim("FadeIn")?,
+            fade_out: anim("FadeOut")?,
+            textures: v["Textures"].as_object().map(|t| t.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect()).unwrap_or_default(),
+        })
+    }
+
+    /// A line's Border_0 content alpha `t` s after AddNewXPLine: FadeIn, then FadeOut after the delay (both keep their
+    /// last state).
+    fn alpha(&self, t: f32) -> f32 {
+        if t < XP_LINE_HOLD_S {
+            self.fade_in.0.eval(t.min(self.fade_in.1))
+        } else {
+            self.fade_out.0.eval((t - XP_LINE_HOLD_S).min(self.fade_out.1))
+        }
+    }
 }
 
 /// SC_Noise_Widget's defaults: its rings' start sizes, the pulse's time and curve.
@@ -289,6 +368,16 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         names: HashMap::new(),
         map,
         scale: 1.0,
+        anims: ["SCCounselorTimerWidget", "SCBreathWidget"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
+        time_to_show: std::fs::read_to_string(dir.join("ui/SCCounselorTimerWidget.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .and_then(|v| v["Defaults"]["TimeToShow"].as_i64())
+            .unwrap_or(0) as i32,
+        xp: XpLines::load(dir).or_else(|| {
+            warn!("ui: no XPLineWidget animations (re-export with f13-export ui): no XP lines");
+            None
+        }),
         noise: NoiseWidget::load(dir).or_else(|| {
             warn!("ui: SC_Noise_Widget has no defaults (re-export with f13-export ui): no noise meter");
             None
@@ -328,12 +417,15 @@ fn build_hud(
     let size = window.size();
     let jason = play.is_some() && hud.killer.is_some();
     // ShowPoliceTimer while they're on their way (HidePoliceTimer once they're here).
-    let police = game.is_some_and(|g| g.state.police_time_remaining > 0);
+    let police = game.as_ref().is_some_and(|g| g.state.police_time_remaining > 0);
+    // ShowGameTimer while the time left is within TimeToShow (see `timer`).
+    let game_timer = game.as_ref().is_some_and(|g| (0..=hud.time_to_show).contains(&g.state.remaining_time));
     if size.x < 1.0 || size.y < 1.0 {
         return;
     }
     let pockets: Vec<String> = player.as_ref().and_then(|p| **p).map_or(vec![], |inv| inv.pockets.iter().filter_map(|&e| items.get(e).ok()).map(|i| i.class.clone()).collect());
-    if hud.built.as_ref().is_some_and(|(s, p, j, c)| *s == size && *p == pockets && *j == jason && *c == police) {
+    let lines = game.as_ref().map_or(0, |g| g.score_lines().len());
+    if hud.built.as_ref().is_some_and(|(s, p, j, c, l)| *s == size && *p == pockets && *j == jason && *c == (police, game_timer) && *l == lines) {
         return;
     }
     if let Some(root) = hud.root.take() {
@@ -345,15 +437,21 @@ fn build_hud(
     let mut tree = if jason { hud.killer.clone().unwrap_or_else(|| hud.hud.clone()) } else { hud.hud.clone() };
     if !jason {
         fill_inventory(&hud, &mut tree, &pockets);
+        fill_xp_lines(&hud, &mut tree, game.as_ref().map_or(&[], |g| g.score_lines()));
     }
     if police {
         if let Some(w) = tree.find_mut("PoliceTimer") {
             w.set_visibility(Vis::Visible);
         }
     }
+    if game_timer {
+        if let Some(w) = tree.find_mut("GameTimer") {
+            w.set_visibility(Vis::Visible);
+        }
+    }
     let root = commands.spawn((Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, Pickable::IGNORE)).id();
     let mut names = HashMap::new();
-    let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, names: &mut names };
+    let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names };
     let full = Rect { x: 0.0, y: 0.0, w: virt.x, h: virt.y };
     let laid = tree.layout(full);
     b.spawn(&laid, root, full, if jason { "KillerHUDWidget" } else { "CounselorHUDWidget" });
@@ -377,7 +475,7 @@ fn build_hud(
     hud.names = names;
     hud.root = Some(root);
     hud.scale = scale;
-    hud.built = Some((size, pockets, jason, police));
+    hud.built = Some((size, pockets, jason, (police, game_timer), lines));
 }
 
 /// Puts an item widget in the inventory's Grid for each pocket item (SCInventory_Widget does it as items are
@@ -419,6 +517,137 @@ fn fill_inventory(hud: &Hud, tree: &mut Widget, pockets: &[String]) {
     }
 }
 
+/// XPDisplayWidget's box: its last MaxAmountOfSlots lines (empty ones first, as its Construct adds them), each with
+/// its text and its category's icon.
+fn fill_xp_lines(hud: &Hud, tree: &mut Widget, scores: &[(String, String, f32)]) {
+    let (Some(xp), Some(stack)) = (&hud.xp, tree.find_mut("MainXPDisplayBox")) else { return };
+    stack.children.clear();
+    let shown = &scores[scores.len().saturating_sub(xp.slots)..];
+    for i in 0..xp.slots {
+        let mut w = xp.line.clone();
+        w.name = format!("XPLine{i}");
+        // Its widgets named by line (XPLine<i>.Border_0) for the fades.
+        w.class = Some(format!("XPLine{i}"));
+        w.slot_kind = "VerticalBoxSlot".into();
+        w.slot = json!({});
+        let score = (i + shown.len()).checked_sub(xp.slots).and_then(|k| shown.get(k));
+        if let Some(text) = w.find_mut("XPDescriptionAndAmouint") {
+            text.props["Text"] = json!({ "LocalizedString": score.map_or("", |s| s.0.as_str()) });
+        }
+        let icon = score.and_then(|s| XP_ICONS.iter().find(|(c, _)| *c == s.1)).and_then(|(_, t)| xp.textures.get(*t));
+        if let (Some(file), Some(image)) = (icon, w.find_mut("XPIcon")) {
+            image.props["Brush"]["ResourceObject"] = json!({ "File": file });
+        }
+        stack.children.push(w);
+    }
+}
+
+/// A Border's ContentColorAndOpacity alpha: the opacity of everything in it (widget animations play it).
+#[derive(Component, PartialEq)]
+struct ContentAlpha(f32);
+
+/// The alpha a widget's colour was built with, under a Border's ContentAlpha.
+#[derive(Component)]
+struct BaseAlpha(f32);
+
+/// Each Border's content opacity on what's in it: all of it when it changes, and anything new in it.
+fn content_alpha(
+    mut commands: Commands,
+    borders: Query<(Entity, Ref<ContentAlpha>)>,
+    children: Query<&Children>,
+    mut colors: Query<(Option<&mut ImageNode>, Option<&mut TextColor>, Option<&BaseAlpha>)>,
+) {
+    for (border, alpha) in &borders {
+        let changed = alpha.is_changed();
+        for e in children.iter_descendants(border) {
+            let Ok((image, text, base)) = colors.get_mut(e) else { continue };
+            if !changed && base.is_some() {
+                continue;
+            }
+            let Some(current) = image.as_ref().map(|i| i.color.alpha()).or(text.as_ref().map(|t| t.0.alpha())) else { continue };
+            let base = match base {
+                Some(b) => b.0,
+                None => {
+                    commands.entity(e).insert(BaseAlpha(current));
+                    current
+                }
+            };
+            if let Some(mut i) = image {
+                i.color.set_alpha(base * alpha.0);
+            }
+            if let Some(mut t) = text {
+                t.0.set_alpha(base * alpha.0);
+            }
+        }
+    }
+}
+
+/// A widget animation (UWidgetAnimation): its length and each Border's content alpha curve, by widget name.
+struct WidgetAnim {
+    length: f32,
+    tracks: Vec<(String, f13_core::curve::RichCurve)>,
+}
+
+/// Loads a widget class's animations' ContentColorAndOpacity alpha tracks (ui/<class>.json "Animations").
+fn load_anims(dir: &std::path::Path, class: &str) -> HashMap<String, WidgetAnim> {
+    let Some(v) = std::fs::read_to_string(dir.join(format!("ui/{class}.json"))).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { return HashMap::new() };
+    let Some(anims) = v["Animations"].as_object() else { return HashMap::new() };
+    anims
+        .iter()
+        .map(|(name, a)| {
+            let tracks = a["Tracks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|t| t["Property"] == "ContentColorAndOpacity")
+                .map(|t| (t["Widget"].as_str().unwrap_or("").to_string(), f13_data::character::ue_rich_curve(&t["Sections"][0]["Channels"]["AlphaCurve"])))
+                .collect();
+            (name.clone(), WidgetAnim { length: a["Length"].as_f64().unwrap_or(0.0) as f32, tracks })
+        })
+        .collect()
+}
+
+/// The widget animations playing (UUserWidget::PlayAnimation): on which user widget (its widgets' "<owner>.<widget>"
+/// names), which, since when, reversed. Each keeps its last state when over (KeepState), so it stays listed.
+#[derive(Resource, Default)]
+pub struct PlayingAnims(Vec<(String, String, f32, bool)>);
+
+impl PlayingAnims {
+    fn play(&mut self, owner: &str, anim: &str, now: f32, reverse: bool) {
+        self.0.retain(|(o, a, _, _)| !(o == owner && a == anim));
+        self.0.push((owner.to_string(), anim.to_string(), now, reverse));
+    }
+}
+
+/// Plays the widget animations: each track's Border content alpha at the animation's time (backwards when reversed).
+fn widget_anims(time: Res<Time>, hud: Res<Hud>, playing: Res<PlayingAnims>, mut borders: Query<&mut ContentAlpha>) {
+    let now = time.elapsed_secs();
+    for (owner, name, start, reverse) in &playing.0 {
+        let Some(anim) = hud.anims.get(owner).and_then(|a| a.get(name)) else { continue };
+        let t = (now - start).clamp(0.0, anim.length);
+        let x = if *reverse { anim.length - t } else { t };
+        for (widget, curve) in &anim.tracks {
+            if let Some(mut a) = hud.names.get(&format!("{owner}.{widget}")).and_then(|&e| borders.get_mut(e).ok()) {
+                a.set_if_neq(ContentAlpha(curve.eval(x)));
+            }
+        }
+    }
+}
+
+/// XPDisplayWidget's lines fading: each line's Border_0 content by its FadeIn / FadeOut (an empty line stays at its
+/// design alpha, 0).
+fn xp_lines(time: Res<Time>, hud: Res<Hud>, game: Option<Res<crate::match_flow::GameMatch>>, mut borders: Query<&mut ContentAlpha>) {
+    let (Some(xp), Some(game)) = (&hud.xp, game) else { return };
+    let scores = game.score_lines();
+    let shown = &scores[scores.len().saturating_sub(xp.slots)..];
+    let now = time.elapsed_secs();
+    for i in 0..xp.slots {
+        let Some(mut a) = hud.names.get(&format!("XPLine{i}.Border_0")).and_then(|&e| borders.get_mut(e).ok()) else { continue };
+        let Some(score) = (i + shown.len()).checked_sub(xp.slots).and_then(|k| shown.get(k)) else { continue };
+        a.set_if_neq(ContentAlpha(xp.alpha(now - score.2)));
+    }
+}
+
 struct Builder<'a, 'w, 's> {
     commands: &'a mut Commands<'w, 's>,
     assets: &'a AssetServer,
@@ -427,6 +656,8 @@ struct Builder<'a, 'w, 's> {
     scale: f32,
     /// Inside a scale box: its scale (texts are the only thing scaled).
     text_scale: f32,
+    /// Inside borders: their ContentColorAndOpacity's colour, multiplied (it tints everything in them).
+    content: [f32; 4],
     names: &'a mut HashMap<String, Entity>,
 }
 
@@ -471,8 +702,8 @@ impl Builder<'_, '_, '_> {
             self.commands.entity(e).insert(UiTransform { scale: Vec2::new(s("X"), s("Y")), rotation: Rot2::degrees(angle), ..default() });
         }
         match w.kind.as_str() {
-            "Image" => self.brush(e, &p["Brush"], color(&p["ColorAndOpacity"], [1.0; 4])),
-            "Border" => self.brush(e, &p["Background"], color(&p["BrushColor"], [1.0; 4])),
+            "Image" => self.brush(e, &p["Brush"], mul(color(&p["ColorAndOpacity"], [1.0; 4]), self.content)),
+            "Border" => self.brush(e, &p["Background"], mul(color(&p["BrushColor"], [1.0; 4]), self.content)),
             "TextBlock" => {
                 let font = if p["Font"]["TypefaceFontName"].as_str() == Some("Bold") { self.hud.bold.clone() } else { self.hud.regular.clone() };
                 let justify = match p["Justification"].as_str().unwrap_or("") {
@@ -484,7 +715,7 @@ impl Builder<'_, '_, '_> {
                 t.insert((
                     Text::new(w.text()),
                     TextFont { font: font.into(), font_size: FontSize::Px(w.font_px() * self.scale * self.text_scale), ..default() },
-                    TextColor(linear(color(&p["ColorAndOpacity"], [1.0; 4]))),
+                    TextColor(linear(mul(color(&p["ColorAndOpacity"], [1.0; 4]), self.content))),
                     // Text sizes are estimates: overflow the box rather than wrap.
                     TextLayout { justify, linebreak: LineBreak::NoWrap },
                 ));
@@ -511,6 +742,13 @@ impl Builder<'_, '_, '_> {
         let owner = w.class.as_deref().unwrap_or(owner).to_string();
         // A scale box fits its content (ScaleToFit).
         let outer = self.text_scale;
+        let outer_content = self.content;
+        if w.kind == "Border" && p["ContentColorAndOpacity"].is_object() {
+            // Its content's colour tints what's in it; its opacity is played by widget animations (ContentAlpha).
+            let c = color(&p["ContentColorAndOpacity"], [1.0; 4]);
+            self.content = mul(self.content, [c[0], c[1], c[2], 1.0]);
+            self.commands.entity(e).insert(ContentAlpha(c[3]));
+        }
         if w.kind == "ScaleBox" {
             if let Some(c) = w.children.first() {
                 let (dw, dh) = c.desired();
@@ -523,6 +761,7 @@ impl Builder<'_, '_, '_> {
             self.spawn(c, e, r, &owner);
         }
         self.text_scale = outer;
+        self.content = outer_content;
         e
     }
 
@@ -772,13 +1011,37 @@ fn stamina(
 }
 
 /// The match timer (mm:ss left).
-fn timer(hud: Res<Hud>, game: Res<crate::match_flow::GameMatch>, mut texts: Query<&mut Text>) {
+fn timer(
+    time: Res<Time>,
+    hud: Res<Hud>,
+    game: Res<crate::match_flow::GameMatch>,
+    mut texts: Query<&mut Text>,
+    mut playing: ResMut<PlayingAnims>,
+    mut shown: Local<(bool, bool)>,
+) {
     let Some(&e) = hud.names.get("SCCounselorTimerWidget.txtTimer").or_else(|| hud.names.get("SCKillerTimerWidget.txtTimer")) else { return };
     let Ok(mut text) = texts.get_mut(e) else { return };
     let left = game.state.remaining_time.max(0);
     let s = format!("{:02}:{:02}", left / 60, left % 60);
     if text.0 != s {
         text.0 = s;
+    }
+    // SCTimerWidget's tick (FUN_140434db0): the game timer shows (ShowGameTimer: Fade Game Timer In) while the time
+    // left is within TimeToShow, and hides (the animation reversed) outside it; the police timer while their
+    // countdown runs. (Jason's timer widget plays its own FadeIn on ClockBorder's colour: not ported.)
+    if hud.names.contains_key("SCCounselorTimerWidget.GameTimer") {
+        let now = time.elapsed_secs();
+        let remaining = game.state.remaining_time;
+        let within = (0..=hud.time_to_show).contains(&remaining);
+        if within != shown.0 {
+            shown.0 = within;
+            playing.play("SCCounselorTimerWidget", "Fade Game Timer In", now, !within);
+        }
+        let police = game.state.police_time_remaining >= 1;
+        if police != shown.1 {
+            shown.1 = police;
+            playing.play("SCCounselorTimerWidget", "Fade Police Timer In", now, !police);
+        }
     }
     // The police's countdown (PoliceTimerText), while it runs.
     let police = game.state.police_time_remaining;
@@ -837,17 +1100,26 @@ fn jason_hud(
 }
 
 /// The breath widget while she hides: both bars at her breath.
+#[allow(clippy::too_many_arguments)]
 fn breath(
     mut commands: Commands,
+    time: Res<Time>,
     hud: Res<Hud>,
     player: Option<Single<(Option<&Breathing>, Has<Hiding>), With<Player>>>,
     tuning: Option<Res<crate::hiding::BreathTuning>>,
     mut vis: Query<&mut Visibility>,
     bars: Query<&Progress>,
+    mut playing: ResMut<PlayingAnims>,
+    mut was_shown: Local<bool>,
 ) {
     let Some(&root) = hud.names.get("SCBreathWidget") else { return };
     let (breathing, hiding) = player.map_or((None, false), |p| *p);
     let shown = hiding && breathing.is_some();
+    // Its Construct (the game creates it as she hides): TransitionIn.
+    if shown && !*was_shown {
+        playing.play("SCBreathWidget", "TransitionIn", time.elapsed_secs(), false);
+    }
+    *was_shown = shown;
     if let Ok(mut v) = vis.get_mut(root) {
         v.set_if_neq(if shown { Visibility::Inherited } else { Visibility::Hidden });
     }

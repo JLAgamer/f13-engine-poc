@@ -131,6 +131,27 @@ class WidgetExporter(IFileProvider provider, string outDir, Action<UObject> queu
             anims[wa.Name.Replace("_INST", "")] = new JObject { ["Length"] = sp["PlaybackRange"]?["UpperBound"]?["Value"], ["Tracks"] = tracks };
         }
         if (anims.Count > 0) j["Animations"] = anims;
+        // Textures its graphs set (SetBrushFromTexture's FindObject): the package's Texture2D imports, by name.
+        var scriptTextures = new JObject();
+        if (provider.LoadPackage(toFile(path)) is CUE4Parse.UE4.Assets.Package pkg)
+            foreach (var imp in pkg.ImportMap.Where(i => i.ClassName.Text == "Texture2D"))
+            {
+                if (!imp.OuterIndex.IsImport) continue;
+                var outer = pkg.ImportMap[-imp.OuterIndex.Index - 1].ObjectName.Text;
+                try
+                {
+                    if (provider.LoadPackage(toFile(outer)).GetExports().OfType<UTexture2D>().FirstOrDefault() is { } tex)
+                    {
+                        queue(tex);
+                        scriptTextures[imp.ObjectName.Text] = tex.GetPathName().Split('.')[0] + ".png";
+                    }
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine($"texture {outer}: {e.Message}");
+                }
+            }
+        if (scriptTextures.Count > 0) j["Textures"] = scriptTextures;
         File.WriteAllText(Path.Combine(Dir, name + ".json"), j.ToString(Formatting.Indented));
         var n = 1;
         foreach (var p in nested.Distinct()) n += Export(p);

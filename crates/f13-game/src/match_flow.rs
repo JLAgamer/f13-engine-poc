@@ -13,8 +13,9 @@
 //!   - breaking his grab: EscapeJasonGrab;
 //!   - a flare hitting him: SpotJasonFlare;
 //!   - escaping and the match's end: f13-core::game_mode.
-//! - **HUD**: each award shows as its description ("Arm Yourself +10") for a few seconds, as the game's
-//!   ClientDisplayScoreEvent does. The display time is this port's (4 s), not the widget's.
+//! - **HUD**: each award shows as its description with "<exp>" replaced by the XP ("Arm Yourself +10") and its
+//!   category, as the counselor's ClientDisplayScoreEvent (FUN_1403e9070, its message FUN_1403ee250) hands them to the
+//!   HUD's OnShowScoreEvent: XPDisplayWidget's lines (ui.rs). Without the game's HUD, a plain text list for 4 s.
 
 use bevy::prelude::*;
 pub use f13_core::game_mode::MatchState;
@@ -60,8 +61,8 @@ pub struct GameMatch {
     pub score: PlayerScore,
     pub record: CounselorRecord,
     last_health: Option<f32>,
-    /// Score texts on the HUD, with the game time they were scored.
-    popups: Vec<(String, f32)>,
+    /// Score texts on the HUD, with their category and the game time they were scored.
+    popups: Vec<(String, String, f32)>,
 }
 
 impl GameMatch {
@@ -73,8 +74,13 @@ impl GameMatch {
         if let Some(xp) = self.score.award(name, event, scale) {
             let text = event.text(xp);
             info!("match: scored {name}: {text}");
-            self.popups.push((text, now));
+            self.popups.push((text, event.category.clone(), now));
         }
+    }
+
+    /// The score texts shown so far: (text, EScoreEventCategory name, game time).
+    pub fn score_lines(&self) -> &[(String, String, f32)] {
+        &self.popups
     }
 
     fn outcome(&self) -> &'static str {
@@ -273,7 +279,7 @@ fn update_hud(
         clock.0 = clock_text;
     }
     let now = time.elapsed_secs();
-    let shown: Vec<&str> = game.popups.iter().filter(|(_, at)| now - at < POPUP_SECONDS).map(|(t, _)| t.as_str()).collect();
+    let shown: Vec<&str> = game.popups.iter().filter(|(_, _, at)| game_hud.is_none() && now - at < POPUP_SECONDS).map(|(t, _, _)| t.as_str()).collect();
     let popup_text = shown.join("\n");
     if popups.0 != popup_text {
         popups.0 = popup_text;

@@ -872,6 +872,8 @@ static class Mvp
         // Created at runtime: an inventory slot, the breath bar while hiding.
         "/Game/UI/HUD/Counselor/SC_InventoryItem_Widget",
         "/Game/UI/HUD/Counselor/SCBreathWidget",
+        // XPDisplayWidget's lines (AddNewXPLine), with the category icons its SetIconImage sets.
+        "/Game/UI/HUD/XPLineWidget",
         "/Game/UI/Interact/SCInteractMinigame_Widget",
         "/Game/UI/HUD/SC_WiggleMinigame_Widget",
         // Jason's, when he's played.
