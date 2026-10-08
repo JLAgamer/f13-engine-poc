@@ -173,12 +173,13 @@ Mechanics: Jason side
       brightness eased 1.2 -> 0.8), Sense's counselor highlight (PP_Jason_Sense_Counselor_01_MASKED through a
       custom-stencil mask camera: her meshes through walls; sense_view.rs) and her cabin's (PP_Jason_Sense_Cabin_01:
       Cabin_Base's SetSenseEffects lights its doors and windows, stencil 1). The AOE light (PP_Killer_AOE_Light) is
-      checked and does nothing for J2 (AOELightRadius 0: the shader returns the scene)
-- [ ] Shift, Morph, Stalk, remaining: the dissolve; the counselor's SenseEffect emitter (particles); (Sense's
-      hiding spot SetSenseEffects, Outhouse / Tent, turns on custom depth at stencil 0, which neither Sense material
-      shows: nothing to draw) the level's bounded post-process volume (its Gaussian DOF and fringe 1.5 apply only
-      inside its box; tonemap.rs reads the unbound one only) (Morph's
+      checked and does nothing for J2 (AOELightRadius 0: the shader returns the scene); the stun's colour fringe
+      and the stun's and Sense's Gaussian depth of field (dof.rs). Sense's hiding spot SetSenseEffects (Outhouse /
+      Tent) turns on custom depth at stencil 0, which neither Sense material shows: nothing to draw
+- [ ] Shift, Morph, Stalk, remaining: the dissolve; the counselor's SenseEffect emitter (particles) (Morph's
       excluded areas: the map's Boundary image has no texture in this level's widget, so none refuse a click)
+- [ ] The level's bounded post-process volume (its Gaussian DOF and fringe 1.5 inside its box; tonemap.rs reads
+      only the unbound one)
 - [x] Throwing knives (J2's two, the knife's damage and cooldown, the throw montage and its ThrowKnife notify,
   SCJasonAIProperties' 5..25 m; placeholder knife speed) and Jason's traps (J2's seven KillerTraps, set in doorways
   he opens; they catch counselors, not him; his trap's own mesh isn't exported)
