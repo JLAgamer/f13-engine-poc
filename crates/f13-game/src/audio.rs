@@ -21,9 +21,9 @@
 //! at once, or fades the playing one out over its FadeOutTime and fades in over FadeInTime; a finished track is
 //! followed by CounselorIdle after MinIdleMusicTime..MaxIdleMusicTime. MatchStart plays when the match starts; the
 //! TwoMinuteWarningMusic at two minutes left; DeathMusic when she dies, SurviveMusic when she escapes. Stingers
-//! ([`MusicStinger`]: a STINGER entry's cue over the music): JasonTeleportedNearStinger when he Morphs in within his
-//! near music's reach (NearCounselorMusicDistance; PLACEHOLDER rule). JasonAbilityUnlockWarning when he unlocks an
-//! ability. Not yet: the other stingers' triggers (OpenDoorStinger, SeeCounselorDeadBody), scary sounds.
+//! ([`MusicStinger`]: a STINGER entry's cue over the music): JasonAbilityUnlockWarning when he unlocks an ability.
+//! MusicCounselor's OpenDoorStinger and JasonTeleportedNearStinger are never played (no code or other package names
+//! them); not yet: SeeCounselorDeadBody's trigger, scary sounds.
 //!
 //! Delay nodes start their voices late (started paused). Continuous modulators and param / distance cross-fades follow
 //! the sound's parameters (`CueParams` on its actor, as AudioComponent::SetFloatParameter sets them) while it plays. PLACEHOLDERS: the listener is the camera; actor sounds

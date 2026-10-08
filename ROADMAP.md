@@ -343,7 +343,7 @@ Setup
       for a decision on that
 
 Decomp audit (nothing guessed: every rule read from the decomp or the game's data)
-- [ ] Check each PLACEHOLDER (15 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
+- [ ] Check each PLACEHOLDER (13 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
       them, in jason.rs, are the AI's own choices and stay) and each "guess"/"assumed"/"not read" note (about 10)
       against the decomp and the export (Ghidra, MODLOG, f13-export `debug-json` / `pseudo` / `cdo` / `grep`); port
       what the game does, or record in MODLOG why it can't be found. Most are in jason.rs, hiding.rs, audio.rs,
@@ -360,7 +360,11 @@ Decomp audit (nothing guessed: every rule read from the decomp or the game's dat
       (Caps Lock: X); the XP popups' 4 s text (the XP line widgets' fades); the counselor's match timer (always shown:
       the game shows it only at 0 s); a window's inside (reversed: she climbed from the far side's spot); the special
       moves' slide (no sweep: SCSpecialMove_SoloMontage's sweep and MoveThreshold); the beds' trace channel (traced as
-      WorldDynamic: Visibility); help texts and Vanessa's SprintBoost (never shown / never usable in the game)
+      WorldDynamic: Visibility); help texts and Vanessa's SprintBoost (never shown / never usable in the game); the
+      Morph stinger (never played: removed) and the teleport static's reach (PlayDistortionEffect's
+      MaxTeleportViewDistance rule, also on Stalk); bTakeCameraControl's default (true: drawers' and windows'
+      cameras); the counselor's heavy swing (held in combat stance, not W); bIsStruggling (never set: Jason's grab
+      layer is always its Idle)
 - [x] Audit of hiding.rs, doors.rs, police.rs, items.rs, placed_kills.rs, character.rs, senses.rs, ui.rs, vehicle.rs
       (MODLOG "Decomp audit (worktree session)"): hiding voice lines and spot doors, the door's opening side, the
       police volume's obstruction, stun spot search and phone box rule, melee sweeps, guns, the firecracker throw,

@@ -91,7 +91,7 @@ const HEAVY_ATTACK: &str = "combat_stand_2h_attack_heavy";
 const GRAB_STARTUP: &str = "normal_grab_startup";
 const GRAB_ENTER: &str = "normal_grab_enter_1";
 /// Jason_Base's ShiftAudioCue (the Shift's rush, on him) and TeleportCueCounselorHears (the static a counselor near his
-/// Morph hears; PLACEHOLDER: near = his near music's reach, as the stinger).
+/// Morph or Stalk hears: [`distortion`]).
 const SHIFT_CUE: &str = "ShiftTunnelCue";
 const TELEPORT_HEARD_CUE: &str = "VHS_SFXCue";
 
@@ -169,8 +169,6 @@ const GRAB_HOLD_M: f32 = 0.65;
 const HOLD_BEFORE_KILL: f32 = 4.0;
 /// Where a hold pulled from a car starts (past the grab's enter takes: the car take ends in the hold).
 const HOLD_AFTER_CAR_GRAB: f32 = 2.0;
-/// NearCounselorMusicDistance + its max-volume distance (m): how near a Morph must land for her stinger.
-const NEAR_MUSIC_M: f32 = 43.0;
 /// SCDriveableVehicle constructor: MinUseCarDoorSpeed (cm/s).
 const MIN_USE_CAR_DOOR_SPEED: f32 = 50.0;
 /// How near the driver door he pulls her out (m; the special move moves him onto its spot).
@@ -269,6 +267,7 @@ impl Plugin for JasonPlugin {
             .add_systems(Startup, (spawn_jason, load_knife_look))
             .add_systems(FixedUpdate, (update_jason, recover_counselor, fly_knives, pick_up_knives))
             .add_observer(spawn_knife)
+            .add_observer(distortion)
             .add_observer(car_slam)
             .add_systems(Update, (tag_jason_parts, animate_jason, grab_layer));
     }
@@ -320,6 +319,8 @@ pub struct KillerTuning {
     pub underwater_full_speed_depth: f32,
     pub underwater_kill_depth: f32,
     pub teleport_screen_time: f32,
+    /// MaxTeleportViewDistance (m): how near (flat) the counselor hears his distortion.
+    pub max_teleport_view_m: f32,
 }
 
 impl KillerTuning {
@@ -362,6 +363,7 @@ impl KillerTuning {
             underwater_full_speed_depth: v("UnderwaterFullSpeedDepth", 275.0),
             underwater_kill_depth: v("UnderwaterKillDepth", 290.0),
             teleport_screen_time: v("TeleportScreenTime", 1.0),
+            max_teleport_view_m: v("MaxTeleportViewDistance", 2000.0) / CM,
         }
     }
 }
@@ -837,6 +839,33 @@ fn segment_distance(p0: Vec3, p1: Vec3, q0: Vec3, q1: Vec3) -> f32 {
 pub struct HitJason {
     pub stun: Option<Stun>,
     pub from: Vec3,
+}
+
+/// SCKillerCharacter::PlayDistortionEffect (0x1403ffd50), from OnRep_Teleport (a Morph starting and ending) and
+/// OnRep_Stalk (Stalk starting): where he is and, Morphing, where he's going (+0x1480, cleared as he arrives).
+#[derive(Event, Clone, Copy, Debug)]
+pub struct Distortion {
+    pub at: Vec3,
+    pub dest: Option<Vec3>,
+}
+
+/// PlayDistortionEffect on the local counselor: within MaxTeleportViewDistance (flat) of him or of his Morph's
+/// destination, or with him in her view (KillerInViewPtr), she hears TeleportCueCounselorHears (PlaySound2D) and
+/// TeleportCounselorHearsMix is pushed (sound mixes aren't ported), with TeleportScreenEffectInst (not ported). Not
+/// when the local player is Jason.
+fn distortion(
+    ev: On<Distortion>,
+    mut commands: Commands,
+    tuning: Option<Res<KillerTuning>>,
+    play: Option<Res<crate::jason_player::PlayJason>>,
+    her: Query<(&Transform, Option<&crate::fear_events::Pushed>), With<Player>>,
+) {
+    let (Some(t), None, Ok((xf, pushed))) = (tuning, play, her.single()) else { return };
+    let flat = |a: Vec3| Vec2::new(a.x - xf.translation.x, a.z - xf.translation.z).length();
+    let near = flat(ev.at) <= t.max_teleport_view_m || ev.dest.is_some_and(|d| flat(d) <= t.max_teleport_view_m);
+    if near || pushed.is_some_and(|p| p.spotted) {
+        commands.trigger(crate::audio::PlaySound { cue: TELEPORT_HEARD_CUE.into(), at: None });
+    }
 }
 
 /// The counselor's wiggle axis (A -1, D +1: GLB_Wiggle) and her grab struggle's minigame (f13-core::stun).
@@ -1404,6 +1433,7 @@ pub(crate) fn update_jason(
                             }
                             info!("Jason: Morph");
                             j.state = JasonState::Morphing { t: 0.0, to };
+                            commands.trigger(Distortion { at: xf.translation, dest: Some(to.translation) });
                             j.velocity = Vec2::ZERO;
                             continue;
                         }
@@ -1414,6 +1444,7 @@ pub(crate) fn update_jason(
                         }
                         info!("Jason: Stalk");
                         j.stalk = Some(Stalk::start(t.stalk_active_time));
+                        commands.trigger(Distortion { at: xf.translation, dest: None });
                     }
                     // GLB_Combat_PC: in or out of combat stance.
                     if p.combat {
@@ -1641,6 +1672,7 @@ pub(crate) fn update_jason(
                         info!("Jason: Morph ({gdist:.0} m to his goal; to a point {:.0} m from it)", Vec2::new(to.translation.x - goal.x, to.translation.z - goal.z).length());
                         j.state = JasonState::Morphing { t: 0.0, to };
                         j.velocity = Vec2::ZERO;
+                        commands.trigger(Distortion { at: xf.translation, dest: Some(to.translation) });
                         continue;
                     }
                 }
@@ -1652,6 +1684,7 @@ pub(crate) fn update_jason(
                     }
                     info!("Jason: Stalk ({gdist:.0} m to his goal)");
                     j.stalk = Some(Stalk::start(t.stalk_active_time));
+                    commands.trigger(Distortion { at: xf.translation, dest: None });
                 }
                 // A knife at her when she's in throwing range.
                 if sees && !driving && alive && j.knives > 0 && j.knife_cooldown <= 0.0 && (KNIFE_RANGE_M.0..=KNIFE_RANGE_M.1).contains(&dist) {
@@ -1873,14 +1906,8 @@ pub(crate) fn update_jason(
                 if at >= t.teleport_screen_time {
                     info!("Jason: morphed to ({:.0}, {:.0})", dest.translation.x, dest.translation.z);
                     *xf = dest;
-                    // Arriving within his near music's reach of her: her stinger.
-                    if dest.translation.distance(pxf.translation) < NEAR_MUSIC_M {
-                        commands.trigger(crate::audio::MusicStinger("JasonTeleportedNearStinger"));
-                        // And what counselors hear of it (TeleportCueCounselorHears), unless he's the one played.
-                        if player_input.is_none() {
-                            commands.trigger(crate::audio::PlaySound { cue: TELEPORT_HEARD_CUE.into(), at: None });
-                        }
-                    }
+                    // OnRep_Teleport as the effect ends: the distortion where he arrived.
+                    commands.trigger(Distortion { at: dest.translation, dest: None });
                     j.path.clear();
                     j.progress = (dest.translation, 0.0);
                     j.stall = 0.0;
