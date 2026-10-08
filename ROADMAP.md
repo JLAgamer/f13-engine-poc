@@ -133,12 +133,12 @@ Mechanics: Jason side
 - [x] His grab kill choices while he holds her (KillerGrabWidget in place of his abilities' diamond): each slot's
       kill icon (ContextKillHUDIcon), red when it fits (IsGrabKillAvailable: its KillBounds box clear of the level
       where he stands, DoesKillVolumeFit), grey when it doesn't; a kill key on a kill that doesn't fit does nothing
-      (PLACEHOLDER: bGrabKillsActive's timer, in an Arxan-guarded lambda, taken as on from the hold's start)
+      (none until his grab's enter has played out: FinishGrabCounselor's bGrabKillsActive timer)
 - [x] His block (CMBT_KLR_Block: right mouse in combat stance, where KLR_Grab is refused): AM_Jason_Combat_Block
       full body standing and over his walk on the move (CombatUpperBody: spine_01, target_jnt, 0.8); no swing while
       blocking; a blocked weapon hit doesn't stun him and plays a BlockingHitMontage up to its OnEndBlockReaction
-      (flares, shotguns, firecrackers, traps and the police can't be blocked: their bCanBeBlocked). PLACEHOLDER:
-      leaving combat stance ends the block
+      (flares, shotguns, firecrackers, traps and the police can't be blocked: their bCanBeBlocked); leaving combat
+      stance ends it
 - [x] His door moves' cameras (interaction_camera.rs for the played character only): KillerOpenDoorInside / Outside
       (1 s in, 0.5 s back) and BreakDownFromInside / Outside (at once, 0.25 s back); the walls' and a raged burst's
       handlers have none
@@ -373,7 +373,7 @@ Setup
       for a decision on that
 
 Decomp audit (nothing guessed: every rule read from the decomp or the game's data)
-- [ ] Check each PLACEHOLDER (11 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
+- [ ] Check each PLACEHOLDER (9 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
       them, in jason.rs, are the AI's own choices and stay) and each "guess"/"assumed"/"not read" note (about 10)
       against the decomp and the export (Ghidra, MODLOG, f13-export `debug-json` / `pseudo` / `cdo` / `grep`); port
       what the game does, or record in MODLOG why it can't be found. Most are in jason.rs, hiding.rs, audio.rs,

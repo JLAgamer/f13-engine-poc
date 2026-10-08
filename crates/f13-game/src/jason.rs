@@ -153,8 +153,10 @@ pub struct GrabKillInfo {
 /// and the slot's kill's KillBounds fitting where he stands (SCDynamicContextKill::DoesKillVolumeFit 0x140379c40: an
 /// overlap on WorldDynamic of the box, the kill attached at his feet facing his way (ReattachKill 0x140396600),
 /// blocked by anything but him, her and the kill). A kill key on a slot that isn't (FUN_1403ffa80) does nothing.
-/// PLACEHOLDER: bGrabKillsActive is set by an Arxan-guarded lambda (0x1403eaf64) not read: taken as from the hold's
-/// start; IsGrabKillAvailable's other conditions (her vt+0xe90; slot 1's controller flag 0x3a8) aren't ported.
+/// bGrabKillsActive: FinishGrabCounselor (0x1403eb560) sets it once his grab montage's enter has played out
+/// (UpdateGrabState 0x140324b40: the rest of its section and the GrabSuccess section; a timer for that long, its
+/// lambda the guarded write at 0x1403eaf64), so none is available during the grab's enter take. Not ported:
+/// IsGrabKillAvailable's other conditions (her vt+0xe90; slot 1's controller flag 0x3a8).
 #[derive(Resource, Default, Debug, PartialEq)]
 pub struct GrabKillsAvailable(pub [bool; 4]);
 
@@ -790,6 +792,7 @@ fn load_knife_look(mut commands: Commands, export: Res<crate::ExportRoot>, asset
 #[allow(clippy::type_complexity)]
 fn grab_kills_available(
     info: Option<Res<GrabKillInfo>>,
+    killer: Option<Res<KillerCharacter>>,
     mut available: ResMut<GrabKillsAvailable>,
     jasons: Query<(&Jason, &Transform)>,
     (collision, dynamic, no_world_dynamic, not_world_dynamic): (
@@ -799,7 +802,9 @@ fn grab_kills_available(
         Option<Res<crate::collision::NotWorldDynamic>>,
     ),
 ) {
-    let Some((_, xf)) = jasons.iter().find(|(j, _)| j.holding()) else {
+    // bGrabKillsActive: his grab's enter played out.
+    let active = |j: &Jason| matches!(j.state, JasonState::Holding { t } if t >= killer.as_ref().and_then(|k| k.length(GRAB_ENTER)).unwrap_or(0.0));
+    let Some((_, xf)) = jasons.iter().find(|(j, _)| j.holding() && active(j)) else {
         available.set_if_neq(GrabKillsAvailable([false; 4]));
         return;
     };
@@ -1623,7 +1628,8 @@ pub(crate) fn update_jason(
                     }
                     // CMBT_KLR_Block (right mouse in combat stance): OnStartBlock while CanBlock (FUN_1402ded00: not
                     // attacking, stunned, interacting or in a special move: here, hunting), OnEndBlock as it's let go.
-                    // PLACEHOLDER: leaving combat stance ends it (the combat input's release isn't read then).
+                    // Leaving combat stance ends it (SetCombatStance 0x1402e94e0 -> vt+0xea8 0x1402e6e20: bIsBlocking
+                    // cleared, OnRep_Block).
                     let block = j.combat && i.block_held;
                     if block != j.blocking {
                         j.blocking = block;
