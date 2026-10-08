@@ -958,8 +958,10 @@ fn minimap(
 
 /// Something the minimap shows (its class's SCMinimapIconComponent): the icon widget counselors see (DefaultIcon)
 /// and Jason's (KillerIcon); the minimap picks one by whose it is (its icon getter), none when that one is unset.
-/// Items' icons start hidden (SCItem's constructor turns its MinimapIcon off) and what shows them isn't read, so
-/// items get none; nor do icons not visible from the start (bStartVisible).
+/// Items get none: SCItem's constructor, its BeginPlay (0x140373ee0) and its pickup (vtable slot 0x640, 0x1403901f0)
+/// all SetVisibility(false) its MinimapIcon, and only SCImposterOutfit::OnShowIcon turns one on (no item Blueprint
+/// does); the minimap shows only visible icon components (UpdateObjectLocations). Nor do icons not visible from the
+/// start (bStartVisible).
 #[derive(Component, Clone, Debug)]
 pub struct MapIcon {
     pub counselor: Option<String>,

@@ -306,7 +306,8 @@ Presentation
       (dropped where it lay, or left in its drawer, TakeClose), the map kept apart (special items); the HUD's active
       pocket; the drop montages (the item goes at their DropLargeItem / DropSmallItem notify). The uses-left count never
       shows (it needs NumUses - TimesUsed > 1; SCItem's constructor sets NumUses 1 and nothing overrides it)
-- [ ] HUD, remaining: the items' minimap icons (they start hidden; what shows them isn't read)
+- [x] The items' minimap icons: none, as in the game (their MinimapIcon is hidden at construction, BeginPlay and
+      pickup; only the imposter outfit's OnShowIcon shows one)
 - [x] Night lighting, fog, flashlight (lighting.rs): the map's point/spot lights (inverse-square lumens, or Unreal's
   falloff-exponent lights matched at a third of their radius; colour temperature; draw-distance fades), the moon and
   height fog of the clear-weather level (CLsm_RainOff), the post-process volume's fixed exposure and ambient cubemap,
