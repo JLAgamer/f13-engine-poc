@@ -49,8 +49,9 @@ fn fade(
             for m in children.iter_descendants(rig_entity) {
                 let Ok((name, handle)) = meshes.get(m) else { continue };
                 let Some(cutoff) = index.fade_cutoff(&name.0, alpha_delta) else { continue };
-                if let Some(mut mat) = materials.get_mut(&handle.0) {
-                    if mat.alpha_mode != AlphaMode::Mask(cutoff) {
+                // Read first: taking it mutably marks it changed (re-prepared) even when nothing is written.
+                if materials.get(&handle.0).is_some_and(|m| m.alpha_mode != AlphaMode::Mask(cutoff)) {
+                    if let Some(mut mat) = materials.get_mut(&handle.0) {
                         mat.alpha_mode = AlphaMode::Mask(cutoff);
                     }
                 }
