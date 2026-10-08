@@ -4,8 +4,8 @@
 //! build's TonemapperConfBitmaskPC (0x142d55530) with what the volume needs (bloom, vignette at its 0.4 default, grain
 //! quantization; no grain, colour fringe or sharpening at their defaults).
 //!
-//! Per pixel (shaders/tonemap.wgsl): scene colour x ColorScale0 (SceneColorTint) [+ bloom x ColorScale1, not yet:
-//! bloom isn't ported]; exposure (Bevy's camera exposure, 1 / 1.2 as the volume's fixed auto exposure gives); the
+//! Per pixel (shaders/tonemap.wgsl): scene colour x ColorScale0 (SceneColorTint) + bloom (bloom.rs) x ColorScale1
+//! (BloomIntensity); exposure (Bevy's camera exposure, 1 / 1.2 as the volume's fixed auto exposure gives); the
 //! vignette (1 / (1 + |v|²)², v the screen position scaled to a circle x VignetteIntensity); the log encoding into the
 //! LUT; x 1.05; the 1/256 grain quantization dither. The result is display-encoded sRGB, decoded here for Bevy's sRGB
 //! output.
@@ -52,6 +52,7 @@ pub struct GameTonemap {
     /// SceneColorTint.
     pub color_scale0: Vec3,
     pub vignette_intensity: f32,
+    pub bloom: crate::bloom::BloomSettings,
 }
 
 #[derive(Component, ShaderType, Clone)]
@@ -62,6 +63,8 @@ pub struct TonemapUniform {
     vignette: Vec4,
     /// GrainRandomFull (xy): this frame's offset of the dither's seed.
     grain: Vec4,
+    /// ColorScale1: BloomIntensity (white x it).
+    color_scale1: Vec4,
 }
 
 impl SyncComponent for GameTonemap {
@@ -80,7 +83,8 @@ impl ExtractComponent for GameTonemap {
         // here is the elapsed frames Bevy counts.
         let frame = FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 1023;
         let grain = Vec4::new(halton(frame, 2), halton(frame, 3), 0.0, 0.0);
-        Some((t.clone(), TonemapUniform { color_scale0: t.color_scale0.extend(0.0), vignette: Vec4::new(t.vignette_intensity, aspect, 0.0, 0.0), grain }))
+        let color_scale1 = Vec4::new(t.bloom.intensity, t.bloom.intensity, t.bloom.intensity, 0.0);
+        Some((t.clone(), TonemapUniform { color_scale0: t.color_scale0.extend(0.0), vignette: Vec4::new(t.vignette_intensity, aspect, 0.0, 0.0), grain, color_scale1 }))
     }
 }
 
@@ -127,6 +131,27 @@ impl Volume<'_> {
         let Some(v) = self.set(key) else { return Vec3::ONE };
         let c = |k: &str| v.get(k).and_then(Value::as_f64).unwrap_or(1.0) as f32;
         Vec3::new(c("R"), c("G"), c("B"))
+    }
+
+    fn bloom(&self) -> crate::bloom::BloomSettings {
+        let d = crate::bloom::BloomSettings::default();
+        let tint = |i: usize| {
+            let key = format!("Bloom{}Tint", i + 1);
+            match self.set(&key) {
+                Some(v) => {
+                    let c = |k: &str, d: f32| v.get(k).and_then(Value::as_f64).map_or(d, |x| x as f32);
+                    Vec4::new(c("R", d.tints[i].x), c("G", d.tints[i].y), c("B", d.tints[i].z), c("A", d.tints[i].w))
+                }
+                None => d.tints[i],
+            }
+        };
+        crate::bloom::BloomSettings {
+            intensity: self.f("BloomIntensity", d.intensity),
+            threshold: self.f("BloomThreshold", d.threshold),
+            size_scale: self.f("BloomSizeScale", d.size_scale),
+            sizes: std::array::from_fn(|i| self.f(&format!("Bloom{}Size", i + 1), d.sizes[i])),
+            tints: std::array::from_fn(tint),
+        }
     }
 
     fn correction(&self, range: &str) -> Correction {
@@ -233,7 +258,7 @@ fn setup(
             params.white_temp,
             started.elapsed().as_secs_f32() * 1000.0
         );
-        *built = Some(GameTonemap { lut: images.add(image), color_scale0: v.color("SceneColorTint"), vignette_intensity: v.f("VignetteIntensity", 0.4) });
+        *built = Some(GameTonemap { lut: images.add(image), color_scale0: v.color("SceneColorTint"), vignette_intensity: v.f("VignetteIntensity", 0.4), bloom: v.bloom() });
     }
     let Some(t) = built.as_ref() else { return };
     for e in &cameras {
@@ -242,7 +267,7 @@ fn setup(
 }
 
 #[derive(Resource)]
-struct TonemapPipeline {
+pub(crate) struct TonemapPipeline {
     layout: BindGroupLayoutDescriptor,
     sampler: Sampler,
     lut_sampler: Sampler,
@@ -261,6 +286,7 @@ fn init_pipeline(mut commands: Commands, device: Res<RenderDevice>, fullscreen_s
                 texture_3d(TextureSampleType::Float { filterable: true }),
                 sampler(SamplerBindingType::Filtering),
                 uniform_buffer::<TonemapUniform>(true),
+                texture_2d(TextureSampleType::Float { filterable: true }),
             ),
         ),
     );
@@ -284,7 +310,7 @@ fn init_pipeline(mut commands: Commands, device: Res<RenderDevice>, fullscreen_s
 }
 
 #[derive(Component)]
-struct TonemapPipelineId(CachedRenderPipelineId);
+pub(crate) struct TonemapPipelineId(CachedRenderPipelineId);
 
 impl SpecializedRenderPipeline for TonemapPipeline {
     type Key = TextureFormat;
@@ -317,21 +343,21 @@ fn prepare_pipelines(
     }
 }
 
-fn game_tonemap(
-    view: ViewQuery<(&ViewTarget, &GameTonemap, &TonemapPipelineId, &DynamicUniformIndex<TonemapUniform>)>,
+pub(crate) fn game_tonemap(
+    view: ViewQuery<(&ViewTarget, &GameTonemap, &TonemapPipelineId, &DynamicUniformIndex<TonemapUniform>, &crate::bloom::BloomTextures)>,
     pipeline: Res<TonemapPipeline>,
     cache: Res<PipelineCache>,
     uniforms: Res<ComponentUniforms<TonemapUniform>>,
     images: Res<RenderAssets<GpuImage>>,
     mut ctx: RenderContext,
 ) {
-    let (target, settings, id, index) = view.into_inner();
+    let (target, settings, id, index, bloom) = view.into_inner();
     let (Some(render_pipeline), Some(lut), Some(binding)) = (cache.get_render_pipeline(id.0), images.get(&settings.lut), uniforms.binding()) else { return };
     let post = target.post_process_write();
     let bind_group = ctx.render_device().create_bind_group(
         None,
         &cache.get_bind_group_layout(&pipeline.layout),
-        &BindGroupEntries::sequential((post.source, &pipeline.sampler, &lut.texture_view, &pipeline.lut_sampler, binding.clone())),
+        &BindGroupEntries::sequential((post.source, &pipeline.sampler, &lut.texture_view, &pipeline.lut_sampler, binding.clone(), bloom.result())),
     );
     let mut pass = ctx.command_encoder().begin_render_pass(&RenderPassDescriptor {
         label: Some("game_tonemap"),

@@ -18,6 +18,7 @@
 //!   Default: play as Vanessa (see player.rs for controls). --fly: free camera instead.   (screenshot: wait for loading, save one frame, exit)
 
 mod audio;
+mod bloom;
 mod bot;
 mod character;
 mod collision;
@@ -461,7 +462,7 @@ fn main() {
         )
         .add_plugins((FreeCameraPlugin, bevy::diagnostic::FrameTimeDiagnosticsPlugin::default()))
         .insert_resource(Level { layouts, grass: args.grass, foliage: args.foliage, aerial: args.aerial, fly: args.fly || args.aerial, camera: args.camera, scenes: vec![] })
-        .add_plugins((materials::MaterialsPlugin { export: args.export.clone() }, mipmaps::MipmapsPlugin, tonemap::TonemapPlugin))
+        .add_plugins((materials::MaterialsPlugin { export: args.export.clone() }, mipmaps::MipmapsPlugin, tonemap::TonemapPlugin, bloom::BloomPlugin))
         .insert_resource(ExportRoot(args.export.clone()))
         .add_plugins(props::PropsPlugin { seed, near_car: args.near_car && !(args.fly || args.aerial) })
         .add_plugins(lighting::LightingPlugin { flashlight: args.flashlight, unlit: args.unlit })
