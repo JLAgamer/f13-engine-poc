@@ -72,6 +72,9 @@ pub enum Goal {
     Police,
     /// Wait at a placed kill for Jason: he should grab her and use it.
     PlacedKill,
+    /// Swim out in the lake where it's deep enough for his drowning kill: he should follow under the water and drown
+    /// her.
+    Drown,
 }
 
 pub struct BotPlugin(pub Goal);
@@ -282,7 +285,7 @@ fn run_bot(
         Query<(Entity, &crate::power::FuseBox, &Transform), (Without<Player>, Without<Vehicle>)>,
         Option<Res<crate::power::PowerGrids>>,
     ),
-    (collision, dynamic, (mut phone_boxes, mut phones, arrived, police_cars, jason_entities, placed_kills)): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<Res<crate::police::PoliceArrived>>, Query<&Transform, (With<crate::police::PoliceCar>, Without<Player>, Without<Vehicle>)>, Query<Entity, With<crate::jason::Jason>>, Query<(Entity, &crate::placed_kills::PlacedKill)>)),
+    (collision, dynamic, (mut phone_boxes, mut phones, arrived, police_cars, jason_entities, placed_kills), water): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<Res<crate::police::PoliceArrived>>, Query<&Transform, (With<crate::police::PoliceCar>, Without<Player>, Without<Vehicle>)>, Query<Entity, With<crate::jason::Jason>>, Query<(Entity, &crate::placed_kills::PlacedKill)>), Option<Res<crate::water::Water>>),
 ) {
     let world = collision.with(&dynamic);
     let dt = time.delta_secs();
@@ -296,7 +299,7 @@ fn run_bot(
     for k in [KeyCode::Space, KeyCode::KeyW, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::KeyC, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD] {
         keys.release(k);
     }
-    let with_jason = matches!(bot.goal, Goal::PlacedKill | Goal::CarGrab | Goal::Jason | Goal::Fight | Goal::Hide | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities | Goal::Block);
+    let with_jason = matches!(bot.goal, Goal::Drown | Goal::PlacedKill | Goal::CarGrab | Goal::Jason | Goal::Fight | Goal::Hide | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities | Goal::Block);
     let limit = if with_jason { 600.0 } else { 240.0 };
     if bot.total > limit && bot.step != Step::Done {
         error!("bot: gave up at {:?}", bot.step);
@@ -438,6 +441,46 @@ fn run_bot(
                 for (mut j, _) in &mut jasons {
                     j.skip_morph_grace();
                 }
+            }
+            if bot.goal == Goal::Drown {
+                // Lake water 3.0 to 3.8 m deep (deep enough for his kill, the bottom within the 3.5 m of its trace
+                // under her), the spot nearest Jason.
+                let Some((_, jxf)) = jasons.iter().next() else {
+                    error!("bot: no Jason");
+                    bot.step = Step::Done;
+                    return;
+                };
+                let jat = jxf.translation;
+                let mut best: Option<(f32, Vec3)> = None;
+                for (lo, hi) in water.as_ref().map(|w| w.boxes.clone()).unwrap_or_default() {
+                    let mut x = lo.x;
+                    while x < hi.x {
+                        let mut z = lo.z;
+                        while z < hi.z {
+                            if let Some((bottom, _)) = f13_core::collision::surface_below(&world, x, z, hi.y, hi.y - 12.0) {
+                                let depth = hi.y - bottom;
+                                let d = Vec2::new(x - jat.x, z - jat.z).length();
+                                // Open water: nothing over it (no pier).
+                                let open = f13_core::collision::segment_hit(&world, Vec3::new(x, hi.y, z), Vec3::new(x, hi.y + 10.0, z), 1.0).is_none();
+                                if (3.0..=3.8).contains(&depth) && open && best.is_none_or(|b| d < b.0) {
+                                    best = Some((d, Vec3::new(x, hi.y - 1.2, z)));
+                                }
+                            }
+                            z += 2.0;
+                        }
+                        x += 2.0;
+                    }
+                }
+                let Some((d, at)) = best else {
+                    error!("bot: no lake water deep enough");
+                    bot.step = Step::Done;
+                    return;
+                };
+                place(pxf, at);
+                info!("bot: swimming at ({:.1}, {:.1}, {:.1}), Jason {d:.0} m away", at.x, at.y, at.z);
+                bot.step = Step::AwaitJason;
+                bot.timer = 0.0;
+                return;
             }
             if bot.goal == Goal::PlacedKill {
                 // The placed kill nearest Jason: she stands just in front of it.
@@ -1209,6 +1252,25 @@ fn run_bot(
         }
         Step::AwaitJason => {
             let Some((j, jxf)) = jasons.iter().next() else { return };
+            if bot.goal == Goal::Drown {
+                // He hears her where she swims.
+                if let Some(mut k) = knowledge.iter_mut().next() {
+                    if !k.sees {
+                        k.last_known = Some((pxf.translation, time.elapsed_secs(), crate::senses::Clue::Heard));
+                    }
+                }
+                if matches!(j.state, crate::jason::JasonState::Killing { .. }) && j.kill_move.2 == "Underwater Grab" && !bot.jason_shots.contains(&"drown") {
+                    bot.jason_shots.push("drown");
+                    info!("bot: Jason is drowning her");
+                }
+                if let crate::jason::JasonState::Killing { t } = j.state {
+                    if t > 1.5 && bot.jason_shots.contains(&"drown") && !bot.jason_shots.contains(&"drown shot") {
+                        bot.jason_shots.push("drown shot");
+                        let path = std::env::temp_dir().join("f13-bot-drown.png");
+                        commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+                    }
+                }
+            }
             if bot.goal == Goal::PlacedKill {
                 // He hears her where she waits.
                 if let Some(mut k) = knowledge.iter_mut().next() {
@@ -1525,6 +1587,7 @@ fn run_bot(
                     Goal::Fight => p.counselor.alive() && bot.jason_shots.contains(&"stun"),
                     Goal::CarGrab => !p.counselor.alive() && bot.jason_shots.contains(&"pulled"),
                     Goal::PlacedKill => !p.counselor.alive() && bot.jason_shots.contains(&"placed"),
+                    Goal::Drown => !p.counselor.alive() && bot.jason_shots.contains(&"drown"),
                     Goal::Power => bot.fixtures[0]
                         .and_then(|e| fuse_boxes.get(e).ok())
                         .is_some_and(|(_, f, _)| !f.destroyed && f.grid.is_some_and(|g| grids.as_ref().is_some_and(|p| p.on(g)))),
@@ -1573,7 +1636,7 @@ fn run_bot(
                     Goal::Police => &[&["GridPartRepaired"], &["CallPolice"], &["Escape"]],
                     Goal::Fight => &[&["StunJason", "StunJasonShotgun", "StunJasonFlare", "FirecrackerJasonStun", "EscapeJasonGrab", "Trapper"]],
                     // Her death ends the match.
-                    Goal::Jason | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities | Goal::Block | Goal::CarGrab | Goal::PlacedKill => &[&["CompletedMatch"]],
+                    Goal::Jason | Goal::HideSeen | Goal::LockedIn { .. } | Goal::Abilities | Goal::Block | Goal::CarGrab | Goal::PlacedKill | Goal::Drown => &[&["CompletedMatch"]],
                     _ => &[],
                 };
                 let mut unscored = Vec::new();

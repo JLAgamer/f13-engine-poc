@@ -1229,7 +1229,7 @@ fn update_prompt(
     (windows, barricades): (Query<&Window>, Query<&Barricade>),
     player: Single<(&Inventory, Has<Driving>, &Transform, Option<&UsingItem>, &Player, Has<crate::jason::Held>, Option<&crate::hiding::Hiding>)>,
     items: Query<&Item>,
-    (vehicles, phone_boxes, cabinets): (Query<&Vehicle>, Query<&crate::police::PhoneBox>, Query<&Cabinet>),
+    (vehicles, phone_boxes, cabinets, jasons): (Query<&Vehicle>, Query<&crate::police::PhoneBox>, Query<&Cabinet>, Query<&crate::jason::Jason>),
     mut text: Single<&mut Text, With<PromptText>>,
 ) {
     let (inv, driving, _, using, p, held, hiding) = *player;
@@ -1357,7 +1357,7 @@ fn update_prompt(
                 _ => {}
             }
         }
-        if held {
+        if held && jasons.iter().any(|j| j.holding()) {
             lines.push("GRABBED: mash A / D to break free".into());
         }
     }

@@ -23,7 +23,11 @@ Mechanics: counselor side
 - [x] Swimming (water.rs, player.rs): the map's water volume (Swim_PhysicsVolume's brush box); she swims while her
       centre is under its surface (IsInWater), afloat at the surface, out where the bottom comes up; the swim
       blend (idle, slow, fast, sprint), swimming speed and stamina, the InWater fear event
-- [ ] Swimming, remaining: diving, Jason in water
+- [x] Jason in the water (jason.rs, decompiled): under it when his capsule's top is, his depth-scaled speed along the
+      bottom, unseen there, no Shift; his drowning kill (Underwater_GrabKill) on a swimming counselor in reach when
+      he's deep enough; the AI follows her in (`--bot-drown`)
+- [ ] Swimming, remaining: diving (counselors only swim at the surface here); Jason's underwater sound mix, his
+      underwater input, dropping a held counselor as he goes under
 - [x] Fear events pushed in the client (fear_events.rs): darkness (f13-core::light, the map's point and spot lights),
   indoors (the cabins' indoor volumes, also used by Sense), wounded, Jason near and in view, grabbed, hidden, items
   held, in water, blackouts (inside a grid's volume while its power is out)
@@ -262,8 +266,8 @@ Presentation
   fear); power cuts (power.rs)
 - [ ] Lighting, remaining: Enlighten GI, local light shadows, light functions, the sky texture, rain (the colour
       grading and bloom: Decomp audit's post-processing)
-- [ ] Audio (audio.rs, f13-data::sound): done: SoundCue playback (the cue graph's random, modulator, mixer, looping and
-  attenuation nodes; Unreal's attenuation falloff; left/right panning around the camera) and the counselor's
+- [ ] Audio (audio.rs, f13-data::sound): done: SoundCue playback (the cue graph's random, modulator, mixer, looping, delay
+  and attenuation nodes; Unreal's attenuation falloff; left/right panning around the camera) and the counselor's
   footsteps (her locomotion's Footstep notifies; the surface under her foot: a mesh's physical material or the
   terrain's heaviest paint layer; Base_Counselor_AnimBP's tables); doors, windows and barricades (their classes' cues);
   Jason's near music (NearCounselorMusic by distance, silenced by Stalk); the counselor's music (MusicCounselor:

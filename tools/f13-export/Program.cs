@@ -849,7 +849,9 @@ static class Mvp
         // Jason's throwing knife (his ThrowingKnifeClass).
         "ThrowingKnife_C",
         // The storm (CLsm_RainOn's).
-        "SCZeus_BP_C"];
+        "SCZeus_BP_C",
+        // Jason under water: his drowning kill and the shape he shows on the surface.
+        "Underwater_GrabKill_C", "KillerWaterImage_C"];
     // Montages whose length or root motion the rules use (anims.json).
     const string Shared = "/Game/Characters/Counselors/Base/Shared";
     public static readonly string[] Montages =
@@ -1085,8 +1087,8 @@ static class Mvp
     static string[] CounselorKills => [.. PickaxeKills.Select(k => $"{Shared}/Cinematic/AM_cinematic_{k}"), .. PlacedKillsHers.Select(m => $"{Shared}/Cinematic/{m}")];
     /// The map's placed (environment) kills' montages: their ContextKillComponents' special moves' ContextMontage, the
     /// victim's (Counselor_*) and Jason's (Jason_*).
-    static string[] PlacedKillsHers => ["AM_cinematic_adirondackchair_kill", "AM_cinematic_fireplace", "AM_cinematic_gravestone_headsmash", "AM_cinematic_hand_birdbath", "AM_cinematic_hand_ironfence", "AM_cinematic_hand_table", "AM_cinematic_hand_tree_arm_ripoff", "AM_cinematic_hand_treestump_faceslam", "AM_cinematic_hand_waterpump", "AM_cinematic_stick_campfire", "AM_cinematic_surface_vertical_backbreak", "AM_cinematic_treebranch_chesthole_01", "AM_cinematic_wall_facesmash", "AM_cinematic_wall_headpunch_01"];
-    static string[] PlacedKillsHis => ["AM_Jason_cinematic_gravestone_headsmash_01", "AM_Jason_cinematic_surface_vertical_backbreak", "AM_cinematic_f_adirondackchair_kill_01", "AM_cinematic_fireplace", "AM_cinematic_hand_birdbath", "AM_cinematic_hand_ironfence", "AM_cinematic_hand_table", "AM_cinematic_hand_tree_arm_ripoff", "AM_cinematic_hand_treestump_faceslam", "AM_cinematic_hand_waterpump", "AM_cinematic_m_wall_facesmash_01", "AM_cinematic_stick_campfire", "AM_cinematic_treebranch_chesthole_01", "AM_cinematic_wall_headpunch_01"];
+    static string[] PlacedKillsHers => ["AM_Counselor_cinematic_swim_grabkill_01", "AM_cinematic_adirondackchair_kill", "AM_cinematic_fireplace", "AM_cinematic_gravestone_headsmash", "AM_cinematic_hand_birdbath", "AM_cinematic_hand_ironfence", "AM_cinematic_hand_table", "AM_cinematic_hand_tree_arm_ripoff", "AM_cinematic_hand_treestump_faceslam", "AM_cinematic_hand_waterpump", "AM_cinematic_stick_campfire", "AM_cinematic_surface_vertical_backbreak", "AM_cinematic_treebranch_chesthole_01", "AM_cinematic_wall_facesmash", "AM_cinematic_wall_headpunch_01"];
+    static string[] PlacedKillsHis => ["AM_Jason_cinematic_swim_grabkill_01", "AM_Jason_cinematic_gravestone_headsmash_01", "AM_Jason_cinematic_surface_vertical_backbreak", "AM_cinematic_f_adirondackchair_kill_01", "AM_cinematic_fireplace", "AM_cinematic_hand_birdbath", "AM_cinematic_hand_ironfence", "AM_cinematic_hand_table", "AM_cinematic_hand_tree_arm_ripoff", "AM_cinematic_hand_treestump_faceslam", "AM_cinematic_hand_waterpump", "AM_cinematic_m_wall_facesmash_01", "AM_cinematic_stick_campfire", "AM_cinematic_treebranch_chesthole_01", "AM_cinematic_wall_headpunch_01"];
     const string JasonAnim = "/Game/Characters/Killers/Jason/Base/Animation";
     static string[] JasonKills => [.. PickaxeKills.Select(k => $"{JasonAnim}/Cinematic/AM_cinematic_{k}"), .. PlacedKillsHis.Select(m => $"{JasonAnim}/Cinematic/{m}")];
     const string JasonStun = $"{JasonAnim}/Deaths_HitReacts_Stuns";
@@ -1133,6 +1135,8 @@ static class Mvp
         "/Game/Blueprints/ContextKills/Table_Placedkill",
         "/Game/Blueprints/ContextKills/TreeBranch_PlacedKill",
         "/Game/Blueprints/ContextKills/WallHeadPunch_PlacedKill",
+        // Jason's drowning kill (his UnderwaterContextKillClass).
+        "/Game/Blueprints/ContextKills/Underwater_GrabKill",
     ];
     // Jason_AnimBP's BS_Jason_Normal_Move (SpeedState 0 idle, 1 walk, 2 fast walk, 3 run), the pickaxe's combat idle,
     // attacks (PickAxe's NeutralAttack and ForwardAttack), the grab, and the grab kill.

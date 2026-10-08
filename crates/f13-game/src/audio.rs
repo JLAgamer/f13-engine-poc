@@ -25,7 +25,7 @@
 //! near music's reach (NearCounselorMusicDistance; PLACEHOLDER rule). JasonAbilityUnlockWarning when he unlocks an
 //! ability. Not yet: the other stingers' triggers (OpenDoorStinger, SeeCounselorDeadBody), scary sounds.
 //!
-//! PLACEHOLDERS: the listener is the camera; Delay and Concatenator nodes play their first child at once; actor sounds
+//! Delay nodes start their voices late (started paused). PLACEHOLDERS: the listener is the camera; actor sounds
 //! play 1 m above the actor's origin (the game plays them from the actor or its audio components).
 
 use bevy::asset::RenderAssetUsages;
@@ -50,7 +50,7 @@ impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_sounds)
             .init_resource::<MusicState>()
-            .add_systems(Update, (add_listener, attenuate, actor_sounds, counselor_music, near_music, fades, ambience, voices).chain())
+            .add_systems(Update, (add_listener, attenuate, actor_sounds, counselor_music, near_music, fades, ambience, voices, start_delayed).chain())
             .add_observer(play_sound)
             .add_observer(footstep)
             .add_observer(actor_sound)
@@ -225,10 +225,14 @@ fn actor_sound(
             mode: if v.looping { PlaybackMode::Loop } else { PlaybackMode::Despawn },
             speed: v.pitch,
             volume: Volume::Linear(v.volume),
+            paused: v.delay > 0.0,
             ..PlaybackSettings::DESPAWN
         };
         let source = AudioPlayer::new(assets.load(format!("sounds/{}", v.file)));
         let mut e = commands.spawn((source, settings, Transform::from_translation(Vec3::Y), ChildOf(ev.actor), VoiceOf(ev.prop)));
+        if v.delay > 0.0 {
+            e.insert(StartAfter(v.delay));
+        }
         if let Some(att) = att.clone().filter(|a| a.attenuate || a.spatialize) {
             e.insert((PlaybackSettings { spatial: att.spatialize, spatial_scale: Some(SpatialScale::new(SPATIAL_SCALE)), ..settings }, Emitter { volume: v.volume, attenuation: att }));
         }
@@ -808,22 +812,48 @@ fn play_sound(
         let mut settings = PlaybackSettings {
             mode: if v.looping { PlaybackMode::Loop } else { PlaybackMode::Despawn },
             speed: v.pitch,
+            paused: v.delay > 0.0,
             ..PlaybackSettings::DESPAWN
         };
         let source = AudioPlayer::new(assets.load(format!("sounds/{}", v.file)));
-        match (ev.at, att.clone().filter(|a| a.attenuate || a.spatialize)) {
+        let e = match (ev.at, att.clone().filter(|a| a.attenuate || a.spatialize)) {
             (Some(at), Some(att)) => {
                 let factor = ear.map_or(1.0, |e| att.factor(e.distance(at) * 100.0));
                 settings.volume = Volume::Linear(v.volume * factor);
                 settings.spatial = att.spatialize;
                 settings.spatial_scale = Some(SpatialScale::new(SPATIAL_SCALE));
-                commands.spawn((source, settings, Transform::from_translation(at), Emitter { volume: v.volume, attenuation: att }));
+                commands.spawn((source, settings, Transform::from_translation(at), Emitter { volume: v.volume, attenuation: att })).id()
             }
             _ => {
                 settings.volume = Volume::Linear(v.volume);
-                commands.spawn((source, settings));
+                commands.spawn((source, settings)).id()
             }
+        };
+        if v.delay > 0.0 {
+            commands.entity(e).insert(StartAfter(v.delay));
         }
+    }
+}
+
+/// A voice waiting out its cue's Delay nodes (spawned paused).
+#[derive(Component)]
+struct StartAfter(f32);
+
+fn start_delayed(mut commands: Commands, time: Res<Time>, mut voices: Query<(Entity, &mut StartAfter, Option<&AudioSink>, Option<&SpatialAudioSink>)>) {
+    for (e, mut s, sink, spatial) in &mut voices {
+        s.0 -= time.delta_secs();
+        if s.0 > 0.0 {
+            continue;
+        }
+        // Its sink comes once its source has loaded.
+        if let Some(sink) = sink {
+            sink.play();
+        } else if let Some(sink) = spatial {
+            sink.play();
+        } else {
+            continue;
+        }
+        commands.entity(e).remove::<StartAfter>();
     }
 }
 

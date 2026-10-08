@@ -93,6 +93,8 @@ pub enum Node {
     /// Every child, each at its input volume.
     Mixer { volumes: Vec<f32>, children: Vec<Node> },
     Looping { child: Option<Box<Node>> },
+    /// USoundNodeDelay: its child starts after a random delay in [DelayMin, DelayMax] s.
+    Delay { range: (f32, f32), child: Option<Box<Node>> },
     /// A wave file (under sounds/), its volume and pitch, and whether it loops.
     Wave { file: Option<String>, volume: f32, pitch: f32, looping: bool },
     Other { kind: String, children: Vec<Node> },
@@ -126,6 +128,7 @@ impl Node {
                 Node::Mixer { volumes, children }
             }
             "Looping" => Node::Looping { child: first() },
+            "Delay" => Node::Delay { range: (f("DelayMin", 0.0), f("DelayMax", 0.0)), child: first() },
             "WavePlayer" => Node::Wave {
                 file: v["Wave"].as_str().filter(|s| !s.is_empty()).map(str::to_string),
                 volume: v["WaveVolume"].as_f64().unwrap_or(1.0) as f32,
@@ -152,6 +155,8 @@ pub struct Voice {
     pub volume: f32,
     pub pitch: f32,
     pub looping: bool,
+    /// Seconds to wait before it starts (its Delay nodes').
+    pub delay: f32,
 }
 
 impl Cue {
@@ -173,13 +178,14 @@ impl Cue {
         let mut voices = Vec::new();
         let mut att = None;
         if let Some(root) = &self.root {
-            walk(root, self.volume, self.pitch, false, rand, &mut voices, &mut att);
+            walk(root, self.volume, self.pitch, false, 0.0, rand, &mut voices, &mut att);
         }
         (voices, att.or_else(|| self.attenuation.clone()))
     }
 }
 
-fn walk(n: &Node, volume: f32, pitch: f32, looping: bool, rand: &mut dyn FnMut() -> f32, out: &mut Vec<Voice>, att: &mut Option<Attenuation>) {
+#[allow(clippy::too_many_arguments)]
+fn walk(n: &Node, volume: f32, pitch: f32, looping: bool, delay: f32, rand: &mut dyn FnMut() -> f32, out: &mut Vec<Voice>, att: &mut Option<Attenuation>) {
     let lerp = |(a, b): (f32, f32), t: f32| a + (b - a) * t;
     match n {
         Node::Attenuation { settings, child } => {
@@ -187,13 +193,13 @@ fn walk(n: &Node, volume: f32, pitch: f32, looping: bool, rand: &mut dyn FnMut()
                 *att = settings.clone();
             }
             if let Some(c) = child {
-                walk(c, volume, pitch, looping, rand, out, att);
+                walk(c, volume, pitch, looping, delay, rand, out, att);
             }
         }
         Node::Modulator { volume: v, pitch: p, child } => {
             let (vm, pm) = (lerp(*v, rand()), lerp(*p, rand()));
             if let Some(c) = child {
-                walk(c, volume * vm, pitch * pm, looping, rand, out, att);
+                walk(c, volume * vm, pitch * pm, looping, delay, rand, out, att);
             }
         }
         Node::Random { weights, children } => {
@@ -211,26 +217,33 @@ fn walk(n: &Node, volume: f32, pitch: f32, looping: bool, rand: &mut dyn FnMut()
                 }
                 pick -= w(i);
             }
-            walk(&children[chosen], volume, pitch, looping, rand, out, att);
+            walk(&children[chosen], volume, pitch, looping, delay, rand, out, att);
         }
         Node::Mixer { volumes, children } => {
             for (i, c) in children.iter().enumerate() {
-                walk(c, volume * volumes.get(i).copied().unwrap_or(1.0), pitch, looping, rand, out, att);
+                walk(c, volume * volumes.get(i).copied().unwrap_or(1.0), pitch, looping, delay, rand, out, att);
+            }
+        }
+        Node::Delay { range, child } => {
+            // USoundNodeDelay::ParseNodes: DelayMax + (DelayMin - DelayMax) x FRand, at least 0.
+            let d = (range.1 + (range.0 - range.1) * rand()).max(0.0);
+            if let Some(c) = child {
+                walk(c, volume, pitch, looping, delay + d, rand, out, att);
             }
         }
         Node::Looping { child } => {
             if let Some(c) = child {
-                walk(c, volume, pitch, true, rand, out, att);
+                walk(c, volume, pitch, true, delay, rand, out, att);
             }
         }
         Node::Wave { file, volume: wv, pitch: wp, looping: wl } => {
             if let Some(file) = file {
-                out.push(Voice { file: file.clone(), volume: volume * wv, pitch: pitch * wp, looping: looping || *wl });
+                out.push(Voice { file: file.clone(), volume: volume * wv, pitch: pitch * wp, looping: looping || *wl, delay });
             }
         }
         Node::Other { children, .. } => {
             if let Some(c) = children.first() {
-                walk(c, volume, pitch, looping, rand, out, att);
+                walk(c, volume, pitch, looping, delay, rand, out, att);
             }
         }
     }

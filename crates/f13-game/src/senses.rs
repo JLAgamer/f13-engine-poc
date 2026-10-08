@@ -169,7 +169,7 @@ fn perceive(
     let Ok((p, pxf, hiding)) = players.single() else { return };
     for (j, jxf, mut k) in &mut jasons {
         // Abilities run from the start of the match.
-        let blockers = Blockers { stunned: matches!(j.state, JasonState::Stunned { .. }), ..default() };
+        let blockers = Blockers { stunned: matches!(j.state, JasonState::Stunned { .. }), underwater: j.underwater, ..default() };
         let mut events = Vec::new();
         k.abilities.update(dt, true, &blockers, &mut events);
         for e in events {

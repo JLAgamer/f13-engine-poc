@@ -471,8 +471,12 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
                      ("DamageWorldModifier", 1f) })
             values[name] = ClassValue<float?>(cls, name) ?? fallback;
         var move = Component(cdo, "CharacterMovement");
-        foreach (var (name, fallback) in new[] { ("MaxWalkSpeed", 104f), ("MaxRunSpeed", 280f), ("MaxSprintSpeed", 450f), ("MaxCombatSpeed", 104f), ("MaxAcceleration", 2048f) })
+        foreach (var (name, fallback) in new[] { ("MaxWalkSpeed", 104f), ("MaxRunSpeed", 280f), ("MaxSprintSpeed", 450f), ("MaxCombatSpeed", 104f), ("MaxAcceleration", 2048f), ("MaxSlowRunSpeed", 200f) })
             values[name] = Inherited<float?>(move, name) ?? fallback;
+        // Under water (SCKillerCharacter's constructor: UnderwaterSpeed 400, UnderwaterFullSpeedDepth 275,
+        // UnderwaterKillDepth 290).
+        foreach (var (name, fallback) in new[] { ("UnderwaterSpeed", 400f), ("UnderwaterFullSpeedDepth", 275f), ("UnderwaterKillDepth", 290f) })
+            values[name] = ClassValue<float?>(cls, name) ?? fallback;
         values["RotationRateYaw"] = Inherited<FRotator?>(move, "RotationRate")?.Yaw ?? 360f;
         values["CanRun"] = (Inherited<FPackageIndex>(meshComp, "AnimClass")?.Load<UStruct>() is { } animClass ? ClassValue<bool?>(animClass, "bCanRun") : null) == true ? 1 : 0;
         var stats = ClassValue<FStructFallback>(weaponClass, "WeaponStats");

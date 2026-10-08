@@ -51,6 +51,17 @@
 //! Stalk when he's closing on one within [`STALK_RANGE_M`] or as he arrives from a Morph. The
 //! teleport effect's fade hides him below half (the game dissolves his materials); Stalk silences nothing yet (no
 //! audio).
+//!
+//! In the water (SCKillerCharacter, decompiled): he's under it when his capsule's top is below its surface (his tick
+//! 0x14040d900); there he walks the bottom at MaxSlowRunSpeed up to UnderwaterSpeed by his feet's depth over
+//! UnderwaterFullSpeedDepth (GetMaxSpeed, GetUnderwaterDepthModifier), slides (GroundFriction 0), can't Shift, and
+//! is unseen outside his special moves (his surface image is bubbles: no particles here). Deep enough (his feet
+//! UnderwaterFullSpeedDepth down) with a swimming counselor over ground within 350 cm of her, his feet
+//! UnderwaterKillDepth down and her within his UnderwaterInteractComponent's reach (its DistanceLimit: his distance
+//! to the surface over him plus 104 cm), he drowns her (Underwater_GrabKill: he takes the kill's place at her, turned
+//! as his mesh; she stays). The AI follows her into the water and only closes in under her there (its choice).
+//! Not ported: dropping a counselor he holds as he goes under (MULTICAST_DropCounselor's implementation isn't read),
+//! the underwater sound mix and loop, the player's underwater input bindings.
 
 use bevy::prelude::*;
 use bevy::world_serialization::{WorldAsset, WorldAssetRoot};
@@ -172,6 +183,21 @@ const UNREACHABLE_RADIUS_M: f32 = 5.0;
 const SHIFT_RANGE_M: (f32, f32) = (6.0, 30.0);
 /// SCJasonAIProperties (constructor): Min/MaxThrowingKnifeDistance (m).
 const KNIFE_RANGE_M: (f32, f32) = (5.0, 25.0);
+/// His drowning kill (UnderwaterContextKillClass Underwater_GrabKill: Jason_ and Counselor_UnderwaterGrab_CK's
+/// AM_*_cinematic_swim_grabkill_01; KillInfo WaterDrown_KillInfo) and its kill camera's key.
+const DROWN_KILL: (&str, &str, &str) = ("cinematic_swim_grabkill_01", "cinematic_swim_grabkill_01", "Underwater Grab");
+const DROWN_KILL_KEY: &str = "Underwater_GrabKill";
+/// The UnderwaterInteractComponent's height over UnderwaterVisualRoot (Jason_Base), and the 50 cm its DistanceLimit
+/// adds (DAT_142138908).
+const UNDERWATER_INTERACT_HEIGHT_M: f32 = 0.54;
+const UNDERWATER_REACH_PAD_M: f32 = 0.5;
+/// DrowningDepthTrace's length under her (DAT_14215e7d8, 350 cm).
+const DROWNING_DEPTH_TRACE_M: f32 = 3.5;
+
+/// The drowning kill's camera spline (Underwater_GrabKill_C's SCCameraSpline) on the kill.
+#[derive(Resource)]
+pub(crate) struct DrownKillCamera(Transform);
+
 /// SCThrowable::Use: the knife starts this far ahead of the camera (DAT_142108c74, 120 cm).
 const KNIFE_START_M: f32 = 1.2;
 /// PLACEHOLDERS (see the module docs): how long he aims, his traps' spacing (m).
@@ -272,6 +298,12 @@ pub struct KillerTuning {
     pub shift_time: f32,
     pub stalk_active_time: f32,
     pub idle_stalk_modifier: f32,
+    /// Under water (SCKillerCharacter): UnderwaterSpeed, MaxSlowRunSpeed (his movement's; cm/s), and
+    /// UnderwaterFullSpeedDepth and UnderwaterKillDepth (cm).
+    pub underwater_speed: f32,
+    pub slow_run_speed: f32,
+    pub underwater_full_speed_depth: f32,
+    pub underwater_kill_depth: f32,
     pub teleport_screen_time: f32,
 }
 
@@ -309,6 +341,10 @@ impl KillerTuning {
             shift_time: v("ShiftTime", 4.0),
             stalk_active_time: v("StalkActiveTime", 20.0),
             idle_stalk_modifier: v("IdleStalkModifier", 0.1),
+            underwater_speed: v("UnderwaterSpeed", 400.0),
+            slow_run_speed: v("MaxSlowRunSpeed", 200.0),
+            underwater_full_speed_depth: v("UnderwaterFullSpeedDepth", 275.0),
+            underwater_kill_depth: v("UnderwaterKillDepth", 290.0),
             teleport_screen_time: v("TeleportScreenTime", 1.0),
         }
     }
@@ -445,6 +481,13 @@ pub struct Jason {
     stun_done: Option<f32>,
     /// The AI's wiggle axis and when it flips next (s into the stun).
     next_wiggle: (f32, f32),
+    /// Under water (bUnderWater: in the water with his capsule's top under its surface), his speed there, and
+    /// whether he's hidden for it.
+    pub underwater: bool,
+    underwater_speed: Option<f32>,
+    under_hidden: bool,
+    /// The kill he's doing holds her on his GrabSocket (grab and placed kills; not the drowning kill).
+    kill_holds: bool,
 }
 
 impl Jason {
@@ -467,6 +510,11 @@ impl Jason {
 
     pub fn shifting(&self) -> bool {
         matches!(self.state, JasonState::Shifting { .. })
+    }
+
+    /// Holding her in his grab (she can struggle), not killing her.
+    pub fn holding(&self) -> bool {
+        matches!(self.state, JasonState::Holding { .. })
     }
 }
 
@@ -659,6 +707,9 @@ fn load_knife_look(mut commands: Commands, export: Res<crate::ExportRoot>, asset
     // K2_SetRelativeRotation(FRotator(270, 0, 0)) as it's thrown.
     let local = f13_data::level::Xform { r: quaternion(Vec3::new(270.0, 0.0, 0.0)).to_array(), ..local };
     commands.insert_resource(KnifeLook(assets.load(GltfAssetLabel::Scene(0).from_asset(file)), crate::to_transform(&local)));
+    if let Some(c) = classes.get("Underwater_GrabKill_C").and_then(|c| c.components.iter().find(|c| c.kind == "SCCameraSplineComponent")) {
+        commands.insert_resource(DrownKillCamera(crate::to_transform(&c.local.unwrap_or(f13_data::level::Xform::IDENTITY))));
+    }
 }
 
 /// The knife's rotation: its forward (Unreal +X) along its velocity (its ProjectileMovement's bRotationFollowsVelocity).
@@ -876,6 +927,10 @@ fn spawn_jason(
                 stun_wiggle: default(),
                 stun_done: None,
                 next_wiggle: (-1.0, 0.0),
+                underwater: false,
+                underwater_speed: None,
+                under_hidden: false,
+                kill_holds: true,
             },
             Transform { translation: feet, rotation, ..default() },
             Visibility::default(),
@@ -949,9 +1004,12 @@ fn steer(j: &mut Jason, nav: &mut NavGrid, navmesh: Option<&f13_core::navmesh::N
 
 /// Moves Jason's capsule by his velocity toward `wish` at up to `max_speed` (cm/s).
 fn walk(j: &mut Jason, xf: &mut Transform, wish: Vec2, max_speed: f32, face: Option<Vec2>, dt: f32, t: &KillerTuning, world: &(impl f13_core::collision::TriSource + ?Sized)) {
-    let accel = input_acceleration(wish.to_array(), &t.movement);
+    // Under water his speed is the depth's (GetMaxSpeed 0x1403b7ab0) and he slides (OnRep_UnderWater: GroundFriction 0).
+    let max_speed = j.underwater_speed.unwrap_or(max_speed);
+    let movement = if j.underwater { MovementSettings { ground_friction: 0.0, ..t.movement } } else { t.movement };
+    let accel = input_acceleration(wish.to_array(), &movement);
     let mut v = j.velocity.to_array();
-    calc_velocity(&mut v, accel, max_speed, dt, &t.movement);
+    calc_velocity(&mut v, accel, max_speed, dt, &movement);
     j.velocity = Vec2::from_array(v);
     let mut pos = xf.translation;
     let r = f13_core::collision::move_capsule(world, &mut pos, &mut j.vel_y, j.grounded, j.velocity * dt / CM, dt, &t.capsule, &WALK);
@@ -1060,7 +1118,7 @@ fn door_in_way(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn update_jason(
     mut commands: Commands,
-    (time, anims): (Res<Time>, Res<crate::Anims>),
+    (time, anims, water, drown): (Res<Time>, Res<crate::Anims>, Option<Res<crate::water::Water>>, Option<Res<DrownKillCamera>>),
     tuning: Option<Res<KillerTuning>>,
     ptuning: Res<PlayerTuning>,
     nav: Option<ResMut<Nav>>,
@@ -1114,6 +1172,27 @@ pub(crate) fn update_jason(
         (at, v.speed)
     });
     for (je, mut j, mut xf, hit, mut know) in &mut jasons {
+        // Under water (his tick 0x14040d900): in the water with his capsule's top under its surface; there he walks
+        // the bottom at UnderwaterSpeed scaled by his feet's depth (GetUnderwaterDepthModifier: up to
+        // UnderwaterFullSpeedDepth) from MaxSlowRunSpeed, and he's unseen outside his special moves
+        // (NativeOnUnderwaterUpdate: his mesh, mask and weapon hidden).
+        let centre = xf.translation + Vec3::Y * t.capsule.half_height;
+        let surface = water.as_ref().and_then(|w| w.surface_at(centre));
+        let under = surface.is_some_and(|s| centre.y + t.capsule.half_height <= s);
+        if under != j.underwater {
+            j.underwater = under;
+            info!("Jason: {} the water", if under { "under" } else { "out of" });
+        }
+        j.underwater_speed = surface.filter(|_| under).map(|s| {
+            let depth = ((s - xf.translation.y) * CM).clamp(0.0, t.underwater_full_speed_depth);
+            let m = (depth / t.underwater_full_speed_depth).clamp(0.0, 1.0);
+            (t.underwater_speed - t.slow_run_speed) * m + t.slow_run_speed
+        });
+        let hide = under && !matches!(j.state, JasonState::Killing { .. });
+        if hide != j.under_hidden {
+            j.under_hidden = hide;
+            commands.entity(je).insert(if hide || j.faded { Visibility::Hidden } else { Visibility::Inherited });
+        }
         j.stun_immune = (j.stun_immune - dt).max(0.0);
         j.knife_cooldown = (j.knife_cooldown - dt).max(0.0);
         // Stalk runs down (slower standing still); the teleport effect fades him while he shifts or morphs.
@@ -1138,7 +1217,7 @@ pub(crate) fn update_jason(
         let faded = j.fade.0 < 0.5;
         if faded != j.faded {
             j.faded = faded;
-            commands.entity(je).insert(if faded { Visibility::Hidden } else { Visibility::Inherited });
+            commands.entity(je).insert(if faded || j.under_hidden { Visibility::Hidden } else { Visibility::Inherited });
         }
         // A counselor's item hit him.
         if let Some(h) = hit {
@@ -1222,10 +1301,51 @@ pub(crate) fn update_jason(
                         continue;
                     }
                 }
+                // Under water, deep enough, a swimming counselor in reach (CanInteractUnderwater 0x1403e6f60, its
+                // victims FUN_1403e87f0): his drowning kill (OnInteractUnderwater 0x1403f9c10). The AI does it at
+                // once, the player with interact.
+                if let Some(s) = surface.filter(|_| j.underwater && alive && !driving && hiding.is_none()) {
+                    let feet_depth = (s - xf.translation.y) * CM;
+                    let her_centre = pxf.translation + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M;
+                    // The UnderwaterInteractComponent rides UnderwaterVisualRoot at the surface over him (Jason_Base's
+                    // OnUnderWaterUpdate): its DistanceLimit is his distance to it plus 50 cm.
+                    let reach = (s + UNDERWATER_INTERACT_HEIGHT_M - centre.y).abs() + UNDERWATER_REACH_PAD_M;
+                    // DrowningDepthTrace: ground within 350 cm under her.
+                    let ground = f13_core::collision::segment_hit(&world, her_centre, her_centre - Vec3::Y * DROWNING_DEPTH_TRACE_M, 0.5).is_some();
+                    let victim = p.counselor.stance == f13_core::counselor::Stance::Swimming
+                        && ground
+                        && feet_depth >= t.underwater_kill_depth
+                        && her_centre.distance(centre) <= reach;
+                    let wants = player_input.map_or(true, |i| i.presses.interact);
+                    debug!("drown check: feet {feet_depth:.0} cm, swimming {}, ground {ground}, dist {:.2} reach {reach:.2}", p.counselor.stance == f13_core::counselor::Stance::Swimming, her_centre.distance(centre));
+                    if feet_depth >= t.underwater_full_speed_depth && victim && wants && killer.info.animations.contains_key(DROWN_KILL.0) {
+                        // The kill rides his mesh (attached, snapped), moved to her: he takes its place, his feet
+                        // there (the special move's desired transform adds his half height), turned as his mesh is;
+                        // she stays.
+                        let mesh_rot = xf.rotation * killer.rig_transform().rotation;
+                        let spot = Transform { translation: her_centre + Vec3::Y * 0.01, rotation: crate::character::flat(Transform::from_rotation(mesh_rot * crate::character::FACING.inverse())).rotation, ..default() };
+                        info!("Jason: drowning Vanessa ({} under)", feet_depth as i32);
+                        struggle.wiggle = default();
+                        j.velocity = Vec2::ZERO;
+                        p.velocity = Vec2::ZERO;
+                        j.kill_move = DROWN_KILL;
+                        j.kill_holds = false;
+                        *xf = killer.place(DROWN_KILL.0, spot).0;
+                        snap_rig(&mut rigs, je);
+                        j.state = JasonState::Killing { t: 0.0 };
+                        // Its camera spline, on the kill (at her, turned as his mesh).
+                        let camera = Transform::from_translation(her_centre).with_rotation(mesh_rot) * drown.as_ref().map_or(Transform::IDENTITY, |d| d.0);
+                        debug!("drowning kill: her {:.2}, him {:.2} facing {:.2}, camera {:.2} facing {:.2}", pxf.translation, xf.translation, xf.rotation * Vec3::Z, camera.translation, camera.rotation * Vec3::X);
+                        commands.entity(je).insert((PlayAction(DROWN_KILL.0.into()), crate::kill_camera::KillCam::at(DROWN_KILL_KEY, camera)));
+                        commands.entity(pe).insert((Held, PlayAction(DROWN_KILL.1.into())));
+                        continue;
+                    }
+                }
                 // The player's Jason (jason_player.rs): what they pressed, else the AI below.
                 if let Some(i) = player_input {
                     let p = i.presses;
-                    let ready = |know: &Option<Mut<crate::senses::Knowledge>>, a: Ability| know.as_ref().is_some_and(|k| k.abilities.is_available(a, &Blockers::default()));
+                    let blockers = Blockers { underwater: j.underwater, ..Blockers::default() };
+                    let ready = |know: &Option<Mut<crate::senses::Knowledge>>, a: Ability| know.as_ref().is_some_and(|k| k.abilities.is_available(a, &blockers));
                     if p.shift && ready(&know, Ability::Shift) {
                         if let Some(k) = know.as_mut() {
                             k.abilities.consume(Ability::Shift);
@@ -1440,8 +1560,16 @@ pub(crate) fn update_jason(
                     let door = doors.iter().map(|(_, d, g)| (g.translation().distance(xf.translation), d.open, d.locked, g.translation())).min_by(|a, b| a.0.total_cmp(&b.0));
                     debug!("Jason: going for {what}, {gdist:.1} m to go (at {:.1},{:.1},{:.1} -> {:.1},{:.1},{:.1}; path {:?}); nearest door {door:?}", xf.translation.x, xf.translation.y, xf.translation.z, goal.x, goal.y, goal.z, j.path);
                 }
+                // Under water (the AI's choice): straight at his goal along the bottom, for his drowning kill (above);
+                // no swings, grabs or abilities there.
+                if j.underwater {
+                    let wish = if gdist > 0.3 { gflat.normalize_or_zero() } else { Vec2::ZERO };
+                    walk(&mut j, &mut xf, wish, t.run_speed, None, dt, &t, &world);
+                    continue;
+                }
                 // His abilities (when is the AI's choice; see the module docs).
-                let ready = |know: &Option<Mut<crate::senses::Knowledge>>, a: Ability| know.as_ref().is_some_and(|k| k.abilities.is_available(a, &Blockers::default()));
+                let blockers = Blockers { underwater: j.underwater, ..Blockers::default() };
+                let ready = |know: &Option<Mut<crate::senses::Knowledge>>, a: Ability| know.as_ref().is_some_and(|k| k.abilities.is_available(a, &blockers));
                 let after_clue = !sees && following;
                 if sees && !driving && (SHIFT_RANGE_M.0..SHIFT_RANGE_M.1).contains(&dist) && ready(&know, Ability::Shift) {
                     if let Some(k) = know.as_mut() {
@@ -1502,8 +1630,11 @@ pub(crate) fn update_jason(
                         continue;
                     }
                 }
-                // Close in: straight at the goal when near, else along a path.
-                let mut wish = if gdist < 1.5 { gflat.normalize_or_zero() } else { steer(&mut j, &mut nav.0, navmesh, &world, xf.translation, goal, dt) };
+                // Close in: straight at the goal when near, else along a path. A goal in the water (the AI's choice;
+                // the navmesh ends at the shore): straight in once his path runs out there, and along the bottom.
+                let wet_goal = water.as_ref().is_some_and(|w| w.surface_at(goal + Vec3::Y * 0.5).is_some());
+                let direct = gdist < 1.5 || (wet_goal && (surface.is_some() || (!j.path_reaches && j.path.len() <= 1)));
+                let mut wish = if direct { gflat.normalize_or_zero() } else { steer(&mut j, &mut nav.0, navmesh, &world, xf.translation, goal, dt) };
                 if sees && dist < t.attack_range_m * 0.7 {
                     wish = Vec2::ZERO; // close enough for anything; don't walk into her
                 }
@@ -1535,7 +1666,7 @@ pub(crate) fn update_jason(
                 if j.progress.1 >= 1.0 {
                     let moved = xf.translation.distance(j.progress.0);
                     // Not getting closer near the goal, or at the end of a path that doesn't get there.
-                    if !sees && (gdist < STALL_RANGE_M || !j.path_reaches) && gdist > j.last_gdist - 0.3 {
+                    if !sees && (gdist < STALL_RANGE_M || (!j.path_reaches && !wet_goal)) && gdist > j.last_gdist - 0.3 {
                         j.stall += 1.0;
                     } else {
                         j.stall = 0.0;
@@ -2028,7 +2159,7 @@ pub(crate) fn update_jason(
                 let jrig = rigs.iter().find(|(_, c, _)| c.parent() == je);
                 let crig = rigs.iter().find(|(_, c, _)| c.parent() == pe);
                 if alive {
-                    if let (Some((jr, _, _)), Some((cr, _, cxf)), Some(c)) = (jrig, crig, &counselor_model) {
+                    if let (true, Some((jr, _, _)), Some((cr, _, cxf)), Some(c)) = (j.kill_holds, jrig, crig, &counselor_model) {
                         place_held(pe, &mut pxf, true, jr, (cr, cxf), &killer.info, &c.info, &globals);
                     }
                     // She dies, and goes limp, where her side of the kill says (he plays his out).
