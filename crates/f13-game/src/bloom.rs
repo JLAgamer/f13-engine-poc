@@ -122,9 +122,10 @@ pub(crate) struct BloomPipelines {
 }
 
 impl SpecializedRenderPipeline for BloomPipelines {
-    type Key = Pass;
+    /// The pass and its target's format (the bloom's FORMAT; dof.rs's blur keeps alpha).
+    type Key = (Pass, TextureFormat);
 
-    fn specialize(&self, pass: Pass) -> RenderPipelineDescriptor {
+    fn specialize(&self, (pass, format): Self::Key) -> RenderPipelineDescriptor {
         let entry = match pass {
             Pass::Downsample => "downsample",
             Pass::Setup => "setup",
@@ -137,7 +138,7 @@ impl SpecializedRenderPipeline for BloomPipelines {
             fragment: Some(FragmentState {
                 shader: self.shader.clone(),
                 entry_point: Some(entry.into()),
-                targets: vec![Some(ColorTargetState { format: FORMAT, blend: None, write_mask: ColorWrites::ALL })],
+                targets: vec![Some(ColorTargetState { format, blend: None, write_mask: ColorWrites::ALL })],
                 ..default()
             }),
             ..default()
@@ -147,7 +148,7 @@ impl SpecializedRenderPipeline for BloomPipelines {
 
 /// One pass's uniforms: the source's texel size, the sample count, flags, then the samples' UV offsets and weights.
 #[derive(Clone, Copy, ShaderType)]
-struct PassUniform {
+pub(crate) struct PassUniform {
     texel: Vec4,
     /// x: samples, y: 1 to add the second texture, z: BloomThreshold.
     params: Vec4,
@@ -239,7 +240,7 @@ fn prepare_textures(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_pass(
+pub(crate) fn run_pass(
     ctx: &mut RenderContext,
     cache: &PipelineCache,
     pipelines: &BloomPipelines,
@@ -271,7 +272,7 @@ fn run_pass(
     pass.draw(0..3, 0..1);
 }
 
-fn empty_uniform(texel: Vec2) -> PassUniform {
+pub(crate) fn empty_uniform(texel: Vec2) -> PassUniform {
     PassUniform { texel: texel.extend(0.0).extend(0.0), params: Vec4::ZERO, offsets: [Vec4::ZERO; MAX_SAMPLES], weights: [Vec4::ZERO; MAX_SAMPLES] }
 }
 
@@ -284,7 +285,7 @@ pub(crate) fn game_bloom(
 ) {
     let (target, camera, settings, textures) = view.into_inner();
     let Some(view_size) = camera.physical_viewport_size else { return };
-    let ids = [Pass::Downsample, Pass::Setup, Pass::Filter].map(|p| specialized.specialize(&cache, &pipelines, p));
+    let ids = [Pass::Downsample, Pass::Setup, Pass::Filter].map(|p| specialized.specialize(&cache, &pipelines, (p, FORMAT)));
     let (Some(down), Some(setup), Some(filter)) = (cache.get_render_pipeline(ids[0]), cache.get_render_pipeline(ids[1]), cache.get_render_pipeline(ids[2])) else { return };
     let b = &settings.bloom;
     let black = &textures.black.default_view;
@@ -309,43 +310,73 @@ pub(crate) fn game_bloom(
         if size <= 9.99999993922529e-09 {
             continue;
         }
-        let level = &textures.levels[stage];
-        let src = size_of(level);
-        let size = size * b.size_scale;
-        // The source's scale against the full-size buffer (DivideAndRoundUp), and the radius from the view's width
-        // (twice that for a fast blur's Y pass).
-        let radius = |input: Vec2, fast_y: bool| {
-            let scale = view_size.x.div_ceil((input.x as u32).max(1)).max(1) as f32;
-            size * (view_size.x as f32 / scale) * if fast_y { 2.0 } else { 1.0 } * 0.004999999888241291
-        };
-        let fill = |u: &mut PassUniform, kernel: &[(f32, f32)], axis: Vec2, tint: Vec4| {
-            u.params.x = kernel.len() as f32;
-            for (k, (o, w)) in kernel.iter().enumerate() {
-                u.offsets[k] = (axis * *o).extend(0.0).extend(0.0);
-                u.weights[k] = tint * *w;
-            }
-        };
-        // DoFastBlur, X: 0.02 x the source's width x size against the threshold.
-        let fast_x = 0.02 * src.x * size >= FAST_BLUR_THRESHOLD;
-        let x_out = if fast_x { &textures.x_half[stage] } else { &textures.x[stage] };
-        let mut ux = empty_uniform(Vec2::ONE / src);
-        fill(&mut ux, &gaussian_kernel(radius(src, false)), Vec2::new(1.0 / src.x, 0.0), Vec4::ONE);
-        run_pass(&mut ctx, &cache, &pipelines, filter, &level.default_view, black, &x_out.default_view, &ux);
-        // DoFastBlur, Y: a source narrower than 0.75 x the buffer's aspect (the half-width X result).
-        let y_src = size_of(x_out);
-        let fast_y = y_src.x / y_src.y < view_size.x as f32 / view_size.y.max(1) as f32 * 0.75;
-        let mut uy = empty_uniform(Vec2::ONE / y_src);
-        fill(&mut uy, &gaussian_kernel(radius(y_src, fast_y)), Vec2::new(0.0, 1.0 / y_src.y), b.tints[stage] * 0.1666666716337204);
-        let second = match previous {
-            Some(p) => {
-                uy.params.y = 1.0;
-                &textures.y[p].default_view
-            }
-            None => black,
-        };
-        run_pass(&mut ctx, &cache, &pipelines, filter, &x_out.default_view, second, &textures.y[stage].default_view, &uy);
+        let added = previous.map(|p| &textures.y[p].default_view);
+        let blur = Blur { x: &textures.x[stage], x_half: &textures.x_half[stage], out: &textures.y[stage], black: &textures.black };
+        gaussian_blur(&mut ctx, &cache, &pipelines, filter, view_size, &textures.levels[stage], blur, size * b.size_scale, b.tints[stage] * 0.1666666716337204, added);
         previous = Some(stage);
     }
+}
+
+/// A Gaussian blur's textures: its X pass's (full and half width: a fast blur's), its result, and a black one.
+pub(crate) struct Blur<'a> {
+    pub x: &'a CachedTexture,
+    pub x_half: &'a CachedTexture,
+    pub out: &'a CachedTexture,
+    pub black: &'a CachedTexture,
+}
+
+/// RenderGaussianBlur (FUN_140c63500): FRCPassPostProcessWeightedSampleSum X, then Y with the tint and `added` added
+/// (TFilterPS's weighted sum), of `size` (SizeScale): its radius size x (view width / the source's scale) x 0.005
+/// texels; DoFastBlur halves the X pass's width when 0.02 x the source's width x size reaches r.FastBlurThreshold,
+/// and its Y pass, seeing a source narrower than 0.75 x the buffer's aspect, doubles the radius.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn gaussian_blur(
+    ctx: &mut RenderContext,
+    cache: &PipelineCache,
+    pipelines: &BloomPipelines,
+    filter: &RenderPipeline,
+    view_size: UVec2,
+    source: &CachedTexture,
+    t: Blur,
+    size: f32,
+    tint: Vec4,
+    added: Option<&TextureView>,
+) {
+    let size_of = |t: &CachedTexture| Vec2::new(t.texture.width() as f32, t.texture.height() as f32);
+    let src = size_of(source);
+    // The source's scale against the full-size buffer (DivideAndRoundUp), and the radius from the view's width
+    // (twice that for a fast blur's Y pass).
+    let radius = |input: Vec2, fast_y: bool| {
+        let scale = view_size.x.div_ceil((input.x as u32).max(1)).max(1) as f32;
+        size * (view_size.x as f32 / scale) * if fast_y { 2.0 } else { 1.0 } * 0.004999999888241291
+    };
+    let fill = |u: &mut PassUniform, kernel: &[(f32, f32)], axis: Vec2, tint: Vec4| {
+        u.params.x = kernel.len() as f32;
+        for (k, (o, w)) in kernel.iter().enumerate() {
+            u.offsets[k] = (axis * *o).extend(0.0).extend(0.0);
+            u.weights[k] = tint * *w;
+        }
+    };
+    let black = &t.black.default_view;
+    // DoFastBlur, X: 0.02 x the source's width x size against the threshold.
+    let fast_x = 0.02 * src.x * size >= FAST_BLUR_THRESHOLD;
+    let x_out = if fast_x { t.x_half } else { t.x };
+    let mut ux = empty_uniform(Vec2::ONE / src);
+    fill(&mut ux, &gaussian_kernel(radius(src, false)), Vec2::new(1.0 / src.x, 0.0), Vec4::ONE);
+    run_pass(ctx, cache, pipelines, filter, &source.default_view, black, &x_out.default_view, &ux);
+    // DoFastBlur, Y: a source narrower than 0.75 x the buffer's aspect (the half-width X result).
+    let y_src = size_of(x_out);
+    let fast_y = y_src.x / y_src.y < view_size.x as f32 / view_size.y.max(1) as f32 * 0.75;
+    let mut uy = empty_uniform(Vec2::ONE / y_src);
+    fill(&mut uy, &gaussian_kernel(radius(y_src, fast_y)), Vec2::new(0.0, 1.0 / y_src.y), tint);
+    let second = match added {
+        Some(a) => {
+            uy.params.y = 1.0;
+            a
+        }
+        None => black,
+    };
+    run_pass(ctx, cache, pipelines, filter, &x_out.default_view, second, &t.out.default_view, &uy);
 }
 
 #[cfg(test)]
