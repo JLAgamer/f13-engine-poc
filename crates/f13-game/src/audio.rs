@@ -54,7 +54,15 @@ impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_sounds)
             .init_resource::<MusicState>()
-            .add_systems(Update, (add_listener, modulate, attenuate, actor_sounds, counselor_music, near_music, fades, ambience, voices, start_delayed).chain())
+            .add_systems(
+                Update,
+                (add_listener, modulate, attenuate, actor_sounds, counselor_music, near_music, fades, ambience, voices, start_delayed, update_mixes, apply_mixes).chain(),
+            )
+            .add_observer(push_mix)
+            .add_observer(loop_2d)
+            .add_observer(stop_2d)
+            .add_observer(pop_mix)
+            .add_observer(clear_mixes)
             .add_observer(play_sound)
             .add_observer(footstep)
             .add_observer(actor_sound)
@@ -159,7 +167,7 @@ fn actor_loop(
     for v in voices {
         let settings = PlaybackSettings { mode: PlaybackMode::Loop, speed: v.pitch, volume: Volume::Linear(v.volume), ..PlaybackSettings::LOOP };
         let source = AudioPlayer::new(assets.load(format!("sounds/{}", v.file)));
-        let mut e = commands.spawn((source, settings, Transform::from_translation(Vec3::Y), ChildOf(ev.actor), LoopOf(ev.prop)));
+        let mut e = commands.spawn((source, settings, Transform::from_translation(Vec3::Y), ChildOf(ev.actor), LoopOf(ev.prop), VoiceClass(v.class.clone())));
         if let Some(att) = att.clone().filter(|a| a.attenuate || a.spatialize) {
             e.insert((PlaybackSettings { spatial: att.spatialize, spatial_scale: Some(SpatialScale::new(SPATIAL_SCALE)), ..settings }, Emitter { volume: v.volume, attenuation: att }));
         }
@@ -282,7 +290,7 @@ fn actor_sound(
             ..PlaybackSettings::DESPAWN
         };
         let source = AudioPlayer::new(assets.load(format!("sounds/{}", v.file)));
-        let mut e = commands.spawn((source, settings, Transform::from_translation(Vec3::Y), ChildOf(ev.actor), VoiceOf(ev.prop)));
+        let mut e = commands.spawn((source, settings, Transform::from_translation(Vec3::Y), ChildOf(ev.actor), VoiceOf(ev.prop), VoiceClass(v.class.clone())));
         if v.delay > 0.0 {
             e.insert(StartAfter(v.delay));
         }
@@ -339,7 +347,7 @@ fn spawn_2d(commands: &mut Commands, assets: &AssetServer, sounds: &mut Sounds, 
     let v = voices.into_iter().next()?;
     let mode = if looping || v.looping { PlaybackSettings::LOOP } else { PlaybackSettings::DESPAWN };
     let settings = PlaybackSettings { volume: Volume::Linear(v.volume * volume), speed: v.pitch, ..mode };
-    Some((commands.spawn((AudioPlayer::new(assets.load(format!("sounds/{}", v.file))), settings)).id(), v.volume))
+    Some((commands.spawn((AudioPlayer::new(assets.load(format!("sounds/{}", v.file))), settings, VoiceClass(v.class.clone()))).id(), v.volume))
 }
 
 /// The line her voice object says as an action starts (its take): swings, windows, the kills.
@@ -658,7 +666,7 @@ fn near_music(
         let (voices, _) = c.play(&mut || rng.0.frand());
         let Some(v) = voices.into_iter().next() else { return };
         let e = commands
-            .spawn((AudioPlayer::new(assets.load(format!("sounds/{}", v.file))), PlaybackSettings { volume: Volume::Linear(0.0), speed: v.pitch, ..PlaybackSettings::LOOP }))
+            .spawn((AudioPlayer::new(assets.load(format!("sounds/{}", v.file))), PlaybackSettings { volume: Volume::Linear(0.0), speed: v.pitch, ..PlaybackSettings::LOOP }, VoiceClass(v.class.clone())))
             .id();
         music.player = Some((e, v.volume));
     }
@@ -823,7 +831,258 @@ fn load_sounds(mut commands: Commands, export: Res<crate::ExportRoot>, level: Re
         .map_err(|e| warn!("no animation sounds ({e}): re-export with tools/f13-export sounds"))
         .unwrap_or_default();
     commands.insert_resource(AnimSounds(anim));
+    commands.insert_resource(SoundMixes::load(&dir));
     commands.insert_resource(Sounds { dir, cues: HashMap::new(), footsteps, jason_footsteps, terrain: load_terrain(&export.0, &level) });
+}
+
+/// A voice's sound class (its cue's SoundClassObject): the classes' volume and pitch, and the sound mixes pushed,
+/// scale it ([`apply_mixes`]).
+#[derive(Component, Clone, Debug)]
+pub struct VoiceClass(pub Option<String>);
+
+/// What [`apply_mixes`] last wrote to a voice (volume, speed) and by which factors.
+#[derive(Component)]
+struct MixApplied {
+    volume: f32,
+    speed: f32,
+    factors: (f32, f32),
+}
+
+/// A sound mix's settings (USoundMix): its timing and its class adjusters (class, volume, pitch, bApplyToChildren).
+#[derive(Clone, Debug)]
+struct MixDef {
+    initial_delay: f32,
+    fade_in: f32,
+    duration: f32,
+    fade_out: f32,
+    effects: Vec<(String, f32, f32, bool)>,
+}
+
+/// A pushed mix (FSoundMixState): its time since pushed, its pushes not yet popped, and the time into its fade out.
+#[derive(Clone, Debug)]
+struct ActiveMix {
+    name: String,
+    t: f32,
+    count: u32,
+    out: Option<f32>,
+}
+
+/// The sound classes (parent, Volume, Pitch: sounds/sound_classes.json), the mixes (sound_mixes.json) and those pushed.
+#[derive(Resource, Default)]
+pub struct SoundMixes {
+    classes: HashMap<String, (Option<String>, f32, f32)>,
+    mixes: HashMap<String, MixDef>,
+    active: Vec<ActiveMix>,
+}
+
+impl SoundMixes {
+    fn load(dir: &std::path::Path) -> Self {
+        let read = |f: &str| std::fs::read_to_string(dir.join(f)).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+        let mut s = SoundMixes::default();
+        match read("sound_classes.json") {
+            Some(v) => {
+                for (k, c) in v.as_object().into_iter().flatten() {
+                    let n = |f: &str| c[f].as_f64().unwrap_or(1.0) as f32;
+                    s.classes.insert(k.clone(), (c["Parent"].as_str().map(str::to_string), n("Volume"), n("Pitch")));
+                }
+            }
+            None => warn!("no sounds/sound_classes.json (re-export with tools/f13-export sounds): no class volumes or mixes"),
+        }
+        for (k, m) in read("sound_mixes.json").as_ref().and_then(|v| v.as_object()).into_iter().flatten() {
+            let n = |f: &str, d: f64| m[f].as_f64().unwrap_or(d) as f32;
+            let effects = m["Effects"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|e| Some((e["Class"].as_str()?.to_string(), e["Volume"].as_f64().unwrap_or(1.0) as f32, e["Pitch"].as_f64().unwrap_or(1.0) as f32, e["ApplyToChildren"].as_bool().unwrap_or(false))))
+                .collect();
+            s.mixes.insert(k.clone(), MixDef { initial_delay: n("InitialDelay", 0.0), fade_in: n("FadeInTime", 0.2), duration: n("Duration", -1.0), fade_out: n("FadeOutTime", 0.2), effects });
+        }
+        s
+    }
+
+    /// FSoundMixState's interpolation: 0 during the initial delay, rising over the fade in, 1, falling over the fade
+    /// out (a popped mix, or one past its Duration).
+    fn interp(def: &MixDef, m: &ActiveMix) -> f32 {
+        let t = m.t - def.initial_delay;
+        let fade_in = if t <= 0.0 { 0.0 } else if def.fade_in > 0.0 { (t / def.fade_in).min(1.0) } else { 1.0 };
+        match m.out {
+            Some(o) => fade_in * if def.fade_out > 0.0 { (1.0 - o / def.fade_out).max(0.0) } else { 0.0 },
+            None => fade_in,
+        }
+    }
+
+    /// Whether `class` is `ancestor` or under it.
+    fn is_under(&self, class: &str, ancestor: &str) -> bool {
+        let mut c = Some(class.to_string());
+        for _ in 0..32 {
+            match c {
+                Some(ref n) if n == ancestor => return true,
+                Some(ref n) => c = self.classes.get(n).and_then(|x| x.0.clone()),
+                None => return false,
+            }
+        }
+        false
+    }
+
+    /// A class's volume and pitch (FAudioDevice::UpdateSoundClassProperties): its own and its parents' properties
+    /// multiplied down the hierarchy, then each active mix's adjusters for it (or for an ancestor that applies to its
+    /// children), each lerped from 1 by the mix's interpolation.
+    fn factors(&self, class: &str) -> (f32, f32) {
+        let (mut v, mut p) = (1.0, 1.0);
+        let mut c = Some(class.to_string());
+        for _ in 0..32 {
+            let Some(n) = c else { break };
+            let Some((parent, cv, cp)) = self.classes.get(&n) else { break };
+            v *= cv;
+            p *= cp;
+            c = parent.clone();
+        }
+        for m in &self.active {
+            let Some(def) = self.mixes.get(&m.name) else { continue };
+            let a = Self::interp(def, m);
+            for (target, av, ap, children) in &def.effects {
+                if target == class || (*children && self.is_under(class, target)) {
+                    v *= 1.0 + (av - 1.0) * a;
+                    p *= 1.0 + (ap - 1.0) * a;
+                }
+            }
+        }
+        (v, p)
+    }
+}
+
+/// A 2D sound kept by a key (GameplayStatics::CreateSound2D, then its AudioComponent's FadeIn(time, 1)).
+#[derive(Event, Clone, Copy, Debug)]
+pub struct Loop2D {
+    pub key: &'static str,
+    pub cue: &'static str,
+    pub fade_in: f32,
+}
+
+/// The keyed 2D sound's AudioComponent::FadeOut(time, 0): it fades out and stops.
+#[derive(Event, Clone, Copy, Debug)]
+pub struct Stop2D {
+    pub key: &'static str,
+    pub fade_out: f32,
+}
+
+#[derive(Component)]
+struct Keyed2D(&'static str);
+
+fn loop_2d(ev: On<Loop2D>, mut commands: Commands, assets: Res<AssetServer>, sounds: Option<ResMut<Sounds>>, mut rng: ResMut<crate::GameRng>) {
+    let Some(mut sounds) = sounds else { return };
+    if let Some((e, volume)) = spawn_2d(&mut commands, &assets, &mut sounds, &mut rng, ev.cue, true, 0.0) {
+        let rate = if ev.fade_in > 0.0 { 1.0 / ev.fade_in } else { f32::MAX };
+        commands.entity(e).insert((Keyed2D(ev.key), Fade { base: volume, level: 0.0, target: 1.0, rate, despawn: false }));
+    }
+}
+
+fn stop_2d(ev: On<Stop2D>, mut commands: Commands, mut keyed: Query<(Entity, &Keyed2D, Option<&mut Fade>)>) {
+    for (e, k, fade) in &mut keyed {
+        if k.0 != ev.key {
+            continue;
+        }
+        match fade {
+            Some(mut f) => {
+                f.target = 0.0;
+                f.rate = if ev.fade_out > 0.0 { 1.0 / ev.fade_out } else { f32::MAX };
+                f.despawn = true;
+            }
+            None => commands.entity(e).despawn(),
+        }
+    }
+}
+
+/// UGameplayStatics::PushSoundMixModifier: the mix starts (or counts another push).
+#[derive(Event, Clone, Copy, Debug)]
+pub struct PushMix(pub &'static str);
+
+/// UGameplayStatics::PopSoundMixModifier: one push undone; the last starts its fade out.
+#[derive(Event, Clone, Copy, Debug)]
+pub struct PopMix(pub &'static str);
+
+/// UGameplayStatics::ClearSoundMixModifiers: every mix fades out.
+#[derive(Event, Clone, Copy, Debug)]
+pub struct ClearMixes;
+
+fn push_mix(ev: On<PushMix>, mut mixes: ResMut<SoundMixes>) {
+    match mixes.active.iter_mut().find(|m| m.name == ev.0) {
+        Some(m) => {
+            m.count += 1;
+            m.out = None;
+        }
+        None => mixes.active.push(ActiveMix { name: ev.0.to_string(), t: 0.0, count: 1, out: None }),
+    }
+}
+
+fn pop_mix(ev: On<PopMix>, mut mixes: ResMut<SoundMixes>) {
+    if let Some(m) = mixes.active.iter_mut().find(|m| m.name == ev.0) {
+        m.count = m.count.saturating_sub(1);
+        if m.count == 0 && m.out.is_none() {
+            m.out = Some(0.0);
+        }
+    }
+}
+
+fn clear_mixes(_: On<ClearMixes>, mut mixes: ResMut<SoundMixes>) {
+    for m in &mut mixes.active {
+        m.count = 0;
+        m.out.get_or_insert(0.0);
+    }
+}
+
+/// The pushed mixes' clocks: past its Duration a mix fades out; one faded out is gone.
+fn update_mixes(time: Res<Time>, mut mixes: ResMut<SoundMixes>) {
+    let dt = time.delta_secs();
+    let s = &mut *mixes;
+    for m in &mut s.active {
+        m.t += dt;
+        if let Some(o) = m.out.as_mut() {
+            *o += dt;
+        }
+        if let Some(def) = s.mixes.get(&m.name) {
+            if def.duration >= 0.0 && m.out.is_none() && m.t >= def.initial_delay + def.fade_in + def.duration {
+                m.out = Some(0.0);
+            }
+        }
+    }
+    let defs = &s.mixes;
+    s.active.retain(|m| match (m.out, defs.get(&m.name)) {
+        (Some(o), Some(d)) => o < d.fade_out,
+        (Some(_), None) => false,
+        _ => true,
+    });
+}
+
+/// Each voice's volume and speed scaled by its class's factors (the other systems set them, or set them once at
+/// the start: a value this pass wrote is taken back to what it was before).
+fn apply_mixes(
+    mut commands: Commands,
+    mixes: Res<SoundMixes>,
+    mut voices: Query<(Entity, &VoiceClass, Option<&mut AudioSink>, Option<&mut SpatialAudioSink>, Option<&MixApplied>)>,
+) {
+    use bevy::audio::AudioSinkPlayback;
+    for (e, class, sink, spatial, applied) in &mut voices {
+        let (fv, fp) = class.0.as_deref().map_or((1.0, 1.0), |c| mixes.factors(c));
+        let sink: &mut dyn AudioSinkPlayback = match (sink, spatial) {
+            (Some(s), _) => s.into_inner(),
+            (None, Some(s)) => s.into_inner(),
+            _ => continue,
+        };
+        let (vol, speed) = (sink.volume().to_linear(), sink.speed());
+        let (base_v, base_s) = match applied {
+            Some(a) if a.volume == vol && a.speed == speed => (vol / a.factors.0.max(1e-6), speed / a.factors.1.max(1e-6)),
+            _ => (vol, speed),
+        };
+        if applied.is_some_and(|a| a.factors == (fv, fp) && a.volume == vol && a.speed == speed) {
+            continue;
+        }
+        let (nv, ns) = (base_v * fv, (base_s * fp).max(1e-3));
+        sink.set_volume(Volume::Linear(nv));
+        sink.set_speed(ns);
+        commands.entity(e).insert(MixApplied { volume: sink.volume().to_linear(), speed: sink.speed(), factors: (fv, fp) });
+    }
 }
 
 /// The camera hears.
@@ -871,11 +1130,11 @@ fn play_sound(
                 settings.volume = Volume::Linear(v.volume * factor);
                 settings.spatial = att.spatialize;
                 settings.spatial_scale = Some(SpatialScale::new(SPATIAL_SCALE));
-                commands.spawn((source, settings, Transform::from_translation(at), Emitter { volume: v.volume, attenuation: att })).id()
+                commands.spawn((source, settings, Transform::from_translation(at), Emitter { volume: v.volume, attenuation: att }, VoiceClass(v.class.clone()))).id()
             }
             _ => {
                 settings.volume = Volume::Linear(v.volume);
-                commands.spawn((source, settings)).id()
+                commands.spawn((source, settings, VoiceClass(v.class.clone()))).id()
             }
         };
         if v.delay > 0.0 {

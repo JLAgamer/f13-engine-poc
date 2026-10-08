@@ -28,8 +28,13 @@ Mechanics: counselor side
       he's deep enough; the AI follows her in (`--bot-drown`)
 - [x] Jason going under (OnRep_UnderWater): a counselor he holds dropped where she is (MULTICAST_DropCounselor,
       OnDropped in water), his Shift ended
-- [ ] Swimming, remaining: Jason's underwater sound mix and input (his own player's: pushed only when he's locally
-      controlled). (Counselors don't dive in the game: SCCounselorCharacter has no diving, only MinWaterDepthForSwimming)
+- [x] Jason under water when he's played: UnderwaterSoundMix and UnderWaterCue (faded in and out over 1 s), his
+      UnderwaterInput's bindings over his others. (Counselors don't dive in the game: SCCounselorCharacter has no diving,
+      only MinWaterDepthForSwimming)
+- [x] Sound classes and mixes (audio.rs): each cue's SoundClass, the classes' volume and pitch multiplied down their
+      hierarchy (Music 0.75, the voice-overs 1.5, Cinematics 1.1), and the pushed mixes' class adjusters with their
+      fades: Jason's Shift, Stalk and under-water mixes for his player, the teleport static's mix for hers (cleared
+      as the effect's TeleportScreenTime runs out). The mixes' EQ isn't played (Bevy's audio has no filters)
 - [x] Fear events pushed in the client (fear_events.rs): darkness (f13-core::light, the map's point and spot lights),
   indoors (the cabins' indoor volumes, also used by Sense), wounded, Jason near and in view, grabbed, hidden, items
   held, in water, blackouts (inside a grid's volume while its power is out)
@@ -130,8 +135,8 @@ Mechanics: Jason side
   half). When the computer Jason uses them is a placeholder
 - [x] Shift's rush (Jason_Base's ShiftAudioCue, on him) and the static a counselor hears as he Morphs in near her
       (TeleportCueCounselorHears; PLACEHOLDER: near = his near music's reach)
-- [ ] Shift, Morph, Stalk, remaining: the dissolve and screen effects, their sound mixes (Shift's, Stalk's), Morph's
-      excluded areas
+- [ ] Shift, Morph, Stalk, remaining: the dissolve and screen effects, Morph's excluded areas (the map's Boundary
+      texture: see MODLOG "Morph's map")
 - [x] Throwing knives (J2's two, the knife's damage and cooldown, the throw montage and its ThrowKnife notify,
   SCJasonAIProperties' 5..25 m; placeholder knife speed) and Jason's traps (J2's seven KillerTraps, set in doorways
   he opens; they catch counselors, not him; his trap's own mesh isn't exported)

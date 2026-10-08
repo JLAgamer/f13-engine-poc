@@ -15,6 +15,7 @@ using CUE4Parse.UE4.Assets;
 using CUE4Parse.UE4.Assets.Exports;
 using CUE4Parse.UE4.Assets.Exports.Sound;
 using CUE4Parse.UE4.Objects.UObject;
+using CUE4Parse.UE4.Assets.Objects;
 using CUE4Parse_Conversion.Sounds;
 
 class SoundExporter(IFileProvider provider, string outDir, Func<string, string> toFile)
@@ -67,8 +68,58 @@ class SoundExporter(IFileProvider provider, string outDir, Func<string, string> 
             if (c.GetOrDefault<FPackageIndex?>("FirstNode")?.Load<UObject>() is { } first) cue["Root"] = Node(first);
         }
         else return false;
+        // Its SoundClassObject (USoundBase's: the sound mixes adjust sounds by class).
+        if (obj.GetOrDefault<FPackageIndex?>("SoundClassObject")?.Load<UObject>() is { } sc) cue["SoundClass"] = sc.Name;
         File.WriteAllText(Path.Combine(Dir, name + ".json"), cue.ToString(Formatting.Indented));
         return true;
+    }
+
+    /// sounds/sound_classes.json: every SoundClass (Content/Sounds/SoundClasses), its parent and its own Volume and
+    /// Pitch (FSoundClassProperties; 1 unless set).
+    public void WriteSoundClasses()
+    {
+        var classes = new JObject();
+        foreach (var f in provider.Files.Keys.Where(k => k.Contains("/Sounds/SoundClasses/", StringComparison.OrdinalIgnoreCase) && k.EndsWith(".uasset")))
+            foreach (var sc in provider.LoadPackage(f).GetExports().Where(e => e.ExportType == "SoundClass"))
+            {
+                var p = sc.GetOrDefault<FStructFallback?>("Properties");
+                classes[sc.Name] = new JObject
+                {
+                    ["Parent"] = sc.GetOrDefault<FPackageIndex?>("ParentClass")?.Load<UObject>()?.Name,
+                    ["Volume"] = p?.GetOrDefault("Volume", 1f) ?? 1f,
+                    ["Pitch"] = p?.GetOrDefault("Pitch", 1f) ?? 1f,
+                };
+            }
+        File.WriteAllText(Path.Combine(Dir, "sound_classes.json"), classes.ToString(Formatting.Indented));
+    }
+
+    /// sounds/sound_mixes.json: the sound mixes f13-game pushes, by name: their fades and class adjusters (the EQ isn't
+    /// played).
+    public void WriteSoundMixes(IEnumerable<string> paths)
+    {
+        var mixes = new JObject();
+        foreach (var path in paths)
+            foreach (var m in provider.LoadPackage(toFile(path)).GetExports().Where(e => e.ExportType == "SoundMix"))
+            {
+                var effects = new JArray();
+                foreach (var e in m.GetOrDefault<FStructFallback[]>("SoundClassEffects", []))
+                    effects.Add(new JObject
+                    {
+                        ["Class"] = e.GetOrDefault<FPackageIndex?>("SoundClassObject")?.Load<UObject>()?.Name,
+                        ["Volume"] = e.GetOrDefault("VolumeAdjuster", 1f),
+                        ["Pitch"] = e.GetOrDefault("PitchAdjuster", 1f),
+                        ["ApplyToChildren"] = e.GetOrDefault("bApplyToChildren", false),
+                    });
+                mixes[m.Name] = new JObject
+                {
+                    ["InitialDelay"] = m.GetOrDefault("InitialDelay", 0f),
+                    ["FadeInTime"] = m.GetOrDefault("FadeInTime", 0.2f),
+                    ["Duration"] = m.GetOrDefault("Duration", -1f),
+                    ["FadeOutTime"] = m.GetOrDefault("FadeOutTime", 0.2f),
+                    ["Effects"] = effects,
+                };
+            }
+        File.WriteAllText(Path.Combine(Dir, "sound_mixes.json"), mixes.ToString(Formatting.Indented));
     }
 
     static JObject Props(UObject o) => JObject.Parse(JsonConvert.SerializeObject(o))["Properties"] as JObject ?? new JObject();

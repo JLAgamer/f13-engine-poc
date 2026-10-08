@@ -656,6 +656,8 @@ switch (rest[0])
         {
             var sx = new SoundExporter(provider, outDir, ToFile);
             sx.Export(sx.FootstepTables().Concat(Mvp.Sounds).Concat(sx.ClassSounds()).Concat(WriteAnimSounds()));
+            sx.WriteSoundClasses();
+            sx.WriteSoundMixes(Mvp.SoundMixes);
         }
         {
             var wx = new WidgetExporter(provider, outDir, Queue, ToFile);
@@ -668,6 +670,8 @@ switch (rest[0])
     {
         var sx = new SoundExporter(provider, outDir, ToFile);
         var n = sx.Export(sx.FootstepTables().Concat(Mvp.Sounds).Concat(sx.ClassSounds()).Concat(WriteAnimSounds()));
+        sx.WriteSoundClasses();
+        sx.WriteSoundMixes(Mvp.SoundMixes);
         Console.WriteLine($"sounds: {n} cues");
         return 0;
     }
@@ -944,6 +948,8 @@ static class Mvp
         "/Game/Sounds/Environment/SoundWaves/main_campground_ambience_loop.main_campground_ambience_loop",
         // Jason_Base's ShiftAudioCue and TeleportCueCounselorHears.
         "/Game/Sounds/GamePlay/JasonShift/ShiftTunnelCue.ShiftTunnelCue",
+        // Jason_Base's UnderWaterCue (CreateSound2D as he goes under).
+        "/Game/Sounds/Swimming/JasonUnderwater_Cue.JasonUnderwater_Cue",
         "/Game/Sounds/GamePlay/VHS_SFXCue.VHS_SFXCue",
         // The world settings' PoliceCalledSFX (the call goes through).
         "/Game/Sounds/GamePlay/PoliceCalled.PoliceCalled",
@@ -1163,6 +1169,15 @@ static class Mvp
         .Select(m => $"/Game/Characters/Counselors/Base/Female/Animation/Interaction/Doors/f_normal_stand_door_{m}")];
     public const string Killer = "/Game/Characters/Killers/Jason/J2/Jason_SackHead";
     /// The kills whose cameras f13-game plays (kill_cameras.json).
+    /// The sound mixes f13-game pushes (Jason_Base's: Shift, Stalk, under water, what a counselor hears of a teleport).
+    public static readonly string[] SoundMixes =
+    [
+        "/Game/Sounds/SoundMixes/JasonShiftSoundMix",
+        "/Game/Sounds/SoundMixes/JasonStalkSoundMix",
+        "/Game/Sounds/SoundMixes/JasonUnderwaterSoundMix",
+        "/Game/Sounds/SoundMixes/TeleportCounselorHearsSoundMix",
+    ];
+
     public static readonly string[] KillCameras =
     [
         "/Game/Blueprints/ContextKills/Pickaxe_ThroatHack_GrabKill",

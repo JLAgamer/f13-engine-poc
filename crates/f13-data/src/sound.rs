@@ -161,6 +161,8 @@ pub struct Cue {
     pub pitch: f32,
     pub attenuation: Option<Attenuation>,
     pub root: Option<Node>,
+    /// Its SoundClassObject.
+    pub sound_class: Option<String>,
 }
 
 /// One voice a cue plays: the wave, its volume and pitch, whether it loops.
@@ -174,6 +176,8 @@ pub struct Voice {
     pub delay: f32,
     /// What changes its volume and pitch while it plays (continuous modulators, cross-fades).
     pub mods: Vec<VoiceMod>,
+    /// Its cue's sound class.
+    pub class: Option<String>,
 }
 
 /// FModulatorContinuousParams (its constructor: Default 1, inputs 0..1, outputs 0..1, MPM_Normal).
@@ -287,6 +291,7 @@ impl Cue {
             pitch: v["Pitch"].as_f64().unwrap_or(1.0) as f32,
             attenuation: v.get("Attenuation").map(Attenuation::from_json),
             root: Node::from_json(&v["Root"]),
+            sound_class: v["SoundClass"].as_str().map(str::to_string),
         })
     }
 
@@ -297,6 +302,9 @@ impl Cue {
         let mut att = None;
         if let Some(root) = &self.root {
             walk(root, self.volume, self.pitch, false, 0.0, &[], rand, &mut voices, &mut att);
+        }
+        for v in &mut voices {
+            v.class = self.sound_class.clone();
         }
         (voices, att.or_else(|| self.attenuation.clone()))
     }
@@ -369,7 +377,7 @@ fn walk(n: &Node, volume: f32, pitch: f32, looping: bool, delay: f32, mods: &[Vo
         }
         Node::Wave { file, volume: wv, pitch: wp, looping: wl } => {
             if let Some(file) = file {
-                out.push(Voice { file: file.clone(), volume: volume * wv, pitch: pitch * wp, looping: looping || *wl, delay, mods: mods.to_vec() });
+                out.push(Voice { file: file.clone(), volume: volume * wv, pitch: pitch * wp, looping: looping || *wl, delay, mods: mods.to_vec(), class: None });
             }
         }
         Node::Other { children, .. } => {
@@ -460,7 +468,7 @@ mod tests {
                 ]}
             ]}
         });
-        let cue = Cue { volume: 2.0, pitch: 1.0, attenuation: None, root: Node::from_json(&v["Root"]) };
+        let cue = Cue { volume: 2.0, pitch: 1.0, attenuation: None, root: Node::from_json(&v["Root"]), sound_class: None };
         // rand: 0 for the modulator's volume and pitch, then 0.5 * 4 = 2 > 1: the second wave.
         let mut seq = [0.0, 0.0, 0.5].into_iter();
         let (voices, _) = cue.play(&mut || seq.next().unwrap_or(0.0));

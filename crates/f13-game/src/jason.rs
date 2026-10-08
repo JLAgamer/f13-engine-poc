@@ -269,7 +269,7 @@ impl Plugin for JasonPlugin {
             .add_observer(spawn_knife)
             .add_observer(distortion)
             .add_observer(car_slam)
-            .add_systems(Update, (tag_jason_parts, animate_jason, grab_layer));
+            .add_systems(Update, (tag_jason_parts, animate_jason, grab_layer, jason_mixes, teleport_mix));
     }
 }
 
@@ -851,8 +851,8 @@ pub struct Distortion {
 
 /// PlayDistortionEffect on the local counselor: within MaxTeleportViewDistance (flat) of him or of his Morph's
 /// destination, or with him in her view (KillerInViewPtr), she hears TeleportCueCounselorHears (PlaySound2D) and
-/// TeleportCounselorHearsMix is pushed (sound mixes aren't ported), with TeleportScreenEffectInst (not ported). Not
-/// when the local player is Jason.
+/// TeleportCounselorHearsMix is pushed (cleared as the effect's TeleportScreenTime runs out: [`teleport_mix`]), with
+/// TeleportScreenEffectInst (not ported). Not when the local player is Jason.
 fn distortion(
     ev: On<Distortion>,
     mut commands: Commands,
@@ -865,6 +865,8 @@ fn distortion(
     let near = flat(ev.at) <= t.max_teleport_view_m || ev.dest.is_some_and(|d| flat(d) <= t.max_teleport_view_m);
     if near || pushed.is_some_and(|p| p.spotted) {
         commands.trigger(crate::audio::PlaySound { cue: TELEPORT_HEARD_CUE.into(), at: None });
+        commands.trigger(crate::audio::PushMix("TeleportCounselorHearsSoundMix"));
+        commands.insert_resource(TeleportEffect(t.teleport_screen_time));
     }
 }
 
@@ -2448,6 +2450,53 @@ fn recover_counselor(mut commands: Commands, time: Res<Time>, mut players: Query
                 commands.entity(e).remove::<PlayAction>();
             }
         }
+    }
+}
+
+/// His player's sound mixes (pushed only when he's locally controlled): OnRep_ShiftActive's ShiftAudioSoundMix,
+/// OnRep_Stalk's StalkAudioSoundMix, OnRep_UnderWater's UnderwaterSoundMix with UnderWaterCue (CreateSound2D, faded
+/// in over 1 s; out over 1 s as he comes up).
+fn jason_mixes(mut commands: Commands, play: Option<Res<crate::jason_player::PlayJason>>, jasons: Query<&Jason>, mut last: Local<(bool, bool, bool)>) {
+    let now = match (play, jasons.iter().next()) {
+        (Some(_), Some(j)) => (j.shifting(), j.stalking(), j.underwater),
+        _ => (false, false, false),
+    };
+    let toggle = |commands: &mut Commands, on: bool, mix: &'static str| {
+        if on {
+            commands.trigger(crate::audio::PushMix(mix));
+        } else {
+            commands.trigger(crate::audio::PopMix(mix));
+        }
+    };
+    if now.0 != last.0 {
+        toggle(&mut commands, now.0, "JasonShiftSoundMix");
+    }
+    if now.1 != last.1 {
+        toggle(&mut commands, now.1, "JasonStalkSoundMix");
+    }
+    if now.2 != last.2 {
+        toggle(&mut commands, now.2, "JasonUnderwaterSoundMix");
+        if now.2 {
+            commands.trigger(crate::audio::Loop2D { key: "JasonUnderwater", cue: "JasonUnderwater_Cue", fade_in: 1.0 });
+        } else {
+            commands.trigger(crate::audio::Stop2D { key: "JasonUnderwater", fade_out: 1.0 });
+        }
+    }
+    *last = now;
+}
+
+/// What's left of the counselor's teleport effect (SCKillerCharacter +0x1444, TeleportScreenTime from each
+/// PlayDistortionEffect): his tick, as it runs out with the effect on, clears the sound mixes
+/// (ClearSoundMixModifiers: TeleportCounselorHearsMix with the rest).
+#[derive(Resource)]
+struct TeleportEffect(f32);
+
+fn teleport_mix(mut commands: Commands, time: Res<Time>, effect: Option<ResMut<TeleportEffect>>) {
+    let Some(mut e) = effect else { return };
+    e.0 -= time.delta_secs();
+    if e.0 <= 0.0 {
+        commands.remove_resource::<TeleportEffect>();
+        commands.trigger(crate::audio::ClearMixes);
     }
 }
 
