@@ -19,6 +19,11 @@ static class NavMeshExporter
         public int X, Y, Layer;
         public float[] Verts = [];
         public List<Poly> Polys = new();
+        // Detail meshes (dtPolyDetail: vertBase, triBase, vertCount, triCount per polygon), their extra vertices (Recast
+        // space) and triangles (3 indices into the polygon's then its detail vertices, and an edge flags byte).
+        public List<int[]> Detail = new();
+        public float[] DetailVerts = [];
+        public byte[] DetailTris = [];
     }
 
     public class Poly
@@ -103,7 +108,12 @@ static class NavMeshExporter
                 int count = r.ReadByte(), areaAndType = r.ReadByte();
                 tile.Polys.Add(new Poly { V = v[..count], N = n[..count], Area = areaAndType & 0x3f });
             }
-            r.BaseStream.Seek(detailMeshes * 10 + detailVerts * 12 + detailTris * 4 + bvNodes * 16 + clusters * 12 + polyCount * 2, SeekOrigin.Current);
+            for (var i = 0; i < detailMeshes; i++)
+                tile.Detail.Add([(int)r.ReadUInt32(), (int)r.ReadUInt32(), r.ReadByte(), r.ReadByte()]);
+            tile.DetailVerts = new float[detailVerts * 3];
+            for (var i = 0; i < tile.DetailVerts.Length; i++) tile.DetailVerts[i] = r.ReadSingle();
+            tile.DetailTris = r.ReadBytes(detailTris * 4);
+            r.BaseStream.Seek(bvNodes * 16 + clusters * 12 + polyCount * 2, SeekOrigin.Current);
             var layerSize = r.ReadInt32();
             r.BaseStream.Seek(layerSize, SeekOrigin.Current);
             mesh.Tiles.Add(tile);

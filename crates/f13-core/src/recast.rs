@@ -6,10 +6,13 @@
 //! (`RegionPartitioning=ChunkyMonotone`) and merge the small ones (`MergeRegionSize`), trace and simplify the region
 //! contours, and triangulate them into convex polygons of up to six vertices.
 //!
-//! Not ported: detail meshes (heights come from the polygon vertices), border vertex removal (tile edges are matched by
-//! overlap, see navmesh.rs), area types.
+//! Each polygon also gets its detail mesh (detail.rs: rcBuildPolyMeshDetail), its triangles following the ground.
+//!
+//! Not ported: border vertex removal (tile edges are matched by overlap, see navmesh.rs), area types.
 //!
 //! Space: Y up, metres (any unit works if the settings use it).
+
+mod detail;
 
 use crate::collision::{Tri, TriSource};
 use glam::Vec3;
@@ -38,6 +41,9 @@ pub struct NavConfig {
     /// ChunkyMonotone partitioning: the tile is swept in this many chunks per side (UE's `RegionChunkSplits`; 1 is
     /// plain monotone).
     pub region_chunk_splits: i32,
+    /// Detail meshes: the sample spacing and the largest height error kept (world units; 0 spacing: none).
+    pub detail_sample_dist: f32,
+    pub detail_sample_max_error: f32,
 }
 
 impl NavConfig {
@@ -59,13 +65,16 @@ impl NavConfig {
     }
 }
 
-/// One tile's polygons: world-space vertices and convex polygons (vertex indices, at most `max_verts_per_poly`).
+/// One tile's polygons: world-space vertices and convex polygons (vertex indices, at most `max_verts_per_poly`), and
+/// each polygon's detail mesh: its added vertices (world) and triangles (indices: the polygon's corners in order,
+/// then its added vertices; none when it has no detail).
 #[derive(Clone, Debug, Default)]
 pub struct TileMesh {
     pub tx: i32,
     pub tz: i32,
     pub verts: Vec<Vec3>,
     pub polys: Vec<Vec<u32>>,
+    pub detail: Vec<(Vec<Vec3>, Vec<[u8; 3]>)>,
 }
 
 const NULL_AREA: u8 = 0;
@@ -1092,7 +1101,7 @@ fn in_cone_of(i: usize, verts: &[(i32, i32)], pj: (i32, i32)) -> bool {
 /// hole's leftmost vertex that crosses nothing), so the polygons go round the obstacle instead of over it. Without it a
 /// region wrapped round a wall (inside and outside a cabin, joined through the doorway) got polygons across the wall,
 /// and the hole itself was garbage. Returns the outlines.
-fn merge_holes(walked: Vec<(u32, Vec<CVert>)>) -> Vec<Vec<CVert>> {
+fn merge_holes(walked: Vec<(u32, Vec<CVert>)>) -> Vec<(u32, Vec<CVert>)> {
     let xz = |c: &[CVert]| c.iter().map(|v| (v.x, v.z)).collect::<Vec<_>>();
     let (mut outlines, mut holes): (Vec<(u32, Vec<CVert>)>, Vec<(u32, Vec<CVert>)>) = walked.into_iter().partition(|(_, c)| contour_area(c) >= 0);
     // Leftmost first (min x, then min z), as Recast does.
@@ -1152,7 +1161,7 @@ fn merge_holes(walked: Vec<(u32, Vec<CVert>)>) -> Vec<Vec<CVert>> {
         let merged: Vec<CVert> = (0..=na).map(|k| ca[(ia + k) % na]).chain((0..=nb).map(|k| hole[(best_vertex + k) % nb])).collect();
         outlines[o].1 = merged;
     }
-    outlines.into_iter().map(|(_, c)| c).collect()
+    outlines
 }
 
 /// Triangles (indices into `v`) of a simple polygon, and whether it had to cut a corner that isn't a proper ear (an
@@ -1394,7 +1403,7 @@ pub fn build_tile(world: &(impl TriSource + ?Sized), cfg: &NavConfig, origin: Ve
         list.push((v.y, idx));
         idx
     };
-    for cont in &contours {
+    for (region, cont) in &contours {
         let xz: Vec<(i32, i32)> = cont.iter().map(|v| (v.x, v.z)).collect();
         let Some((tris, stuck)) = triangulate(&xz) else {
             stats.bad_contours.fetch_add(1, Ordering::Relaxed);
@@ -1425,6 +1434,21 @@ pub fn build_tile(world: &(impl TriSource + ?Sized), cfg: &NavConfig, origin: Ve
             let mut dedup = ids.clone();
             dedup.dedup();
             if dedup.len() >= 3 && dedup.first() != dedup.last() {
+                // Its detail mesh, from its corners as the mesh keeps them (cells).
+                let corners: Vec<(i32, i32, i32)> = dedup
+                    .iter()
+                    .map(|&k| {
+                        let v = (mesh.verts[k as usize] - bmin) / Vec3::new(cs, cfg.cell_height, cs);
+                        (v.x.round() as i32, v.y.round() as i32, v.z.round() as i32)
+                    })
+                    .collect();
+                let (extra, tris) = if cfg.detail_sample_dist > 0.0 {
+                    detail::poly_detail(&c, &reg, &corners, *region, cs, cfg.cell_height, cfg.detail_sample_dist, cfg.detail_sample_max_error)
+                } else {
+                    (Vec::new(), Vec::new())
+                };
+                let to_world = |v: Vec3| Vec3::new(bmin.x + v.x * cs, bmin.y + v.y * cfg.cell_height, bmin.z + v.z * cs);
+                mesh.detail.push((extra.into_iter().map(to_world).collect(), tris));
                 mesh.polys.push(dedup);
             }
         }

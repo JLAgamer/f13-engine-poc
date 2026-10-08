@@ -100,7 +100,11 @@ Mechanics: Jason side
   ChunkyMonotone regions merged as the cooked navmesh shows (93% the same walkable area, a few percent apart in
   polygon count), tiles on the game's grid; paths pulled taut and shortened along the mesh; the HUD shows the build.
   The cooked navmesh is exported (navmesh-<agent>.json) as a reference
-- [ ] Navmesh, remaining: detail meshes (heights come from the polygon corners), border vertex removal
+- [x] Navmesh detail meshes (f13-core recast/detail.rs, rcBuildPolyMeshDetail with UE's detailSampleDist 600 cm and
+      detailSampleMaxError 1 cm): polygon heights follow the ground (navmesh height queries use them). Against the
+      cooked Killer navmesh: extra vertices per polygon 78/7/10/2 % (0/1/2/3) vs the game's 82/7/8/2 %; height gap
+      to the game's detail 6.5 cm mean (7.7 from corners alone); a -2.5 cm bias in the corners' own heights remains
+- [ ] Navmesh, remaining: border vertex removal
 - [x] Holding breath while hiding (f13-core::breath, hiding.rs): the breath meter's drain, refill, threshold and wait;
   her HoldBreath / HoldBreathEnd / KillerIsNearWhileHiding voice lines (3 m, then 20 s) and Screams (23 m); Jason
   hears the hiding line within its range (AI choice)

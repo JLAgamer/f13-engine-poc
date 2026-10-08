@@ -35,6 +35,10 @@ const MAX_EDGE_CM: f32 = 1200.0;
 const MERGE_REGION_SIZE_CM: f32 = 200.0;
 /// RecastNavMesh's RegionChunkSplits (engine default 2): ChunkyMonotone sweeps each tile in 2 x 2 chunks.
 const REGION_CHUNK_SPLITS: i32 = 2;
+/// The detail meshes' sample spacing and largest error (cm), as UE's generator config sets them (0x14124c846:
+/// detailSampleDist 600, detailSampleMaxError 1, after maxVertsPerPoly 6).
+const DETAIL_SAMPLE_DIST_CM: f32 = 600.0;
+const DETAIL_SAMPLE_MAX_ERROR_CM: f32 = 1.0;
 
 pub fn killer_config() -> NavConfig {
     let cs = 0.09;
@@ -51,6 +55,8 @@ pub fn killer_config() -> NavConfig {
         max_verts_per_poly: 6,
         merge_region_area: (MERGE_REGION_SIZE_CM.powi(2) / (cs * 100.0)) as usize,
         region_chunk_splits: REGION_CHUNK_SPLITS,
+        detail_sample_dist: DETAIL_SAMPLE_DIST_CM / 100.0,
+        detail_sample_max_error: DETAIL_SAMPLE_MAX_ERROR_CM / 100.0,
     }
 }
 
@@ -97,6 +103,22 @@ fn build_navmesh(
                     task.2.elapsed().as_secs_f32()
                 );
                 commands.remove_resource::<Building>();
+                // F13_NAV_DUMP=<file>: each polygon's corners, detail vertices and triangles (Bevy metres), to compare
+                // with the cooked navmesh (navmesh-*.json).
+                if let Ok(path) = std::env::var("F13_NAV_DUMP") {
+                    let polys: Vec<serde_json::Value> = mesh
+                        .polys
+                        .iter()
+                        .map(|p| {
+                            let v = |v: &Vec3| [v.x, v.y, v.z];
+                            serde_json::json!([p.verts.iter().map(|&i| v(&mesh.verts[i as usize])).collect::<Vec<_>>(), p.detail.0.iter().map(v).collect::<Vec<_>>(), p.detail.1])
+                        })
+                        .collect();
+                    match std::fs::write(&path, serde_json::to_string(&polys).unwrap_or_default()) {
+                        Ok(()) => info!("navmesh: dumped to {path}"),
+                        Err(e) => warn!("navmesh: {path}: {e}"),
+                    }
+                }
                 commands.insert_resource(Navmesh(Arc::new(mesh)));
             }
             None => {

@@ -22,6 +22,8 @@ pub struct Poly {
     pub portals: Vec<Portal>,
     pub min: Vec3,
     pub max: Vec3,
+    /// Its detail mesh: added vertices (world) and triangles (indices: its corners, then the added vertices).
+    pub detail: (Vec<Vec3>, Vec<[u8; 3]>),
 }
 
 pub struct NavMesh {
@@ -104,7 +106,8 @@ impl NavMesh {
                         }
                     }
                 }
-                polys.push(Poly { verts: pv, portals, min, max });
+                let detail = t.detail.get(k).cloned().unwrap_or_default();
+                polys.push(Poly { verts: pv, portals, min, max, detail });
             }
         }
         // Stitch tiles: overlapping edges on the same border line, from different tiles, at about the same height.
@@ -191,26 +194,33 @@ impl NavMesh {
         self.polys[p as usize].verts.iter().map(|&v| self.verts[v as usize])
     }
 
-    /// Height of polygon `p` at (x, z) if the point is over it.
+    /// Height of polygon `p` at (x, z) if the point is over it: on its detail triangles (Detour's
+    /// dtGetPolyHeight), else on a fan of its corners.
     pub fn height_on(&self, p: u32, x: f32, z: f32) -> Option<f32> {
         let v: Vec<Vec3> = self.poly_verts(p).collect();
         let q = Vec2::new(x, z);
-        for i in 1..v.len() - 1 {
-            let (a, b, c) = (xz(v[0]), xz(v[i]), xz(v[i + 1]));
-            let d = (b - a).perp_dot(c - a);
+        let on = |a: Vec3, b: Vec3, c: Vec3| -> Option<f32> {
+            let (a2, b2, c2) = (xz(a), xz(b), xz(c));
+            let d = (b2 - a2).perp_dot(c2 - a2);
             if d.abs() < 1e-9 {
-                continue;
+                return None;
             }
-            let u = (q - a).perp_dot(c - a) / -d;
-            let w = (b - a).perp_dot(q - a) / d;
-            let (u, w) = (-u, w);
+            let u = (q - a2).perp_dot(c2 - a2) / d;
+            let w = (b2 - a2).perp_dot(q - a2) / d;
             let s = 1.0 - u - w;
             let tol = -1e-4;
-            if u >= tol && w >= tol && s >= tol {
-                return Some(v[0].y * s + v[i].y * u + v[i + 1].y * w);
+            (u >= tol && w >= tol && s >= tol).then(|| a.y * s + b.y * u + c.y * w)
+        };
+        let (extra, tris) = &self.polys[p as usize].detail;
+        let at = |i: u8| v.get(i as usize).copied().or_else(|| extra.get(i as usize - v.len()).copied());
+        for t in tris {
+            if let (Some(a), Some(b), Some(c)) = (at(t[0]), at(t[1]), at(t[2])) {
+                if let Some(h) = on(a, b, c) {
+                    return Some(h);
+                }
             }
         }
-        None
+        (1..v.len() - 1).find_map(|i| on(v[0], v[i], v[i + 1]))
     }
 
     fn candidates(&self, p: Vec3, radius: f32) -> Vec<u32> {
@@ -516,6 +526,8 @@ mod tests {
             max_verts_per_poly: 6,
             merge_region_area: 4444,
             region_chunk_splits: 2,
+            detail_sample_dist: 6.0,
+            detail_sample_max_error: 0.01,
         }
     }
 
