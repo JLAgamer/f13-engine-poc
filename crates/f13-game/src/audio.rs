@@ -26,8 +26,10 @@
 //! them); not yet: SeeCounselorDeadBody's trigger, scary sounds.
 //!
 //! Delay nodes start their voices late (started paused). Continuous modulators and param / distance cross-fades follow
-//! the sound's parameters (`CueParams` on its actor, as AudioComponent::SetFloatParameter sets them) while it plays. PLACEHOLDERS: the listener is the camera; actor sounds
-//! play 1 m above the actor's origin (the game plays them from the actor or its audio components).
+//! the sound's parameters (`CueParams` on its actor, as AudioComponent::SetFloatParameter sets them) while it plays.
+//! Actors' cues play at their root (PlaySoundAtLocation). PLACEHOLDERS: the listener is the camera; voice lines play
+//! 1 m above the character's feet (SCVoiceOverComponent plays them through an audio component whose attachment
+//! isn't read).
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
@@ -256,8 +258,9 @@ fn actor_sound(
 ) {
     let Ok((s, g)) = actors.get(ev.actor) else { return };
     let Some(cue) = s.0.get(ev.prop) else { return };
+    // The doors', windows', barricades' and walls' cues play at the actor's root (PlaySoundAtLocation).
     if !ev.prop.starts_with("VO:") {
-        commands.trigger(PlaySound { cue: cue.clone(), at: Some(g.translation() + Vec3::Y) });
+        commands.trigger(PlaySound { cue: cue.clone(), at: Some(g.translation()) });
         return;
     }
     let Some(mut sounds) = sounds else { return };
