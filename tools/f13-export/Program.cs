@@ -893,7 +893,10 @@ static class Mvp
         // The storm (CLsm_RainOn's).
         "SCZeus_BP_C",
         // Jason under water: his drowning kill and the shape he shows on the surface.
-        "Underwater_GrabKill_C", "KillerWaterImage_C"];
+        "Underwater_GrabKill_C", "KillerWaterImage_C",
+        // The pickaxe's grab kills (SCKillerCharacter's GrabKills: KillerGrabWidget's icons, DoesKillVolumeFit's KillBounds).
+        "Pickaxe_ThroatHack_GrabKill_C", "Pickaxe_Canopener_GrabKill_C", "PickAxe_CurbStomp_GrabKill_C",
+        "PickAxe_SweepTheLeg_GrabKill_C", "PickAxe_TopPopper_GrabKill_C"];
     // Montages whose length or root motion the rules use (anims.json).
     const string Shared = "/Game/Characters/Counselors/Base/Shared";
     public static readonly string[] Montages =

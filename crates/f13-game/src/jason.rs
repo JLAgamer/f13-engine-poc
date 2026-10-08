@@ -134,6 +134,24 @@ const GRAB_MISS: &str = "normal_grab_miss";
 /// put on the click.
 pub const GRAB_KILL_SLOTS: [usize; 4] = [1, 0, 2, 3];
 
+/// The pickaxe's grab kills' KillBounds by [`KILLS`] index (DoesKillVolumeFit): the box's place in the kill's root
+/// space (its component transform, Bevy) and half size (BoxExtent, m); and their ContextKillHUDIcon (its PNG):
+/// KillerGrabWidget's icons (GetGrabKillIcon(slot, true)).
+#[derive(Resource, Default)]
+pub struct GrabKillInfo {
+    pub bounds: [Option<(Transform, Vec3)>; 5],
+    pub icons: [Option<String>; 5],
+}
+
+/// Which of his four grab kill slots he can use as he holds her (IsGrabKillAvailable 0x1403f5500): bGrabKillsActive
+/// and the slot's kill's KillBounds fitting where he stands (SCDynamicContextKill::DoesKillVolumeFit 0x140379c40: an
+/// overlap on WorldDynamic of the box, the kill attached at his feet facing his way (ReattachKill 0x140396600),
+/// blocked by anything but him, her and the kill). A kill key on a slot that isn't (FUN_1403ffa80) does nothing.
+/// PLACEHOLDER: bGrabKillsActive is set by an Arxan-guarded lambda (0x1403eaf64) not read: taken as from the hold's
+/// start; IsGrabKillAvailable's other conditions (her vt+0xe90; slot 1's controller flag 0x3a8) aren't ported.
+#[derive(Resource, Default, Debug, PartialEq)]
+pub struct GrabKillsAvailable(pub [bool; 4]);
+
 pub const KILLS: [(&str, &str, &str); 5] = [
     ("cinematic_pickaxe_throathack", "Pickaxe_ThroatHack_GrabKill", "Pickaxe Throat Hack"),
     ("cinematic_pickaxe_head_canopener", "Pickaxe_Canopener_GrabKill", "Pickaxe Can Opener"),
@@ -264,8 +282,9 @@ pub(crate) struct JasonConfig {
 impl Plugin for JasonPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(JasonConfig { delay: self.delay, kill: self.kill })
+            .init_resource::<GrabKillsAvailable>()
             .add_systems(Startup, (spawn_jason, load_knife_look))
-            .add_systems(FixedUpdate, (update_jason, recover_counselor, fly_knives, pick_up_knives))
+            .add_systems(FixedUpdate, (grab_kills_available.before(update_jason), update_jason, recover_counselor, fly_knives, pick_up_knives))
             .add_observer(spawn_knife)
             .add_observer(distortion)
             .add_observer(car_slam)
@@ -734,6 +753,55 @@ fn load_knife_look(mut commands: Commands, export: Res<crate::ExportRoot>, asset
     if let Some(c) = classes.get("Underwater_GrabKill_C").and_then(|c| c.components.iter().find(|c| c.kind == "SCCameraSplineComponent")) {
         commands.insert_resource(DrownKillCamera(crate::to_transform(&c.local.unwrap_or(f13_data::level::Xform::IDENTITY))));
     }
+    // The grab kills' KillBounds and HUD icons.
+    let textures: std::collections::HashMap<String, String> =
+        std::fs::read_to_string(export.0.join("ui").join("textures.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let mut info = GrabKillInfo::default();
+    for (i, (_, class, _)) in KILLS.iter().enumerate() {
+        let Some(c) = classes.get(&format!("{class}_C")) else {
+            warn!("{class}_C isn't in classes.json (re-export: f13-export levels): its grab kill always fits and has no icon");
+            continue;
+        };
+        if let Some(b) = c.components.iter().find(|c| c.name == "KillBounds") {
+            let e = &b.props["BoxExtent"];
+            let v = |k: &str| e[k].as_f64().unwrap_or(32.0) as f32;
+            info.bounds[i] = Some((crate::to_transform(&b.local.unwrap_or(f13_data::level::Xform::IDENTITY)), Vec3::new(v("X"), v("Z"), v("Y")) / 100.0));
+        }
+        let icon = c.props["ContextKillHUDIcon"].as_str().and_then(|s| s.split('\'').nth(1));
+        info.icons[i] = icon.and_then(|n| textures.get(n).cloned());
+    }
+    commands.insert_resource(info);
+}
+
+/// IsGrabKillAvailable for each slot while he holds her (see [`GrabKillsAvailable`]).
+#[allow(clippy::type_complexity)]
+fn grab_kills_available(
+    info: Option<Res<GrabKillInfo>>,
+    mut available: ResMut<GrabKillsAvailable>,
+    jasons: Query<(&Jason, &Transform)>,
+    (collision, dynamic, no_world_dynamic, not_world_dynamic): (
+        Option<Res<crate::collision::WorldCollision>>,
+        Res<crate::collision::DynamicColliders>,
+        Query<(), With<crate::collision::NoWorldDynamic>>,
+        Option<Res<crate::collision::NotWorldDynamic>>,
+    ),
+) {
+    let Some((_, xf)) = jasons.iter().find(|(j, _)| j.holding()) else {
+        available.set_if_neq(GrabKillsAvailable([false; 4]));
+        return;
+    };
+    let origin = Transform::from_matrix(xf.to_matrix() * Transform::from_rotation(crate::character::FACING).to_matrix());
+    let fits = GRAB_KILL_SLOTS.map(|k| {
+        let (Some(world), Some((local, half))) = (collision.as_ref(), info.as_ref().and_then(|i| i.bounds[k])) else { return true };
+        let w = origin.mul_transform(local);
+        let b = f13_core::collision::Obb { centre: w.translation, axes: [w.rotation * Vec3::X, w.rotation * Vec3::Y, w.rotation * Vec3::Z], half: half * w.scale.abs() };
+        let (grid, lists) = world.without(&dynamic, |e| no_world_dynamic.contains(e));
+        let level = crate::collision::Excluding(grid, not_world_dynamic.as_ref().map(|g| &g.0));
+        !f13_core::collision::box_blocked(&(&level, lists.as_slice()), &b)
+    });
+    if available.set_if_neq(GrabKillsAvailable(fits)) {
+        info!("Jason: grab kills that fit (right, bottom, left, top): {fits:?}");
+    }
 }
 
 /// The knife's rotation: its forward (Unreal +X) along its velocity (its ProjectileMovement's bRotationFollowsVelocity).
@@ -1182,7 +1250,12 @@ pub(crate) fn update_jason(
     (killer, counselor_model): (Option<Res<KillerCharacter>>, Option<Res<crate::character::CounselorCharacter>>),
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
     (mut rng, mut struggle, mut controls, config): (ResMut<crate::GameRng>, ResMut<Struggle>, Option<ResMut<crate::jason_player::JasonControls>>, Res<JasonConfig>),
-    (mut jasons, morph_points, mut morph_map): (Query<(Entity, &mut Jason, &mut Transform, Option<&HitJason>, Option<&mut crate::senses::Knowledge>), Without<Player>>, Option<Res<MorphPoints>>, Option<ResMut<crate::jason_player::MorphMap>>),
+    (mut jasons, morph_points, mut morph_map, grab_kills): (
+        Query<(Entity, &mut Jason, &mut Transform, Option<&HitJason>, Option<&mut crate::senses::Knowledge>), Without<Player>>,
+        Option<Res<MorphPoints>>,
+        Option<ResMut<crate::jason_player::MorphMap>>,
+        Res<GrabKillsAvailable>,
+    ),
     (inventories, items, mut fuse_boxes, (mut grids, mut phone_boxes, mut phones), vehicles): (
         Query<&crate::interact::Inventory>,
         Query<&crate::props::Item>,
@@ -2253,9 +2326,11 @@ pub(crate) fn update_jason(
                     commands.entity(je).insert((PlayAction(his.into()), crate::kill_camera::KillCam::at(&pk.camera_key, pk.camera)));
                     commands.entity(pe).insert(PlayAction(hers.into()));
                     snap_rig(&mut rigs, je);
-                } else if player_input.map_or(at >= HOLD_BEFORE_KILL, |i| i.presses.attack || i.presses.kill.is_some()) {
-                    // The AI kills after a while; the player with a kill key (1-4, its slot) or a click (slot 1).
-                    // One of the weapon's grab kills.
+                } else if player_input.map_or(at >= HOLD_BEFORE_KILL, |i| {
+                    // A kill key (1-4, its slot) or a click (slot 1), its kill available (FUN_1403ffa80).
+                    (i.presses.attack || i.presses.kill.is_some()) && grab_kills.0[i.presses.kill.unwrap_or(1).min(3)]
+                }) {
+                    // The AI kills after a while; the player with a kill key or a click. One of the weapon's grab kills.
                     let picked = player_input.map(|i| GRAB_KILL_SLOTS[i.presses.kill.unwrap_or(1).min(3)]);
                     j.kill = picked.or(config.kill).unwrap_or_else(|| rng.0.index(KILLS.len()));
                     let (anim, class, name) = KILLS[j.kill];

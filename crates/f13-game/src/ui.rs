@@ -1212,6 +1212,12 @@ fn jason_hud(
     mut shown: Local<(bool, bool, f32)>,
     (mut morph_map, map_nodes): (Option<ResMut<crate::jason_player::MorphMap>>, Query<(&ComputedNode, &UiGlobalTransform)>),
     mut map_shown: Local<bool>,
+    (grab_info, grab_available, asset_server, mut images): (
+        Option<Res<crate::jason::GrabKillInfo>>,
+        Res<crate::jason::GrabKillsAvailable>,
+        Res<AssetServer>,
+        Query<&mut ImageNode>,
+    ),
 ) {
     use f13_core::killer_abilities::{Ability, Blockers};
     if play.is_none() || hud.built.as_ref().is_none_or(|b| !b.2) {
@@ -1224,6 +1230,33 @@ fn jason_hud(
     for name in ["KillerAbilityWidget_521", "GrabIconWidget_121", "RageWidget_190", "KillerKnifeWidget_77", "KillerTrapWidget_184"] {
         if let Some(mut v) = hud.names.get(&format!("KillerHUDWidget.{name}")).and_then(|&e| vis.get_mut(e).ok()) {
             v.set_if_neq(if combat { Visibility::Hidden } else { Visibility::Inherited });
+        }
+    }
+    // KillerGrabWidget while he holds her (Get_CanvasPanel_64_Visibility_0: GetGrabbedCounselor valid): Icon1-4 are
+    // slots 0-3 (right, bottom, left, top: Get_Icon*_Brush, GetGrabKillIcon(slot, true): the kill's
+    // ContextKillHUDIcon), IconUsableColor when IsGrabKillAvailable, else IconLockedColor (GetIconColor).
+    // His abilities' diamond gives way to it (SCKillerAbilityWidget::GetWidgetVisibility 0x14042dee0: collapsed while
+    // he holds someone).
+    for (name, shown) in [("KillerGrabWidget.CanvasPanel_64", j.holding()), ("KillerAbilityWidget.CanvasPanel_64", !j.holding())] {
+        if let Some(mut v) = hud.names.get(name).and_then(|&e| vis.get_mut(e).ok()) {
+            v.set_if_neq(if shown { Visibility::Inherited } else { Visibility::Hidden });
+        }
+    }
+    if j.holding() {
+        const USABLE: [f32; 4] = [0.854993, 0.030713, 0.017642, 0.498039];
+        const LOCKED: [f32; 4] = [0.039546, 0.039546, 0.039546, 1.0];
+        for (slot, &kill) in crate::jason::GRAB_KILL_SLOTS.iter().enumerate() {
+            let Some(mut img) = hud.names.get(&format!("KillerGrabWidget.Icon{}", slot + 1)).and_then(|&e| images.get_mut(e).ok()) else { continue };
+            if let Some(file) = grab_info.as_ref().and_then(|i| i.icons[kill].as_ref()) {
+                let handle = asset_server.load(file.clone());
+                if img.image != handle {
+                    img.image = handle;
+                }
+            }
+            let c = linear(if grab_available.0[slot] { USABLE } else { LOCKED });
+            if img.color != c {
+                img.color = c;
+            }
         }
     }
     // His map (Map_Overylay): open (bIsMapEnabled); MorphUse / MorphCancel and the map's header while it's out for a

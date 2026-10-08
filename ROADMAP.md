@@ -130,8 +130,11 @@ Mechanics: Jason side
       reversed as it's put away (UpdateMapVisibility on Jason_Base's SetMapStatus); the level's KillerMapTexture in
       the map's material (SCMiniMapBase 0x140430e20); the Morph / Cancel / Back keys by their bindings. ScaleBox lays
       its content out as Slate does (ScaleToFit and the other Stretch modes), so his map is the square it should be
-- [ ] Playing as Jason, remaining: the grab kill choices while
-      holding her (KillerGrabWidget); KillerHelpTextWidget; his score lines (XPDisplayWidget); his block in combat
+- [x] His grab kill choices while he holds her (KillerGrabWidget in place of his abilities' diamond): each slot's
+      kill icon (ContextKillHUDIcon), red when it fits (IsGrabKillAvailable: its KillBounds box clear of the level
+      where he stands, DoesKillVolumeFit), grey when it doesn't; a kill key on a kill that doesn't fit does nothing
+      (PLACEHOLDER: bGrabKillsActive's timer, in an Arxan-guarded lambda, taken as on from the hold's start)
+- [ ] Playing as Jason, remaining: KillerHelpTextWidget; his score lines (XPDisplayWidget); his block in combat
       stance (CMBT_KLR_Block); the doors' and walls' special move cameras for him (KillerOpenDoor, BreakDownFrom*);
       the grab kill slots are the save game's picks (unread: the throat hack on the click)
 - [x] Shift, Morph, Stalk (f13-core::killer_moves, jason.rs): Shift's 0.7 s wind-up, ShiftSpeed and ShiftTime (J2:
@@ -354,7 +357,7 @@ Setup
       for a decision on that
 
 Decomp audit (nothing guessed: every rule read from the decomp or the game's data)
-- [ ] Check each PLACEHOLDER (10 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
+- [ ] Check each PLACEHOLDER (11 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
       them, in jason.rs, are the AI's own choices and stay) and each "guess"/"assumed"/"not read" note (about 10)
       against the decomp and the export (Ghidra, MODLOG, f13-export `debug-json` / `pseudo` / `cdo` / `grep`); port
       what the game does, or record in MODLOG why it can't be found. Most are in jason.rs, hiding.rs, audio.rs,

@@ -375,6 +375,49 @@ pub fn capsule_blocked(world: &(impl TriSource + ?Sized), a: Vec3, b: Vec3, radi
     hit
 }
 
+/// An oriented box: its centre, its three unit axes and its half size along each.
+#[derive(Clone, Copy, Debug)]
+pub struct Obb {
+    pub centre: Vec3,
+    pub axes: [Vec3; 3],
+    pub half: Vec3,
+}
+
+impl Obb {
+    /// Its world-space bounds.
+    pub fn aabb(&self) -> (Vec3, Vec3) {
+        let e = self.axes[0].abs() * self.half.x + self.axes[1].abs() * self.half.y + self.axes[2].abs() * self.half.z;
+        (self.centre - e, self.centre + e)
+    }
+
+    /// Whether it overlaps a triangle (the separating axis test: the box's axes, the triangle's normal and the nine
+    /// edge cross products).
+    pub fn overlaps_tri(&self, t: &Tri) -> bool {
+        let v = [t.a - self.centre, t.b - self.centre, t.c - self.centre];
+        let edges = [v[1] - v[0], v[2] - v[1], v[0] - v[2]];
+        let separated = |axis: Vec3| {
+            if axis.length_squared() < 1e-12 {
+                return false;
+            }
+            let p = v.map(|p| p.dot(axis));
+            let r = self.half.x * self.axes[0].dot(axis).abs() + self.half.y * self.axes[1].dot(axis).abs() + self.half.z * self.axes[2].dot(axis).abs();
+            p[0].min(p[1]).min(p[2]) > r || p[0].max(p[1]).max(p[2]) < -r
+        };
+        if self.axes.iter().any(|&a| separated(a)) || separated(edges[0].cross(edges[1])) {
+            return false;
+        }
+        !self.axes.iter().any(|&a| edges.iter().any(|&e| separated(a.cross(e))))
+    }
+}
+
+/// Whether an oriented box overlaps any triangle (an overlap query's blocking hit).
+pub fn box_blocked(world: &(impl TriSource + ?Sized), b: &Obb) -> bool {
+    let (min, max) = b.aabb();
+    let mut hit = false;
+    world.for_each_in(min, max, &mut |t| hit = hit || b.overlaps_tri(t));
+    hit
+}
+
 /// Whether a sphere overlaps a convex hull (its triangles, normals outward): the centre inside it, or a triangle
 /// within `radius`.
 pub fn sphere_overlaps_hull(hull: &[Tri], centre: Vec3, radius: f32) -> bool {
@@ -665,6 +708,23 @@ mod tests {
         assert!(sphere_overlaps_hull(&c, Vec3::new(2.4, 0.0, 0.0), 1.5));
         assert!(!sphere_overlaps_hull(&c, Vec3::new(2.6, 0.0, 0.0), 1.5));
         assert!(!sphere_overlaps_hull(&[], Vec3::ZERO, 1.0));
+    }
+
+    #[test]
+    fn box_overlaps_tris() {
+        let g = ground();
+        let axis = [Vec3::X, Vec3::Y, Vec3::Z];
+        assert!(box_blocked(&g, &Obb { centre: Vec3::new(0.0, 0.5, 0.0), axes: axis, half: Vec3::splat(1.0) }));
+        assert!(!box_blocked(&g, &Obb { centre: Vec3::new(0.0, 1.3, 0.0), axes: axis, half: Vec3::splat(1.0) }));
+        // Turned 45 degrees about Z: its corner reaches sqrt(2) down.
+        let q = glam::Quat::from_rotation_z(std::f32::consts::FRAC_PI_4);
+        let turned = [q * Vec3::X, q * Vec3::Y, q * Vec3::Z];
+        assert!(box_blocked(&g, &Obb { centre: Vec3::new(0.0, 1.3, 0.0), axes: turned, half: Vec3::splat(1.0) }));
+        assert!(!box_blocked(&g, &Obb { centre: Vec3::new(0.0, 1.5, 0.0), axes: turned, half: Vec3::splat(1.0) }));
+        // A wall's triangle beside the box, an edge-on miss and a hit.
+        let wall = Tri::new(Vec3::new(3.0, 0.0, -5.0), Vec3::new(3.0, 5.0, 0.0), Vec3::new(3.0, 0.0, 5.0)).unwrap();
+        assert!(!Obb { centre: Vec3::new(1.9, 1.0, 0.0), axes: axis, half: Vec3::splat(1.0) }.overlaps_tri(&wall));
+        assert!(Obb { centre: Vec3::new(2.1, 1.0, 0.0), axes: axis, half: Vec3::splat(1.0) }.overlaps_tri(&wall));
     }
 
     fn ground() -> TriGrid {

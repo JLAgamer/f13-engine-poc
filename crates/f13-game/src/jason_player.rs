@@ -246,6 +246,7 @@ fn demo(
     mut done: Local<(bool, bool, f32)>,
     time: Res<Time>,
     (know, mut map, window, mut opened): (Query<&crate::senses::Knowledge>, ResMut<MorphMap>, Single<&bevy::window::Window, With<bevy::window::PrimaryWindow>>, Local<Option<f32>>),
+    grab_kills: Res<crate::jason::GrabKillsAvailable>,
 ) {
     let (Some((j, jxf)), Some(h)) = (jason.iter().next(), her.iter().next()) else { return };
     let d = h.translation - jxf.translation;
@@ -284,9 +285,9 @@ fn demo(
     }
     let (knife, swung, last) = &mut *done;
     debug!("jason demo: {:?} at {:.1}, {dist:.1} m from her, velocity {:.0}", j.state, jxf.translation, j.velocity);
-    // Holding her: a kill by its key (3: the left slot).
+    // Holding her: a kill by its key (3: the left slot, else the first that fits).
     if matches!(j.state, crate::jason::JasonState::Holding { t } if t > 1.5) {
-        controls.latched.kill = Some(2);
+        controls.latched.kill = [2, 0, 1, 3].into_iter().find(|&s| grab_kills.0[s]);
     }
     if !matches!(j.state, crate::jason::JasonState::Hunting) || now - *last < 1.0 {
         return;
