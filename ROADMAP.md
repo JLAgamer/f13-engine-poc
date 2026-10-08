@@ -134,8 +134,10 @@ Mechanics: Jason side
 - [x] Placed kills' props (SCContextKillActor, decompiled): the bird bath, the water pump and the chair are drawn
       (their skeletal meshes) and play their own animation as the kill starts (KillStarted), the bird bath turned as
       its Blueprint turns it; the cabins' spawned placed kills (30: back breaks, head smashes, head punches) are usable
-- [ ] Kills, remaining: walking her to one; the bird bath's bShouldOrientTowardKiller (where it's applied isn't
-      found). (The other weapons' kills are other Jasons': not Part 2's)
+- [ ] Kills, remaining: walking her to one (he walks at his normal speeds while holding her; needs the grab's
+      upper-body layered bone blend, read, see MODLOG "Jason walking with a held counselor"); the bird bath's
+      bShouldOrientTowardKiller (where it's applied isn't found). (The other weapons' kills are other Jasons': not
+      Part 2's)
 - [x] Generators (power.rs): the fuse boxes and their power grids; a destroyed fuse box puts out the powered lights
       in its grid's box (and they stop lighting her: darkness fear) and lights its red power-out light; counselors
       repair it (hold E, 15 s, pips), Jason destroys it (the player's E: Jason_Generator_Destruction_Machete's
