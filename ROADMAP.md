@@ -112,6 +112,13 @@ Mechanics: Jason side
 - [x] Sense on demand when Jason's played (4; the computer Jason uses it when ready and she's out of sight)
 - [x] Choosing kills when Jason's played: 1-5 while holding her (a click: one at random)
 - [ ] Playing as Jason, remaining: the map for Morph
+- [ ] Playing as Jason: the counselor bot should idle instead of running the escape bot, so there's time to try Jason
+      out
+- [ ] Bug: Jason's camera and spawn point seem wrong when he's played
+- [ ] Jason's HUD is unfinished (compare against KillerHUDWidget's full layout)
+- [ ] Jason's keybinds are wrong (e.g. middle click swings instead of throwing a knife): take them from the game's
+      DefaultInput.ini
+- [ ] Bug: when Jason's played, the counselor bot's prompts (the repair dial and such) show on his HUD
 - [x] Shift, Morph, Stalk (f13-core::killer_moves, jason.rs): Shift's 0.7 s wind-up, ShiftSpeed and ShiftTime (J2:
   1000 cm/s, 4 s), ending in a grab; Stalk's StalkActiveTimer (IdleStalkModifier standing still); Morph to the
   nearest SCKillerMorphPoint within 30 m of the spot after TeleportScreenTime; the teleport fade (he's hidden below
@@ -247,6 +254,8 @@ Presentation
 - [x] Cabinet special moves (cabinets.rs, decompiled): Counselor_OpenDrawer / OpenDrawerLow's montage (Open, Idle,
       Close, Take), the drawer following her target_jnt bone (SCCabinet's tick), ready after the Open section; a press
       closes it, a 1 s hold takes the item (at OnPickupItem); emptied drawers stay open; desks' two drawers
+- [ ] Bug: the counselor's camera doesn't move when she opens a drawer (check the drawer special move's camera in the
+      decomp)
 - [x] Through windows on the takes' own root motion: the climb, the dive and its landing play from the window's
       CounselorVault / CounselorDive special move spot on her side (a window's inside is its +X side:
       SCWindow::IsInteractorInside is the door's test reversed)
