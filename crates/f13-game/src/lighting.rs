@@ -4,7 +4,7 @@
 //!
 //! Units carry over from Unreal 4.18 as follows:
 //! - **Exposure**: the volume fixes it (auto exposure min = max brightness, 1.2), so a pixel is the scene value /
-//!   1.2. That's Bevy's exposure at `ev100 = 0`. Tonemapping is ACES, the curve the game's filmic tonemapper fits.
+//!   1.2. That's Bevy's exposure at `ev100 = 0`. Tonemapping is the game's own (tonemap.rs).
 //! - **Lights**:
 //!   - The moon's Intensity is its illuminance (lux).
 //!   - An inverse-square light's Intensity is lumens, as in Bevy.
@@ -40,7 +40,6 @@
 //! - the power's flicker curves (power.rs turns lights off and on).
 
 use bevy::camera::Exposure;
-use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::light::{CascadeShadowConfigBuilder, GlobalAmbientLight};
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
@@ -413,10 +412,10 @@ fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
     }
 }
 
-/// Fixed exposure, the game's tonemapping curve and its fog, on every 3D camera.
+/// Fixed exposure and its fog on every 3D camera (tonemap.rs puts the game's tonemapper on them).
 fn setup_cameras(mut commands: Commands, cameras: Query<Entity, (With<Camera3d>, Without<Lit>)>) {
     for e in &cameras {
-        commands.entity(e).insert((Lit, Exposure { ev100: 0.0 }, Tonemapping::AcesFitted));
+        commands.entity(e).insert((Lit, Exposure { ev100: 0.0 }));
     }
 }
 

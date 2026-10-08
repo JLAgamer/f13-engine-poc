@@ -4,6 +4,7 @@
 pub mod breath;
 pub mod camera_spline;
 pub mod collision;
+pub mod color_grading;
 pub mod counselor;
 pub mod curve;
 pub mod dodge;

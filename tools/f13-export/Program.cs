@@ -160,6 +160,14 @@ void ExportLevel(string mapPath, params string[] extra)
                 if (actor.ExportType == "PostProcessVolume" && actor.GetOrDefault<FStructFallback?>("Settings") is { } pp
                     && pp.GetOrDefault<FPackageIndex?>("AmbientCubemap")?.Load<UTextureCube>() is { } cube && CubeAverage(cube) is { } avg)
                     info.Props["AmbientCubemapAverage"] = new Newtonsoft.Json.Linq.JArray(avg);
+                // Its colour grading LUT (a 256 x 16 strip of 16 slices; f13-game reads its PNG to build the volume's
+                // combined LUT as the engine's CombineLUTs pass does).
+                if (actor.ExportType == "PostProcessVolume" && actor.GetOrDefault<FStructFallback?>("Settings") is { } pps
+                    && pps.GetOrDefault<FPackageIndex?>("ColorGradingLUT")?.Load<UTexture>() is { } lut)
+                {
+                    Queue(lut);
+                    info.Props["ColorGradingLUTFile"] = lut.GetPathName().Split('.')[0].TrimStart('/');
+                }
             }
             if (actor.ExportType == "BlockingVolume")
             {
