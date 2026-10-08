@@ -174,9 +174,9 @@ fn link_items(items: Query<(Entity, &InCabinet, &Transform), Added<InCabinet>>, 
 }
 
 /// Starts the drawer's special move: she slides onto its spot, then her montage begins (UseCabinetStarted).
-pub fn search(commands: &mut Commands, player: Entity, from: Transform, cabinet: Entity, slot: usize, spot: Transform) {
+pub fn search(commands: &mut Commands, player: Entity, from: Transform, cabinet: Entity, slot: usize, spot: Transform, params: crate::interact::MoveParams) {
     let at = spot.translation;
-    crate::interact::move_to_spot(commands, player, from, spot, move |w| {
+    crate::interact::move_to_spot(commands, player, from, spot, params, move |w| {
         let take = {
             let Some(mut cab) = w.get_mut::<Cabinet>(cabinet) else { return };
             let Some(s) = cab.slots.get_mut(slot) else { return };

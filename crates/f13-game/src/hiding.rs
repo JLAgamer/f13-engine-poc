@@ -348,10 +348,12 @@ pub fn enter(
     gxf: &GlobalTransform,
     model: &CounselorCharacter,
     _now: f32,
+    move_params: impl Fn(&str) -> crate::interact::MoveParams,
 ) {
     let side = spot.nearest_side(gxf, xf.translation);
     let s = &spot.sides[side];
-    let (origin, end) = model.place(s.enter_anim, HidingSpot::world(gxf, &s.enter));
+    let enter_spot = HidingSpot::world(gxf, &s.enter);
+    let (origin, end) = model.place(s.enter_anim, enter_spot);
     let enter_anim = s.enter_anim;
     p.velocity = Vec2::ZERO;
     p.counselor.set_sprinting(false);
@@ -363,7 +365,9 @@ pub fn enter(
     // Its enter move (Counselor_EnterArmoire etc., SCSpecialMove_SoloMontage): she slides onto its spot, then the
     // take plays and the spot's door and flaps move.
     let tent = (spot.kind == SpotKind::Tent).then_some(spot.prop).flatten();
-    crate::interact::move_to_spot(commands, player, *xf, origin, move |w| {
+    // Its enter component: EnterSpecialMove, or a bed's EnterRight.
+    let params = move_params(if side == 0 { "EnterSpecialMove" } else { "EnterRight" });
+    crate::interact::move_to_rooted_spot(commands, player, *xf, enter_spot, origin, params, move |w| {
         if let Some(mut s) = w.get_mut::<HidingSpot>(spot_entity) {
             s.door = DoorMotion::Entering(0.0);
         }

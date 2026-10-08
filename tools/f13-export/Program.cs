@@ -357,6 +357,36 @@ void WriteCollision()
 
 // The storm's values (SCZeus_BP's class defaults over SCZeus's constructor: InitialDelay 2, MinTimeBetweenLightning 8,
 // MaxTimeBetweenLightning 25, LightningSoundThreshold 3) and its LightningCurves' keys (weather.json).
+/// special_moves.json: each special move Blueprint's way onto its spot (SCSpecialMove_SoloMontage's fields; its
+/// constructor 0x14041b450: bInterpToInteraction true, InterpolationTime 0.15, bMoveToward true, MoveThreshold 15,
+/// bSweepTestOnLerp true).
+void WriteSpecialMoves()
+{
+    var o = new Newtonsoft.Json.Linq.JObject();
+    foreach (var f in provider.Files.Keys.Where(k => k.StartsWith("SummerCamp/Content/Blueprints/SpecialMoves/") && k.EndsWith(".uasset")).Order())
+    {
+        var name = f.Split('/')[^1][..^".uasset".Length];
+        try
+        {
+            if (provider.LoadPackageObject<UBlueprintGeneratedClass>(f[..^".uasset".Length] + "." + name + "_C").ClassDefaultObject.Load() is not { } cdo) continue;
+            o[name + "_C"] = new Newtonsoft.Json.Linq.JObject
+            {
+                ["InterpToInteraction"] = cdo.GetOrDefault("bInterpToInteraction", true),
+                ["InterpolationTime"] = cdo.GetOrDefault("InterpolationTime", 0.15f),
+                ["MoveToward"] = cdo.GetOrDefault("bMoveToward", true),
+                ["MoveThreshold"] = cdo.GetOrDefault("MoveThreshold", 15f),
+                ["SweepTestOnLerp"] = cdo.GetOrDefault("bSweepTestOnLerp", true),
+            };
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine($"special move {name}: {e.Message}");
+        }
+    }
+    File.WriteAllText(Path.Combine(outDir, "special_moves.json"), o.ToString(Newtonsoft.Json.Formatting.Indented));
+    Console.WriteLine($"special_moves.json: {o.Count} moves");
+}
+
 void WriteWeather()
 {
     var cls = provider.LoadPackageObject<UBlueprintGeneratedClass>("SummerCamp/Content/Blueprints/SCZeus_BP.SCZeus_BP_C");
@@ -524,12 +554,16 @@ switch (rest[0])
         if (rest[1] == Mvp.Map) ExportLevel(Mvp.Map);
         else ExportLevel(rest[1]);
         break;
+    case "specialmoves": // special_moves.json only
+        WriteSpecialMoves();
+        return 0;
     case "levels": // the MVP map and its cabin layouts, and the classes they use (classes.json)
         ExportLevel(Mvp.Map);
         foreach (var w in Mvp.Weathers) ExportLevel(w);
         WriteWeather();
         foreach (var l in Mvp.Layouts) ExportLevel(l);
         WriteClasses();
+        WriteSpecialMoves();
         break;
     case "materials":
         WriteMaterialIndex();
@@ -608,6 +642,7 @@ switch (rest[0])
         WriteWeather();
         foreach (var l in Mvp.Layouts) ExportLevel(l);
         WriteClasses();
+        WriteSpecialMoves();
         NavMeshExporter.Write(provider, outDir, Mvp.Map);
         AnimExporter.Write(provider, outDir, Mvp.Montages);
         new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims, Mvp.KeepRoot);
@@ -641,6 +676,7 @@ switch (rest[0])
         WriteWeather();
         foreach (var l in Mvp.Layouts) ExportLevel(l);
         WriteClasses();
+        WriteSpecialMoves();
         WriteCollision();
         return 0;
     case "counselor": // the MVP counselor's parts and animations (and the meshes they need)

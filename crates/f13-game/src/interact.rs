@@ -332,38 +332,142 @@ fn standing_on(player: &Transform, at: Transform) -> Transform {
 /// SCSpecialMove_SoloMontage's InterpolationTime (its constructor; no counselor move overrides it).
 pub const INTERPOLATION_TIME_S: f32 = 0.15;
 
+/// A special move's way onto its spot (special_moves.json: SCSpecialMove_SoloMontage's InterpolationTime,
+/// MoveThreshold, bSweepTestOnLerp; its constructor's 0.15 s, 15 cm and true when a move isn't listed).
+#[derive(Clone, Copy, Debug)]
+pub struct MoveParams {
+    pub interp_time: f32,
+    pub threshold_m: f32,
+    pub sweep: bool,
+}
+
+impl Default for MoveParams {
+    fn default() -> Self {
+        MoveParams { interp_time: INTERPOLATION_TIME_S, threshold_m: 0.15, sweep: true }
+    }
+}
+
+/// The special moves' parameters, and which move each actor class's special move components start (their
+/// SpecialMove property).
+#[derive(Resource, Default)]
+pub struct SpecialMoves {
+    moves: std::collections::HashMap<String, MoveParams>,
+    by_component: std::collections::HashMap<(String, String), String>,
+    /// The same by the component's parent (a repair's special move hangs off the repair component).
+    by_parent: std::collections::HashMap<(String, String), String>,
+}
+
+impl SpecialMoves {
+    /// The move `component` of `owner_class` starts: its parameters.
+    pub fn of(&self, owner_class: &str, component: &str) -> MoveParams {
+        self.by_component.get(&(owner_class.to_string(), component.to_string())).and_then(|m| self.moves.get(m)).copied().unwrap_or_default()
+    }
+
+    /// The move of the special move component under `parent` (a repair component) of `owner_class`.
+    pub fn of_child(&self, owner_class: &str, parent: &str) -> MoveParams {
+        self.by_parent.get(&(owner_class.to_string(), parent.to_string())).and_then(|m| self.moves.get(m)).copied().unwrap_or_default()
+    }
+}
+
+fn load_special_moves(mut commands: Commands, export: Res<crate::ExportRoot>) {
+    let mut s = SpecialMoves::default();
+    match std::fs::read_to_string(export.0.join("special_moves.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) {
+        Some(v) => {
+            for (name, m) in v.as_object().into_iter().flatten() {
+                let f = |k: &str, d: f32| m[k].as_f64().map_or(d, |x| x as f32);
+                s.moves.insert(
+                    name.clone(),
+                    MoveParams { interp_time: f("InterpolationTime", INTERPOLATION_TIME_S), threshold_m: f("MoveThreshold", 15.0) / 100.0, sweep: m["SweepTestOnLerp"].as_bool().unwrap_or(true) },
+                );
+            }
+        }
+        None => warn!("no special_moves.json (re-export with f13-export levels): the special moves' constructor defaults"),
+    }
+    if let Ok(classes) = f13_data::classes::ClassDb::load(&export.0.join("classes.json")) {
+        for (class, info) in &classes.classes {
+            for c in &info.components {
+                if let Some(m) = c.props["SpecialMove"].as_str() {
+                    s.by_component.insert((class.clone(), c.name.clone()), m.to_string());
+                    if let Some(parent) = &c.parent {
+                        s.by_parent.insert((class.clone(), parent.clone()), m.to_string());
+                    }
+                }
+            }
+        }
+    }
+    commands.insert_resource(s);
+}
+
 /// SCSpecialMove_SoloMontage's way onto its spot (its tick 0x140448320 with bInterpToInteraction, which every counselor
-/// interaction move keeps): her transform goes from where she stood to the spot over [`INTERPOLATION_TIME_S`]
-/// (location lerped, rotation by normalised lerp), then the move begins (DestinationReached: its montage and its
-/// camera). PLACEHOLDER: the game sweeps her capsule as she slides (bSweepTestOnLerp) and cancels the move if she's
-/// stopped short.
+/// interaction move keeps): her transform goes from where she stood toward the spot over its InterpolationTime
+/// (location lerped, rotation by normalised lerp), her capsule swept there each frame when bSweepTestOnLerp (stopped
+/// where it's blocked). At the end she's set on the spot (swept); blocked, she's put there anyway when within its
+/// MoveThreshold (XY), else the move is cancelled (CancelSpecialMove). Then the move begins (DestinationReached: its
+/// montage and its camera). A take played on its own root motion is then set where its first frame stands on the
+/// spot (`then`: Unreal keeps the actor on the spot and applies the root's motion from there).
 #[derive(Component)]
 pub struct MoveToSpot {
     from: Transform,
     to: Transform,
+    then: Option<Transform>,
     t: f32,
+    params: MoveParams,
     begin: Option<Box<dyn FnOnce(&mut World) + Send + Sync>>,
 }
 
 /// Starts a special move from `to`: she slides there, then `begin` runs.
-pub fn move_to_spot(commands: &mut Commands, player: Entity, from: Transform, to: Transform, begin: impl FnOnce(&mut World) + Send + Sync + 'static) {
-    commands.entity(player).insert(MoveToSpot { from, to, t: 0.0, begin: Some(Box::new(begin)) });
+pub fn move_to_spot(commands: &mut Commands, player: Entity, from: Transform, to: Transform, params: MoveParams, begin: impl FnOnce(&mut World) + Send + Sync + 'static) {
+    commands.entity(player).insert(MoveToSpot { from, to, then: None, t: 0.0, params, begin: Some(Box::new(begin)) });
 }
 
-fn moves_to_spots(mut commands: Commands, time: Res<Time>, mut players: Query<(Entity, &mut Transform, &mut MoveToSpot), With<Player>>) {
+/// The same for a take on its own root motion: she slides onto `spot`, then stands at `origin` (where the take's
+/// first frame stands on the spot).
+#[allow(clippy::too_many_arguments)]
+pub fn move_to_rooted_spot(commands: &mut Commands, player: Entity, from: Transform, spot: Transform, origin: Transform, params: MoveParams, begin: impl FnOnce(&mut World) + Send + Sync + 'static) {
+    commands.entity(player).insert(MoveToSpot { from, to: spot, then: Some(origin), t: 0.0, params, begin: Some(Box::new(begin)) });
+}
+
+fn moves_to_spots(
+    mut commands: Commands,
+    time: Res<Time>,
+    collision: Res<crate::collision::WorldCollision>,
+    dynamic: Res<crate::collision::DynamicColliders>,
+    mut interaction: ResMut<Interaction>,
+    mut players: Query<(Entity, &mut Transform, &mut MoveToSpot), With<Player>>,
+) {
+    let world = collision.with(&dynamic);
+    let sweep = |from: Vec3, to: Vec3| f13_core::collision::capsule_sweep(&world, from, to, crate::player::CAPSULE_RADIUS_M, crate::player::CAPSULE_HALF_HEIGHT_M);
     for (pe, mut xf, mut m) in &mut players {
         m.t += time.delta_secs();
-        let a = (m.t / INTERPOLATION_TIME_S).clamp(0.0, 1.0);
-        let (from, to) = (m.from.rotation, m.to.rotation);
-        let to = if from.dot(to) < 0.0 { -to } else { to };
-        *xf = Transform { translation: m.from.translation.lerp(m.to.translation, a), rotation: (from * (1.0 - a) + to * a).normalize(), ..m.to };
+        let a = (m.t / m.params.interp_time.max(1e-4)).clamp(0.0, 1.0);
         if a >= 1.0 {
-            *xf = m.to;
+            let blocked = m.params.sweep && sweep(xf.translation, m.to.translation).is_some();
+            let near = Vec2::new(xf.translation.x - m.to.translation.x, xf.translation.z - m.to.translation.z).length() <= m.params.threshold_m;
             commands.entity(pe).remove::<MoveToSpot>();
+            if blocked && !near {
+                info!(
+                    "special move cancelled: blocked on the way to its spot ({:.2}, {:.2}, {:.2}), stopped at ({:.2}, {:.2}, {:.2}) from ({:.2}, {:.2}, {:.2})",
+                    m.to.translation.x, m.to.translation.y, m.to.translation.z, xf.translation.x, xf.translation.y, xf.translation.z, m.from.translation.x, m.from.translation.y, m.from.translation.z
+                );
+                interaction.hold = None;
+                interaction.target = None;
+                continue;
+            }
+            *xf = m.then.unwrap_or(m.to);
             if let Some(begin) = m.begin.take() {
                 commands.queue(begin);
             }
+            continue;
         }
+        let (from, to) = (m.from.rotation, m.to.rotation);
+        let to = if from.dot(to) < 0.0 { -to } else { to };
+        let mut next = Transform { translation: m.from.translation.lerp(m.to.translation, a), rotation: (from * (1.0 - a) + to * a).normalize(), ..m.to };
+        if m.params.sweep {
+            if let Some(hit) = sweep(xf.translation, next.translation) {
+                next.translation = xf.translation.lerp(next.translation, hit);
+            }
+        }
+        *xf = next;
     }
 }
 
@@ -581,7 +685,7 @@ impl Plugin for InteractPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Interaction>()
             .add_observer(door_move_ended)
-            .add_systems(Startup, spawn_prompt)
+            .add_systems(Startup, (spawn_prompt, load_special_moves))
             .add_systems(
             Update,
             (add_inventory, crate::windows::link_barricades, choose_target, act, crate::cabinets::cabinet_uses, crate::cabinets::follow_items, moves_to_spots, door_moves, window_moves, barricade_moves, repair_anims, small_items, dropping, use_item, update_prompt)
@@ -792,11 +896,15 @@ fn act(
     (cabinets, cabinet_xfs): (Query<&Cabinet>, Query<&GlobalTransform, With<Cabinet>>),
     mut vehicles: Query<&mut Vehicle>,
     mut doors: Query<(&mut Door, &GlobalTransform)>,
-    (windows, mut barricades, (mut phone_boxes, mut phones, mut game, match_tuning)): (Query<(&mut Window, &GlobalTransform)>, Query<&mut Barricade>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<ResMut<crate::match_flow::GameMatch>>, Option<Res<crate::match_flow::MatchTuning>>)),
+    (windows, mut barricades, (mut phone_boxes, mut phones, mut game, match_tuning), (names, special_moves)): (Query<(&mut Window, &GlobalTransform)>, Query<&mut Barricade>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<ResMut<crate::match_flow::GameMatch>>, Option<Res<crate::match_flow::MatchTuning>>), (Query<&Name>, Option<Res<SpecialMoves>>)),
     (mut visibility, mut fuse_boxes, mut grids, vehicle_xfs): (Query<&mut Visibility>, Query<&mut crate::power::FuseBox>, Option<ResMut<crate::power::PowerGrids>>, Query<&GlobalTransform, With<Vehicle>>),
 ) {
     let Some(target) = interaction.target else { return };
     let (player_entity, ref mut player_xf, ref mut inv, ref mut p, sliding) = *player;
+    // A special move component's way onto its spot (its owner's class: the actor's Name).
+    let class_of = |owner: Entity| names.get(owner).map_or(String::new(), |n| n.as_str().to_string());
+    let moves = special_moves.as_deref();
+    let mv = |owner: Entity, component: &str| moves.map_or(MoveParams::default(), |m| m.of(&class_of(owner), component));
     // On her way onto a move's spot: only the hold that started it goes on.
     if sliding && !interaction.hold.as_ref().is_some_and(|h| h.started) {
         return;
@@ -833,7 +941,8 @@ fn act(
                 if keys.just_pressed(KeyCode::KeyE) {
                     let at = crate::hiding::HidingSpot::world(gxf, &slot.spot);
                     let to = Transform { translation: at.translation.with_y(player_xf.translation.y), rotation: at.rotation, ..**player_xf };
-                    crate::cabinets::search(&mut commands, player_entity, **player_xf, e, i, to);
+                    let handler = if i == 0 { "UseCabinet_SpecialMoveHandler" } else { "UseCabinet_SpecialMoveHandler2" };
+                    crate::cabinets::search(&mut commands, player_entity, **player_xf, e, i, to, mv(e, handler));
                     interaction.target = None;
                 }
                 return;
@@ -892,7 +1001,8 @@ fn act(
                             _ => **player_xf,
                         };
                         if let Some(base) = r.anim.clone() {
-                            move_to_spot(&mut commands, player_entity, **player_xf, to, move |w| {
+                            let params = moves.map_or(MoveParams::default(), |m| m.of_child(&class_of(v), &r.name));
+                            move_to_spot(&mut commands, player_entity, **player_xf, to, params, move |w| {
                                 w.entity_mut(player_entity).insert(repair_start(&base));
                             });
                         }
@@ -979,7 +1089,7 @@ fn act(
             if events.contains(&MinigameEvent::Started) {
                 info!("phone box {} started: {} pips, {:.1}s", if fixing { "repair" } else { "fuse" }, hold.pips.len(), hold.hold_time);
                 let to = pb.stand.map_or(**player_xf, |stand| standing_on(player_xf, stand));
-                move_to_spot(&mut commands, player_entity, **player_xf, to, move |w| {
+                move_to_spot(&mut commands, player_entity, **player_xf, to, mv(b, "InteractSpecialMove"), move |w| {
                     w.entity_mut(player_entity).insert(repair_start(crate::police::PHONE_BOX_TAKE));
                 });
             }
@@ -1024,7 +1134,7 @@ fn act(
             if events.contains(&MinigameEvent::Started) {
                 info!("calling the police: {:.1}s", hold.hold_time);
                 let to = phone.stand.map_or(**player_xf, |stand| standing_on(player_xf, stand));
-                move_to_spot(&mut commands, player_entity, **player_xf, to, move |w| {
+                move_to_spot(&mut commands, player_entity, **player_xf, to, mv(ph, "UsePhone_SpecialMove"), move |w| {
                     w.entity_mut(player_entity).insert(repair_start(crate::police::PHONE_TAKE));
                 });
             }
@@ -1062,19 +1172,21 @@ fn act(
                         let root = door_root(&door, gxf, player_xf.translation.y, anim, model.as_deref());
                         // She slides onto the move's spot (its take's start), then the take plays and its handler takes
                         // the camera (doors' open and close moves have bTakeCameraControl).
-                        let to = match (root, door.spots.get(door_spot(anim))) {
-                            (Some((origin, _)), _) => origin,
-                            (None, Some(spot)) => {
-                                let at = crate::hiding::HidingSpot::world(gxf, spot);
-                                Transform { translation: at.translation.with_y(player_xf.translation.y), rotation: at.rotation, ..**player_xf }
-                            }
-                            (None, None) => **player_xf,
-                        };
+                        let spot = door.spots.get(door_spot(anim)).map(|spot| {
+                            let at = crate::hiding::HidingSpot::world(gxf, spot);
+                            Transform { translation: at.translation.with_y(player_xf.translation.y), rotation: at.rotation, ..**player_xf }
+                        });
+                        let to = spot.unwrap_or(**player_xf);
+                        let origin = root.map(|r| r.0);
                         let m = DoorMove { door: d, t: 0.0, swing, curve: t.curve("DoorRotation"), length: t.length, swung: false, root };
-                        move_to_spot(&mut commands, player_entity, **player_xf, to, move |w| {
+                        let begin = move |w: &mut World| {
                             w.entity_mut(player_entity).insert((m, crate::character::PlayAction(anim.into())));
                             w.trigger(crate::interaction_camera::PlayInteractionCamera { actor: d, handler: door_spot(anim) });
-                        });
+                        };
+                        match origin {
+                            Some(origin) => move_to_rooted_spot(&mut commands, player_entity, **player_xf, to, origin, mv(d, door_spot(anim)), begin),
+                            None => move_to_spot(&mut commands, player_entity, **player_xf, to, mv(d, door_spot(anim)), begin),
+                        }
                     }
                     None => {
                         let what = door.press(gxf, player_xf.translation);
@@ -1106,7 +1218,7 @@ fn act(
                     let at = crate::hiding::HidingSpot::world(gxf, s);
                     Transform { translation: Vec3::new(at.translation.x, player_xf.translation.y, at.translation.z), rotation: at.rotation, ..**player_xf }
                 });
-                move_to_spot(&mut commands, player_entity, **player_xf, to, move |w| {
+                move_to_spot(&mut commands, player_entity, **player_xf, to, mv(d, spot), move |w| {
                     w.entity_mut(player_entity).insert((LockAnim, crate::character::PlayAction(anim.into())));
                 });
             }
@@ -1163,7 +1275,13 @@ fn act(
                                 let mut at = crate::hiding::HidingSpot::world(gxf, &spot);
                                 at.translation.y = player_xf.translation.y;
                                 let root = c.place(take, at);
-                                move_to_spot(&mut commands, player_entity, **player_xf, root.0, move |w| {
+                                let component = match (kind == WindowMoveKind::Dive, side) {
+                                    (true, 0) => "CounselorDiveInside",
+                                    (true, _) => "CounselorDiveOutside",
+                                    (false, 0) => "CounselorVaultInside",
+                                    (false, _) => "CounselorVaultOutside",
+                                };
+                                move_to_rooted_spot(&mut commands, player_entity, **player_xf, at, root.0, mv(w, component), move |w| {
                                     w.entity_mut(player_entity).insert(window_root_move(w_entity, kind, root));
                                 });
                             }
@@ -1198,7 +1316,7 @@ fn act(
         Target::Hide(s) if keys.just_pressed(KeyCode::KeyE) && p.counselor.alive() => {
             let (Ok((mut spot, gxf)), Some(model)) = (spots.get_mut(s), model.as_ref()) else { return };
             if spot.usable() {
-                crate::hiding::enter(&mut commands, player_entity, player_xf, p, s, &mut spot, gxf, model, time.elapsed_secs());
+                crate::hiding::enter(&mut commands, player_entity, player_xf, p, s, &mut spot, gxf, model, time.elapsed_secs(), |c| mv(s, c));
             }
             interaction.target = None;
         }
@@ -1313,7 +1431,8 @@ pub(crate) fn take_small(commands: &mut Commands, visibility: &mut Query<&mut Vi
 /// (OnDropItemPressed / Released 0x1403c1570, the tick 0x1403dbc70): held for DropItemHoldTime with a large item, that
 /// one; released sooner, or with no large item, the selected small item: her drop montage plays
 /// (DropLargeItemMontage / DropSmallItemMontage) and the item goes at its DropLargeItem / DropSmallItem notify
-/// ([`dropping`]). PLACEHOLDER: the press's own check (FUN_1403a7500) is unread.
+/// ([`dropping`]). The press counts (FUN_1403a7500) when she's not in a seat, a water volume or a special move, not
+/// interacting, and not already dropping.
 #[allow(clippy::type_complexity)]
 fn small_items(
     mut commands: Commands,
@@ -1322,10 +1441,11 @@ fn small_items(
     scroll: Res<bevy::input::mouse::AccumulatedMouseScroll>,
     model: Option<Res<crate::character::CounselorCharacter>>,
     interaction: Res<Interaction>,
-    mut player: Single<(Entity, &mut Inventory, &Player, Has<UsingItem>, Has<crate::items::ItemAction>, Has<Dropping>), (With<Player>, Without<Driving>)>,
+    water: Option<Res<crate::water::Water>>,
+    mut player: Single<(Entity, &Transform, &mut Inventory, Has<UsingItem>, Has<crate::items::ItemAction>, Has<Dropping>, Has<MoveToSpot>), (With<Player>, Without<Driving>)>,
     mut drop_held: Local<Option<f32>>,
 ) {
-    let (pe, ref mut inv, p, using, acting, dropping) = *player;
+    let (pe, xf, ref mut inv, using, acting, dropping, sliding) = *player;
     inv.use_small = None;
     let count = inv.pockets.len();
     if !using && !acting && count > 0 {
@@ -1344,10 +1464,11 @@ fn small_items(
     if keys.just_pressed(KeyCode::KeyG) {
         inv.use_small = inv.current_small();
     }
-    // The drop key: not in water nor during a special move.
+    // The drop key: not in a water volume (her feet in one) nor during a special move or an interaction.
     let hold_time = model.as_ref().and_then(|m| m.info.values.get("DropItemHoldTime").copied()).unwrap_or(1.5);
-    let free = p.counselor.stance != f13_core::counselor::Stance::Swimming && !interaction.busy();
-    if keys.just_pressed(KeyCode::KeyZ) {
+    let in_water = water.as_ref().is_some_and(|w| w.surface_at(xf.translation + Vec3::Y * 0.05).is_some());
+    let free = !in_water && !interaction.busy() && !sliding;
+    if keys.just_pressed(KeyCode::KeyZ) && free && !dropping {
         *drop_held = Some(0.0);
     }
     if let Some(held) = drop_held.as_mut() {

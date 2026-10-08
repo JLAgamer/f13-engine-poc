@@ -217,7 +217,7 @@ const FX_STEPS: &[FxStep] = &[
     FxStep { what: "climb in", fx: Fx::Window, outside: None, hold: false, sprint: false, walk: None, expect: |s| s.inside && s.health == 100.0 },
     FxStep { what: "close it from inside", fx: Fx::Window, outside: None, hold: true, sprint: false, walk: None, expect: |s| !s.window_open },
     FxStep { what: "dive out through the glass", fx: Fx::Window, outside: None, hold: false, sprint: true, walk: None, expect: |s| !s.inside && s.window_broken && s.health == 80.0 },
-    FxStep { what: "climb back in over the broken glass", fx: Fx::Window, outside: None, hold: false, sprint: false, walk: None, expect: |s| s.inside },
+    FxStep { what: "climb back in over the broken glass", fx: Fx::Window, outside: Some(true), hold: false, sprint: false, walk: None, expect: |s| s.inside },
 ];
 
 const CAPSULE: f13_core::collision::Capsule =
@@ -292,7 +292,7 @@ fn run_bot(
         Query<(Entity, &crate::power::FuseBox, &Transform), (Without<Player>, Without<Vehicle>)>,
         Option<Res<crate::power::PowerGrids>>,
     ),
-    (collision, dynamic, (mut phone_boxes, mut phones, arrived, police_cars, jason_entities, placed_kills), water, navmesh): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<Res<crate::police::PoliceArrived>>, Query<&Transform, (With<crate::police::PoliceCar>, Without<Player>, Without<Vehicle>)>, Query<Entity, With<crate::jason::Jason>>, Query<(Entity, &crate::placed_kills::PlacedKill)>), Option<Res<crate::water::Water>>, Option<Res<crate::navigation::Navmesh>>),
+    (collision, dynamic, (mut phone_boxes, mut phones, arrived, police_cars, jason_entities, placed_kills), water, navmesh, moving): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<Res<crate::police::PoliceArrived>>, Query<&Transform, (With<crate::police::PoliceCar>, Without<Player>, Without<Vehicle>)>, Query<Entity, With<crate::jason::Jason>>, Query<(Entity, &crate::placed_kills::PlacedKill)>), Option<Res<crate::water::Water>>, Option<Res<crate::navigation::Navmesh>>, Query<(), (With<Player>, Or<(With<crate::interact::WindowMove>, With<crate::interact::MoveToSpot>)>)>),
 ) {
     let world = collision.with(&dynamic);
     let dt = time.delta_secs();
@@ -833,7 +833,9 @@ fn run_bot(
                 keys.release(KeyCode::KeyW);
             }
             if let (Some(outside), None) = (step.outside, step.walk) {
-                let stand = Vec3::new(at.x, gxf.translation().y, at.z) + fwd * if outside { 0.8 } else { -0.8 };
+                // A door's outside is its -X side's opposite (+X); a window's outside is its -X side.
+                let out = if step.fx == Fx::Window { -0.8 } else { 0.8 };
+                let stand = Vec3::new(at.x, gxf.translation().y, at.z) + fwd * if outside { out } else { -out };
                 if bot.timer < 0.5 || first_frame {
                     place(pxf, stand);
                 }
@@ -858,7 +860,8 @@ fn run_bot(
                 bot.second_tap = true;
                 return;
             }
-            if bot.timer < 2.5 {
+            // Done with any move (a climb's take carries her over before it leaves her on the other side).
+            if bot.timer < 2.5 || !moving.is_empty() {
                 return;
             }
             keys.release(KeyCode::ShiftLeft);

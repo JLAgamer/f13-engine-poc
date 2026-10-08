@@ -58,8 +58,10 @@ pub enum WindowAction {
 }
 
 impl Window {
+    /// SCWindow::IsInteractorInside (0x140386440): on the root's +X side (0 < dot(forward, to her)), the side its
+    /// Counselor...Inside components stand on. (The door's 0x14034c000 is the other way round.)
     pub fn is_inside(window: &GlobalTransform, at: Vec3) -> bool {
-        crate::doors::Door::is_inside(window, at)
+        (window.rotation() * Vec3::X).dot(at - window.translation()) > 0.0
     }
 
     /// The press action for a counselor (`None` if nothing).
@@ -89,7 +91,7 @@ impl Window {
     /// Where the counselor ends up after going through from `from`.
     pub fn landing(window: &GlobalTransform, interact: Vec3, from: Vec3) -> Vec3 {
         let forward = (window.rotation() * Vec3::X).with_y(0.0).normalize_or_zero();
-        let side = if Window::is_inside(window, from) { 1.0 } else { -1.0 };
+        let side = if Window::is_inside(window, from) { -1.0 } else { 1.0 };
         let at = window.transform_point(interact);
         Vec3::new(at.x, from.y, at.z) + forward * side * THROUGH_M
     }

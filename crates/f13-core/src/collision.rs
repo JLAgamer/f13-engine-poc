@@ -411,6 +411,47 @@ pub fn sphere_sweep(world: &(impl TriSource + ?Sized), from: Vec3, to: Vec3, rad
     None
 }
 
+/// Unreal's walking capsule rests this far above its floor (UCharacterMovementComponent's MAX_FLOOR_DIST, 2.4 cm), so
+/// sweeps from rest don't hit it.
+pub const MAX_FLOOR_DIST_M: f32 = 0.024;
+
+/// Where an upright capsule (feet at `from`, `radius`, `half_height`) moving to `to` first touches a triangle, as a
+/// fraction of the way: SetActorTransform's sweep. It's swept from [`MAX_FLOOR_DIST_M`] over its floor, and
+/// triangles it already touches at the start don't stop it (a sweep moving out of contact goes on).
+pub fn capsule_sweep(world: &(impl TriSource + ?Sized), from: Vec3, to: Vec3, radius: f32, half_height: f32) -> Option<f32> {
+    let lift = Vec3::Y * MAX_FLOOR_DIST_M;
+    let (lo, hi) = (lift + Vec3::Y * radius, lift + Vec3::Y * (2.0 * half_height - radius).max(radius));
+    let r = Vec3::splat(radius);
+    let mut tris = Vec::new();
+    world.for_each_in(from.min(to) + lo - r, from.max(to) + hi + r, &mut |t| tris.push(*t));
+    let touches = |t: &Tri, p: Vec3| {
+        let (a, b) = (p + lo, p + hi);
+        let n = ((b - a).length() / (radius * 0.25).max(1e-3)).ceil().max(1.0) as usize;
+        (0..=n).any(|i| {
+            let q = a.lerp(b, i as f32 / n as f32);
+            t.closest_point(q).distance_squared(q) < radius * radius
+        })
+    };
+    tris.retain(|t| !touches(t, from));
+    let blocked = |p: Vec3| tris.iter().any(|t| touches(t, p));
+    let d = to - from;
+    let n = (d.length() / (radius * 0.25).max(1e-3)).ceil().max(1.0) as usize;
+    let mut clear = 0.0;
+    for i in 1..=n {
+        let t = i as f32 / n as f32;
+        if blocked(from + d * t) {
+            let mut hit = t;
+            for _ in 0..12 {
+                let mid = (clear + hit) * 0.5;
+                if blocked(from + d * mid) { hit = mid } else { clear = mid }
+            }
+            return Some(clear);
+        }
+        clear = t;
+    }
+    None
+}
+
 /// The highest surface crossing the vertical line at (x, z) between `bottom` and `top`: (height, normal).
 pub fn surface_below(world: &(impl TriSource + ?Sized), x: f32, z: f32, top: f32, bottom: f32) -> Option<(f32, Vec3)> {
     let mut best: Option<(f32, Vec3)> = None;
@@ -656,6 +697,21 @@ mod tests {
         assert!(segment_hit(&g, eye + Vec3::Y * 2.0, Vec3::new(20.0, 3.5, 0.0), 3.0).is_none());
         assert!(segment_hit(&g, eye, Vec3::new(0.0, 1.5, 20.0), 3.0).is_none());
     }
+    #[test]
+    fn capsule_sweeps_stop_at_walls_not_the_floor() {
+        let mut g = ground();
+        for t in cube(Vec3::new(5.0, 1.0, 0.0), Vec3::new(0.5, 1.0, 5.0)) {
+            g.insert(t);
+        }
+        // Along the floor she stands on: clear.
+        assert!(capsule_sweep(&g, Vec3::ZERO, Vec3::new(0.0, 0.0, 3.0), 0.34, 0.82).is_none());
+        // Into the wall: stopped with her radius to spare (the wall's face at x 4.5).
+        let t = capsule_sweep(&g, Vec3::ZERO, Vec3::new(8.0, 0.0, 0.0), 0.34, 0.82).expect("the wall blocks");
+        assert!((t * 8.0 - (4.5 - 0.34)).abs() < 0.01, "{}", t * 8.0);
+        // Touching it at the start, moving away: clear.
+        assert!(capsule_sweep(&g, Vec3::new(4.2, 0.0, 0.0), Vec3::new(2.0, 0.0, 0.0), 0.34, 0.82).is_none());
+    }
+
     const WALK: WalkSettings = WalkSettings { max_step: 0.45, walkable_normal_y: 0.71, gravity: 9.8 };
 
     #[test]

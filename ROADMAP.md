@@ -242,7 +242,11 @@ Presentation
       Close, Take), the drawer following her target_jnt bone (SCCabinet's tick), ready after the Open section; a press
       closes it, a 1 s hold takes the item (at OnPickupItem); emptied drawers stay open; desks' two drawers
 - [x] Through windows on the takes' own root motion: the climb, the dive and its landing play from the window's
-      CounselorVault / CounselorDive special move spot on her side
+      CounselorVault / CounselorDive special move spot on her side (a window's inside is its +X side:
+      SCWindow::IsInteractorInside is the door's test reversed)
+- [x] The special moves' slide onto their spot as SCSpecialMove_SoloMontage does it: each move's InterpolationTime,
+      her capsule swept (bSweepTestOnLerp), stopped where blocked, the move cancelled when it ends short of its
+      MoveThreshold (special_moves.json)
 - [x] Doors on root motion: her open and close takes play from the door's special move spots (opening from outside
       carries her into the doorway, closing from outside walks her back out); locks and unlocks on theirs
 - [x] The repairs' own root motion (montages' root motion): the phone box's enter carries her 42.6 cm to the box
