@@ -901,7 +901,7 @@ static class Mvp
         "Underwater_GrabKill_C", "KillerWaterImage_C",
         // The pickaxe's grab kills (SCKillerCharacter's GrabKills: KillerGrabWidget's icons, DoesKillVolumeFit's KillBounds).
         "Pickaxe_ThroatHack_GrabKill_C", "Pickaxe_Canopener_GrabKill_C", "PickAxe_CurbStomp_GrabKill_C",
-        "PickAxe_SweepTheLeg_GrabKill_C", "PickAxe_TopPopper_GrabKill_C"];
+        "PickAxe_SweepTheLeg_GrabKill_C", "PickAxe_TopPopper_GrabKill_C", "Choke_GrabKill_C"];
     // Montages whose length or root motion the rules use (anims.json).
     const string Shared = "/Game/Characters/Counselors/Base/Shared";
     public static readonly string[] Montages =
@@ -1144,13 +1144,15 @@ static class Mvp
     // The pickaxe's grab kills (its DefaultGrabKill Pickaxe_ThroatHack_GrabKill, and the others): each plays a paired
     // Jason and counselor montage around one origin.
     static string[] PickaxeKills => ["pickaxe_throathack", "pickaxe_head_canopener", "pickaxe_curbstomp", "pickaxe_sweeptheleg", "pickaxe_toppopper"];
-    static string[] CounselorKills => [.. PickaxeKills.Select(k => $"{Shared}/Cinematic/AM_cinematic_{k}"), .. PlacedKillsHers.Select(m => $"{Shared}/Cinematic/{m}")];
+    // Jason_SackHead's own grab kill (GrabKillClasses[0], inherited from Jason_Base): Choke_GrabKill's Jason_Choke_CK /
+    // Counselor_Choke_CK.
+    static string[] CounselorKills => [.. PickaxeKills.Select(k => $"{Shared}/Cinematic/AM_cinematic_{k}"), .. PlacedKillsHers.Select(m => $"{Shared}/Cinematic/{m}"), $"{Shared}/Cinematic/AM_cinematic_hand_choke"];
     /// The map's placed (environment) kills' montages: their ContextKillComponents' special moves' ContextMontage, the
     /// victim's (Counselor_*) and Jason's (Jason_*).
     static string[] PlacedKillsHers => ["AM_Counselor_cinematic_swim_grabkill_01", "AM_cinematic_adirondackchair_kill", "AM_cinematic_fireplace", "AM_cinematic_gravestone_headsmash", "AM_cinematic_hand_birdbath", "AM_cinematic_hand_ironfence", "AM_cinematic_hand_table", "AM_cinematic_hand_tree_arm_ripoff", "AM_cinematic_hand_treestump_faceslam", "AM_cinematic_hand_waterpump", "AM_cinematic_stick_campfire", "AM_cinematic_surface_vertical_backbreak", "AM_cinematic_treebranch_chesthole_01", "AM_cinematic_wall_facesmash", "AM_cinematic_wall_headpunch_01"];
     static string[] PlacedKillsHis => ["AM_Jason_cinematic_swim_grabkill_01", "AM_Jason_cinematic_gravestone_headsmash_01", "AM_Jason_cinematic_surface_vertical_backbreak", "AM_cinematic_f_adirondackchair_kill_01", "AM_cinematic_fireplace", "AM_cinematic_hand_birdbath", "AM_cinematic_hand_ironfence", "AM_cinematic_hand_table", "AM_cinematic_hand_tree_arm_ripoff", "AM_cinematic_hand_treestump_faceslam", "AM_cinematic_hand_waterpump", "AM_cinematic_m_wall_facesmash_01", "AM_cinematic_stick_campfire", "AM_cinematic_treebranch_chesthole_01", "AM_cinematic_wall_headpunch_01"];
     const string JasonAnim = "/Game/Characters/Killers/Jason/Base/Animation";
-    static string[] JasonKills => [.. PickaxeKills.Select(k => $"{JasonAnim}/Cinematic/AM_cinematic_{k}"), .. PlacedKillsHis.Select(m => $"{JasonAnim}/Cinematic/{m}")];
+    static string[] JasonKills => [.. PickaxeKills.Select(k => $"{JasonAnim}/Cinematic/AM_cinematic_{k}"), .. PlacedKillsHis.Select(m => $"{JasonAnim}/Cinematic/{m}"), $"{JasonAnim}/Cinematic/AM_Jason_cinematic_hand_choke"];
     const string JasonStun = $"{JasonAnim}/Deaths_HitReacts_Stuns";
     public static string[] PairedKills => [.. CounselorKills, .. JasonKills];
     /// Getting in and out of the driver's seat (played from the seat's socket).
@@ -1195,6 +1197,7 @@ static class Mvp
         "/Game/Blueprints/ContextKills/PickAxe_CurbStomp_GrabKill",
         "/Game/Blueprints/ContextKills/PickAxe_SweepTheLeg_GrabKill",
         "/Game/Blueprints/ContextKills/PickAxe_TopPopper_GrabKill",
+        "/Game/Blueprints/ContextKills/Choke_GrabKill",
         // The placed kills' (their SCCameraSpline, under the ContextKillComponent).
         "/Game/Blueprints/ContextKills/Birdbath_PlacedKill",
         "/Game/Blueprints/ContextKills/HeadSmash_PlacedKill",

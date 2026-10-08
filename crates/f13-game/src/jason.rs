@@ -131,21 +131,22 @@ const GRAB_MISS: &str = "normal_grab_miss";
 const BLOCK_LAYER_FILTERS: &[(&str, i32)] = &[("spine_01", 1), ("target_jnt", 0)];
 const BLOCK_LAYER_WEIGHT: f32 = 0.8;
 const BLOCK_LAYER_BLEND_S: f32 = 0.1;
-/// The pickaxe's grab kills: his and her paired montage (same name), the kill class (its camera), and its KillName.
-/// The grab kills on the player's four kill keys (SCKillerCharacter's grab kill slots: UseRightGrabKill 0,
-/// UseBottomGrabKill 1, UseLeftGrabKill 2, UseTopGrabKill 3, picked by FUN_1403ffa80; a click while holding her uses
-/// slot 1), as indexes into [`KILLS`]. PLACEHOLDER: the game fills the slots from the player's saved picks
-/// (SCCharacterSelectionsSaveGame::GetKillerGrabKills), not read; the weapon's DefaultGrabKill (the throat hack) is
-/// put on the click.
-pub const GRAB_KILL_SLOTS: [usize; 4] = [1, 0, 2, 3];
+/// His grab kills on the four kill keys (SCKillerCharacter's GrabKills: UseRightGrabKill 0, UseBottomGrabKill 1,
+/// UseLeftGrabKill 2, UseTopGrabKill 3, used by FUN_1403ffa80; a click while holding her uses slot 1), as indexes into
+/// [`KILLS`]. InitFromPlayerState (0x1403fb9f0) spawns each slot's kill from the player's picks (PlayerState
+/// PickedGrabKills, from SCCharacterSelectionsSaveGame's killer profile; this port has no save) or else his
+/// GrabKillClasses in order, the first empty one taking the weapon's DefaultGrabKill into slot 1 and ending the
+/// list: Jason_SackHead keeps Jason_Base's GrabKillClasses[0] (Choke_GrabKill) and empties 1-3, so the choke on the
+/// right, the pickaxe's throat hack on the bottom (and the click), nothing on the left or top.
+pub const GRAB_KILL_SLOTS: [Option<usize>; 4] = [Some(5), Some(0), None, None];
 
-/// The pickaxe's grab kills' KillBounds by [`KILLS`] index (DoesKillVolumeFit): the box's place in the kill's root
+/// The grab kills' KillBounds by [`KILLS`] index (DoesKillVolumeFit): the box's place in the kill's root
 /// space (its component transform, Bevy) and half size (BoxExtent, m); and their ContextKillHUDIcon (its PNG):
 /// KillerGrabWidget's icons (GetGrabKillIcon(slot, true)).
 #[derive(Resource, Default)]
 pub struct GrabKillInfo {
-    pub bounds: [Option<(Transform, Vec3)>; 5],
-    pub icons: [Option<String>; 5],
+    pub bounds: [Option<(Transform, Vec3)>; KILLS.len()],
+    pub icons: [Option<String>; KILLS.len()],
 }
 
 /// Which of his four grab kill slots he can use as he holds her (IsGrabKillAvailable 0x1403f5500): bGrabKillsActive
@@ -157,12 +158,15 @@ pub struct GrabKillInfo {
 #[derive(Resource, Default, Debug, PartialEq)]
 pub struct GrabKillsAvailable(pub [bool; 4]);
 
-pub const KILLS: [(&str, &str, &str); 5] = [
+/// The grab kills: his and her paired montage's take (same name), the kill class (its camera), and its KillName: the
+/// pickaxe's, and his own choke (Choke_GrabKill: Jason_Choke_CK / Counselor_Choke_CK).
+pub const KILLS: [(&str, &str, &str); 6] = [
     ("cinematic_pickaxe_throathack", "Pickaxe_ThroatHack_GrabKill", "Pickaxe Throat Hack"),
     ("cinematic_pickaxe_head_canopener", "Pickaxe_Canopener_GrabKill", "Pickaxe Can Opener"),
     ("cinematic_pickaxe_curbstomp", "PickAxe_CurbStomp_GrabKill", "Pickaxe Curb Stomp"),
     ("cinematic_pickaxe_sweeptheleg", "PickAxe_SweepTheLeg_GrabKill", "Pickaxe Sweep The Leg"),
     ("cinematic_pickaxe_toppopper", "PickAxe_TopPopper_GrabKill", "Pickaxe Top Popper"),
+    ("cinematic_hand_choke", "Choke_GrabKill", "Choke"),
 ];
 
 const HIT_BACK: &str = "f_normal_stand_hitreaction_back_01";
@@ -801,6 +805,8 @@ fn grab_kills_available(
     };
     let origin = Transform::from_matrix(xf.to_matrix() * Transform::from_rotation(crate::character::FACING).to_matrix());
     let fits = GRAB_KILL_SLOTS.map(|k| {
+        // No kill in the slot: never available.
+        let Some(k) = k else { return false };
         let (Some(world), Some((local, half))) = (collision.as_ref(), info.as_ref().and_then(|i| i.bounds[k])) else { return true };
         let w = origin.mul_transform(local);
         let b = f13_core::collision::Obb { centre: w.translation, axes: [w.rotation * Vec3::X, w.rotation * Vec3::Y, w.rotation * Vec3::Z], half: half * w.scale.abs() };
@@ -2381,7 +2387,7 @@ pub(crate) fn update_jason(
                     (i.presses.attack || i.presses.kill.is_some()) && grab_kills.0[i.presses.kill.unwrap_or(1).min(3)]
                 }) {
                     // The AI kills after a while; the player with a kill key or a click. One of the weapon's grab kills.
-                    let picked = player_input.map(|i| GRAB_KILL_SLOTS[i.presses.kill.unwrap_or(1).min(3)]);
+                    let picked = player_input.and_then(|i| GRAB_KILL_SLOTS[i.presses.kill.unwrap_or(1).min(3)]);
                     j.kill = picked.or(config.kill).unwrap_or_else(|| rng.0.index(KILLS.len()));
                     let (anim, class, name) = KILLS[j.kill];
                     info!("Jason: {name}");

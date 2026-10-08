@@ -878,7 +878,8 @@ impl Builder<'_, '_, '_> {
         if w.kind == "ScaleBox" {
             if let Some(c) = w.children.first() {
                 let (dw, dh) = c.desired();
-                if dw > 0.0 && dh > 0.0 {
+                // (A collapsed box is laid out at no size: its texts keep their scale, unseen.)
+                if dw > 0.0 && dh > 0.0 && r.w > 0.0 && r.h > 0.0 {
                     self.text_scale *= (r.w / dw).min(r.h / dh);
                 }
             }
@@ -1254,7 +1255,13 @@ fn jason_hud(
         const USABLE: [f32; 4] = [0.854993, 0.030713, 0.017642, 0.498039];
         const LOCKED: [f32; 4] = [0.039546, 0.039546, 0.039546, 1.0];
         for (slot, &kill) in crate::jason::GRAB_KILL_SLOTS.iter().enumerate() {
-            let Some(mut img) = hud.names.get(&format!("KillerGrabWidget.Icon{}", slot + 1)).and_then(|&e| images.get_mut(e).ok()) else { continue };
+            let icon = hud.names.get(&format!("KillerGrabWidget.Icon{}", slot + 1)).copied();
+            // An empty slot: no brush (Get_Icon*_Brush's NoDrawType).
+            if let Some(mut v) = icon.and_then(|e| vis.get_mut(e).ok()) {
+                v.set_if_neq(if kill.is_some() { Visibility::Inherited } else { Visibility::Hidden });
+            }
+            let Some(kill) = kill else { continue };
+            let Some(mut img) = icon.and_then(|e| images.get_mut(e).ok()) else { continue };
             if let Some(file) = grab_info.as_ref().and_then(|i| i.icons[kill].as_ref()) {
                 let handle = asset_server.load(file.clone());
                 if img.image != handle {

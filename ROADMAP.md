@@ -149,8 +149,10 @@ Mechanics: Jason side
       KillAllCounselors, Unscathed (he took no damage) and CompletedMatch. His XPDisplayWidget lines on his HUD, his
       results at the end. KillerHelpTextWidget never shows (its Construct jumps to its end; nothing calls
       ShowHelpText), as hers
-- [ ] Playing as Jason, remaining: the grab kill slots are the save game's picks (unread: the throat hack on the
-      click)
+- [x] His grab kill slots as the game fills them without a player's picks (InitFromPlayerState: GrabKillClasses,
+      then the weapon's DefaultGrabKill in slot 1): the choke (Choke_GrabKill, exported) on the right, the pickaxe's
+      throat hack on the bottom and the click, none on the left and top. (The picks come from the player's save game,
+      which this port doesn't have.)
 - [x] Shift, Morph, Stalk (f13-core::killer_moves, jason.rs): Shift's 0.7 s wind-up, ShiftSpeed and ShiftTime (J2:
   1000 cm/s, 4 s), ending in a grab; Stalk's StalkActiveTimer (IdleStalkModifier standing still); Morph to the
   nearest SCKillerMorphPoint within 30 m of the spot after TeleportScreenTime; the teleport fade (he's hidden below
@@ -371,7 +373,7 @@ Setup
       for a decision on that
 
 Decomp audit (nothing guessed: every rule read from the decomp or the game's data)
-- [ ] Check each PLACEHOLDER (12 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
+- [ ] Check each PLACEHOLDER (11 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
       them, in jason.rs, are the AI's own choices and stay) and each "guess"/"assumed"/"not read" note (about 10)
       against the decomp and the export (Ghidra, MODLOG, f13-export `debug-json` / `pseudo` / `cdo` / `grep`); port
       what the game does, or record in MODLOG why it can't be found. Most are in jason.rs, hiding.rs, audio.rs,
