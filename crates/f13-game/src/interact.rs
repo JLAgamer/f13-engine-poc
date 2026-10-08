@@ -679,12 +679,12 @@ fn door_moves(
 
 /// NativeSpecialComplete / NativeSpecialAborted: however her door move ends, the view goes back to her.
 fn door_move_ended(_: On<Remove, DoorMove>, mut commands: Commands) {
-    commands.trigger(crate::interaction_camera::StopInteractionCamera);
+    commands.trigger(crate::interaction_camera::StopInteractionCamera { killer: false });
 }
 
 /// The same for a window's open or close move (its vault and dive handlers have no camera).
 fn window_move_ended(_: On<Remove, WindowMove>, mut commands: Commands) {
-    commands.trigger(crate::interaction_camera::StopInteractionCamera);
+    commands.trigger(crate::interaction_camera::StopInteractionCamera { killer: false });
 }
 
 pub struct InteractPlugin;
@@ -1195,7 +1195,7 @@ fn act(
                         let m = DoorMove { door: d, t: 0.0, swing, curve: t.curve("DoorRotation"), length: t.length, swung: false, root };
                         let begin = move |w: &mut World| {
                             w.entity_mut(player_entity).insert((m, crate::character::PlayAction(anim.into())));
-                            w.trigger(crate::interaction_camera::PlayInteractionCamera { actor: d, handler: door_spot(anim) });
+                            w.trigger(crate::interaction_camera::PlayInteractionCamera { actor: d, handler: door_spot(anim), killer: false });
                         };
                         match origin {
                             Some(origin) => move_to_rooted_spot(&mut commands, player_entity, **player_xf, to, origin, mv(d, door_spot(anim)), begin),
@@ -1278,7 +1278,7 @@ fn act(
                         start_window_move(&mut commands, player_entity, w, WindowMoveKind::Open, player_xf.translation, player_xf.translation);
                         // Its handler for her side takes the view (bTakeCameraControl).
                         let handler = if Window::is_inside(gxf, player_xf.translation) { "CounselorOpenInside" } else { "CounselorOpenOutside" };
-                        commands.trigger(crate::interaction_camera::PlayInteractionCamera { actor: w, handler });
+                        commands.trigger(crate::interaction_camera::PlayInteractionCamera { actor: w, handler, killer: false });
                     }
                     _ => {
                         // Through the window (her climb or dive take carries her over), taking any damage.
@@ -1328,7 +1328,7 @@ fn act(
             if events.contains(&MinigameEvent::Completed) {
                 start_window_move(&mut commands, player_entity, w, WindowMoveKind::Close, player_xf.translation, player_xf.translation);
                 let handler = if Window::is_inside(gxf, player_xf.translation) { "CounselorCloseInside" } else { "CounselorCloseOutside" };
-                commands.trigger(crate::interaction_camera::PlayInteractionCamera { actor: w, handler });
+                commands.trigger(crate::interaction_camera::PlayInteractionCamera { actor: w, handler, killer: false });
                 info!("window Close");
                 interaction.hold = None;
                 interaction.hold_done = true;

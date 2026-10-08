@@ -293,7 +293,7 @@ impl Plugin for JasonPlugin {
             .add_observer(spawn_knife)
             .add_observer(distortion)
             .add_observer(car_slam)
-            .add_systems(Update, (tag_jason_parts, animate_jason, grab_layer, jason_mixes, teleport_mix));
+            .add_systems(Update, (tag_jason_parts, animate_jason, grab_layer, jason_mixes, teleport_mix, jason_door_camera));
     }
 }
 
@@ -2628,6 +2628,43 @@ fn teleport_mix(mut commands: Commands, time: Res<Time>, effect: Option<ResMut<T
 }
 
 /// GrabWeight (the anim instance's copy of GrabValue): the grab layer while he holds her.
+/// The played Jason's door moves take the view (their handlers' SCSplineCameras: interaction_camera.rs): opening one
+/// (KillerOpenDoorInside / Outside: 1 s in, 0.5 s back) or breaking one down (BreakDownFromInside / Outside, the
+/// handler's defaults: at once, 0.25 s back), handed back as the move ends. A raged burst's and the walls' handlers
+/// have no camera.
+fn jason_door_camera(
+    mut commands: Commands,
+    play: Option<Res<crate::jason_player::PlayJason>>,
+    jasons: Query<(&Jason, &Transform)>,
+    doors: Query<&GlobalTransform, With<crate::doors::Door>>,
+    mut playing: Local<Option<(Entity, &'static str)>>,
+) {
+    if play.is_none() {
+        return;
+    }
+    let Some((j, xf)) = jasons.iter().next() else { return };
+    let inside = |d: Entity| doors.get(d).is_ok_and(|g| crate::doors::Door::is_inside(g, xf.translation));
+    let now = match j.state {
+        JasonState::OpeningDoor { door, anim, .. } => {
+            Some((door, if anim == DOOR_OPEN_INSIDE { "KillerOpenDoorInside_SpecialMoveHandler" } else { "KillerOpenDoorOutside_SpecialMoveHandler" }))
+        }
+        JasonState::BreakingDoor { door, .. } => Some((door, if inside(door) { "BreakDownFromInside_SpecialMoveHandler" } else { "BreakDownFromOutside_SpecialMoveHandler" })),
+        _ => None,
+    };
+    // A move's handler is chosen as it starts (a door found locked mid-open goes on to the break down's).
+    let now = match (*playing, now) {
+        (Some((d, h)), Some((nd, nh))) if d == nd && (h == nh || !nh.starts_with("Break")) => Some((d, h)),
+        _ => now,
+    };
+    if now != *playing {
+        match now {
+            Some((actor, handler)) => commands.trigger(crate::interaction_camera::PlayInteractionCamera { actor, handler, killer: true }),
+            None => commands.trigger(crate::interaction_camera::StopInteractionCamera { killer: true }),
+        }
+        *playing = now;
+    }
+}
+
 fn grab_layer(time: Res<Time>, mut jasons: Query<(&Jason, &mut crate::character::LayeredBlend)>) {
     for (j, mut l) in &mut jasons {
         // Holding her: the grab layer at once. Blocking on the move (bIsMoving): his block over his walk, its

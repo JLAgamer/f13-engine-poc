@@ -31,8 +31,8 @@ impl Plugin for InteractionCameraPlugin {
             Update,
             interaction_camera
                 .after(crate::counselor_camera::counselor_camera)
-                .before(crate::kill_camera::kill_camera)
-                .run_if(not(resource_exists::<crate::jason_player::PlayJason>)),
+                .after(crate::jason_player::jason_camera)
+                .before(crate::kill_camera::kill_camera),
         );
     }
 }
@@ -78,11 +78,16 @@ impl InteractionCameras {
 pub struct PlayInteractionCamera {
     pub actor: Entity,
     pub handler: &'static str,
+    /// Jason's move (else hers): only the played character's moves take the view.
+    pub killer: bool,
 }
 
 /// StopInteractionCamera: the view goes back to her.
 #[derive(Event, Clone, Copy, Debug)]
-pub struct StopInteractionCamera;
+pub struct StopInteractionCamera {
+    /// Jason's move (else hers).
+    pub killer: bool,
+}
 
 /// The view's state: blending to the interaction camera (from a locked view), on it, or blending back.
 #[derive(Resource, Clone, Copy, Debug)]
@@ -103,7 +108,11 @@ fn play(
     actors: Query<(&InteractionCameras, &GlobalTransform)>,
     camera: Single<(&Transform, &Projection), With<PlayerCamera>>,
     windows: Query<&Window>,
+    play_jason: Option<Res<crate::jason_player::PlayJason>>,
 ) {
+    if ev.killer != play_jason.is_some() {
+        return;
+    }
     let Ok((cams, g)) = actors.get(ev.actor) else { return };
     let Some(h) = cams.0.get(ev.handler) else { return };
     let (xf, proj) = *camera;
@@ -118,12 +127,17 @@ fn play(
 }
 
 fn stop(
-    _: On<StopInteractionCamera>,
+    ev: On<StopInteractionCamera>,
     mut commands: Commands,
     view: Option<Res<View>>,
     mut player_camera: Single<&mut PlayerCamera>,
     rig: Option<ResMut<crate::counselor_camera::Rig>>,
+    jason_rig: Option<ResMut<crate::jason_player::JasonRig>>,
+    play_jason: Option<Res<crate::jason_player::PlayJason>>,
 ) {
+    if ev.killer != play_jason.is_some() {
+        return;
+    }
     let Some(View::In { to, back, t, time, from }) = view.as_deref().copied() else { return };
     // Where the view is now (mid blend, if it hadn't arrived).
     let now = blend(from, to, ease(t, time));
@@ -133,6 +147,9 @@ fn stop(
     player_camera.pitch = 0.0;
     // ReturnCameraToCharacter ends in ResetCameras: her cameras' arms snap to that view.
     if let Some(mut rig) = rig {
+        rig.reset_cameras();
+    }
+    if let Some(mut rig) = jason_rig {
         rig.reset_cameras();
     }
     commands.insert_resource(View::Back { from: now, time: back, t: 0.0 });

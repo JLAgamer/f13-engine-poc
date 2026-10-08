@@ -366,6 +366,11 @@ pub struct JasonRig {
 }
 
 impl JasonRig {
+    /// ResetCameras (ReturnCameraToCharacter): his cameras' arms snap to the view.
+    pub(crate) fn reset_cameras(&mut self) {
+        self.cams.reset();
+    }
+
     /// Jason_Base's ChangeCamera (its spline cameras' check: the kill camera has the view while one plays).
     fn change_camera(&mut self, blend: f32, now: f32) {
         let name = if self.combat {
@@ -380,7 +385,7 @@ impl JasonRig {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn jason_camera(
+pub(crate) fn jason_camera(
     mut commands: Commands,
     time: Res<Time>,
     killer: Option<Res<crate::character::KillerCharacter>>,

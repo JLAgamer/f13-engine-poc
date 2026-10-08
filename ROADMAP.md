@@ -139,7 +139,10 @@ Mechanics: Jason side
       blocking; a blocked weapon hit doesn't stun him and plays a BlockingHitMontage up to its OnEndBlockReaction
       (flares, shotguns, firecrackers, traps and the police can't be blocked: their bCanBeBlocked). PLACEHOLDER:
       leaving combat stance ends the block
-- [ ] Playing as Jason, remaining: KillerHelpTextWidget; his score lines (XPDisplayWidget); the doors' and walls' special move cameras for him (KillerOpenDoor, BreakDownFrom*);
+- [x] His door moves' cameras (interaction_camera.rs for the played character only): KillerOpenDoorInside / Outside
+      (1 s in, 0.5 s back) and BreakDownFromInside / Outside (at once, 0.25 s back); the walls' and a raged burst's
+      handlers have none
+- [ ] Playing as Jason, remaining: KillerHelpTextWidget; his score lines (XPDisplayWidget);
       the grab kill slots are the save game's picks (unread: the throat hack on the click)
 - [x] Shift, Morph, Stalk (f13-core::killer_moves, jason.rs): Shift's 0.7 s wind-up, ShiftSpeed and ShiftTime (J2:
   1000 cm/s, 4 s), ending in a grab; Stalk's StalkActiveTimer (IdleStalkModifier standing still); Morph to the

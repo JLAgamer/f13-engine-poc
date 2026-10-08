@@ -191,14 +191,14 @@ pub fn search(commands: &mut Commands, player: Entity, from: Transform, cabinet:
         // NativeDestinationReached: the handler takes the view (bTakeCameraControl: the constructor's true) to its
         // CabinetCam.
         let handler = if slot == 0 { "UseCabinet_SpecialMoveHandler" } else { "UseCabinet_SpecialMoveHandler2" };
-        w.trigger(crate::interaction_camera::PlayInteractionCamera { actor: cabinet, handler });
+        w.trigger(crate::interaction_camera::PlayInteractionCamera { actor: cabinet, handler, killer: false });
         info!("searching a cabinet from ({:.2}, {:.2}, {:.2})", at.x, at.y, at.z);
     });
 }
 
 /// OpenCloseCabinetCompleted / UseCabinetAborted: however her drawer move ends, the view goes back to her.
 fn cabinet_move_ended(_: On<Remove, CabinetUse>, mut commands: Commands) {
-    commands.trigger(crate::interaction_camera::StopInteractionCamera);
+    commands.trigger(crate::interaction_camera::StopInteractionCamera { killer: false });
 }
 
 /// MULTICAST_Close: not ready any more; the montage to Close or Take, or (empty, not taking) the move ends.
