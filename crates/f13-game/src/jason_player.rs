@@ -51,7 +51,7 @@ impl Plugin for PlayJasonPlugin {
             .add_systems(Update, (look, hud).run_if(on))
             .add_systems(
                 Update,
-                view.after(crate::player::follow_camera).after(crate::hiding::hiding_camera).before(crate::kill_camera::kill_camera).run_if(on),
+                view.after(crate::counselor_camera::counselor_camera).after(crate::hiding::hiding_camera).before(crate::kill_camera::kill_camera).run_if(on),
             )
             .add_systems(Startup, spawn_hud);
     }

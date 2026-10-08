@@ -17,7 +17,7 @@ impl Plugin for KillCameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<KillCameras>()
             .add_systems(Startup, load)
-            .add_systems(Update, (kill_camera, blend_back).chain().after(crate::player::follow_camera).after(crate::hiding::hiding_camera));
+            .add_systems(Update, (kill_camera, blend_back).chain().after(crate::counselor_camera::counselor_camera).after(crate::hiding::hiding_camera));
     }
 }
 
@@ -92,28 +92,20 @@ pub(crate) fn kill_camera(
     mut kills: Query<(Entity, &mut KillCam)>,
     mut camera: Single<(&mut Transform, &mut Projection), With<PlayerCamera>>,
     windows: Query<&Window>,
-    mut normal_fov: Local<Option<f32>>,
     her: Query<&Transform, (With<crate::player::Player>, Without<PlayerCamera>)>,
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
 ) {
     let (ref mut xf, ref mut proj) = *camera;
     let Projection::Perspective(persp) = &mut **proj else { return };
-    let Some((e, mut k)) = kills.iter_mut().next() else {
-        if let Some(fov) = normal_fov.take() {
-            persp.fov = fov;
-        }
-        return;
-    };
+    // No kill: her cameras (counselor_camera.rs) have the view and its field of view.
+    let Some((e, mut k)) = kills.iter_mut().next() else { return };
     let Some(spline) = cameras.0.get(k.kill.as_str()) else {
         commands.entity(e).remove::<KillCam>();
         return;
     };
-    let normal = *normal_fov.get_or_insert(persp.fov);
     let dt = time.delta_secs();
     k.t += dt;
     if k.t >= spline.duration() {
-        persp.fov = normal;
-        *normal_fov = None;
         commands.entity(e).remove::<KillCam>();
         commands.insert_resource(BlendBack { from: **xf, t: 0.0 });
         return;

@@ -333,7 +333,7 @@ impl Plugin for HidingPlugin {
         app.add_systems(FixedUpdate, update_hiding.before(crate::player::move_player))
             .add_systems(Update, (read_exit, swing_doors, setup_breath))
             .add_systems(FixedUpdate, breathe.after(update_hiding))
-            .add_systems(Update, hiding_camera.after(crate::player::follow_camera));
+            .add_systems(Update, hiding_camera.after(crate::counselor_camera::counselor_camera));
     }
 }
 
@@ -549,16 +549,12 @@ pub(crate) fn hiding_camera(
     spots: Query<(&HidingSpot, &GlobalTransform)>,
     mut camera: Single<(&mut PlayerCamera, &mut Transform, &mut Projection), Without<Player>>,
     windows: Query<&Window>,
-    mut normal_fov: Local<Option<f32>>,
 ) {
     let (ref mut cam, ref mut xf, ref mut proj) = *camera;
     let Projection::Perspective(persp) = &mut **proj else { return };
-    let normal = *normal_fov.get_or_insert(persp.fov);
+    // Not hidden: her cameras (counselor_camera.rs) have the view.
     let hidden = players.iter().find(|h| h.phase == HidePhase::Hidden);
-    let Some((spot, gxf)) = hidden.and_then(|h| spots.get(h.spot).ok()) else {
-        persp.fov = normal;
-        return;
-    };
+    let Some((spot, gxf)) = hidden.and_then(|h| spots.get(h.spot).ok()) else { return };
     // follow_camera turned yaw/pitch by the mouse; here they are offsets, clamped.
     let max = spot.max_look * std::f32::consts::PI / 180.0;
     cam.yaw = cam.yaw.clamp(-max.x, max.x);

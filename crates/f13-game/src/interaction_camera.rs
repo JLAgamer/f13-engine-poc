@@ -28,7 +28,7 @@ impl Plugin for InteractionCameraPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(play).add_observer(stop).add_systems(
             Update,
-            interaction_camera.after(crate::player::follow_camera).before(crate::kill_camera::kill_camera),
+            interaction_camera.after(crate::counselor_camera::counselor_camera).before(crate::kill_camera::kill_camera),
         );
     }
 }
@@ -84,8 +84,8 @@ pub struct StopInteractionCamera;
 #[derive(Resource, Clone, Copy, Debug)]
 enum View {
     In { from: (Transform, f32), to: (Transform, f32), time: f32, t: f32, back: f32 },
-    /// `fov`: the follow camera's own field of view (it never changes it).
-    Back { from: (Transform, f32), fov: f32, time: f32, t: f32 },
+    /// Back to her cameras (counselor_camera.rs places the camera and sets its field of view before this runs).
+    Back { from: (Transform, f32), time: f32, t: f32 },
 }
 
 /// The vertical field of view of a horizontal one at the window's aspect.
@@ -113,7 +113,13 @@ fn play(
     commands.insert_resource(View::In { from: (*xf, p.fov), to: (world(cam), vertical(*fov, aspect)), time: h.blend_in, t: 0.0, back: h.blend_back });
 }
 
-fn stop(_: On<StopInteractionCamera>, mut commands: Commands, view: Option<Res<View>>, mut player_camera: Single<&mut PlayerCamera>) {
+fn stop(
+    _: On<StopInteractionCamera>,
+    mut commands: Commands,
+    view: Option<Res<View>>,
+    mut player_camera: Single<&mut PlayerCamera>,
+    rig: Option<ResMut<crate::counselor_camera::Rig>>,
+) {
     let Some(View::In { to, back, t, time, from }) = view.as_deref().copied() else { return };
     // Where the view is now (mid blend, if it hadn't arrived).
     let now = blend(from, to, ease(t, time));
@@ -121,7 +127,11 @@ fn stop(_: On<StopInteractionCamera>, mut commands: Commands, view: Option<Res<V
     let f = now.0.forward();
     player_camera.yaw = (-f.x).atan2(-f.z);
     player_camera.pitch = 0.0;
-    commands.insert_resource(View::Back { from: now, fov: from.1, time: back, t: 0.0 });
+    // ReturnCameraToCharacter ends in ResetCameras: her cameras' arms snap to that view.
+    if let Some(mut rig) = rig {
+        rig.reset_cameras();
+    }
+    commands.insert_resource(View::Back { from: now, time: back, t: 0.0 });
 }
 
 /// FMath::InterpEaseInOut(0, 1, t / time, BLEND_EXP).
@@ -131,12 +141,12 @@ fn ease(t: f32, time: f32) -> f32 {
 }
 
 /// A Bevy camera rotation as an Unreal rotator (the camera looking along Unreal +X), and back.
-fn to_rotator(q: Quat) -> Vec3 {
+pub(crate) fn to_rotator(q: Quat) -> Vec3 {
     let q = q * Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
     rotator(Quat::from_xyzw(-q.x, -q.z, -q.y, q.w))
 }
 
-fn from_rotator(r: Vec3) -> Quat {
+pub(crate) fn from_rotator(r: Vec3) -> Quat {
     let u = quaternion(r);
     Quat::from_xyzw(-u.x, -u.z, -u.y, u.w) * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2)
 }
@@ -162,10 +172,10 @@ fn interaction_camera(mut commands: Commands, time: Res<Time>, view: Option<ResM
             **xf = x;
             p.fov = fov;
         }
-        View::Back { from, fov, time, t } => {
+        View::Back { from, time, t } => {
             *t += dt;
-            // To the live follow camera (this frame's, already placed).
-            let (x, fov) = blend(*from, (**xf, *fov), ease(*t, *time));
+            // To her live view (this frame's, already placed).
+            let (x, fov) = blend(*from, (**xf, p.fov), ease(*t, *time));
             **xf = x;
             if *t >= *time {
                 commands.remove_resource::<View>();

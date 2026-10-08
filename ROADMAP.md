@@ -268,7 +268,9 @@ Presentation
   Jason's swings, door breaking, knives, traps and kills; the cycles' (the swim strokes) by their phase; the map's
   ambience (CrystalLake_Sm_Audio's AmbientSounds: the campground and mood tone loops, the lake's within its box
   attenuation); the car's horn (H) and brakes (their audio components' cues); her voice lines (Impact, Wounded,
-  Choke, Stumble, Died, swings, windows, each kill's, stunning Jason, car parts fitted; PLACEHOLDER triggers). Remaining:
+  Choke (Base_Counselor's graph: a second after a grab, stopped by a kill or her release), Stumble, Died, swings,
+  windows, each kill's, stunning Jason, car parts fitted; PLACEHOLDER triggers; one line at a time, as her voice
+  component plays them). Remaining:
   the other stingers, scary sounds, the other voice lines (chases, calls, dead bodies), the audio volumes' reverb
 
 Setup
@@ -293,8 +295,12 @@ Decomp audit (nothing guessed: every rule read from the decomp or the game's dat
       placed kills' Interactable range test, no start/stop takes, Jason's eye and view angle, the minimap's scale,
       the brake skid (the handbrake's). Left as placeholders: APEX door chunks, the block idle's upper-body slot,
       sweeps against Jason's physics bodies, the firecracker's spawn point
-- [ ] The counselor's cameras (Base_Counselor: Chase, Combat, Crouching, Driving, Grab, Indoor, Outdoor, Shooting,
-      Water spring arms, switched by its ChangeCamera graph): f13-rs's single follow camera is a guess
+- [x] The counselor's cameras (counselor_camera.rs, f13-core::dynamic_camera): Base_Counselor's nine
+      ILLDynamicCameraComponents (their speed-picked settings and blends, this build's spring arm: RInterpTo/VInterpTo
+      lag, the probe sweep on the camera channel), ILLCharacter's camera stack, the graph's ChangeCamera (stance,
+      chase, indoors); the engine's mouse look (sensitivity, FOV scaling, input scales, ±87 pitch); her look in the
+      car; chases (her chase check, read: the game takes acosf of the angle). Not yet: the chase's camera shake, the
+      spline cameras (pocket knife, rear view, grabbed, drowning), Jason's own cameras when he's played
 - [ ] Special moves' look (ILLSpecialMove_MoveToward: her view turns to the move's spot, MODLOG)
 - [ ] Post-processing the map's volume asks for: the colour grading LUT (LutTestHorror at 0.25), the engine's filmic
       tonemapper, SSAO and bloom (DefaultFeature.*); then compare against the game's own screenshots

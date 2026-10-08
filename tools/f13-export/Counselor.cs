@@ -99,6 +99,11 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         /// The body mesh's physics asset (the ragdoll): one body per simulated bone, and the joints between them.
         public List<RagdollBody>? Ragdoll;
         public List<RagdollJoint>? Joints;
+        /// The character's dynamic cameras (ILLDynamicCameraComponent: Base_Counselor's Chase, Combat, Crouching,
+        /// Driving, Grab, Indoor, Outdoor, ShootingCam, Water), by component name: "Settings" (its
+        /// MovementBasedSettings: FCameraBehaviorSettings), "Use2DVelocity", and its "SpringArm" and "Camera"
+        /// subobjects' own properties.
+        public Newtonsoft.Json.Linq.JObject? Cameras;
     }
 
     /// A physics asset body: its bone's capsules ("Sphyl": Radius, Length between the sphere centres, along the
@@ -221,6 +226,15 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         values["FlashlightFalloffExponent"] = flash.GetOrDefault("LightFalloffExponent", 8f);
         values["FlashlightInverseSquared"] = flash.GetOrDefault("bUseInverseSquaredFalloff", true) ? 1f : 0f;
         values["FlashlightLerpSpeed"] = ClassValue<float?>(cls, "FlashlightLerpSpeed") ?? 15f;
+        // Chases (SCCounselorCharacter's chase check, FUN_1403bd080; constructor: 45 / 90 degrees, 1500 / 3000 cm, 2 s)
+        // and her look in a car (constructor: 70 / 40 degrees; CameraRotateScale 0.5, 0.5).
+        foreach (var (name, fallback) in new[] { ("StartChaseKillerAngle", 45f), ("EndChaseKillerAngle", 90f), ("StartChaseDistance", 1500f),
+                     ("EndChaseDistance", 3000f), ("ChaseTimeout", 2f), ("MaxVehicleCameraYawAngle", 70f), ("MaxVehicleCameraPitchAngle", 40f) })
+            values[name] = ClassValue<float?>(cls, name) ?? fallback;
+        values["ChasingKillerMustBeMoving"] = ClassValue<bool?>(cls, "ChasingKillerMustBeMoving") == true ? 1f : 0f;
+        var rotateScale = ClassValue<FVector2D?>(cls, "CameraRotateScale") ?? new FVector2D(0.5f, 0.5f);
+        values["CameraRotateScaleX"] = rotateScale.X;
+        values["CameraRotateScaleY"] = rotateScale.Y;
         info.Values = values;
         info.Stats = new() { ["NoiseStatMod"] = StatValue(cls, "NoiseStatMod", 1f) };
         // Holding her breath while hiding (constructor: MaxBreath 100, MinHoldBreathThreshold 50, MinHoldBreathTimer
@@ -232,6 +246,7 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         info.Stats["BreathRechargeModifier"] = StatValue(cls, "BreathRechargeModifier", 10f, (5, 1f));
         info.Stats["BreathNoiseMod"] = StatValue(cls, "BreathNoiseMod", 1f, (6, 0.2f));
         info.Music = MusicObject(cls);
+        info.Cameras = DynamicCameras(cls);
         // Her voice lines (VoiceOverObjectClass's VoiceOverData), as Sounds "VO:<name>".
         info.Sounds = VoiceOvers(cls);
 
@@ -562,6 +577,50 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             result["VO:" + name] = $"SoundCue'{path.Split('.')[^1]}'";
         }
         return result;
+    }
+
+    /// A Blueprint class's ILLDynamicCameraComponents (construction-script nodes of it and its Blueprint parents, a
+    /// subclass's InheritableComponentHandler override first), by variable name.
+    static Newtonsoft.Json.Linq.JObject? DynamicCameras(UStruct? cls)
+    {
+        var chain = new List<UBlueprintGeneratedClass>();
+        for (var c = cls; c != null; c = c.SuperStruct?.Load<UStruct>())
+            if (c is UBlueprintGeneratedClass bp) chain.Add(bp);
+        var overrides = new Dictionary<string, UObject>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in chain)
+            foreach (var rec in c.InheritableComponentHandler?.Load()?.GetOrDefault<FStructFallback[]>("Records", []) ?? [])
+            {
+                var name = rec.GetOrDefault<FStructFallback?>("ComponentKey")?.GetOrDefault<FName>("SCSVariableName").Text;
+                if (name != null && rec.GetOrDefault<FPackageIndex?>("ComponentTemplate")?.Load() is { } t) overrides.TryAdd(name, t);
+            }
+        static Newtonsoft.Json.Linq.JToken Props(UObject? o) =>
+            o == null ? new Newtonsoft.Json.Linq.JObject() : Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(o))["Properties"] ?? new Newtonsoft.Json.Linq.JObject();
+        var result = new Newtonsoft.Json.Linq.JObject();
+        foreach (var c in chain)
+        {
+            void Walk(FPackageIndex idx)
+            {
+                if (idx.Load() is not { } node) return;
+                var name = node.GetOrDefault<FName>("InternalVariableName").Text;
+                var t = overrides.GetValueOrDefault(name) ?? node.GetOrDefault<FPackageIndex?>("ComponentTemplate")?.Load();
+                if (t?.ExportType == "ILLDynamicCameraComponent" && result[name] == null)
+                {
+                    var p = Props(t);
+                    result[name] = new Newtonsoft.Json.Linq.JObject
+                    {
+                        ["Settings"] = p["MovementBasedSettings"] ?? new Newtonsoft.Json.Linq.JArray(),
+                        // The constructor's bUse2DVelocity is true.
+                        ["Use2DVelocity"] = p["bUse2DVelocity"] ?? true,
+                        ["SpringArm"] = Props(t.GetOrDefault<FPackageIndex?>("SpringArm")?.Load()),
+                        ["Camera"] = Props(t.GetOrDefault<FPackageIndex?>("Camera")?.Load()),
+                    };
+                }
+                foreach (var child in node.GetOrDefault<FPackageIndex[]>("ChildNodes", [])) Walk(child);
+            }
+            if (c.SimpleConstructionScript?.Load() is { } scs)
+                foreach (var n in scs.GetOrDefault<FPackageIndex[]>("RootNodes", [])) Walk(n);
+        }
+        return result.Count > 0 ? result : null;
     }
 
     /// The defaults of a character's MusicObjectClass, with object references flattened to their names.

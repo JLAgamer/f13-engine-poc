@@ -6,7 +6,8 @@
 // Meshes with neither collide with nothing, as for Unreal's character sweeps (which use simple collision).
 //
 // Whether a component blocks a counselor comes from its collision profile (the game's DefaultEngine.ini) or its
-// custom responses: blocking needs query collision and a Block response on the Pawn channel.
+// custom responses: blocking needs query collision and a Block response on the Pawn channel. Whether it blocks the
+// camera (the spring arms' probe, ECC_Camera) the same way on the Camera channel.
 //
 // "Surface": the mesh's physical surface type (EPhysicalSurface: SurfaceType1..; 0 the default), from its body setup's
 // PhysMaterial, else its first material's (up its parents): footsteps pick their sound by it.
@@ -46,8 +47,8 @@ static class Collision
         return null;
     }
 
-    /// Profile name -> (query collision enabled, Pawn channel response).
-    static readonly Dictionary<string, (bool Query, string Pawn)> profiles = new(StringComparer.OrdinalIgnoreCase);
+    /// Profile name -> (query collision enabled, Pawn channel response, Camera channel response).
+    static readonly Dictionary<string, (bool Query, string Pawn, string Camera)> profiles = new(StringComparer.OrdinalIgnoreCase);
     static readonly HashSet<string> unknown = new(StringComparer.OrdinalIgnoreCase);
     /// How often each profile decided BlocksPawn (summary for the log).
     public static readonly SortedDictionary<string, int> Used = new();
@@ -63,8 +64,13 @@ static class Collision
             var name = Field(line, "Name");
             if (name == null) continue;
             var enabled = Field(line, "CollisionEnabled") ?? "QueryAndPhysics";
-            var pawn = System.Text.RegularExpressions.Regex.Match(line, "\\(Channel=\"Pawn\",Response=(ECR_\\w+)\\)");
-            profiles[name] = (enabled.StartsWith("Query"), pawn.Success ? pawn.Groups[1].Value : "ECR_Block");
+            // Engine channels a profile doesn't list keep their default response, Block.
+            string Response(string channel)
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(line, "\\(Channel=\"" + channel + "\",Response=(ECR_\\w+)\\)");
+                return m.Success ? m.Groups[1].Value : "ECR_Block";
+            }
+            profiles[name] = (enabled.StartsWith("Query"), Response("Pawn"), Response("Camera"));
         }
     }
 
@@ -76,21 +82,26 @@ static class Collision
 
     /// Whether a primitive component blocks a counselor (Pawn). `defaultProfile` is the component class's constructor
     /// default (BlockAll for static meshes) for components that keep it.
-    public static bool BlocksPawn(UObject component, string defaultProfile = "BlockAll")
+    public static bool BlocksPawn(UObject component, string defaultProfile = "BlockAll") => Blocks(component, "Pawn", defaultProfile, true);
+
+    /// Whether a primitive component blocks the camera channel (spring arm probes).
+    public static bool BlocksCamera(UObject component, string defaultProfile = "BlockAll") => Blocks(component, "Camera", defaultProfile, false);
+
+    static bool Blocks(UObject component, string channel, string defaultProfile, bool count)
     {
         var bi = component.GetOrDefault<FStructFallback?>("BodyInstance");
         var profile = bi?.GetOrDefault<FName>("CollisionProfileName").Text;
         if (string.IsNullOrEmpty(profile) || profile == "None") profile = defaultProfile;
-        Used[profile] = Used.GetValueOrDefault(profile) + 1;
+        if (count) Used[profile] = Used.GetValueOrDefault(profile) + 1;
         if (profile == "Custom")
         {
             var enabled = bi?.GetOrDefault<string>("CollisionEnabled") ?? "ECollisionEnabled::QueryAndPhysics";
             if (!enabled.Contains("Query")) return false;
             foreach (var r in bi?.GetOrDefault<FStructFallback?>("CollisionResponses")?.GetOrDefault<FStructFallback[]>("ResponseArray", []) ?? [])
-                if (r.GetOrDefault<FName>("Channel").Text == "Pawn") return r.GetOrDefault<string>("Response") == "ECR_Block";
-            return true; // the Pawn channel's default response is Block
+                if (r.GetOrDefault<FName>("Channel").Text == channel) return r.GetOrDefault<string>("Response") == "ECR_Block";
+            return true; // the engine channels' default response is Block
         }
-        if (profiles.TryGetValue(profile, out var p)) return p.Query && p.Pawn == "ECR_Block";
+        if (profiles.TryGetValue(profile, out var p)) return p.Query && (channel == "Pawn" ? p.Pawn : p.Camera) == "ECR_Block";
         if (unknown.Add(profile)) Console.WriteLine($"  collision profile {profile} not in DefaultEngine.ini: treated as blocking");
         return true;
     }

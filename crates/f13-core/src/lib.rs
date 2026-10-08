@@ -7,6 +7,7 @@ pub mod collision;
 pub mod counselor;
 pub mod curve;
 pub mod dodge;
+pub mod dynamic_camera;
 pub mod fear;
 pub mod game_mode;
 pub mod health;

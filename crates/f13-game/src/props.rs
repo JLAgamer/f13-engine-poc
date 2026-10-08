@@ -357,6 +357,9 @@ fn spawn_props(
             }
             if let Some(col) = collision.as_ref().filter(|_| c.blocks_pawn && c.kind == "StaticMeshComponent").and_then(|w| w.mesh_collider(mesh)) {
                 commands.entity(child).insert(col);
+                if c.blocks_camera {
+                    commands.entity(child).insert(crate::collision::CameraBlocker);
+                }
             }
             parts.insert(c.name.as_str(), child);
             if c.name == "AnimatedMesh" {
@@ -391,17 +394,26 @@ fn spawn_props(
             });
             if let Some(&(p, pt)) = c.parent.as_deref().and_then(|n| spot_pivots.get(n)) {
                 let rel = Transform::from_matrix(pt.to_matrix().inverse() * local(c).to_matrix());
-                commands.spawn((rel, Visibility::default(), collider, ChildOf(p)));
+                let e = commands.spawn((rel, Visibility::default(), collider, ChildOf(p))).id();
+                if c.hull_blocks_camera {
+                    commands.entity(e).insert(crate::collision::CameraBlocker);
+                }
                 continue;
             }
             match on_pivot {
                 Some((p, pt)) => {
                     // A door leaf: doorways stay open on the navmesh (Jason opens or breaks the door on his way).
                     let rel = Transform::from_matrix(pt.to_matrix().inverse() * local(c).to_matrix());
-                    commands.spawn((rel, Visibility::default(), collider, crate::navigation::NotOnNavmesh, ChildOf(p)));
+                    let e = commands.spawn((rel, Visibility::default(), collider, crate::navigation::NotOnNavmesh, ChildOf(p))).id();
+                    if c.hull_blocks_camera {
+                        commands.entity(e).insert(crate::collision::CameraBlocker);
+                    }
                 }
                 None => {
                     let e = commands.spawn((local(c), Visibility::default(), collider, ChildOf(root))).id();
+                    if c.hull_blocks_camera {
+                        commands.entity(e).insert(crate::collision::CameraBlocker);
+                    }
                     hulls.insert(c.name.as_str(), e);
                 }
             }

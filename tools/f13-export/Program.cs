@@ -166,8 +166,11 @@ void ExportLevel(string mapPath, params string[] extra)
                 // Its brush's convex hulls, in world space.
                 var brush = root;
                 var bs = brush?.GetOrDefault<FPackageIndex?>("BrushBodySetup")?.Load() as CUE4Parse.UE4.Objects.PhysicsEngine.UBodySetup;
-                if (brush != null && bs?.AggGeom != null && Collision.BlocksPawn(brush, "BlockAll"))
+                var (pawn, camera) = brush == null ? (false, false) : (Collision.BlocksPawn(brush, "BlockAll"), Collision.BlocksCamera(brush, "BlockAll"));
+                if (brush != null && bs?.AggGeom != null && (pawn || camera))
                 {
+                    info.HullsBlockPawn = pawn;
+                    info.HullsBlockCamera = camera;
                     var w = brush.GetAbsoluteTransform();
                     info.Hulls = bs.AggGeom.ConvexElems.Where(c => c.VertexData is { Length: >= 4 })
                         .Select(c => c.VertexData.SelectMany(v => { var p = w.TransformPosition(c.Transform.TransformPosition(v)); return new[] { p.X, p.Y, p.Z }; }).ToArray())
@@ -231,6 +234,7 @@ void ExportLevel(string mapPath, params string[] extra)
                     .Select(m => m?.ResolvedObject?.GetPathName()).ToArray(),
                 MaterialMap = MeshMaterials.OverrideMap(mesh, smc.GetOrDefault<FPackageIndex[]>("OverrideMaterials", []), Queue),
                 BlocksPawn = Collision.BlocksPawn(smc),
+                BlocksCamera = Collision.BlocksCamera(smc),
                 CastShadow = smc.GetOrDefault("CastShadow", true),
                 // Foliage instances fade out at InstanceEndCullDistance; other components at their max draw distance
                 // (LDMaxDrawDistance, or the cull distance volume's CachedMaxDrawDistance), the nearer one when both are set.
@@ -1201,6 +1205,8 @@ class Placement
     public List<Xform>? Instances;
     /// Blocks counselors (its collision profile or custom responses); its shapes are in collision.json.
     public bool BlocksPawn = true;
+    /// Blocks the camera channel (the spring arms' probe).
+    public bool BlocksCamera = true;
     /// Casts shadows (CastShadow; baked ones included, which f13-game's dynamic sun stands in for).
     public bool CastShadow = true;
     /// Not drawn past this distance from the camera (cm; 0 = always drawn).
@@ -1214,6 +1220,8 @@ class ActorInfo
     public List<Newtonsoft.Json.Linq.JObject>? Components;
     /// BlockingVolumes: their convex hulls as world-space point sets (cm).
     public List<float[]>? Hulls;
+    /// Whether the hulls block counselors (Pawn) and the camera channel.
+    public bool HullsBlockPawn = true, HullsBlockCamera = true;
     /// NavMeshBoundsVolumes and the minimap volume: the world-space box their brush covers (cm: min x, y, z, max x, y, z).
     public float[]? Bounds;
 }

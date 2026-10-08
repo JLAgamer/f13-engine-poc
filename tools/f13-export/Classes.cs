@@ -205,6 +205,7 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
                     j["MaterialMap"] = JObject.FromObject(map);
                 j["Hidden"] = t.GetOrDefault("bHiddenInGame", false) || !t.GetOrDefault("bVisible", true);
                 j["BlocksPawn"] = Collision.BlocksPawn(t);
+                j["BlocksCamera"] = Collision.BlocksCamera(t);
                 return j;
             }
             case USkeletalMeshComponent:
@@ -231,7 +232,10 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
         // constructor's profile (not in the export) are taken as non-blocking (triggers, volumes).
         // Spacer capsules (doorways, windows, car seats) only block while an interaction pushes characters clear.
         if (!type.Contains("SpacerCapsule") && Collision.ShapeComponent(t, FVector.OneVector) is { } hull && Collision.BlocksPawn(t, "OverlapAllDynamic"))
+        {
             j["Hull"] = new JArray(hull);
+            j["HullBlocksCamera"] = Collision.BlocksCamera(t, "OverlapAllDynamic");
+        }
         foreach (var cls in t.GetOrDefault<FPackageIndex[]>("ActorList", [])) Add(cls);
         Add(t.GetOrDefault<FPackageIndex?>("ChildActorClass"));
         foreach (var cls in t.GetOrDefault<FPackageIndex[]>("RequiredPartClasses", [])) Add(cls);

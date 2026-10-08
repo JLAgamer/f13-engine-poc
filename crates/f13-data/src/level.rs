@@ -38,6 +38,9 @@ pub struct Placement {
     /// Blocks counselors (its collision profile); its shapes are in collision.json. Exports before collision: true.
     #[serde(default = "yes")]
     pub blocks_pawn: bool,
+    /// Blocks the camera channel (the spring arms' probe).
+    #[serde(default = "yes")]
+    pub blocks_camera: bool,
     /// Casts shadows (the component's CastShadow).
     #[serde(default = "yes")]
     pub cast_shadow: bool,
@@ -67,6 +70,11 @@ pub struct ActorInfo {
     /// BlockingVolumes: convex hulls as world-space point sets (Unreal cm, flat x, y, z).
     #[serde(default, deserialize_with = "null_as_default")]
     pub hulls: Vec<Vec<f32>>,
+    /// Whether the hulls block counselors and the camera channel.
+    #[serde(default = "yes")]
+    pub hulls_block_pawn: bool,
+    #[serde(default = "yes")]
+    pub hulls_block_camera: bool,
     /// NavMeshBoundsVolumes: the box their brush covers (Unreal cm: min x, y, z, max x, y, z).
     #[serde(default)]
     pub bounds: Option<[f32; 6]>,
@@ -106,9 +114,15 @@ pub struct ComponentInfo {
     /// Static mesh components: blocks counselors (default for exports without the flag).
     #[serde(default = "yes")]
     pub blocks_pawn: bool,
+    /// Static mesh components: blocks the camera channel.
+    #[serde(default = "yes")]
+    pub blocks_camera: bool,
     /// Box, sphere and capsule components that block counselors: a convex point set in component space (Unreal cm).
     #[serde(default)]
     pub hull: Option<Vec<f32>>,
+    /// Whether the hull also blocks the camera channel.
+    #[serde(default = "yes")]
+    pub hull_blocks_camera: bool,
 }
 
 impl ComponentInfo {

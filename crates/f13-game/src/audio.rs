@@ -54,6 +54,7 @@ impl Plugin for AudioPlugin {
             .add_observer(play_sound)
             .add_observer(footstep)
             .add_observer(actor_sound)
+            .add_observer(stop_voice_over)
             .add_observer(actor_loop)
             .add_observer(stop_loop)
             .add_observer(music_stinger)
@@ -161,17 +162,76 @@ fn actor_loop(
     }
 }
 
-/// Play the cue `actor`'s class names under `prop`, at the actor.
+/// Play the cue `actor`'s class names under `prop`, at the actor. A voice line ("VO:<name>") is said by the actor's
+/// voice: SCVoiceOverComponent plays its lines on one audio component (0x14031bff0), so a new line cuts the last
+/// one off; the voice follows the actor.
 #[derive(Event, Clone, Copy, Debug)]
 pub struct ActorSound {
     pub actor: Entity,
     pub prop: &'static str,
 }
 
-fn actor_sound(ev: On<ActorSound>, mut commands: Commands, actors: Query<(&ClassSounds, &GlobalTransform)>) {
+/// A voice of the line an actor is saying.
+#[derive(Component)]
+pub struct VoiceOf(pub &'static str);
+
+/// SCVoiceOverComponent's StopVoiceOver (0x140320a10): the line the actor is saying stops.
+#[derive(Event, Clone, Copy, Debug)]
+pub struct StopVoiceOver {
+    pub actor: Entity,
+}
+
+fn stop_voice_over(ev: On<StopVoiceOver>, mut commands: Commands, voices: Query<(Entity, &ChildOf), With<VoiceOf>>) {
+    debug!("voice: {} stops", ev.actor);
+    for (e, parent) in &voices {
+        if parent.parent() == ev.actor {
+            commands.entity(e).despawn();
+        }
+    }
+}
+
+/// Whether `actor` is saying `line` (IsVoiceOverPlaying).
+pub fn saying(voices: &Query<(&VoiceOf, &ChildOf)>, actor: Entity, line: &str) -> bool {
+    voices.iter().any(|(v, p)| p.parent() == actor && v.0 == line)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn actor_sound(
+    ev: On<ActorSound>,
+    mut commands: Commands,
+    actors: Query<(&ClassSounds, &GlobalTransform)>,
+    voices: Query<(Entity, &ChildOf), With<VoiceOf>>,
+    assets: Res<AssetServer>,
+    sounds: Option<ResMut<Sounds>>,
+    mut rng: ResMut<crate::GameRng>,
+) {
     let Ok((s, g)) = actors.get(ev.actor) else { return };
-    if let Some(cue) = s.0.get(ev.prop) {
+    let Some(cue) = s.0.get(ev.prop) else { return };
+    if !ev.prop.starts_with("VO:") {
         commands.trigger(PlaySound { cue: cue.clone(), at: Some(g.translation() + Vec3::Y) });
+        return;
+    }
+    let Some(mut sounds) = sounds else { return };
+    let Some(c) = sounds.cue(cue).cloned() else { return };
+    debug!("voice: {} says {}", ev.actor, ev.prop);
+    for (e, parent) in &voices {
+        if parent.parent() == ev.actor {
+            commands.entity(e).despawn();
+        }
+    }
+    let (played, att) = c.play(&mut || rng.0.frand());
+    for v in played {
+        let settings = PlaybackSettings {
+            mode: if v.looping { PlaybackMode::Loop } else { PlaybackMode::Despawn },
+            speed: v.pitch,
+            volume: Volume::Linear(v.volume),
+            ..PlaybackSettings::DESPAWN
+        };
+        let source = AudioPlayer::new(assets.load(format!("sounds/{}", v.file)));
+        let mut e = commands.spawn((source, settings, Transform::from_translation(Vec3::Y), ChildOf(ev.actor), VoiceOf(ev.prop)));
+        if let Some(att) = att.clone().filter(|a| a.attenuate || a.spatialize) {
+            e.insert((PlaybackSettings { spatial: att.spatialize, spatial_scale: Some(SpatialScale::new(SPATIAL_SCALE)), ..settings }, Emitter { volume: v.volume, attenuation: att }));
+        }
     }
 }
 
@@ -250,22 +310,41 @@ fn action_line(take: &str) -> Option<&'static str> {
 
 /// Her voice lines (her VoiceOverObjectClass's, as her class sounds) on what happens to her: Impact when she's hurt,
 /// Wounded as she becomes wounded, Stumble, Died (a death outside a kill), and each action's line as it starts (swings,
-/// windows, kills: [`action_line`]). Not Choke on a grab: no code names that line (only the choke kills' Blueprints
-/// do), and it loops. PLACEHOLDER: the game's voice component picks these on its own events, not read; the hiding
-/// lines are hiding.rs's.
+/// windows, kills: [`action_line`]). Choke as Base_Counselor's graph says it: a second after she's grabbed
+/// (BP_OnGrabbed's Delay, which a second grab while it waits doesn't restart), stopped when Jason drops her
+/// (BP_OnDropped) or while she's in a special move (its tick: a kill, its take or its camera running). Her lines only while she's alive (PlayVoiceOver).
+/// PLACEHOLDER: the game's voice component picks the others on its own events, not read; the hiding lines are
+/// hiding.rs's.
 #[allow(clippy::type_complexity)]
 fn voices(
     mut commands: Commands,
+    time: Res<Time>,
     mut last: Local<Option<(f32, bool, bool, Option<String>, Option<String>, bool)>>,
+    mut choke_at: Local<Option<f32>>,
     players: Query<(Entity, &Player, Option<&crate::character::PlayAction>, Has<crate::jason::Held>), With<ClassSounds>>,
+    saying_now: Query<(&VoiceOf, &ChildOf)>,
+    kills: Query<(), With<crate::kill_camera::KillCam>>,
 ) {
     let Ok((pe, p, action, held)) = players.single() else { return };
     let c = &p.counselor;
     let now = (c.health, c.wounded, held, action.map(|a| a.0.clone()), p.montage.clone(), c.alive());
-    let Some((health, wounded, _, was_action, was_montage, was_alive)) = last.replace(now.clone()) else { return };
-    let mut say = |line: &'static str| commands.trigger(ActorSound { actor: pe, prop: line });
+    let Some((health, wounded, was_held, was_action, was_montage, was_alive)) = last.replace(now.clone()) else { return };
+    let alive = now.5;
+    let mut say = |line: &'static str| {
+        if alive || line == "VO:Died" {
+            commands.trigger(ActorSound { actor: pe, prop: line });
+        }
+    };
     let kill = |a: &Option<String>| a.as_deref().and_then(action_line).is_some_and(|l| l.ends_with("Kill"));
     let in_kill = kill(&now.3) || kill(&was_action);
+    let t = time.elapsed_secs();
+    if held && !was_held && choke_at.is_none() {
+        *choke_at = Some(t + 1.0);
+    }
+    if choke_at.is_some_and(|at| t >= at) {
+        *choke_at = None;
+        say("VO:Choke");
+    }
     if !now.5 && was_alive && !in_kill {
         say("VO:Died");
     } else if now.0 < health && now.5 {
@@ -277,10 +356,18 @@ fn voices(
     if now.4.as_deref().is_some_and(|m| m.contains("stumble")) && now.4 != was_montage {
         say("VO:Stumble");
     }
+    // A new line (the kill's) cuts Choke off itself.
+    let mut said = false;
     if now.3 != was_action {
         if let Some(line) = now.3.as_deref().and_then(action_line) {
             say(line);
+            said = true;
         }
+    }
+    if was_held && !held {
+        commands.trigger(StopVoiceOver { actor: pe });
+    } else if !said && (kill(&now.3) || !kills.is_empty()) && saying(&saying_now, pe, "VO:Choke") {
+        commands.trigger(StopVoiceOver { actor: pe });
     }
 }
 

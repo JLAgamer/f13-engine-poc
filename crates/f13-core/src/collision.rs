@@ -375,6 +375,35 @@ pub fn capsule_blocked(world: &(impl TriSource + ?Sized), a: Vec3, b: Vec3, radi
     hit
 }
 
+/// Where a sphere of `radius` moving from `from` to `to` first touches a triangle, as a fraction of the way (0 when it
+/// starts touching one): the spring arm's probe (SweepSingleByChannel with a sphere). Found in steps of a quarter
+/// radius, then refined by halving.
+pub fn sphere_sweep(world: &(impl TriSource + ?Sized), from: Vec3, to: Vec3, radius: f32) -> Option<f32> {
+    let r = Vec3::splat(radius);
+    let mut tris = Vec::new();
+    world.for_each_in(from.min(to) - r, from.max(to) + r, &mut |t| tris.push(*t));
+    let touches = |p: Vec3| tris.iter().any(|t| t.closest_point(p).distance_squared(p) < radius * radius);
+    if touches(from) {
+        return Some(0.0);
+    }
+    let d = to - from;
+    let n = (d.length() / (radius * 0.25).max(1e-3)).ceil().max(1.0) as usize;
+    let mut clear = 0.0;
+    for i in 1..=n {
+        let t = i as f32 / n as f32;
+        if touches(from + d * t) {
+            let mut hit = t;
+            for _ in 0..12 {
+                let mid = (clear + hit) * 0.5;
+                if touches(from + d * mid) { hit = mid } else { clear = mid }
+            }
+            return Some(clear);
+        }
+        clear = t;
+    }
+    None
+}
+
 /// The highest surface crossing the vertical line at (x, z) between `bottom` and `top`: (height, normal).
 pub fn surface_below(world: &(impl TriSource + ?Sized), x: f32, z: f32, top: f32, bottom: f32) -> Option<(f32, Vec3)> {
     let mut best: Option<(f32, Vec3)> = None;

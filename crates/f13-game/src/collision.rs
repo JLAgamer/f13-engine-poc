@@ -21,6 +21,9 @@ impl Plugin for CollisionPlugin {
 #[derive(Resource)]
 pub struct WorldCollision {
     pub grid: std::sync::Arc<TriGrid>,
+    /// What blocks the camera channel (the spring arms' probe): the placements, volumes and terrain whose collision
+    /// blocks Camera.
+    pub camera_grid: std::sync::Arc<TriGrid>,
     /// Simple collision per mesh glTF path (lowercase), for class components.
     shapes: HashMap<String, MeshShapes>,
 }
@@ -46,6 +49,10 @@ impl WorldCollision {
 /// Blocking triangles in the entity's own space; active while the entity is visible.
 #[derive(Component, Clone)]
 pub struct Collider(pub std::sync::Arc<Vec<Tri>>);
+
+/// A [`Collider`] whose component also blocks the camera channel (the spring arms' probe).
+#[derive(Component, Clone, Copy)]
+pub struct CameraBlocker;
 
 /// World-space triangles of every active `Collider`.
 #[derive(Resource, Default)]
@@ -110,10 +117,11 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
             .clone()
     };
     let mut grid = TriGrid::new(4.0);
+    let mut camera_grid = TriGrid::new(4.0);
     let (mut placed, mut volumes) = (0usize, 0usize);
     for layout in &level.layouts {
         for p in &layout.placements {
-            if !p.blocks_pawn {
+            if !p.blocks_pawn && !p.blocks_camera {
                 continue;
             }
             let tris = local(&p.file);
@@ -128,7 +136,12 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
             for x in xforms {
                 let m = crate::to_transform(x).compute_affine();
                 for t in transform_tris(&tris, &m) {
-                    grid.insert(t);
+                    if p.blocks_pawn {
+                        grid.insert(t);
+                    }
+                    if p.blocks_camera {
+                        camera_grid.insert(t);
+                    }
                 }
                 placed += 1;
             }
@@ -142,7 +155,12 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
             }
             for h in &a.hulls {
                 for t in hull_from_unreal(h) {
-                    grid.insert(t);
+                    if a.hulls_block_pawn {
+                        grid.insert(t);
+                    }
+                    if a.hulls_block_camera {
+                        camera_grid.insert(t);
+                    }
                 }
                 volumes += 1;
             }
@@ -163,6 +181,7 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
                         // Terrain is one-sided and faces up: order it so the normal points up.
                         if let Some(t) = Tri::new(a, b, c).map(|t| if t.n.y < 0.0 { Tri::new(a, c, b).unwrap() } else { t }.with_surface(Tri::TERRAIN)) {
                             grid.insert(t);
+                            camera_grid.insert(t);
                         }
                     }
                 }
@@ -175,7 +194,7 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
         grid.len(),
         started.elapsed().as_secs_f32()
     );
-    commands.insert_resource(WorldCollision { grid: std::sync::Arc::new(grid), shapes });
+    commands.insert_resource(WorldCollision { grid: std::sync::Arc::new(grid), camera_grid: std::sync::Arc::new(camera_grid), shapes });
 }
 
 /// Rebuilds the world-space triangles of moved, shown or hidden colliders.

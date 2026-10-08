@@ -4,7 +4,6 @@
 //! mouse look (click to capture, Esc to release); E interact and G drop (interact.rs), F leave a car (vehicle.rs). The capsule moves through the game's own
 //! collision (collision.rs, f13-core::collision).
 
-use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings};
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
@@ -31,9 +30,6 @@ const LANDING_SPEED_M_S: f32 = 2.0;
 /// Afloat, her centre is this far under the water's surface (Unreal floats a Buoyancy 1 swimmer with its centre at the
 /// surface: just above, it isn't in water and falls back).
 const SWIM_DEPTH_M: f32 = 0.05;
-const CAMERA_DISTANCE_M: f32 = 3.0;
-const CAR_CAMERA_DISTANCE_M: f32 = 7.0;
-const CAMERA_HEIGHT_M: f32 = 1.6;
 
 #[derive(Resource, Clone)]
 pub struct PlayerTuning {
@@ -138,7 +134,7 @@ pub struct PlayerPlugin {
 pub(crate) struct PlayerConfig {
     spawn: Vec3,
     capsule: bool,
-    camera: Option<(Vec3, Vec3)>,
+    pub(crate) camera: Option<(Vec3, Vec3)>,
     demo: bool,
     fear: f32,
     health: Option<f32>,
@@ -153,7 +149,17 @@ impl Plugin for PlayerPlugin {
             // that runs several fixed steps (low frame rate, --speed) doesn't repeat a key press.
             .add_systems(RunFixedMainLoop, read_intent.in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop))
             .add_systems(FixedUpdate, (update_counselor, move_player).chain())
-            .add_systems(Update, (tag_player_parts, grab_cursor, aim_demo, follow_camera, update_hud, toggle_debug_hud).chain());
+            .add_systems(Update, (
+                    tag_player_parts,
+                    grab_cursor,
+                    aim_demo,
+                    crate::counselor_camera::chase,
+                    crate::counselor_camera::look,
+                    crate::counselor_camera::counselor_camera,
+                    update_hud,
+                    toggle_debug_hud,
+                )
+                    .chain());
     }
 }
 
@@ -194,8 +200,9 @@ fn spawn_player(
     }
     commands.spawn((
         Camera3d::default(),
-        Transform::from_translation(config.spawn + Vec3::new(0.0, CAMERA_HEIGHT_M, CAMERA_DISTANCE_M)),
-        PlayerCamera { yaw: 0.0, pitch: -0.35 },
+        // Placed by counselor_camera.rs from the first frame.
+        Transform::from_translation(config.spawn),
+        PlayerCamera { yaw: 0.0, pitch: 0.0 },
         IsDefaultUiCamera,
     ));
     commands.spawn((
@@ -545,50 +552,6 @@ fn aim_demo(
 }
 
 /// Third-person camera on a "spring arm": pulled in when the map is between the camera and the counselor.
-pub(crate) fn follow_camera(
-    config: Res<PlayerConfig>,
-    motion: Res<AccumulatedMouseMotion>,
-    cursor: Single<&CursorOptions>,
-    player: Single<(&Transform, Has<Driving>), (With<Player>, Without<PlayerCamera>)>,
-    mut camera: Single<(&mut PlayerCamera, &mut Transform)>,
-    mut ray_cast: MeshRayCast,
-    parts: Query<(), With<PlayerPart>>,
-    vehicle_parts: Query<(), With<crate::props::VehiclePart>>,
-    ragdolls: Query<&crate::ragdoll::Ragdolled>,
-    jason_parts: Query<(), With<crate::jason::JasonPart>>,
-    play_jason: Option<Res<crate::jason_player::PlayJason>>,
-) {
-    let (player, driving) = *player;
-    // Dead: the camera follows the body.
-    let body = ragdolls.iter().find_map(|r| r.center());
-    let player = &Transform::from_translation(body.map_or(player.translation, |c| c - Vec3::Y * 0.9));
-    if let Some((eye, target)) = config.camera {
-        let (_, ref mut xf) = *camera;
-        xf.translation = player.translation + eye;
-        xf.look_at(player.translation + target, Vec3::Y);
-        return;
-    }
-    let max_distance = if driving { CAR_CAMERA_DISTANCE_M } else { CAMERA_DISTANCE_M };
-    let (ref mut cam, ref mut xf) = *camera;
-    // Playing Jason, the mouse turns his view (jason_player.rs), not hers.
-    if cursor.grab_mode == CursorGrabMode::Locked && play_jason.is_none() {
-        cam.yaw -= motion.delta.x * 0.003;
-        cam.pitch = (cam.pitch - motion.delta.y * 0.003).clamp(-1.2, 0.8);
-    }
-    let rot = Quat::from_euler(EulerRot::YXZ, cam.yaw, cam.pitch, 0.0);
-    let target = player.translation + Vec3::Y * CAMERA_HEIGHT_M;
-    let back = rot * Vec3::Z;
-    // Characters don't pull the camera in, only the world.
-    let not_player = |e: Entity| !parts.contains(e) && !jason_parts.contains(e) && !(driving && vehicle_parts.contains(e));
-    let settings = MeshRayCastSettings::default().with_filter(&not_player);
-    let distance = ray_cast
-        .cast_ray(Ray3d::new(target, Dir3::new(back).unwrap()), &settings)
-        .first()
-        .map_or(max_distance, |(_, hit)| (hit.distance - 0.2).clamp(0.3, max_distance));
-    xf.translation = target + back * distance;
-    xf.look_at(target, Vec3::Y);
-}
-
 /// F3: the debug text (it shows when the game's HUD is missing).
 fn toggle_debug_hud(keys: Res<ButtonInput<KeyCode>>, game_hud: Option<Res<crate::ui::Hud>>, mut hud: Single<&mut Visibility, With<Hud>>) {
     if keys.just_pressed(KeyCode::F3) || game_hud.is_none() {

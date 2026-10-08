@@ -47,6 +47,78 @@ pub struct CharacterInfo {
     /// The music object's defaults (MusicData, idle times, warning cues; references as "SoundCue'Name'").
     #[serde(default)]
     pub music: serde_json::Value,
+    /// The character's dynamic cameras (ILLDynamicCameraComponent), by component name.
+    #[serde(default, deserialize_with = "crate::level::null_as_empty")]
+    pub cameras: HashMap<String, DynamicCameraInfo>,
+}
+
+/// An ILLDynamicCameraComponent as exported: its MovementBasedSettings, bUse2DVelocity and its spring arm's own
+/// properties.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct DynamicCameraInfo {
+    #[serde(default)]
+    pub settings: Vec<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default = "yes", rename = "Use2DVelocity")]
+    pub use_2d_velocity: bool,
+    #[serde(default)]
+    pub spring_arm: serde_json::Map<String, serde_json::Value>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl DynamicCameraInfo {
+    /// Its FCameraBehaviorSettings, the struct's defaults where a field isn't exported.
+    pub fn settings(&self) -> Vec<f13_core::dynamic_camera::Settings> {
+        use f13_core::dynamic_camera::{BlendFunc, Settings};
+        self.settings
+            .iter()
+            .map(|m| {
+                let d = Settings::default();
+                let f = |k: &str, v: f32| m.get(k).and_then(|x| x.as_f64()).map_or(v, |x| x as f32);
+                let b = |k: &str, v: bool| m.get(k).and_then(|x| x.as_bool()).unwrap_or(v);
+                let v3 = |k: &str, v: glam::Vec3| {
+                    m.get(k).map_or(v, |x| {
+                        let c = |a: &str| x.get(a).and_then(|y| y.as_f64()).unwrap_or(0.0) as f32;
+                        glam::Vec3::new(c("X"), c("Y"), c("Z"))
+                    })
+                };
+                Settings {
+                    minimum_character_speed: f("MinimumCharacterSpeed", d.minimum_character_speed),
+                    blend_exponent: f("BlendExponent", d.blend_exponent),
+                    blend_func: m.get("BlendFunc").and_then(|x| x.as_str()).map_or(d.blend_func, BlendFunc::from_name),
+                    blend_in_delay: f("BlendInDelay", d.blend_in_delay),
+                    blend_in_time: f("BlendInTime", d.blend_in_time),
+                    target_arm_length: f("TargetArmLength", d.target_arm_length),
+                    socket_offset: v3("SocketOffset", d.socket_offset),
+                    target_offset: v3("TargetOffset", d.target_offset),
+                    use_pawn_control_rotation: b("bUsePawnControlRotation", d.use_pawn_control_rotation),
+                    inherit_pitch: b("bInheritPitch", d.inherit_pitch),
+                    inherit_yaw: b("bInheritYaw", d.inherit_yaw),
+                    inherit_roll: b("bInheritRoll", d.inherit_roll),
+                    enable_camera_lag: b("bEnableCameraLag", d.enable_camera_lag),
+                    enable_camera_rotation_lag: b("bEnableCameraRotationLag", d.enable_camera_rotation_lag),
+                    use_camera_lag_substepping: b("bUseCameraLagSubstepping", d.use_camera_lag_substepping),
+                    camera_lag_speed: f("CameraLagSpeed", d.camera_lag_speed),
+                    camera_rotation_lag_speed: f("CameraRotationLagSpeed", d.camera_rotation_lag_speed),
+                    camera_lag_max_time_step: f("CameraLagMaxTimeStep", d.camera_lag_max_time_step),
+                    camera_lag_max_distance: f("CameraLagMaxDistance", d.camera_lag_max_distance),
+                    field_of_view: f("FieldOfView", d.field_of_view),
+                }
+            })
+            .collect()
+    }
+
+    /// Its spring arm: USpringArmComponent's constructor (ProbeSize 12, bDoCollisionTest) unless the template sets them.
+    pub fn spring_arm(&self) -> f13_core::dynamic_camera::SpringArm {
+        let a = &self.spring_arm;
+        f13_core::dynamic_camera::SpringArm::new(
+            a.get("ProbeSize").and_then(|x| x.as_f64()).map_or(12.0, |x| x as f32),
+            a.get("bDoCollisionTest").and_then(|x| x.as_bool()).unwrap_or(true),
+        )
+    }
 }
 
 /// A RichCurve key as the exporter writes it.
