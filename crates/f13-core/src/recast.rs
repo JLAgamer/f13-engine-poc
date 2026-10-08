@@ -8,7 +8,10 @@
 //!
 //! Each polygon also gets its detail mesh (detail.rs: rcBuildPolyMeshDetail), its triangles following the ground.
 //!
-//! Not ported: border vertex removal (tile edges are matched by overlap, see navmesh.rs), area types.
+//! The vertices where regions meet the tile's border (RC_BORDER_VERTEX) are taken out of the polygons where they can
+//! be, as rcBuildPolyMesh does (canRemoveVertex / removeVertex: the polygons round one re-triangulated and merged).
+//!
+//! Not ported: area types.
 //!
 //! Space: Y up, metres (any unit works if the settings use it).
 
@@ -1286,6 +1289,139 @@ fn merge_polys(pa: &[usize], pb: &[usize], ea: usize, eb: usize) -> Vec<usize> {
     out
 }
 
+/// canRemoveVertex: the polygons round `rem` would leave more than two edges, and at most two of the edges at it are
+/// open (else two polygons only touch there).
+fn can_remove_vertex(polys: &[(Vec<u32>, u32)], rem: u32) -> bool {
+    let mut remaining_edges = 0;
+    for (p, _) in polys {
+        let removed = p.iter().filter(|&&v| v == rem).count();
+        if removed > 0 {
+            remaining_edges += p.len() - (removed + 1);
+        }
+    }
+    if remaining_edges <= 2 {
+        return false;
+    }
+    // The edges at it (other end, how many polygons share it).
+    let mut edges: Vec<(u32, u32)> = Vec::new();
+    for (p, _) in polys {
+        let n = p.len();
+        for j in 0..n {
+            let k = (j + n - 1) % n;
+            if p[j] == rem || p[k] == rem {
+                let b = if p[j] == rem { p[k] } else { p[j] };
+                match edges.iter_mut().find(|e| e.0 == b) {
+                    Some(e) => e.1 += 1,
+                    None => edges.push((b, 1)),
+                }
+            }
+        }
+    }
+    edges.iter().filter(|e| e.1 < 2).count() <= 2
+}
+
+/// removeVertex: the polygons round `rem` taken out, the hole they leave re-triangulated (each triangle in the region
+/// of its first corner's edge) and merged back into convex polygons; the vertex dropped.
+fn remove_vertex(polys: &mut Vec<(Vec<u32>, u32)>, cells: &mut Vec<(i32, i32, i32)>, rem: u32, nvp: usize) {
+    // The removed polygons' edges that don't touch it: (from, to, region).
+    let mut edges: Vec<(u32, u32, u32)> = Vec::new();
+    let mut i = 0;
+    while i < polys.len() {
+        if polys[i].0.contains(&rem) {
+            let (p, region) = polys.swap_remove(i);
+            let n = p.len();
+            for j in 0..n {
+                let k = (j + n - 1) % n;
+                if p[j] != rem && p[k] != rem {
+                    edges.push((p[k], p[j], region));
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+    cells.remove(rem as usize);
+    let shift = |v: u32| if v > rem { v - 1 } else { v };
+    for (p, _) in polys.iter_mut() {
+        p.iter_mut().for_each(|v| *v = shift(*v));
+    }
+    for e in &mut edges {
+        e.0 = shift(e.0);
+        e.1 = shift(e.1);
+    }
+    if edges.is_empty() {
+        return;
+    }
+    // The hole: one edge, then the others joined at its start or end.
+    let mut hole: std::collections::VecDeque<(u32, u32)> = std::collections::VecDeque::new();
+    let first = edges.swap_remove(0);
+    hole.push_back((first.0, first.2));
+    hole.push_back((first.1, first.2));
+    loop {
+        let mut matched = false;
+        let mut k = 0;
+        while k < edges.len() {
+            let (ea, eb, r) = edges[k];
+            let add = if hole.front().is_some_and(|h| h.0 == eb) {
+                hole.push_front((ea, r));
+                true
+            } else if hole.back().is_some_and(|h| h.0 == ea) {
+                hole.push_back((eb, r));
+                true
+            } else {
+                false
+            };
+            if add {
+                edges.swap_remove(k);
+                matched = true;
+            } else {
+                k += 1;
+            }
+        }
+        if !matched || edges.is_empty() {
+            break;
+        }
+    }
+    let hole: Vec<(u32, u32)> = hole.into_iter().collect();
+    let xz: Vec<(i32, i32)> = hole.iter().map(|&(v, _)| (cells[v as usize].0, cells[v as usize].2)).collect();
+    let Some((tris, _)) = triangulate(&xz) else { return };
+    let mut hp: Vec<(Vec<usize>, u32)> =
+        tris.iter().filter(|t| t[0] != t[1] && t[0] != t[2] && t[1] != t[2]).map(|t| (t.to_vec(), hole[t[0]].1)).collect();
+    // Merge the triangles (in hole indices).
+    loop {
+        let mut best: Option<(i64, usize, usize, usize, usize)> = None;
+        for j in 0..hp.len() {
+            for k in j + 1..hp.len() {
+                if let Some((v, ea, eb)) = merge_value(&hp[j].0, &hp[k].0, &xz, nvp) {
+                    if v > 0 && best.is_none_or(|b| v > b.0) {
+                        best = Some((v, j, k, ea, eb));
+                    }
+                }
+            }
+        }
+        let Some((_, j, k, ea, eb)) = best else { break };
+        let merged = merge_polys(&hp[j].0, &hp[k].0, ea, eb);
+        hp[j].0 = merged;
+        hp.swap_remove(k);
+    }
+    for (p, region) in hp {
+        polys.push((p.iter().map(|&k| hole[k].0).collect(), region));
+    }
+}
+
+/// rcBuildPolyMesh's edge vertex removal: each border vertex that can go.
+fn remove_border_vertices(polys: &mut Vec<(Vec<u32>, u32)>, cells: &mut Vec<(i32, i32, i32)>, vflags: &mut Vec<bool>, nvp: usize) {
+    let mut i = 0;
+    while i < cells.len() {
+        if vflags[i] && can_remove_vertex(polys, i as u32) {
+            remove_vertex(polys, cells, i as u32, nvp);
+            vflags.remove(i);
+            continue;
+        }
+        i += 1;
+    }
+}
+
 /// A build's progress, readable while it runs: tiles done of the total, and the time spent per stage (microseconds,
 /// summed over tiles): rasterize, filter, compact and erode, regions, contours, polygons.
 #[derive(Default, Debug)]
@@ -1393,16 +1529,27 @@ pub fn build_tile(world: &(impl TriSource + ?Sized), cfg: &NavConfig, origin: Ve
     // Polygons: triangulate each contour, merge into convex polygons, share vertices.
     let mut mesh = TileMesh { tx, tz, ..Default::default() };
     let mut vmap: HashMap<(i32, i32), Vec<(i32, u32)>> = HashMap::new();
-    let mut add_vertex = |mesh: &mut TileMesh, v: &CVert| -> u32 {
+    // The mesh's vertices in cells, and which are border vertices (any contour's vertex there flagged).
+    let mut cells: Vec<(i32, i32, i32)> = Vec::new();
+    let mut vflags: Vec<bool> = Vec::new();
+    let mut add_vertex = |v: &CVert| -> u32 {
         let list = vmap.entry((v.x, v.z)).or_default();
-        if let Some(&(_, idx)) = list.iter().find(|(y, _)| (y - v.y).abs() <= 2) {
-            return idx;
+        let idx = match list.iter().find(|(y, _)| (y - v.y).abs() <= 2) {
+            Some(&(_, idx)) => idx,
+            None => {
+                let idx = cells.len() as u32;
+                cells.push((v.x, v.y, v.z));
+                vflags.push(false);
+                list.push((v.y, idx));
+                idx
+            }
+        };
+        if v.r & BORDER_VERTEX != 0 {
+            vflags[idx as usize] = true;
         }
-        let idx = mesh.verts.len() as u32;
-        mesh.verts.push(Vec3::new(bmin.x + v.x as f32 * cs, bmin.y + v.y as f32 * cfg.cell_height, bmin.z + v.z as f32 * cs));
-        list.push((v.y, idx));
         idx
     };
+    let mut all: Vec<(Vec<u32>, u32)> = Vec::new();
     for (region, cont) in &contours {
         let xz: Vec<(i32, i32)> = cont.iter().map(|v| (v.x, v.z)).collect();
         let Some((tris, stuck)) = triangulate(&xz) else {
@@ -1430,28 +1577,27 @@ pub fn build_tile(world: &(impl TriSource + ?Sized), cfg: &NavConfig, origin: Ve
             polys.swap_remove(k);
         }
         for p in polys {
-            let ids: Vec<u32> = p.iter().map(|&k| add_vertex(&mut mesh, &cont[k])).collect();
+            let ids: Vec<u32> = p.iter().map(|&k| add_vertex(&cont[k])).collect();
             let mut dedup = ids.clone();
             dedup.dedup();
             if dedup.len() >= 3 && dedup.first() != dedup.last() {
-                // Its detail mesh, from its corners as the mesh keeps them (cells).
-                let corners: Vec<(i32, i32, i32)> = dedup
-                    .iter()
-                    .map(|&k| {
-                        let v = (mesh.verts[k as usize] - bmin) / Vec3::new(cs, cfg.cell_height, cs);
-                        (v.x.round() as i32, v.y.round() as i32, v.z.round() as i32)
-                    })
-                    .collect();
-                let (extra, tris) = if cfg.detail_sample_dist > 0.0 {
-                    detail::poly_detail(&c, &reg, &corners, *region, cs, cfg.cell_height, cfg.detail_sample_dist, cfg.detail_sample_max_error)
-                } else {
-                    (Vec::new(), Vec::new())
-                };
-                let to_world = |v: Vec3| Vec3::new(bmin.x + v.x * cs, bmin.y + v.y * cfg.cell_height, bmin.z + v.z * cs);
-                mesh.detail.push((extra.into_iter().map(to_world).collect(), tris));
-                mesh.polys.push(dedup);
+                all.push((dedup, *region));
             }
         }
+    }
+    remove_border_vertices(&mut all, &mut cells, &mut vflags, cfg.max_verts_per_poly);
+    let to_world = |x: f32, y: f32, z: f32| Vec3::new(bmin.x + x * cs, bmin.y + y * cfg.cell_height, bmin.z + z * cs);
+    mesh.verts = cells.iter().map(|&(x, y, z)| to_world(x as f32, y as f32, z as f32)).collect();
+    for (poly, region) in all {
+        // Its detail mesh, from its corners (cells).
+        let corners: Vec<(i32, i32, i32)> = poly.iter().map(|&k| cells[k as usize]).collect();
+        let (extra, tris) = if cfg.detail_sample_dist > 0.0 {
+            detail::poly_detail(&c, &reg, &corners, region, cs, cfg.cell_height, cfg.detail_sample_dist, cfg.detail_sample_max_error)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        mesh.detail.push((extra.into_iter().map(|v| to_world(v.x, v.y, v.z)).collect(), tris));
+        mesh.polys.push(poly);
     }
     stats.add(5, &mut clock);
     mesh

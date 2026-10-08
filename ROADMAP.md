@@ -104,7 +104,8 @@ Mechanics: Jason side
       detailSampleMaxError 1 cm): polygon heights follow the ground (navmesh height queries use them). Against the
       cooked Killer navmesh: extra vertices per polygon 78/7/10/2 % (0/1/2/3) vs the game's 82/7/8/2 %; height gap
       to the game's detail 6.5 cm mean (7.7 from corners alone); a -2.5 cm bias in the corners' own heights remains
-- [ ] Navmesh, remaining: border vertex removal
+- [x] Navmesh border vertices removed as rcBuildPolyMesh does (canRemoveVertex / removeVertex: the polygons round
+      each re-triangulated and merged): 23.7k -> 23.0k polygons, every reach goal kept
 - [x] Holding breath while hiding (f13-core::breath, hiding.rs): the breath meter's drain, refill, threshold and wait;
   her HoldBreath / HoldBreathEnd / KillerIsNearWhileHiding voice lines (3 m, then 20 s) and Screams (23 m); Jason
   hears the hiding line within its range (AI choice)
