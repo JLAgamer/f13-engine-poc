@@ -152,7 +152,7 @@ impl PlacedLight {
 }
 
 /// Lumens for a light without inverse-square falloff, matching its illuminance at a third of its radius `r` (cm).
-fn unreal_falloff_lumens(intensity: f32, r: f32, exponent: f32) -> f32 {
+pub(crate) fn unreal_falloff_lumens(intensity: f32, r: f32, exponent: f32) -> f32 {
     let lux = intensity * (8.0f32 / 9.0).powf(exponent);
     let d = r / 300.0;
     lux * d * d * 4.0 * std::f32::consts::PI

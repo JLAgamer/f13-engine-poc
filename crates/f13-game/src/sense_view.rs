@@ -49,7 +49,7 @@ impl Plugin for SenseViewPlugin {
         embedded_asset!(app, "shaders/sense_counselor.wgsl");
         embedded_asset!(app, "shaders/sense_cabin.wgsl");
         app.add_plugins((ExtractComponentPlugin::<SenseHighlight>::default(), UniformComponentPlugin::<SenseUniform>::default()))
-            .add_systems(Update, (mask_camera, mirrors, highlight).chain());
+            .add_systems(Update, ((mask_camera, mirrors, highlight).chain(), sense_light));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else { return };
         render_app
             .init_gpu_resource::<SpecializedRenderPipelines<SensePipeline>>()
@@ -58,6 +58,50 @@ impl Plugin for SenseViewPlugin {
             // In his volume's blendables after the stun's (from the start) and Shift's.
             .add_systems(Core3d, sense.after(crate::screen_effects::shift).before(crate::screen_effects::vhs).in_set(Core3dSystems::PostProcess));
     }
+}
+
+/// Jason_Base's SenseLight (its SenseLight_GEN_VARIABLE template): a point light 46.2 cm over his capsule's centre,
+/// AttenuationRadius 1500 without inverse-square falloff (LightFalloffExponent 2), LightColor (5, 5, 5), 10000 K,
+/// no shadows, its IES profile IES_Sense's brightness (853, TextureMultiplier 1.265738: the light proxy takes
+/// Brightness x IESBrightnessScale x TextureMultiplier when bUseIESBrightness, 0x14134f72a). OnSenseChanged (the
+/// Blueprint) shows it while Sense is on, on the locally controlled Jason. (The profile's shape isn't drawn.)
+#[derive(Component)]
+struct SenseLight;
+
+const SENSE_LIGHT_OVER_FEET_M: f32 = 0.88 + 0.46218925;
+
+fn sense_light(
+    mut commands: Commands,
+    time: Res<Time>,
+    play: Option<Res<crate::jason_player::PlayJason>>,
+    jasons: Query<(Entity, &crate::senses::Knowledge), With<crate::jason::Jason>>,
+    mut lights: Query<(&mut Visibility, &ChildOf), With<SenseLight>>,
+) {
+    let Some((jason, know)) = jasons.iter().next().filter(|_| play.is_some()) else { return };
+    let on = know.sensing(time.elapsed_secs());
+    if let Some((mut v, _)) = lights.iter_mut().find(|(_, p)| p.parent() == jason) {
+        let want = if on { Visibility::Inherited } else { Visibility::Hidden };
+        if *v != want {
+            *v = want;
+        }
+        return;
+    }
+    let t = f13_core::light::temperature_color(10000.0);
+    let c = LinearRgba::from(Color::srgb_u8(5, 5, 5));
+    let brightness = 853.0 * 1.0 * 1.265738;
+    commands.spawn((
+        PointLight {
+            color: LinearRgba::rgb(c.red * t[0], c.green * t[1], c.blue * t[2]).into(),
+            intensity: crate::lighting::unreal_falloff_lumens(brightness, 1500.0, 2.0),
+            range: 15.0,
+            shadow_maps_enabled: false,
+            ..default()
+        },
+        Transform::from_xyz(0.0, SENSE_LIGHT_OVER_FEET_M, 0.0),
+        Visibility::Hidden,
+        SenseLight,
+        ChildOf(jason),
+    ));
 }
 
 /// The custom stencil's camera (the other 3D-camera systems leave it alone).
