@@ -313,7 +313,14 @@ fn actor_sounds(
     window_moves: Query<&crate::interact::WindowMove, Added<crate::interact::WindowMove>>,
     barricade_moves: Query<&crate::interact::BarricadeMove, Added<crate::interact::BarricadeMove>>,
     barricades: Query<(Entity, &crate::windows::Barricade), With<ClassSounds>>,
+    (windows, mut broken): (Query<(Entity, &crate::windows::Window, &GlobalTransform)>, Local<HashMap<Entity, bool>>),
 ) {
+    // Cabin_Window_BP's OnWindowDestroyed: WindowBreak where the window is.
+    for (e, w, g) in &windows {
+        if w.destroyed && !broken.insert(e, true).unwrap_or(false) {
+            commands.trigger(PlaySound { cue: "WindowBreak".into(), at: Some(g.translation()) });
+        }
+    }
     let mut play = |actor: Entity, prop: &'static str| commands.trigger(ActorSound { actor, prop });
     for (e, d) in &doors {
         let now = (d.health, d.broken);

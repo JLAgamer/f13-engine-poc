@@ -948,6 +948,8 @@ static class Mvp
         "/Game/Sounds/Environment/SoundWaves/main_campground_ambience_loop.main_campground_ambience_loop",
         // Jason_Base's ShiftAudioCue and TeleportCueCounselorHears.
         "/Game/Sounds/GamePlay/JasonShift/ShiftTunnelCue.ShiftTunnelCue",
+        // Cabin_Window_BP's OnWindowDestroyed (PlaySoundAtLocation as the glass breaks).
+        "/Game/Sounds/GamePlay/WindowBreak.WindowBreak",
         // Jason_Base's UnderWaterCue (CreateSound2D as he goes under).
         "/Game/Sounds/Swimming/JasonUnderwater_Cue.JasonUnderwater_Cue",
         "/Game/Sounds/GamePlay/VHS_SFXCue.VHS_SFXCue",
