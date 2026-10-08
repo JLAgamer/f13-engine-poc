@@ -327,7 +327,7 @@ fn bake(table: &[Vec3]) -> Image {
 }
 
 /// UKismetMathLibrary::FInterpTo.
-fn finterp_to(current: f32, target: f32, dt: f32, speed: f32) -> f32 {
+pub(crate) fn finterp_to(current: f32, target: f32, dt: f32, speed: f32) -> f32 {
     if speed <= 0.0 {
         return target;
     }

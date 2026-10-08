@@ -887,9 +887,12 @@ static class Mvp
         "/Game/Props/Manmade/Vehicles/Vehicle_battery_01",
         "/Game/Props/Manmade/LivingRoom/S_LivingRoom_GasCan_Red_01",
         "/Game/Props/Pickups/S_Pickup_Vehicle_Keys_01",
-        // Jason_Base's screen effects: Shift's BaseTexture1A (PP_Player_Jason_Shift_01) and his StalkColorGrade.
+        // Jason_Base's screen effects: Shift's BaseTexture1A (PP_Player_Jason_Shift_01), his StalkColorGrade, and his
+        // StunScreenEffectMaterial's (PP_Player_StunEffect_01) Stun4 and BaseTexture1A/1B (Stun2).
         "/Game/Effects/Textures/PostProcess/T_Vignette_Simple_01",
         "/Game/Effects/ColorGrades/CG_Stalk_B",
+        "/Game/Effects/Textures/PostProcess/Stun4",
+        "/Game/Effects/Textures/PostProcess/Stun2",
     ];
     // Classes the game spawns by reference from native code rather than from level data.
     // Classes no level places but the game reads (the cars' wheels: SCWheeledVehicleMovementComponent WheelSetups).
