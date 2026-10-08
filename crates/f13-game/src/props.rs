@@ -23,6 +23,8 @@ pub struct Item {
     pub hand_socket: String,
     /// The cue it makes when put down (DroppedSoundCue).
     pub drop_cue: Option<String>,
+    /// How many of its class she can carry (InventoryMax; 0: no limit).
+    pub inventory_max: u32,
 }
 
 /// What an item does (by its native class).
@@ -118,24 +120,16 @@ pub struct KnifePickup {
     pub reach: f32,
 }
 
-/// The item sits in this cabinet and can only be taken once the cabinet is open.
+/// The item sits in this cabinet's drawer (`.1`: SCDoubleCabinet's second is 1); the cabinet hands it over
+/// (cabinets.rs).
 #[derive(Component)]
-pub struct InCabinet(pub Entity);
+pub struct InCabinet(pub Entity, pub usize);
 
-#[derive(Component)]
-pub struct Cabinet {
-    pub open: bool,
-    /// Interact point in the cabinet's local (Bevy) space, and its range in cm.
-    pub interact: Vec3,
-    pub reach: f32,
-    pub drawer: Option<Entity>,
-}
+pub use crate::cabinets::Cabinet;
 
-/// The cabinet's moving part (drawer or door) with its closed transform.
+/// A cabinet's moving part (its AnimatedMesh: a drawer or a door).
 #[derive(Component)]
-pub struct Drawer {
-    pub closed: Transform,
-}
+pub struct Drawer;
 
 /// A place on a vehicle where a part is installed (gas tank, hood, ignition).
 #[derive(Debug, Clone)]
@@ -248,6 +242,18 @@ fn actor_bool(classes: &ClassDb, class: &str, name: &str, default: bool) -> bool
     classes.prop(class, name).as_bool().unwrap_or(default)
 }
 
+/// An FTransform property ({Translation, Rotation, Scale3D}, each part optional).
+fn transform_prop(v: &serde_json::Value) -> Option<Xform> {
+    let o = v.as_object()?;
+    let f = |v: &serde_json::Value, k: &str, d: f32| v[k].as_f64().map_or(d, |x| x as f32);
+    let (t, r, s) = (&o.get("Translation"), &o.get("Rotation"), &o.get("Scale3D"));
+    Some(Xform {
+        t: t.map_or([0.0; 3], |t| [f(t, "X", 0.0), f(t, "Y", 0.0), f(t, "Z", 0.0)]),
+        r: r.map_or([0.0, 0.0, 0.0, 1.0], |r| [f(r, "X", 0.0), f(r, "Y", 0.0), f(r, "Z", 0.0), f(r, "W", 1.0)]),
+        s: s.map_or([1.0; 3], |s| [f(s, "X", 1.0), f(s, "Y", 1.0), f(s, "Z", 1.0)]),
+    })
+}
+
 fn reach(c: &f13_data::level::ComponentInfo, default: f32) -> f32 {
     c.props["DistanceLimit"].as_f64().map_or(default, |d| d as f32)
 }
@@ -307,7 +313,6 @@ fn spawn_props(
         if !sounds.is_empty() {
             commands.entity(root).insert(crate::audio::ClassSounds(sounds));
         }
-        let mut drawer = None;
         if let Some(cams) = crate::interaction_camera::InteractionCameras::new(&info.components) {
             commands.entity(root).insert(cams);
         }
@@ -362,9 +367,8 @@ fn spawn_props(
                 }
             }
             parts.insert(c.name.as_str(), child);
-            if c.name == "AnimatedMesh" {
-                commands.entity(child).insert(Drawer { closed: local(c) });
-                drawer = Some(child);
+            if c.name.starts_with("AnimatedMesh") {
+                commands.entity(child).insert(Drawer);
             }
         }
 
@@ -545,6 +549,7 @@ fn spawn_props(
                 hand_socket: classes.prop(&actor.class, "HandAttachSocket").as_str().filter(|s| *s != "None").unwrap_or("WeaponSocket").to_string(),
                 // A soft reference: "/Game/Sounds/ItemDrops/Name.Name".
                 drop_cue: classes.prop(&actor.class, "DroppedSoundCue")["AssetPathName"].as_str().and_then(|p| p.rsplit('.').next()).map(String::from),
+                inventory_max: classes.prop(&actor.class, "InventoryMax").as_u64().unwrap_or(0) as u32,
             });
             *item_classes.entry(actor.class.clone()).or_default() += 1;
             *counts.entry(if actor.kind == Some(SpawnKind::RepairPart) { "repair parts" } else { "items" }).or_default() += 1;
@@ -559,12 +564,29 @@ fn spawn_props(
             let p = to_transform(&actor.transform).translation;
             debug!("{} at ({:.1}, {:.1}, {:.1})", actor.class, p.x, p.y, p.z);
         } else if classes.is_child_of(&actor.class, "SCCabinet") {
-            commands.entity(root).insert(Cabinet {
-                open: false,
-                interact: interact.map_or(Vec3::ZERO, |c| local(c).translation),
-                reach: interact.map_or(100.0, |c| reach(c, 100.0)),
-                drawer,
-            });
+            // Its drawers: SCCabinet's components, and SCDoubleCabinet's second set (named ...2).
+            let component = |name: String| info.components.iter().find(|c| c.name == name);
+            let follows = classes.prop(&actor.class, "bItemShouldFollowAnimatedMesh").as_bool().unwrap_or(false);
+            let slots = ["", "2"]
+                .into_iter()
+                .filter_map(|s| {
+                    let interact = component(format!("Interactable{s}"))?;
+                    let handler = component(format!("UseCabinet_SpecialMoveHandler{s}"))?;
+                    let mesh = component(format!("AnimatedMesh{s}"));
+                    let close = transform_prop(&classes.prop(&actor.class, &format!("CloseTransform{s}"))).map(|x| to_transform(&x)).or(mesh.map(local)).unwrap_or_default();
+                    let follow = follows.then(|| Some((local(component(format!("FollowLocation{s}"))?), local(component(format!("ItemAttachLocation{s}"))?)))).flatten();
+                    Some(crate::cabinets::Slot::new(
+                        local(interact).translation,
+                        reach(interact, 100.0),
+                        local(handler),
+                        handler.props["SpecialMove"].as_str() == Some("Counselor_OpenDrawerLow_C"),
+                        mesh.and_then(|m| parts.get(m.name.as_str()).copied()),
+                        close,
+                        follow,
+                    ))
+                })
+                .collect();
+            commands.entity(root).insert(Cabinet { slots });
             *counts.entry("cabinets").or_default() += 1;
         } else if classes.is_child_of(&actor.class, "SCDriveableVehicle") {
             let repairs = info
@@ -627,9 +649,9 @@ fn spawn_props(
     }
     // Items inside cabinets.
     for (id, _) in world.spawned_actors() {
-        if let (Some(cab), Some(&item)) = (world.cabinet_of(id, &classes), entities.get(&id)) {
+        if let (Some((cab, slot)), Some(&item)) = (world.cabinet_slot_of(id, &classes), entities.get(&id)) {
             if let Some(&cabinet) = entities.get(&cab) {
-                commands.entity(item).insert(InCabinet(cabinet));
+                commands.entity(item).insert(InCabinet(cabinet, slot));
             }
         }
     }

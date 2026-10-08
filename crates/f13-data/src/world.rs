@@ -219,9 +219,15 @@ impl MatchWorld {
 
     /// The cabinet actor holding this actor, if it was spawned into one.
     pub fn cabinet_of(&self, actor: usize, classes: &ClassDb) -> Option<usize> {
+        self.cabinet_slot_of(actor, classes).map(|(c, _)| c)
+    }
+
+    /// The cabinet an item was spawned in and which of its drawers holds it (SCDoubleCabinet's ItemSpawner2: 1).
+    pub fn cabinet_slot_of(&self, actor: usize, classes: &ClassDb) -> Option<(usize, usize)> {
         let by = self.actors[actor].spawned_by?;
         let owner = self.spawners[by].owner;
-        classes.is_child_of(&self.actors[owner].class, "SCCabinet").then_some(owner)
+        let slot = usize::from(self.spawners[by].component == "ItemSpawner2");
+        classes.is_child_of(&self.actors[owner].class, "SCCabinet").then_some((owner, slot))
     }
 }
 

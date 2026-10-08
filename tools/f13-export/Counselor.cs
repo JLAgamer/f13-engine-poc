@@ -39,6 +39,8 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         /// The skeleton's translation retargeting mode: "Skeleton" takes the translation from the mesh's own bind
         /// pose, "Animation" from the animation.
         public string Retarget = "";
+        /// The reference pose (bone space, Unreal).
+        public Xform? Local;
     }
 
     public class AnimInfo
@@ -53,6 +55,10 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         public List<Window>? Windows;
         /// The montage's float curves (its RawCurveData, e.g. "Barricade": how far the plank has swung), by name.
         public SortedDictionary<string, List<CurveKey>>? Curves;
+        /// The montage's sections (CompositeSections: name, start, length in montage seconds).
+        public List<Window>? Sections;
+        /// The montage's BlendIn time, when it sets one.
+        public float? BlendIn;
     }
 
     /// A RichCurve key: Interp "linear", "constant" or "cubic".
@@ -201,9 +207,7 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         info.Parts.Add(new Part { Name = "Hair", File = MeshFile(hairMesh), Attach = "Face", Transform = Xf(hair.GetOrDefault<FVector>("RelativeLocation"), hair.GetOrDefault<FRotator>("RelativeRotation")) });
 
         var skeleton = body.Skeleton.Load<USkeleton>()!;
-        var bones = skeleton.ReferenceSkeleton.FinalRefBoneInfo;
-        for (var i = 0; i < bones.Length; i++)
-            info.Bones.Add(new Bone { Name = bones[i].Name.Text, Parent = bones[i].ParentIndex, Retarget = skeleton.BoneTree[i].ToString() });
+        AddBones(info, body, skeleton);
 
         // Noise, visibility and light (SCCounselorCharacter::GetNoiseLevel, SCCharacter::LineOfSight, the light
         // check of her Darkness fear event). Defaults: the counselor constructor (noise 1 crouching, 2 walking,
@@ -269,6 +273,8 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         {
             var windows = Windows(path);
             var curves = MontageCurves(path);
+            var sections = Sections(path);
+            var blendIn = (provider.LoadPackageObject(path + "." + path.Split('/')[^1]) as UAnimMontage)?.GetOrDefault<FStructFallback?>("BlendIn")?.GetOrDefault<float?>("BlendTime");
             foreach (var seq in Sequences(path))
             {
                 // Already written from another montage: still give it this montage's notifies and curves if it has none.
@@ -276,11 +282,15 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
                 {
                     have.Windows ??= windows;
                     have.Curves ??= curves;
+                    have.Sections ??= sections;
+                    have.BlendIn ??= blendIn;
                     continue;
                 }
                 var a = WriteSequence(seq, skeleton, dir, keepRoot.Contains(path));
                 a.Windows = windows;
                 a.Curves = curves;
+                a.Sections = sections;
+                a.BlendIn = blendIn;
                 info.Animations[seq.Name] = a;
             }
         }
@@ -348,6 +358,23 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
     }
 
     /// Every socket of the body mesh and its skeleton (the mesh's win), as Parts without a file.
+    /// The skeleton's bones, each with its reference pose from the mesh's bind pose (by name; the skeleton's own
+    /// where the mesh lacks the bone).
+    static void AddBones(Info info, USkeletalMesh body, USkeleton skeleton)
+    {
+        var bones = skeleton.ReferenceSkeleton.FinalRefBoneInfo;
+        var meshIndex = body.ReferenceSkeleton.FinalNameToIndexMap;
+        for (var i = 0; i < bones.Length; i++)
+        {
+            var pose = meshIndex.TryGetValue(bones[i].Name.Text, out var m) ? body.ReferenceSkeleton.FinalRefBonePose[m] : skeleton.ReferenceSkeleton.FinalRefBonePose[i];
+            info.Bones.Add(new Bone
+            {
+                Name = bones[i].Name.Text, Parent = bones[i].ParentIndex, Retarget = skeleton.BoneTree[i].ToString(),
+                Local = new Xform { T = [pose.Translation.X, pose.Translation.Y, pose.Translation.Z], R = [pose.Rotation.X, pose.Rotation.Y, pose.Rotation.Z, pose.Rotation.W], S = [pose.Scale3D.X, pose.Scale3D.Y, pose.Scale3D.Z] },
+            });
+        }
+    }
+
     static void AddSockets(Info info, USkeletalMesh body, USkeleton skeleton)
     {
         foreach (var s in skeleton.GetOrDefault<FPackageIndex[]>("Sockets", []).Concat(body.GetOrDefault<FPackageIndex[]>("Sockets", [])).Select(s => s.Load()))
@@ -483,9 +510,7 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         foreach (var name in new[] { "SenseFearRadiusCurve", "SenseFearHidingRadiusCurve", "RageSenseDistanceCurve" })
             if (CurveValue(cls, name) is { } keys) info.Curves[name] = keys;
 
-        var bones = skeleton.ReferenceSkeleton.FinalRefBoneInfo;
-        for (var i = 0; i < bones.Length; i++)
-            info.Bones.Add(new Bone { Name = bones[i].Name.Text, Parent = bones[i].ParentIndex, Retarget = skeleton.BoneTree[i].ToString() });
+        AddBones(info, body, skeleton);
         AddSockets(info, body, skeleton);
         WriteAnimations(info, skeleton, animations, "anims/jason", keepRoot);
         Save(info, "killers");
@@ -524,6 +549,16 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             }).ToList();
         }
         return result.Count > 0 ? result : null;
+    }
+
+    /// A montage's sections, as windows (Start, End = Start + SegmentLength).
+    List<Window>? Sections(string path)
+    {
+        if (provider.LoadPackageObject(path + "." + path.Split('/')[^1]) is not UAnimMontage m) return null;
+        var list = m.GetOrDefault<FStructFallback[]>("CompositeSections", [])
+            .Select(s => new Window { Name = s.GetOrDefault<FName>("SectionName").Text, Start = s.GetOrDefault<float>("SegmentBeginTime"), End = s.GetOrDefault<float>("SegmentBeginTime") + s.GetOrDefault<float>("SegmentLength") })
+            .ToList();
+        return list.Count > 0 ? list : null;
     }
 
     List<Window>? Windows(string path)

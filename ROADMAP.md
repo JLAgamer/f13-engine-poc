@@ -227,7 +227,11 @@ Presentation
       and ends in the dive landing)
 - [x] Door lock and unlock: her takes while she holds E
 - [x] Barricade special moves: her pull-down and push-up takes (Counselor_Barricade_Pulldown / PushUp), the
-      barricade moving as their UseBarricade window ends
+      barricade moving as their UseBarricade window ends; each barricade finds its door as SCBarricade's BeginPlay
+      does (the nearest door root its 150 cm overlap finds)
+- [x] Cabinet special moves (cabinets.rs, decompiled): Counselor_OpenDrawer / OpenDrawerLow's montage (Open, Idle,
+      Close, Take), the drawer following her target_jnt bone (SCCabinet's tick), ready after the Open section; a press
+      closes it, a 1 s hold takes the item (at OnPickupItem); emptied drawers stay open; desks' two drawers
 - [x] Through windows on the takes' own root motion: the climb, the dive and its landing play from the window's
       CounselorVault / CounselorDive special move spot on her side
 - [x] Doors on root motion: her open and close takes play from the door's special move spots (opening from outside

@@ -6,13 +6,13 @@
 //! (first aid: heals when its use animation ends; the counselor can't move meanwhile).
 //! Repairs are the game's hold timer and pip minigame (f13-core::minigame): hold E; when the needle is in a pip,
 //! press its key (right mouse = key 0, left mouse = key 1, the game's MG_InteractSkill1/2). Letting go cancels.
-//! PLACEHOLDER: opening a cabinet is instant.
+//! Cabinets: see cabinets.rs.
 
 use crate::player::{Player, PlayerCamera, PlayerTuning};
 use crate::doors::Door;
 use crate::windows::{Barricade, Window, WindowAction};
 use crate::match_flow::ClassScore;
-use crate::props::{Cabinet, Drawer, InCabinet, Item, Vehicle};
+use crate::props::{Cabinet, InCabinet, Item, Vehicle};
 use crate::vehicle::Driving;
 use bevy::prelude::*;
 use f13_core::minigame::{HoldInteraction, MinigameEvent};
@@ -64,7 +64,8 @@ pub fn take_part(inv: &mut Inventory, items: &Query<&Item>, classes: &[String]) 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Target {
     Item(Entity),
-    Cabinet(Entity),
+    /// A cabinet's drawer (cabinets.rs).
+    Cabinet(Entity, usize),
     Repair(Entity, usize),
     Seat(Entity),
     Door(Entity),
@@ -464,7 +465,7 @@ impl Plugin for InteractPlugin {
             .add_systems(Startup, spawn_prompt)
             .add_systems(
             Update,
-            (add_inventory, crate::windows::link_barricades, choose_target, act, moves_to_spots, door_moves, window_moves, barricade_moves, repair_anims, drop_item, use_item, update_prompt)
+            (add_inventory, crate::windows::link_barricades, choose_target, act, crate::cabinets::cabinet_uses, crate::cabinets::follow_items, moves_to_spots, door_moves, window_moves, barricade_moves, repair_anims, drop_item, use_item, update_prompt)
                 .chain()
                 .before(crate::doors::swing_doors),
         )
@@ -500,7 +501,7 @@ fn has_part(inv: &Inventory, carried: &Query<&Item, With<Carried>>, parts: &[Str
 /// (bIgnoreHeightInDistanceComparison). PLACEHOLDER: the range test's MaxYawOffset / MaxPitchOffset and occlusion
 /// (FUN_14022e940) aren't exported, so aren't applied.
 fn choose_target(
-    player: Single<(&Transform, &Inventory, &Player), (Without<Driving>, Without<crate::hiding::Hiding>)>,
+    player: Single<(Entity, &Transform, &Inventory, &Player, Option<&crate::cabinets::CabinetUse>), (Without<Driving>, Without<crate::hiding::Hiding>)>,
     camera: Single<&PlayerCamera>,
     items: Query<(Entity, &Item, &GlobalTransform, Option<&InCabinet>), Without<Carried>>,
     carried: Query<&Item, With<Carried>>,
@@ -516,7 +517,17 @@ fn choose_target(
     if interaction.busy() {
         return; // keep the target while repairing
     }
-    let (xf, inv, p) = *player;
+    let (pe, xf, inv, p, searching) = *player;
+    // At a drawer: it's the only thing to use, once it's ready (CanInteractWith: nothing on it before).
+    if let Some(u) = searching {
+        let ready = cabinets.get(u.cabinet).is_ok_and(|(_, c, _)| c.slots.get(u.slot).is_some_and(|s| s.ready && s.interactor == Some(pe)));
+        let target = ready.then_some(Target::Cabinet(u.cabinet, u.slot));
+        if target != interaction.target {
+            interaction.hold = None;
+        }
+        interaction.target = target;
+        return;
+    }
     let centre = xf.translation + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M;
     let look = camera.look();
     let facing = xf.rotation * Vec3::Z;
@@ -542,7 +553,8 @@ fn choose_target(
         }
     };
     for (e, item, gxf, in_cab) in &items {
-        if in_cab.is_some_and(|c| cabinets.get(c.0).is_ok_and(|(_, cab, _)| !cab.open)) {
+        // In a drawer: the drawer hands it over.
+        if in_cab.is_some() {
             continue;
         }
         if !item.large && inv.pockets.len() >= MAX_SMALL_ITEMS {
@@ -551,8 +563,10 @@ fn choose_target(
         consider(gxf.translation(), item.reach, Target::Item(e));
     }
     for (e, cab, gxf) in &cabinets {
-        if !cab.open {
-            consider(gxf.transform_point(cab.interact), cab.reach, Target::Cabinet(e));
+        for (i, s) in cab.slots.iter().enumerate() {
+            if s.searchable() {
+                consider(gxf.transform_point(s.interact), s.reach, Target::Cabinet(e, i));
+            }
         }
     }
     for (e, v, gxf) in &vehicles {
@@ -613,8 +627,7 @@ fn act(
     mut player: Single<(Entity, &mut Transform, &mut Inventory, &mut Player, Has<MoveToSpot>), (Without<Driving>, Without<crate::hiding::Hiding>, Without<crate::jason::Held>)>,
     items: Query<&Item>,
     (mut spots, model): (Query<(&mut crate::hiding::HidingSpot, &GlobalTransform)>, Option<Res<crate::character::CounselorCharacter>>),
-    mut cabinets: Query<&mut Cabinet>,
-    mut drawers: Query<(&Drawer, &mut Transform), Without<Player>>,
+    (cabinets, cabinet_xfs): (Query<&Cabinet>, Query<&GlobalTransform, With<Cabinet>>),
     mut vehicles: Query<&mut Vehicle>,
     mut doors: Query<(&mut Door, &GlobalTransform)>,
     (windows, mut barricades, (mut phone_boxes, mut phones, mut game, match_tuning)): (Query<(&mut Window, &GlobalTransform)>, Query<&mut Barricade>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<ResMut<crate::match_flow::GameMatch>>, Option<Res<crate::match_flow::MatchTuning>>)),
@@ -647,14 +660,47 @@ fn act(
             }
             interaction.target = None;
         }
-        Target::Cabinet(e) if keys.just_pressed(KeyCode::KeyE) => {
-            let Ok(mut cab) = cabinets.get_mut(e) else { return };
-            cab.open = true;
-            // Slide the drawer out toward the front (-Y in the cabinet's Unreal space, -Z here).
-            if let Some((d, mut t)) = cab.drawer.and_then(|d| drawers.get_mut(d).ok()) {
-                t.translation = d.closed.translation + Vec3::new(0.0, 0.0, -0.3);
+        Target::Cabinet(e, i) => {
+            let (Ok(cab), Ok(gxf)) = (cabinets.get(e), cabinet_xfs.get(e)) else { return };
+            let Some(slot) = cab.slots.get(i) else { return };
+            if interaction.hold_done {
+                interaction.hold_done = keys.pressed(KeyCode::KeyE);
+                return;
             }
-            interaction.target = None;
+            // Closed: a press searches it (its special move).
+            if slot.searchable() {
+                if keys.just_pressed(KeyCode::KeyE) {
+                    let at = crate::hiding::HidingSpot::world(gxf, &slot.spot);
+                    let to = Transform { translation: at.translation.with_y(player_xf.translation.y), rotation: at.rotation, ..**player_xf };
+                    crate::cabinets::search(&mut commands, player_entity, **player_xf, e, i, to);
+                    interaction.target = None;
+                }
+                return;
+            }
+            if !slot.ready || slot.interactor != Some(player_entity) {
+                return;
+            }
+            // Ready: a press closes it; holding takes the item.
+            let item = slot.item.and_then(|(it, _)| items.get(it).ok());
+            let takeable = crate::cabinets::can_take(item, inv, &items);
+            let started = interaction.hold.as_ref().is_some_and(|h| h.started);
+            if keys.just_released(KeyCode::KeyE) && !started {
+                interaction.hold = None;
+                commands.trigger(crate::cabinets::CloseCabinet { player: player_entity, take: false });
+                return;
+            }
+            if !keys.pressed(KeyCode::KeyE) || !takeable {
+                interaction.hold = None;
+                return;
+            }
+            let h = interaction.hold.get_or_insert_with(|| HoldInteraction::new(crate::cabinets::TAKE_HOLD_S, false));
+            let mut events = Vec::new();
+            h.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
+            if events.contains(&MinigameEvent::Completed) {
+                commands.trigger(crate::cabinets::CloseCabinet { player: player_entity, take: true });
+                interaction.hold = None;
+                interaction.hold_done = true;
+            }
         }
         Target::Repair(v, i) => {
             let Ok(mut vehicle) = vehicles.get_mut(v) else { return };
@@ -1011,7 +1057,7 @@ fn barricade_of(barricades: &Query<&Barricade>, door: Entity) -> Option<bool> {
 }
 
 /// Puts an item back in the world at the counselor's feet.
-fn drop_at(commands: &mut Commands, visibility: &mut Query<&mut Visibility>, item: Entity, player: &Transform) {
+pub(crate) fn drop_at(commands: &mut Commands, visibility: &mut Query<&mut Visibility>, item: Entity, player: &Transform) {
     let forward = player.rotation * Vec3::Z;
     let at = player.translation + forward * 0.5 + Vec3::Y * 0.05;
     commands.entity(item).remove::<(Carried, ChildOf, crate::items::InHand)>().insert(Transform::from_translation(at));
@@ -1078,7 +1124,7 @@ fn update_prompt(
     (windows, barricades): (Query<&Window>, Query<&Barricade>),
     player: Single<(&Inventory, Has<Driving>, &Transform, Option<&UsingItem>, &Player, Has<crate::jason::Held>, Option<&crate::hiding::Hiding>)>,
     items: Query<&Item>,
-    (vehicles, phone_boxes): (Query<&Vehicle>, Query<&crate::police::PhoneBox>),
+    (vehicles, phone_boxes, cabinets): (Query<&Vehicle>, Query<&crate::police::PhoneBox>, Query<&Cabinet>),
     mut text: Single<&mut Text, With<PromptText>>,
 ) {
     let (inv, driving, _, using, p, held, hiding) = *player;
@@ -1111,7 +1157,16 @@ fn update_prompt(
                 let full = items.get(e).is_ok_and(|i| !i.large) && inv.pockets.len() >= MAX_SMALL_ITEMS;
                 lines.push(if full { format!("Pockets full ({})", name(e)) } else { format!("[E] Pick up {}", name(e)) });
             }
-            Some(Target::Cabinet(_)) => lines.push("[E] Search".into()),
+            Some(Target::Cabinet(c, i)) => match cabinets.get(c).ok().and_then(|c| c.slots.get(i)) {
+                Some(s) if s.ready => {
+                    let item = s.item.and_then(|(it, _)| items.get(it).ok());
+                    lines.push(match item {
+                        Some(it) if crate::cabinets::can_take(Some(it), inv, &items) => format!("[E] Close   [Hold E] Take {}", it.name),
+                        _ => "[E] Close".into(),
+                    });
+                }
+                _ => lines.push("[E] Search".into()),
+            },
             Some(Target::Repair(v, i)) => {
                 if let Ok(v) = vehicles.get(v) {
                     match &interaction.hold {

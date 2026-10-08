@@ -252,6 +252,9 @@ pub struct Bone {
     pub parent: i32,
     /// "Animation" (translation from the animation) or "Skeleton" (from the mesh's bind pose).
     pub retarget: String,
+    /// The reference pose (bone space, Unreal), from the mesh's bind pose.
+    #[serde(default)]
+    pub local: Option<crate::level::Xform>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -272,6 +275,12 @@ pub struct AnimInfo {
     /// The montage's float curves (e.g. "Barricade"), keyed in seconds into it.
     #[serde(default, deserialize_with = "crate::level::null_as_empty")]
     pub curves: BTreeMap<String, Vec<CurveKey>>,
+    /// The montage's sections (CompositeSections), in seconds into it.
+    #[serde(default, deserialize_with = "crate::level::null_as_empty")]
+    pub sections: Vec<Window>,
+    /// The montage's BlendIn time, when it sets one.
+    #[serde(default)]
+    pub blend_in: Option<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -286,6 +295,11 @@ impl AnimInfo {
     /// The first notify window called `name`.
     pub fn window(&self, name: &str) -> Option<(f32, f32)> {
         self.windows.iter().find(|w| w.name == name).map(|w| (w.start, w.end))
+    }
+
+    /// The montage's section called `name`: its start and end.
+    pub fn section(&self, name: &str) -> Option<(f32, f32)> {
+        self.sections.iter().find(|w| w.name == name).map(|w| (w.start, w.end))
     }
 
     /// The montage's float curve called `name`.

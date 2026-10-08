@@ -132,6 +132,8 @@ struct Bot {
     second_tap: bool,
     /// Keep E down across frames (a hold) instead of re-pressing it each frame.
     hold_e: bool,
+    /// Holding E at a ready drawer to take its item (set each frame it's wanted).
+    cabinet_hold: bool,
     /// Fixture test targets: lockable door, barricaded door, window.
     fixtures: [Option<Entity>; 3],
     door_ok: bool,
@@ -149,7 +151,7 @@ struct Bot {
 
 impl Default for Bot {
     fn default() -> Self {
-        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false, hold_e: false, fixtures: [None; 3], door_ok: false, jason_shots: Vec::new(), door_hits: Vec::new(), fear_seen: Vec::new(), last_health: 100.0, min_breath: f32::MAX }
+        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false, hold_e: false, cabinet_hold: false, fixtures: [None; 3], door_ok: false, jason_shots: Vec::new(), door_hits: Vec::new(), fear_seen: Vec::new(), last_health: 100.0, min_breath: f32::MAX }
     }
 }
 
@@ -288,7 +290,7 @@ fn run_bot(
     bot.total += dt;
     mouse.release(MouseButton::Left);
     mouse.release(MouseButton::Right);
-    if !bot.hold_e {
+    if !bot.hold_e && !std::mem::take(&mut bot.cabinet_hold) {
         keys.release(KeyCode::KeyE);
     }
     for k in [KeyCode::Space, KeyCode::KeyW, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::KeyC, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD] {
@@ -1623,37 +1625,41 @@ fn go_fetch(
         error!("bot: no {:?} anywhere", classes);
         return false;
     };
-    let cabinet = in_cab.and_then(|c| cabinets.get(c.0).ok());
-    let closed_cabinet = cabinet.filter(|(c, _)| !c.open);
-    if let Some((cab, cxf)) = closed_cabinet {
-        // Stand at the cabinet's interact point (feet a metre below it) and search it.
-        let at = cxf.transform_point(cab.interact);
-        let stand = stand_spot(world, at, cab.reach / 100.0).unwrap_or(at - Vec3::Y * 1.0);
-        if pxf.translation.distance(stand) > 0.05 {
-            place(pxf, stand);
-        }
-        look_at(camera, pxf, at);
-        if bot.timer > 0.3 {
-            info!("bot: searching cabinet for {}", item.name);
-            keys.press(KeyCode::KeyE);
-            bot.timer = 0.0;
-        }
-    } else {
-        let at = ixf.translation();
-        // In an opened cabinet: stand where it was searched from. Loose: 0.7 m short of it, coming from where we are.
-        let stand = match cabinet {
-            Some((cab, cxf)) => {
-                let point = cxf.transform_point(cab.interact);
-                stand_spot(world, point, cab.reach / 100.0).unwrap_or(point - Vec3::Y * 1.0)
+    // In a drawer: search it, then (her move at it, ready) hold E to take the item.
+    if let Some((inc, (cab, cxf))) = in_cab.and_then(|c| Some((c, cabinets.get(c.0).ok()?))) {
+        let Some(slot) = cab.slots.get(inc.1) else { return false };
+        if slot.searchable() {
+            // Stand at its interact point (feet a metre below it) and search it.
+            let at = cxf.transform_point(slot.interact);
+            let stand = stand_spot(world, at, slot.reach / 100.0).unwrap_or(at - Vec3::Y * 1.0);
+            if pxf.translation.distance(stand) > 0.05 {
+                place(pxf, stand);
             }
-            None => {
-                let back = (pxf.translation - at).with_y(0.0).try_normalize().unwrap_or(Vec3::X);
-                let short = at + back * 0.7;
-                if f13_core::nav::capsule_fits(world, short, &CAPSULE, &crate::player::WALK) {
-                    short
-                } else {
-                    stand_spot(world, at, item.reach / 100.0).unwrap_or(short)
-                }
+            look_at(camera, pxf, at);
+            if bot.timer > 0.3 {
+                info!("bot: searching cabinet for {}", item.name);
+                keys.press(KeyCode::KeyE);
+                bot.timer = 0.0;
+            }
+        } else if slot.ready {
+            if !keys.pressed(KeyCode::KeyE) {
+                info!("bot: taking {} from the cabinet", item.name);
+            }
+            bot.cabinet_hold = true;
+            keys.press(KeyCode::KeyE);
+        }
+        return true;
+    }
+    {
+        let at = ixf.translation();
+        // Loose: 0.7 m short of it, coming from where we are.
+        let stand = {
+            let back = (pxf.translation - at).with_y(0.0).try_normalize().unwrap_or(Vec3::X);
+            let short = at + back * 0.7;
+            if f13_core::nav::capsule_fits(world, short, &CAPSULE, &crate::player::WALK) {
+                short
+            } else {
+                stand_spot(world, at, item.reach / 100.0).unwrap_or(short)
             }
         };
         if pxf.translation.distance(stand) > 0.05 {

@@ -958,6 +958,9 @@ static class Mvp
         // driver windows).
         $"{Shared}/Interaction/Barricade/AM_normal_stand_barricade_pulldown",
         $"{Shared}/Interaction/Barricade/AM_normal_stand_barricade_pushup",
+        // Searching a cabinet (Counselor_OpenDrawer / OpenDrawerLow): open, idle, close, take.
+        $"{Shared}/Interaction/Search/Drawer/AM_normal_stand_drawer_open_mid",
+        $"{Shared}/Interaction/Search/Drawer/AM_normal_stand_drawer_open_low",
         // Pulled out of the car by Jason (the driver seat's CounselorGrabbedMontage).
         CarGrab[0],
         // The phone box's fuse (AM_normal_stand_repair_phonebox) and calling the police (AM_normal_stand_use_phone).
