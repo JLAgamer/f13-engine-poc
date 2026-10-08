@@ -121,6 +121,10 @@ fn car_slam(ev: On<CarSlam>, mut commands: Commands, mut jasons: Query<(&mut Jas
 /// Pulling the driver out of the car: both sides' take (AM_normal_stand_car_grab_left), played from DriverGrab.
 const CAR_GRAB: &str = "cinematic_car_grab_left";
 const GRAB_IDLE: &str = "normal_grab_idle";
+/// Jason_AnimBP's grab layer (LayeredBoneBlend over his locomotion, BlendWeights[0] bound to GrabWeight =
+/// SCKillerCharacter's GrabValue: 1 from FinishGrabCounselor until he drops her): its BranchFilters, in component
+/// space (bMeshSpaceRotationBlend); its layer is the GrabState machine's Idle (GRAB_IDLE).
+const GRAB_LAYER_FILTERS: &[(&str, i32)] = &[("spine_01", 3), ("target_jnt", 0)];
 const GRAB_MISS: &str = "normal_grab_miss";
 /// The pickaxe's grab kills: his and her paired montage (same name), the kill class (its camera), and its KillName.
 /// The grab kills on the player's four kill keys (SCKillerCharacter's grab kill slots: UseRightGrabKill 0,
@@ -266,7 +270,7 @@ impl Plugin for JasonPlugin {
             .add_systems(FixedUpdate, (update_jason, recover_counselor, fly_knives, pick_up_knives))
             .add_observer(spawn_knife)
             .add_observer(car_slam)
-            .add_systems(Update, (tag_jason_parts, animate_jason));
+            .add_systems(Update, (tag_jason_parts, animate_jason, grab_layer));
     }
 }
 
@@ -956,6 +960,7 @@ fn spawn_jason(
             Transform { translation: feet, rotation, ..default() },
             Visibility::default(),
             Name::new("Jason"),
+            crate::character::LayeredBlend::new(GRAB_LAYER_FILTERS, true, GRAB_IDLE),
         ))
         .id();
     crate::character::spawn_model(&mut commands, &assets, &killer.0, Model::Killer, jason, JasonPart);
@@ -2161,9 +2166,15 @@ pub(crate) fn update_jason(
                     pxf.translation = xf.translation + Vec3::new(yaw.sin(), 0.0, yaw.cos()) * GRAB_HOLD_M;
                     pxf.rotation = Quat::from_rotation_y(yaw + std::f32::consts::PI);
                 }
-                if at >= killer.length(GRAB_ENTER).unwrap_or(0.3) {
-                    commands.entity(je).insert(PlayAction(GRAB_IDLE.into()));
+                // Past the grab's enter montage: his locomotion with the grab layer over it (grab_layer); he moves at his
+                // normal speeds (GetMaxSpeed has no grab case), the player walking him; the AI stands.
+                let entered = at >= killer.length(GRAB_ENTER).unwrap_or(0.3);
+                if entered {
+                    commands.entity(je).remove::<PlayAction>();
                 }
+                let wish = player_input.filter(|_| entered).map_or(Vec2::ZERO, |i| i.movement);
+                let speed = if j.combat { t.combat_speed } else if player_input.is_some_and(|i| i.run) && t.can_run { t.run_speed } else { t.walk_speed };
+                walk(&mut j, &mut xf, wish, speed, None, dt, &t, &world);
                 if at >= counselor_model.as_ref().and_then(|c| c.length(GRABBED_ENTER)).unwrap_or(2.0) {
                     commands.entity(pe).insert(PlayAction(GRABBED_IDLE.into()));
                 }
@@ -2226,7 +2237,7 @@ pub(crate) fn update_jason(
                         snap_rig(&mut rigs, je);
                     }
                     j.state = JasonState::Holding { t: HOLD_AFTER_CAR_GRAB };
-                    commands.entity(je).insert(PlayAction(GRAB_IDLE.into()));
+                    commands.entity(je).remove::<PlayAction>();
                     commands.entity(pe).insert(PlayAction(GRABBED_IDLE.into()));
                 } else {
                     j.state = JasonState::PullingOut { t: at };
@@ -2409,6 +2420,16 @@ fn recover_counselor(mut commands: Commands, time: Res<Time>, mut players: Query
             if p.counselor.alive() {
                 commands.entity(e).remove::<PlayAction>();
             }
+        }
+    }
+}
+
+/// GrabWeight (the anim instance's copy of GrabValue): the grab layer while he holds her.
+fn grab_layer(mut jasons: Query<(&Jason, &mut crate::character::LayeredBlend)>) {
+    for (j, mut l) in &mut jasons {
+        let w = if j.holding() { 1.0 } else { 0.0 };
+        if l.weight != w {
+            l.weight = w;
         }
     }
 }

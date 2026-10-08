@@ -146,10 +146,12 @@ Mechanics: Jason side
 - [x] Placed kills' props (SCContextKillActor, decompiled): the bird bath, the water pump and the chair are drawn
       (their skeletal meshes) and play their own animation as the kill starts (KillStarted), the bird bath turned as
       its Blueprint turns it; the cabins' spawned placed kills (30: back breaks, head smashes, head punches) are usable
-- [ ] Kills, remaining: walking her to one (he walks at his normal speeds while holding her; needs the grab's
-      upper-body layered bone blend, read, see MODLOG "Jason walking with a held counselor"); the bird bath's
-      bShouldOrientTowardKiller (where it's applied isn't found). (The other weapons' kills are other Jasons': not
-      Part 2's)
+- [x] Walking her to a kill: holding her, the played Jason walks at his normal speeds (GetMaxSpeed has no grab case)
+      with Jason_AnimBP's grab layer over his locomotion (character.rs layered_blend: LayeredBoneBlend's mask weights
+      and mesh-space rotation blend on the CPU; GrabWeight = GrabValue). The computer Jason still uses only the placed
+      kills in reach (his AI's choice)
+- [ ] Kills, remaining: the bird bath's bShouldOrientTowardKiller (where it's applied isn't found). (The other
+      weapons' kills are other Jasons': not Part 2's)
 - [x] Generators (power.rs): the fuse boxes and their power grids; a destroyed fuse box puts out the powered lights
       in its grid's box (and they stop lighting her: darkness fear) and lights its red power-out light; counselors
       repair it (hold E, 15 s, pips), Jason destroys it (the player's E: Jason_Generator_Destruction_Machete's
@@ -243,9 +245,11 @@ Presentation
       sets: the counselor goes straight between idle and moving)
 - [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: their root doesn't turn, the body turns about it; how the actor turns with them is unread), foot-marker
       sync (now normalised time), aim offsets (Base_Counselor_AnimBP's AimOffsets, the Hunter's poses on the shared
-      skeleton, by AimPitch while bIsAiming), BS_Run_Lean, upper-body layered bone blends (Jason's grab over his
-      locomotion, her block idle; plan in MODLOG "Jason walking with a held counselor"). Not in the game: turn-in-place
-      takes, limp movement
+      skeleton, by AimPitch while bIsAiming), BS_Run_Lean, the rest of the anim Blueprints' graphs (f13-rs plays their
+      locomotion and the grab and block layers; their look-at, IK and additive nodes aren't ported). Not in the game:
+      turn-in-place takes, limp movement
+- [x] Upper-body layers: Jason's grab layer while he holds her, her block idle on the move (Base_Counselor_AnimBP's
+      CombatUpperBody slot over her stance pose when bIsMoving, its CombatFullBody track standing)
       (bShouldPlayWounded only swaps in F_hurt_stand_idle_01, done)
 - [x] Door special moves: her open and close takes (inside or outside), the leaf swinging in the montage's
       OpenCloseDoor driver window; she stands while they play
@@ -339,7 +343,7 @@ Setup
       for a decision on that
 
 Decomp audit (nothing guessed: every rule read from the decomp or the game's data)
-- [ ] Check each PLACEHOLDER (16 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
+- [ ] Check each PLACEHOLDER (15 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
       them, in jason.rs, are the AI's own choices and stay) and each "guess"/"assumed"/"not read" note (about 10)
       against the decomp and the export (Ghidra, MODLOG, f13-export `debug-json` / `pseudo` / `cdo` / `grep`); port
       what the game does, or record in MODLOG why it can't be found. Most are in jason.rs, hiding.rs, audio.rs,

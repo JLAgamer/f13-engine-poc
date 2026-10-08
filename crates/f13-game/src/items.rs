@@ -11,7 +11,7 @@
 //! blocking is scaled by her BlockingDamageMod (f13-core::health) and wears the weapon by its BlockingWear (a weapon
 //! worn out breaks); she plays the block reaction (AM_F_Combat_Stand_Block_React) instead of a hit reaction. A
 //! killer's heavy attack (his weapon's ForwardAttack) ends the block. BlockStaminaCost isn't read by the game's
-//! code. PLACEHOLDER: the block idle replaces the combat idle (the game plays it in an upper-body slot).
+//! code. The block idle plays full-body standing and as an upper-body layer on the move (character.rs).
 //!
 //! From the game's data: WeaponStats (Damage, StunChance, Durability, AttackingWear), the swings' AttackTraceNotify
 //! windows, the stun classes' times (jason.rs), the firecracker's ThrowDelayTime, BP_Firecracker_Projectile's

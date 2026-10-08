@@ -97,7 +97,8 @@ impl Plugin for CharacterPlugin {
                 commands.insert_resource(KillerCharacter(c));
             }
         })
-        .add_systems(Update, (assemble, animate).chain());
+        .add_systems(Update, (assemble, animate).chain())
+        .add_systems(PostUpdate, layered_blend.after(bevy::app::AnimationSystems).before(bevy::transform::TransformSystems::Propagate));
     }
 }
 
@@ -108,7 +109,20 @@ pub struct CharacterModel {
     clips: HashMap<String, (AnimationNodeIndex, f32)>,
     /// Animations that keep their root motion: the root bone's pose at each frame (rig space), and the length.
     roots: HashMap<String, (Vec<Transform>, f32)>,
+    /// The takes played as a layer over the pose ([`LAYER_TAKES`]): their samples and length.
+    layers: HashMap<String, (AnimData, f32)>,
 }
+
+/// Takes the anim Blueprints play in a layered bone blend's layer (sampled here: [`layered_blend`]): Jason_AnimBP's
+/// GrabState machine's Idle (its Struggle state needs the counselor's bIsStruggling, which nothing sets: its only
+/// setter, SCCharacter::SetStruggling, is called by no code or Blueprint); her block idle's CombatUpperBody track.
+const LAYER_TAKES: [&str; 2] = ["normal_grab_idle", BLOCK_IDLE];
+
+/// Base_Counselor_AnimBP's CombatUpperBody slot: a LayeredBoneBlend over her stance pose (spine_01, BlendDepth 2,
+/// bMeshSpaceRotationBlend), chosen over the CombatFullBody slot while she moves (BlendListByBool on bIsMoving:
+/// speed over 1e-4 cm/s, blending over 0.1 s).
+const BLOCK_LAYER_FILTERS: &[(&str, i32)] = &[("spine_01", 2)];
+const BLOCK_LAYER_BLEND_S: f32 = 0.1;
 
 #[derive(Resource, Deref)]
 pub struct CounselorCharacter(pub CharacterModel);
@@ -137,6 +151,7 @@ impl CharacterModel {
         let mut graph = AnimationGraph::new();
         let mut nodes = HashMap::new();
         let mut roots = HashMap::new();
+        let mut layers = HashMap::new();
         for (name, a) in &info.animations {
             let data = match AnimData::load(&export.join(&a.file)) {
                 Ok(d) => d,
@@ -158,9 +173,12 @@ impl CharacterModel {
             }
             let clip = build_clip(&data, a.length, &animated);
             nodes.insert(name.clone(), (graph.add_clip(clips.add(clip), 1.0, graph.root), a.length));
+            if LAYER_TAKES.contains(&name.as_str()) {
+                layers.insert(name.clone(), (data, a.length));
+            }
         }
         info!("character model {}: {} animations", info.name, nodes.len());
-        Some(Self { info, graph: graphs.add(graph), clips: nodes, roots })
+        Some(Self { info, graph: graphs.add(graph), clips: nodes, roots, layers })
     }
 
     /// The rig's place under its owner (see [`spawn_model`]).
@@ -426,6 +444,7 @@ pub(crate) fn animate(
     anim_sounds: Option<Res<crate::audio::AnimSounds>>,
     players: Query<(Entity, &Player, &Transform, Option<&crate::interact::UsingItem>, Option<&PlayAction>, Has<crate::items::Blocking>, Has<RestartAction>, Option<&SeekAction>)>,
     mut rigs: Query<(&ChildOf, &mut Rig, &mut AnimationPlayer), Without<crate::ragdoll::Ragdolled>>,
+    mut layers: Query<&mut LayeredBlend, With<Player>>,
 ) {
     let Some(character) = character else { return };
     let dt = time.delta_secs();
@@ -498,7 +517,9 @@ pub(crate) fn animate(
                 }
                 Stance::Combat => {
                     let s = (speed / t.max_combat_speed.max(1.0)).clamp(0.0, 1.0);
-                    let idle = if blocking && character.clips.contains_key(BLOCK_IDLE) { BLOCK_IDLE } else { COMBAT_IDLE };
+                    // Blocking: standing, the block idle's full-body track; moving, her combat locomotion with its
+                    // upper-body track over it (the block layer, below).
+                    let idle = if blocking && speed <= 1e-4 && character.clips.contains_key(BLOCK_IDLE) { BLOCK_IDLE } else { COMBAT_IDLE };
                     targets.insert(idle, 1.0 - s);
                     // Direction of travel relative to facing, + to the right (Unreal's CalculateDirection).
                     let (yaw, _, _) = xf.rotation.to_euler(EulerRot::YXZ);
@@ -530,6 +551,19 @@ pub(crate) fn animate(
 
         let synced = |n: &str| MOVE.contains(&n) || SWIM[1..].contains(&n) || n == CROUCH_WALK || COMBAT_WALK.iter().any(|(_, m)| *m == n);
         rig.drive(&character.0, &targets, &synced, dt, &mut anim);
+        // The block layer while she blocks on the move.
+        let block_layer = if blocking && c.stance == Stance::Combat && speed > 1e-4 { 1.0 } else { 0.0 };
+        match layers.get_mut(pe) {
+            Ok(mut l) => {
+                let w = l.weight + (block_layer - l.weight).clamp(-dt / BLOCK_LAYER_BLEND_S, dt / BLOCK_LAYER_BLEND_S);
+                if l.weight != w {
+                    l.weight = w;
+                }
+            }
+            Err(_) => {
+                commands.entity(pe).insert(LayeredBlend::new(BLOCK_LAYER_FILTERS, true, BLOCK_IDLE));
+            }
+        }
 
         // The Footstep_L / Footstep_R notifies the locomotion cycle that weighs most passed this frame (audio.rs).
         let (before, after) = (rig.prev_phase, rig.phase);
@@ -657,6 +691,167 @@ impl Rig {
                 self.idle_time % len.max(1e-3)
             };
             anim.play(node).set_speed(0.0).set_weight(w).set_seek_time(at);
+        }
+    }
+}
+
+/// An upper-body layer over a character's pose (AnimNode_LayeredBoneBlend, one layer): `take` ([`LAYER_TAKES`],
+/// looping) over the bones its branch filters pick, by `weight` (the node's BlendWeights, bound to a variable).
+#[derive(Component, Clone, Debug)]
+pub struct LayeredBlend {
+    pub weight: f32,
+    /// BranchFilters: (bone, BlendDepth).
+    pub filters: &'static [(&'static str, i32)],
+    /// bMeshSpaceRotationBlend.
+    pub mesh_space: bool,
+    take: &'static str,
+    t: f32,
+}
+
+impl LayeredBlend {
+    pub fn new(filters: &'static [(&'static str, i32)], mesh_space: bool, take: &'static str) -> Self {
+        LayeredBlend { weight: 0.0, filters, mesh_space, take, t: 0.0 }
+    }
+}
+
+/// FAnimationRuntime::CreateMaskWeights: each bone's weight from the branch filters, by its depth under the filter
+/// bone: BlendDepth 0, the whole branch; else (depth + 1) / BlendDepth, summed over the filters and clamped to 0..1.
+fn mask_weights(bones: &[f13_data::character::Bone], filters: &[(&str, i32)]) -> Vec<f32> {
+    let mut w = vec![0.0f32; bones.len()];
+    for &(name, blend_depth) in filters {
+        let Some(f) = bones.iter().position(|b| b.name.eq_ignore_ascii_case(name)) else { continue };
+        let per_depth = if blend_depth != 0 { 1.0 / blend_depth as f32 } else { 1.0 };
+        for (i, wi) in w.iter_mut().enumerate() {
+            // GetDepthBetweenBones: parent steps from the bone up to the filter bone (-1: not under it).
+            let (mut at, mut depth) = (i as i32, 0);
+            while at >= 0 && at as usize != f {
+                at = bones[at as usize].parent;
+                depth += 1;
+            }
+            if at >= 0 {
+                *wi = (*wi + per_depth * (depth + 1) as f32).clamp(0.0, 1.0);
+            }
+        }
+    }
+    w
+}
+
+/// A layer take's local pose of `bone` at `t` (looping): its rotation and, for a bone that takes its translation from
+/// the animation, its translation.
+fn sample_take(data: &AnimData, length: f32, bone: &str, t: f32) -> Option<(Quat, Option<Vec3>)> {
+    let track = data.tracks.iter().find(|tr| tr.bone == bone)?;
+    let n = track.rotation.len().max(1);
+    let x = if length > 0.0 && n > 1 { (t.rem_euclid(length) / length) * (n - 1) as f32 } else { 0.0 };
+    let (i, f) = (x.floor() as usize, x.fract());
+    let j = (i + 1).min(n - 1);
+    let r = |k: usize| track.rotation.get(k).map_or(Quat::IDENTITY, |q| Quat::from_array(*q).normalize());
+    let rotation = r(i).slerp(r(j), f);
+    let translation = track.translation.as_ref().map(|v| {
+        let p = |k: usize| v.get(k).map_or(Vec3::ZERO, |a| Vec3::from_array(*a));
+        p(i).lerp(p(j), f)
+    });
+    Some((rotation, translation))
+}
+
+/// FQuat::FastLerp (the shortest way), normalised.
+fn fast_lerp(a: Quat, b: Quat, alpha: f32) -> Quat {
+    let bias = if a.dot(b) >= 0.0 { 1.0 } else { -1.0 };
+    (b * alpha + a * (bias * (1.0 - alpha))).normalize()
+}
+
+/// FAnimationRuntime::BlendPosesPerBoneFilter after the animation is evaluated: each bone's pose from its locomotion
+/// (the base) and the layer take by its mask weight times the layer's weight; translations blend in the bone's own
+/// space, rotations in component space when bMeshSpaceRotationBlend (a bone outside the branch keeps its component
+/// rotation, so its local one follows its blended parent). Bones the animation doesn't write every frame get back
+/// what they had before the blend (so it doesn't build up).
+#[allow(clippy::type_complexity)]
+fn layered_blend(
+    time: Res<Time>,
+    counselor: Option<Res<CounselorCharacter>>,
+    killer: Option<Res<KillerCharacter>>,
+    mut owners: Query<(Entity, &mut LayeredBlend)>,
+    rigs: Query<(&ChildOf, &Rig)>,
+    mut transforms: Query<&mut Transform>,
+    mut written: Local<HashMap<Entity, (Transform, Transform)>>,
+) {
+    let dt = time.delta_secs();
+    for (owner, mut l) in &mut owners {
+        l.t += dt;
+        if l.weight <= 0.0 {
+            continue;
+        }
+        let Some((_, rig)) = rigs.iter().find(|(c, _)| c.parent() == owner) else { continue };
+        // A full-body action (a montage in a slot over the layer, or a scripted take) has the whole pose.
+        if rig.action.is_some() {
+            continue;
+        }
+        let model = match rig.model {
+            Model::Counselor => counselor.as_deref().map(|c| &c.0),
+            Model::Killer => killer.as_deref().map(|k| &k.0),
+        };
+        let Some(model) = model else { continue };
+        let Some((data, length)) = model.layers.get(l.take) else { continue };
+        let bones = &model.info.bones;
+        let mask = mask_weights(bones, l.filters);
+        let n = bones.len();
+        let (mut base, mut layer) = (vec![Transform::IDENTITY; n], vec![Transform::IDENTITY; n]);
+        let mut ents = vec![None; n];
+        for (i, b) in bones.iter().enumerate() {
+            let Some(&e) = rig.bones.get(&b.name) else { continue };
+            let Ok(xf) = transforms.get(e) else { continue };
+            // Not written by the animation since the last blend: what it had before that.
+            let current = match written.get(&e) {
+                Some((before, after)) if after == xf => *before,
+                _ => *xf,
+            };
+            ents[i] = Some(e);
+            base[i] = current;
+            // A bone the take doesn't key is at its reference pose.
+            let mut p = match &b.local {
+                Some(x) => {
+                    let g = x.to_gltf_space();
+                    Transform { translation: Vec3::from_array(g.translation), rotation: Quat::from_array(g.rotation).normalize(), scale: current.scale }
+                }
+                None => current,
+            };
+            if let Some((r, tr)) = sample_take(data, *length, &b.name, l.t) {
+                p.rotation = r;
+                if let Some(tr) = tr.filter(|_| b.retarget == "Animation") {
+                    p.translation = tr;
+                }
+            }
+            layer[i] = p;
+        }
+        // Component-space rotations (parents come first in the reference skeleton).
+        let mesh = |pose: &[Transform]| {
+            let mut m = vec![Quat::IDENTITY; n];
+            for i in 0..n {
+                let parent = bones[i].parent;
+                m[i] = if parent >= 0 { m[parent as usize] * pose[i].rotation } else { pose[i].rotation };
+            }
+            m
+        };
+        let (base_mesh, layer_mesh) = if l.mesh_space { (mesh(&base), mesh(&layer)) } else { (vec![], vec![]) };
+        let mut out_mesh = vec![Quat::IDENTITY; n];
+        for i in 0..n {
+            let w = (mask[i] * l.weight).clamp(0.0, 1.0);
+            let mut out = base[i];
+            out.translation = base[i].translation.lerp(layer[i].translation, w);
+            if l.mesh_space {
+                out_mesh[i] = if w <= 1e-5 { base_mesh[i] } else if w >= 1.0 - 1e-5 { layer_mesh[i] } else { fast_lerp(base_mesh[i], layer_mesh[i], w) };
+                let parent = bones[i].parent;
+                out.rotation = if parent >= 0 { (out_mesh[parent as usize].inverse() * out_mesh[i]).normalize() } else { out_mesh[i] };
+            } else {
+                out.rotation = fast_lerp(base[i].rotation, layer[i].rotation, w);
+            }
+            if let Some(e) = ents[i] {
+                if let Ok(mut xf) = transforms.get_mut(e) {
+                    if *xf != out {
+                        *xf = out;
+                    }
+                    written.insert(e, (base[i], out));
+                }
+            }
         }
     }
 }
