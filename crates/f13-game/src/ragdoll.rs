@@ -125,7 +125,8 @@ fn build(info: &CharacterInfo, rig: &Rig, transforms: &Query<&Transform>, global
                 let shape = b.transform.as_ref().map(crate::to_transform).unwrap_or_default();
                 let mut local = shape.translation * 2.0;
                 if local.length() < 0.03 {
-                    local = shape.rotation * Vec3::Z * (b.length / 200.0 + radius[b.bone.as_str()]);
+                    // A sphyl lies along its Z (Unreal), Bevy's Y here.
+                    local = shape.rotation * Vec3::Y * (b.length / 200.0 + radius[b.bone.as_str()]);
                 }
                 if local.length() < 0.03 {
                     p

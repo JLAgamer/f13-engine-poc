@@ -187,6 +187,9 @@ pub struct RagdollBody {
     pub length: f32,
     #[serde(default)]
     pub transform: Option<Xform>,
+    /// A box's full X, Y, Z extents (cm, Unreal).
+    #[serde(default)]
+    pub extents: Option<[f32; 3]>,
 }
 
 /// A physics constraint: `bone1` (the child) swings relative to `bone2` within the limits (degrees; 0 locked,

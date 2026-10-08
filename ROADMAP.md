@@ -343,7 +343,7 @@ Setup
       for a decision on that
 
 Decomp audit (nothing guessed: every rule read from the decomp or the game's data)
-- [ ] Check each PLACEHOLDER (12 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
+- [ ] Check each PLACEHOLDER (11 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
       them, in jason.rs, are the AI's own choices and stay) and each "guess"/"assumed"/"not read" note (about 10)
       against the decomp and the export (Ghidra, MODLOG, f13-export `debug-json` / `pseudo` / `cdo` / `grep`); port
       what the game does, or record in MODLOG why it can't be found. Most are in jason.rs, hiding.rs, audio.rs,
@@ -365,7 +365,8 @@ Decomp audit (nothing guessed: every rule read from the decomp or the game's dat
       MaxTeleportViewDistance rule, also on Stalk); bTakeCameraControl's default (true: drawers' and windows'
       cameras); the counselor's heavy swing (held in combat stance, not W); bIsStruggling (never set: Jason's grab
       layer is always its Idle); the doors', windows' and barricades' cues (played on state changes: the windows'
-      as her move starts, the barricades' as she starts using one, the doors' open / close cues never by code)
+      as her move starts, the barricades' as she starts using one, the doors' open / close cues never by code); weapon
+      sweeps against Jason's physics bodies (his PhysicsAsset, exported; his capsule stood in)
 - [x] Audit of hiding.rs, doors.rs, police.rs, items.rs, placed_kills.rs, character.rs, senses.rs, ui.rs, vehicle.rs
       (MODLOG "Decomp audit (worktree session)"): hiding voice lines and spot doors, the door's opening side, the
       police volume's obstruction, stun spot search and phone box rule, melee sweeps, guns, the firecracker throw,

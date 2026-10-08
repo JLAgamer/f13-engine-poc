@@ -22,8 +22,8 @@
 //! AttackTraceNotify window, each frame sweeps the weapon's KillVolume capsule (its "DamageVolume") from where it was
 //! to where it is, in min(max(its yaw change / 15 degrees (the sc.AttackRotationIteration CVar), its move / its
 //! diameter, 1), 9) steps: step i sweeps from i/n of the way there to its current place, and a line runs from her
-//! to that point. The first actor hit is hit once per swing. PLACEHOLDER: the game's sweeps hit Jason's physics
-//! bodies (his mesh; the Pawn channel is ignored), which aren't exported: his collision capsule stands in, and walls
+//! to that point. The first actor hit is hit once per swing. The sweeps hit Jason's physics bodies (his mesh's
+//! PhysicsAsset, posed by his animation: the largest shape of each; the Pawn channel, his capsule, is ignored); walls
 //! don't stop the sweeps (only the line from her).
 //!
 //! Guns (SCGun): using one fires it at once (its Use: bHasAmmunition and bIsAiming -> Fire; the flare's OnUseItem
@@ -195,7 +195,53 @@ fn segment_distance(p0: Vec3, p1: Vec3, q0: Vec3, q1: Vec3) -> f32 {
 /// One frame of a swing's trace (FUN_1404501f0): whether the weapon's KillVolume (`radius`, `half` its half height),
 /// moving from `prev` to `now`, or the line from its owner at `owner` to each step's point, touches the capsule
 /// `body` (its sphere centres) of `body_radius`. A wall in the way stops the line.
-fn swing_hits(prev: Transform, now: Transform, radius: f32, half: f32, owner: Vec3, body: (Vec3, Vec3), body_radius: f32, world: &(impl f13_core::collision::TriSource + ?Sized)) -> bool {
+/// A physics body in the world: a capsule (segment, radius) or a box (its transform, half extents), metres.
+#[derive(Clone, Copy, Debug)]
+enum BodyShape {
+    Capsule(Vec3, Vec3, f32),
+    Box(Transform, Vec3),
+}
+
+impl BodyShape {
+    /// Whether the segment `a..b` comes within `r` of the shape.
+    fn near_segment(&self, a: Vec3, b: Vec3, r: f32) -> bool {
+        match *self {
+            BodyShape::Capsule(p, q, cr) => segment_distance(a, b, p, q) <= r + cr,
+            BodyShape::Box(xf, half) => {
+                // The segment's closest approach to the box, by its points (a fine sampling of it).
+                let inv = xf.compute_affine().inverse();
+                let n = ((a.distance(b) / (r.max(0.01))).ceil() as usize).clamp(1, 64);
+                (0..=n).any(|k| {
+                    let p = inv.transform_point3(a.lerp(b, k as f32 / n as f32));
+                    let d = (p.abs() - half).max(Vec3::ZERO);
+                    d.length() <= r
+                })
+            }
+        }
+    }
+}
+
+/// Jason's physics bodies where his animation has them (his rig's bones), from his PhysicsAsset's shapes: a Sphyl's
+/// axis is its Z (Bevy's Y here).
+fn jason_bodies(info: &f13_data::character::CharacterInfo, rig: &Rig, globals: &Query<&GlobalTransform>) -> Vec<BodyShape> {
+    info.ragdoll
+        .iter()
+        .filter_map(|b| {
+            let bone = globals.get(*rig.bones.get(&b.bone)?).ok()?;
+            let local = b.transform.as_ref().map(crate::to_transform).unwrap_or_default();
+            let xf = bone.mul_transform(local).compute_transform();
+            Some(match (b.shape.as_str(), b.extents) {
+                ("Box", Some([x, y, z])) => BodyShape::Box(Transform { scale: Vec3::ONE, ..xf }, Vec3::new(x, z, y) / 200.0),
+                _ => {
+                    let half = xf.rotation * Vec3::Y * (b.length / 200.0);
+                    BodyShape::Capsule(xf.translation - half, xf.translation + half, b.radius / 100.0)
+                }
+            })
+        })
+        .collect()
+}
+
+fn swing_hits(prev: Transform, now: Transform, radius: f32, half: f32, owner: Vec3, bodies: &[BodyShape], world: &(impl f13_core::collision::TriSource + ?Sized)) -> bool {
     use f13_core::camera_spline::rotator;
     // Unreal's yaw (rotator Y) wraps into -180..180; only a positive change from the last trace counts (as in the game).
     let yaw = |t: &Transform| rotator(t.rotation).y;
@@ -211,7 +257,7 @@ fn swing_hits(prev: Transform, now: Transform, radius: f32, half: f32, owner: Ve
         let a = rot * Vec3::Y * (half - radius).max(0.0);
         (at - a, at + a)
     };
-    let touches = |a: (Vec3, Vec3)| segment_distance(a.0, a.1, body.0, body.1) <= radius + body_radius;
+    let touches = |a: (Vec3, Vec3)| bodies.iter().any(|b| b.near_segment(a.0, a.1, radius));
     for i in 1..=steps.max(1) {
         let s = i as f32 / steps.max(1) as f32;
         let (from, rot) = (prev.translation.lerp(now.translation, s), prev.rotation.slerp(now.rotation, s));
@@ -221,7 +267,7 @@ fn swing_hits(prev: Transform, now: Transform, radius: f32, half: f32, owner: Ve
             return true;
         }
         // The line from her to this step's point, unless a wall comes first.
-        let line = segment_distance(owner, from, body.0, body.1) <= body_radius;
+        let line = bodies.iter().any(|b| b.near_segment(owner, from, 0.0));
         if line && f13_core::collision::segment_hit(world, owner, from, 1.0).is_none() {
             return true;
         }
@@ -464,7 +510,7 @@ fn tick_action(
     items: Query<&Item>,
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
     mut assets: (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>),
-    (globals, killer, character, rigs): (Query<&GlobalTransform>, Option<Res<crate::jason::KillerTuning>>, Option<Res<CounselorCharacter>>, Query<(&ChildOf, &Rig)>),
+    (globals, killer, character, rigs, killer_model): (Query<&GlobalTransform>, Option<Res<crate::jason::KillerTuning>>, Option<Res<CounselorCharacter>>, Query<(&ChildOf, &Rig)>, Option<Res<crate::character::KillerCharacter>>),
 ) {
     let Ok((pe, mut a, mut inv, xf, p)) = player.single_mut() else { return };
     a.t += time.delta_secs();
@@ -500,14 +546,21 @@ fn tick_action(
                     let prev = a.trace.or(now);
                     a.trace = now;
                     let world = collision.with(&dynamic);
-                    let hit = jason.filter(|(_, jxf)| {
+                    let hit = jason.filter(|(je, jxf)| {
                         let (Some(now), Some(prev), Some((_, radius, half)), Some(cap), Some(c)) = (now, prev, stats.volume, killer.as_ref().map(|k| k.capsule), character.as_ref()) else {
                             return false;
                         };
                         // Her actor's location: her capsule's centre.
                         let owner = xf.translation + Vec3::Y * c.info.capsule_half_height / 100.0;
-                        let body = (jxf.translation + Vec3::Y * cap.radius, jxf.translation + Vec3::Y * (2.0 * cap.half_height - cap.radius).max(cap.radius));
-                        swing_hits(prev, now, radius, half, owner, body, cap.radius, &world)
+                        // His physics bodies (his capsule only for an export without them).
+                        let mut bodies = match (killer_model.as_ref(), rigs.iter().find(|(c, _)| c.parent() == *je)) {
+                            (Some(k), Some((_, rig))) => jason_bodies(&k.info, rig, &globals),
+                            _ => vec![],
+                        };
+                        if bodies.is_empty() {
+                            bodies.push(BodyShape::Capsule(jxf.translation + Vec3::Y * cap.radius, jxf.translation + Vec3::Y * (2.0 * cap.half_height - cap.radius).max(cap.radius), cap.radius));
+                        }
+                        swing_hits(prev, now, radius, half, owner, &bodies, &world)
                     });
                     if let Some((je, jxf)) = hit {
                         let to = jxf.translation - xf.translation;

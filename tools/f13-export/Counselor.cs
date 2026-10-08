@@ -121,6 +121,8 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         public string Bone = "", Shape = "";
         public float Radius, Length;
         public Xform? Transform;
+        /// A box's full X, Y, Z extents.
+        public float[]? Extents;
     }
 
     /// A physics constraint: Bone1 (the child) moves relative to Bone2 within the swing cone and twist limit
@@ -322,7 +324,7 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             {
                 float x = e.GetOrDefault<float>("X"), y = e.GetOrDefault<float>("Y"), z = e.GetOrDefault<float>("Z");
                 Consider(new RagdollBody { Bone = bone, Shape = "Box", Radius = Math.Min(x, Math.Min(y, z)) / 2, Length = Math.Max(x, Math.Max(y, z)) - Math.Min(x, Math.Min(y, z)),
-                    Transform = Xf(e.GetOrDefault<FVector>("Center"), e.GetOrDefault<FRotator>("Rotation")) });
+                    Transform = Xf(e.GetOrDefault<FVector>("Center"), e.GetOrDefault<FRotator>("Rotation")), Extents = [x, y, z] });
             }
             if (best != null) info.Ragdoll.Add(best);
         }
@@ -527,6 +529,8 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             if (provider.LoadPackageObject<UBlueprintGeneratedClass>(shake + "." + shake.Split('/')[^1] + "_C").ClassDefaultObject.Load() is { } shakeCdo)
                 info.CameraShakes[shake.Split('/')[^1]] = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(shakeCdo))["Properties"] ?? new Newtonsoft.Json.Linq.JObject();
 
+        // His physics bodies (what weapon sweeps hit).
+        AddRagdoll(info, body);
         AddBones(info, body, skeleton);
         AddSockets(info, body, skeleton);
         WriteAnimations(info, skeleton, animations, "anims/jason", keepRoot);
