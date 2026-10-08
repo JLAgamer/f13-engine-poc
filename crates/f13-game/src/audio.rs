@@ -27,9 +27,10 @@
 //!
 //! Delay nodes start their voices late (started paused). Continuous modulators and param / distance cross-fades follow
 //! the sound's parameters (`CueParams` on its actor, as AudioComponent::SetFloatParameter sets them) while it plays.
-//! Actors' cues play at their root (PlaySoundAtLocation). PLACEHOLDERS: the listener is the camera; voice lines play
-//! 1 m above the character's feet (SCVoiceOverComponent plays them through an audio component whose attachment
-//! isn't read).
+//! Actors' cues play at their root (PlaySoundAtLocation). The listener is the camera: APlayerController's own
+//! GetAudioListenerPosition (its view point), as nothing sets an override (SetAudioListenerOverride has no caller in
+//! the code or the packages). PLACEHOLDER: voice lines play 1 m above the character's feet (SCVoiceOverComponent plays
+//! them through an audio component whose attachment isn't read).
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
