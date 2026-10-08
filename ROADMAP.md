@@ -110,8 +110,7 @@ Mechanics: Jason side
       camera to it and widens its field of view (indoor kills no longer film from behind walls)
 - [x] Kill cameras blend back (0.5 s, their special moves' BlendBackTime) to the follow camera
 - [x] Playing as Jason (`--play-jason`, jason_player.rs): walk, fast walk, look; attack (held in combat stance: the
-      heavy attack), grab and kill, knives (aimed while held), traps, Shift, Morph (the point nearest 30 m ahead),
-      Stalk; doors as he walks into them; the counselor stands idle unless a `--bot-*` plays her
+      heavy attack), grab and kill, knives (aimed while held), traps, Shift, Morph (picked on his map), Stalk; doors as he walks into them; the counselor stands idle unless a `--bot-*` plays her
 - [x] Jason's keys as the game binds them (SetupPlayerInputComponent 0x140407900 and DefaultInput.ini): LMB attack,
       RMB grab, MMB held aims a knife and letting go throws it (RMB puts it away), C combat stance (MaxCombatSpeed,
       facing the view), R trap, 1 Morph, 2 Sense, 3 Shift, 4 Stalk, Left Shift fast walk, E interact; holding her, 1-4
@@ -125,7 +124,13 @@ Mechanics: Jason side
       (GetCombatVisibility); the grab icon when a counselor's in grab range (UpdateGrabIcon); the knife's reticle while
       aiming (ReticleFade). Her prompts, dial and breath meter stay off his screen
 - [x] Sense on demand when Jason's played (2; the computer Jason uses it when ready and she's out of sight)
-- [ ] Playing as Jason, remaining: the map for Morph (KillerHUDWidget's Map_Overylay); the grab kill choices while
+- [x] His map (KillerHUDWidget's Map_Overylay): M shows it (GLB_Map), 1 brings it out for a Morph with the mouse free
+      at the screen's centre (KLR_Morph_PC) and a click on it morphs him to the morph point nearest that place
+      (AttemptMorph, GetClickWorldLocationForSlot 0x140297e70), 1 again puts it away; MapFade plays as it's shown and
+      reversed as it's put away (UpdateMapVisibility on Jason_Base's SetMapStatus); the level's KillerMapTexture in
+      the map's material (SCMiniMapBase 0x140430e20); the Morph / Cancel / Back keys by their bindings. ScaleBox lays
+      its content out as Slate does (ScaleToFit and the other Stretch modes), so his map is the square it should be
+- [ ] Playing as Jason, remaining: the grab kill choices while
       holding her (KillerGrabWidget); KillerHelpTextWidget; his score lines (XPDisplayWidget); his block in combat
       stance (CMBT_KLR_Block); the doors' and walls' special move cameras for him (KillerOpenDoor, BreakDownFrom*);
       the grab kill slots are the save game's picks (unread: the throat hack on the click)
@@ -135,8 +140,8 @@ Mechanics: Jason side
   half). When the computer Jason uses them is a placeholder
 - [x] Shift's rush (Jason_Base's ShiftAudioCue, on him) and the static a counselor hears as he Morphs in near her
       (TeleportCueCounselorHears; PLACEHOLDER: near = his near music's reach)
-- [ ] Shift, Morph, Stalk, remaining: the dissolve and screen effects, Morph's excluded areas (the map's Boundary
-      texture: see MODLOG "Morph's map")
+- [ ] Shift, Morph, Stalk, remaining: the dissolve and screen effects (Morph's excluded areas: the map's Boundary
+      image has no texture in this level's widget, so none refuse a click)
 - [x] Throwing knives (J2's two, the knife's damage and cooldown, the throw montage and its ThrowKnife notify,
   SCJasonAIProperties' 5..25 m; placeholder knife speed) and Jason's traps (J2's seven KillerTraps, set in doorways
   he opens; they catch counselors, not him; his trap's own mesh isn't exported)

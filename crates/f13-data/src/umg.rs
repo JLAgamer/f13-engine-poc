@@ -44,6 +44,17 @@ pub struct Laid<'a> {
     pub children: Vec<Laid<'a>>,
 }
 
+impl Laid<'_> {
+    /// Scales the laid-out subtree by (sx, sy) about the origin, then moves it by (ox, oy).
+    fn transform(&mut self, ox: f32, oy: f32, sx: f32, sy: f32) {
+        let r = self.rect;
+        self.rect = Rect { x: ox + r.x * sx, y: oy + r.y * sy, w: r.w * sx, h: r.h * sy };
+        for c in &mut self.children {
+            c.transform(ox, oy, sx, sy);
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Vis {
     Visible,
@@ -271,6 +282,40 @@ impl Widget {
                     at += along + if horizontal { pad[0] + pad[2] } else { pad[1] + pad[3] };
                     children.push((0, c.layout(r)));
                 }
+            }
+            "ScaleBox" if self.children.first().is_some_and(|c| c.desired().0 > 0.0 && c.desired().1 > 0.0) => {
+                // SScaleBox: the child laid out at its desired size, scaled by Stretch (ScaleToFit unless set:
+                // uniform, to fit; Fill: each axis to fill; ScaleToFill; ScaleToFitX / Y; None) within its
+                // StretchDirection, and placed by its slot's alignment (centred; a uniform scale can't fill).
+                let c = &self.children[0];
+                let (dw, dh) = c.desired();
+                let (fx, fy) = (rect.w / dw, rect.h / dh);
+                let stretch = self.props["Stretch"].as_str().unwrap_or("EStretch::ScaleToFit").rsplit(':').next().unwrap_or("ScaleToFit");
+                let (mut sx, mut sy) = match stretch {
+                    "None" => (1.0, 1.0),
+                    "Fill" => (fx, fy),
+                    "ScaleToFill" => (fx.max(fy), fx.max(fy)),
+                    "ScaleToFitX" => (fx, fx),
+                    "ScaleToFitY" => (fy, fy),
+                    "UserSpecified" => (f(&self.props["UserSpecifiedScale"], 1.0), f(&self.props["UserSpecifiedScale"], 1.0)),
+                    _ => (fx.min(fy), fx.min(fy)),
+                };
+                match self.props["StretchDirection"].as_str().unwrap_or("").rsplit(':').next().unwrap_or("") {
+                    "DownOnly" => (sx, sy) = (sx.min(1.0), sy.min(1.0)),
+                    "UpOnly" => (sx, sy) = (sx.max(1.0), sy.max(1.0)),
+                    _ => {}
+                }
+                let (w, h) = (dw * sx, dh * sy);
+                let centre = |a: Option<&str>| match a.map(|a| a.rsplit('_').next().unwrap_or("")) {
+                    Some("Left") | Some("Top") => 0.0,
+                    Some("Right") | Some("Bottom") => 1.0,
+                    _ => 0.5,
+                };
+                let ox = rect.x + (rect.w - w) * centre(c.slot["HorizontalAlignment"].as_str());
+                let oy = rect.y + (rect.h - h) * centre(c.slot["VerticalAlignment"].as_str());
+                let mut laid = c.layout(Rect { x: 0.0, y: 0.0, w: dw, h: dh });
+                laid.transform(ox, oy, sx, sy);
+                children.push((0, laid));
             }
             _ => {
                 // One child (or an overlay's several) aligned in the padded rectangle.

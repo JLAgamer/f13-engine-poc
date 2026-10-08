@@ -175,6 +175,8 @@ struct MapInfo {
     file: String,
     area: [f32; 4],
     zoom: f32,
+    /// Jason's map (the volume's KillerMapTexture).
+    killer_file: Option<String>,
 }
 
 /// SC_MiniMap_Widget's size in CounselorMinimapWidget (its slot's 328 x 328).
@@ -341,17 +343,16 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         let name = a.props["MapTexture"]["AssetPathName"].as_str()?.rsplit('.').next()?.to_string();
         let b = a.bounds?;
         let zoom = a.props["DefaultMinimapZoom"].as_f64().unwrap_or(0.2) as f32;
-        Some(MapInfo { file: textures.get(&name)?.clone(), area: [b[0], b[1], b[3], b[4]], zoom: MINIMAP_SIZE / (zoom * 0.1 * (b[3] - b[0])).max(1.0) })
+        let killer = a.props["KillerMapTexture"]["AssetPathName"].as_str().and_then(|p| p.rsplit('.').next()).and_then(|n| textures.get(n).cloned());
+        Some(MapInfo { file: textures.get(&name)?.clone(), area: [b[0], b[1], b[3], b[4]], zoom: MINIMAP_SIZE / (zoom * 0.1 * (b[3] - b[0])).max(1.0), killer_file: killer })
     });
     let mut killer = Widget::load(dir, "KillerHUDWidget");
     if let Some(k) = killer.as_mut() {
-        // Shown by things not ported: the Morph map, the rage overlay, help texts, XP.
+        // Shown by things not ported: the rage overlay, help texts, XP.
         for name in [
-            "Map_Overylay",
             "RageBorder",
             "KillerHelpTextWidget",
             "XPDisplayWidget_81",
-            "Reticle",
             "SaveGameThreadActiveIcon_0",
             "HUDLaggingIconWidget",
             "HUDActiveMicWidget",
@@ -606,8 +607,10 @@ fn widget_colors(
             if c.is_added() {
                 continue;
             }
-            if let Ok((Some(mut i), _, _)) = nodes.get_mut(e) {
-                i.color = linear(mul(b.0, c.0));
+            match nodes.get_mut(e) {
+                Ok((Some(mut i), _, _)) => i.color = linear(mul(b.0, c.0)),
+                Ok((None, Some(mut t), _)) => t.0 = linear(mul(b.0, c.0)),
+                _ => {}
             }
             continue;
         }
@@ -821,6 +824,8 @@ impl Builder<'_, '_, '_> {
                     _ => Justify::Left,
                 };
                 let mut t = self.commands.entity(e);
+                // Its ColorAndOpacity (the text's colour) can be played too (WidgetColor), under the borders' tint.
+                t.insert((ColorBase(self.content), WidgetColor(color(&p["ColorAndOpacity"], [1.0; 4]))));
                 t.insert((
                     Text::new(w.text()),
                     TextFont { font: font.into(), font_size: FontSize::Px(w.font_px() * self.scale * self.text_scale), ..default() },
@@ -929,8 +934,11 @@ impl Builder<'_, '_, '_> {
 }
 
 /// Keeps the minimap on her: her place on the map, turned with the camera, the compass's N kept on north.
+#[allow(clippy::too_many_arguments)]
 fn minimap(
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut images: Query<&mut ImageNode>,
     hud: Res<Hud>,
     player: Option<Single<&Transform, With<Player>>>,
     camera: Option<Single<&GlobalTransform, With<crate::player::PlayerCamera>>>,
@@ -938,6 +946,14 @@ fn minimap(
     mut maps: ResMut<Assets<Minimap>>,
 ) {
     let (Some(map), Some(player), Some(camera)) = (&hud.map, player, camera) else { return };
+    // His map's image (MapImage): the level's KillerMapTexture in place of MiniMap_Mat_Inst's (SCMiniMapBase's
+    // vt+0x4c8 from InitializeMinimap 0x14029c050), across SC_KillerMap_Widget (the click maps across it).
+    if let (Some(file), Some(mut img)) = (&map.killer_file, hud.names.get("SC_KillerMap_Widget.Image_0").and_then(|&e| images.get_mut(e).ok())) {
+        let handle = asset_server.load(file.clone());
+        if img.image != handle {
+            img.image = handle;
+        }
+    }
     let Some(&e) = hud.names.iter().find(|(k, _)| k.as_str() == MINIMAP_RETAINER).map(|(_, e)| e) else { return };
     let Ok(node) = nodes.get(e) else { return };
     let uv = map_uv(map.area, player.translation);
@@ -1194,6 +1210,8 @@ fn jason_hud(
     mut vis: Query<&mut Visibility>,
     mut playing: ResMut<PlayingAnims>,
     mut shown: Local<(bool, bool, f32)>,
+    (mut morph_map, map_nodes): (Option<ResMut<crate::jason_player::MorphMap>>, Query<(&ComputedNode, &UiGlobalTransform)>),
+    mut map_shown: Local<bool>,
 ) {
     use f13_core::killer_abilities::{Ability, Blockers};
     if play.is_none() || hud.built.as_ref().is_none_or(|b| !b.2) {
@@ -1206,6 +1224,45 @@ fn jason_hud(
     for name in ["KillerAbilityWidget_521", "GrabIconWidget_121", "RageWidget_190", "KillerKnifeWidget_77", "KillerTrapWidget_184"] {
         if let Some(mut v) = hud.names.get(&format!("KillerHUDWidget.{name}")).and_then(|&e| vis.get_mut(e).ok()) {
             v.set_if_neq(if combat { Visibility::Hidden } else { Visibility::Inherited });
+        }
+    }
+    // His map (Map_Overylay): open (bIsMapEnabled); MorphUse / MorphCancel and the map's header while it's out for a
+    // Morph (Get_MorphUse_Visibility_0, Get_HeaderBracket_Visibility_0); MapClose when open otherwise.
+    if let Some(m) = morph_map.as_deref_mut() {
+        let set = |vis: &mut Query<&mut Visibility>, name: &str, on: bool| {
+            if let Some(mut v) = hud.names.get(name).and_then(|&e| vis.get_mut(e).ok()) {
+                v.set_if_neq(if on { Visibility::Inherited } else { Visibility::Hidden });
+            }
+        };
+        // UpdateMapVisibility: bShowMorphMap (Jason_Base's SetMapStatus: the map shown, either map) changed -> MapFade,
+        // reversed as it's put away (the overlay's widgets are transparent until it plays).
+        if m.open != *map_shown {
+            *map_shown = m.open;
+            playing.play("KillerHUDWidget", "MapFade", now, !m.open);
+        }
+        for n in ["MorphUse", "MorphUseText", "MorphCancel", "MorphCancelText"] {
+            set(&mut vis, &format!("KillerHUDWidget.{n}"), m.morph);
+        }
+        for n in ["MapClose", "MapCloseText"] {
+            set(&mut vis, &format!("KillerHUDWidget.{n}"), m.open && !m.morph);
+        }
+        for n in ["HeaderBar", "HeaderBracket", "TextBlock_0"] {
+            set(&mut vis, &format!("SC_KillerMap_Widget.{n}"), m.morph);
+        }
+        // GetClickWorldLocationForSlot (0x140297e70): the click's place across the map widget (clamped 0..1); world X
+        // down from TopLeft.X, Y across from TopLeft.Y, at his height.
+        if let Some(click) = m.click.take() {
+            let rect = hud.names.get("KillerHUDWidget.SC_KillerMap_Widget").and_then(|&e| map_nodes.get(e).ok());
+            if let (Some((node, gxf)), Some(map)) = (rect, &hud.map) {
+                let scale = node.inverse_scale_factor();
+                let size = node.size() * scale;
+                let top_left = gxf.translation * scale - size / 2.0;
+                let uv = ((click - top_left) / size.max(Vec2::splat(1.0))).clamp(Vec2::ZERO, Vec2::ONE);
+                let [x0, y0, x1, y1] = map.area;
+                let world = Vec3::new((x1 - uv.y * (x1 - x0)) / 100.0, jxf.translation.y, (y0 + uv.x * (y1 - y0)) / 100.0);
+                info!("Morph map: clicked ({:.2}, {:.2}) of {:.0}x{:.0} at {:.0} -> ({:.0}, {:.0})", uv.x, uv.y, size.x, size.y, top_left, world.x, world.z);
+                m.target = Some(world);
+            }
         }
     }
     let (grab_shown, reticle, next_check) = &mut *shown;

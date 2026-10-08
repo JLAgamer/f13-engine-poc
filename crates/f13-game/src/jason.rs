@@ -1182,7 +1182,7 @@ pub(crate) fn update_jason(
     (killer, counselor_model): (Option<Res<KillerCharacter>>, Option<Res<crate::character::CounselorCharacter>>),
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
     (mut rng, mut struggle, mut controls, config): (ResMut<crate::GameRng>, ResMut<Struggle>, Option<ResMut<crate::jason_player::JasonControls>>, Res<JasonConfig>),
-    (mut jasons, morph_points): (Query<(Entity, &mut Jason, &mut Transform, Option<&HitJason>, Option<&mut crate::senses::Knowledge>), Without<Player>>, Option<Res<MorphPoints>>),
+    (mut jasons, morph_points, mut morph_map): (Query<(Entity, &mut Jason, &mut Transform, Option<&HitJason>, Option<&mut crate::senses::Knowledge>), Without<Player>>, Option<Res<MorphPoints>>, Option<ResMut<crate::jason_player::MorphMap>>),
     (inventories, items, mut fuse_boxes, (mut grids, mut phone_boxes, mut phones), vehicles): (
         Query<&crate::interact::Inventory>,
         Query<&crate::props::Item>,
@@ -1427,17 +1427,34 @@ pub(crate) fn update_jason(
                         j.velocity = Vec2::ZERO;
                         continue;
                     }
-                    if p.morph && ready(&know, Ability::Morph) {
-                        let ahead = xf.translation + Vec3::new(i.forward.x, 0.0, i.forward.y) * crate::jason_player::MORPH_AHEAD_M;
-                        if let Some(to) = morph_points.as_ref().and_then(|m| m.pick(ahead)) {
-                            if let Some(k) = know.as_mut() {
-                                k.abilities.consume(Ability::Morph);
+                    // KLR_Morph_PC (FUN_1403e4a70): his map out for a Morph (not over his plain map), or put away.
+                    if let Some(map) = morph_map.as_deref_mut() {
+                        if p.morph {
+                            if map.morph {
+                                map.morph = false;
+                                map.open = false;
+                            } else if !map.open && ready(&know, Ability::Morph) {
+                                map.morph = true;
+                                map.open = true;
+                                map.target = None;
                             }
-                            info!("Jason: Morph");
-                            j.state = JasonState::Morphing { t: 0.0, to };
-                            commands.trigger(Distortion { at: xf.translation, dest: Some(to.translation) });
-                            j.velocity = Vec2::ZERO;
-                            continue;
+                        }
+                        // AttemptMorph: the place picked on the map; Morph (SetMorphLocation) takes the morph point
+                        // nearest it, the map put away, or nothing happens.
+                        if let Some(at) = map.target.take().filter(|_| map.morph && ready(&know, Ability::Morph)) {
+                            if let Some(to) = morph_points.as_ref().and_then(|m| m.pick(at)) {
+                                if let Some(k) = know.as_mut() {
+                                    k.abilities.consume(Ability::Morph);
+                                }
+                                info!("Jason: Morph");
+                                map.morph = false;
+                                map.open = false;
+                                j.state = JasonState::Morphing { t: 0.0, to };
+                                commands.trigger(Distortion { at: xf.translation, dest: Some(to.translation) });
+                                j.velocity = Vec2::ZERO;
+                                continue;
+                            }
+                            info!("Jason: no morph point near that place");
                         }
                     }
                     if p.stalk && j.stalk.is_none() && ready(&know, Ability::Stalk) {

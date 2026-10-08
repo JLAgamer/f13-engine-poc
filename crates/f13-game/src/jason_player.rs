@@ -12,7 +12,9 @@
 //! phone box at hand, a placed kill while holding her), 1 Morph (to the morph point nearest 30 m ahead of where he
 //! looks), 2 Sense, 3 Shift, 4 Stalk (KLR_Morph/Sense/Shift/Stalk_PC). Holding her (GrabInput): 1-4 let go are the
 //! right, bottom, left and top grab kills (CMBT_KLR_GrabKillRight/Bottom/Left/Top), a click the bottom one. Doors in
-//! his way open or break as he walks into them. Esc frees the mouse, a click takes it again.
+//! his way open or break as he walks into them. M opens and closes his map (GLB_Map); 1 opens it for a Morph: a click on it
+//! morphs him to the morph point nearest that place (within 30 m), 1 again puts it away. Esc frees the mouse, a click
+//! takes it again.
 //!
 //! His cameras (Jason_Base's graph, decompiled: pseudo_Jason_Base): his ILLDynamicCameraComponents on his capsule,
 //! stacked as the counselor's are (counselor_camera.rs). ChangeCamera(BlendTime): CombatCamera in combat stance, else
@@ -31,8 +33,6 @@ use bevy::input::{ButtonInput, ButtonState};
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
 
-/// How far ahead of where he looks Morph aims (the game picks the spot on the map).
-pub const MORPH_AHEAD_M: f32 = 30.0;
 
 const OUTDOOR: &str = "OutdoorCamera";
 const INDOOR: &str = "IndoorCamera";
@@ -52,6 +52,17 @@ const UNDERWATER_PITCH: f32 = -30.0;
 /// The player is Jason.
 #[derive(Resource)]
 pub struct PlayJason;
+
+/// His map (KillerHUDWidget's Map_Overylay): open (bIsMapEnabled), for a Morph (bIsMorphActive: MorphInput's LMB picks
+/// the place), a click on it waiting to be read (window px), and the world place it picked (ui.rs reads the click off
+/// SC_KillerMap_Widget, jason.rs morphs there).
+#[derive(Resource, Default, Debug)]
+pub struct MorphMap {
+    pub open: bool,
+    pub morph: bool,
+    pub click: Option<Vec2>,
+    pub target: Option<Vec3>,
+}
 
 pub struct PlayJasonPlugin {
     /// The player is Jason from the start (`--play-jason`); else only once the host makes them Jason ([`become_jason`]).
@@ -76,8 +87,9 @@ impl Plugin for PlayJasonPlugin {
         if self.active {
             app.insert_resource(PlayJason).init_resource::<JasonControls>();
         }
-        app.add_systems(PreUpdate, capture.before(bevy::input::InputSystems).run_if(on))
-            .add_systems(Update, (look, hud).run_if(on))
+        app.init_resource::<MorphMap>()
+            .add_systems(PreUpdate, capture.before(bevy::input::InputSystems).run_if(on))
+            .add_systems(Update, (look, hud, map_cursor).run_if(on))
             .add_systems(
                 Update,
                 jason_camera.after(look).after(crate::counselor_camera::counselor_camera).after(crate::hiding::hiding_camera).before(crate::kill_camera::kill_camera).run_if(on),
@@ -164,6 +176,8 @@ fn capture(
     mut keyboard: ResMut<Messages<KeyboardInput>>,
     mut buttons: ResMut<Messages<MouseButtonInput>>,
     mut cursor: Single<&mut CursorOptions>,
+    mut map: ResMut<MorphMap>,
+    window: Single<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
 ) {
     let c = &mut *controls;
     c.keys.clear();
@@ -184,8 +198,19 @@ fn capture(
         cursor.visible = true;
         cursor.grab_mode = CursorGrabMode::None;
     }
+    // GLB_Map: his map open or shut (not while it's out for a Morph).
+    if c.keys.just_pressed(KeyCode::KeyM) && !map.morph {
+        map.open = !map.open;
+    }
+    // The map out for a Morph: a click picks the place (KLR_Morph_Activate).
+    if map.morph {
+        if c.mouse.just_pressed(MouseButton::Left) {
+            map.click = window.cursor_position();
+        }
+        c.mouse.release(MouseButton::Left);
+    }
     let locked = cursor.grab_mode == CursorGrabMode::Locked;
-    if c.mouse.just_pressed(MouseButton::Left) && !locked {
+    if c.mouse.just_pressed(MouseButton::Left) && !locked && !map.morph {
         // The first click takes the mouse (no swing).
         cursor.visible = false;
         cursor.grab_mode = CursorGrabMode::Locked;
@@ -220,6 +245,7 @@ fn demo(
     mut camera: Single<&mut PlayerCamera>,
     mut done: Local<(bool, bool, f32)>,
     time: Res<Time>,
+    (know, mut map, window, mut opened): (Query<&crate::senses::Knowledge>, ResMut<MorphMap>, Single<&bevy::window::Window, With<bevy::window::PrimaryWindow>>, Local<Option<f32>>),
 ) {
     let (Some((j, jxf)), Some(h)) = (jason.iter().next(), her.iter().next()) else { return };
     let d = h.translation - jxf.translation;
@@ -241,6 +267,21 @@ fn demo(
     // Sense whenever it's ready while she's not close.
     controls.sense |= dist > 20.0;
     let now = time.elapsed_secs();
+    // Morph by his map once it's ready and she's far: open it (1), then a click at its centre 8 s later.
+    let morph_ready = know.iter().next().is_some_and(|k| k.abilities.is_available(f13_core::killer_abilities::Ability::Morph, &f13_core::killer_abilities::Blockers::default()));
+    match *opened {
+        None if morph_ready && dist > 40.0 && matches!(j.state, crate::jason::JasonState::Hunting) => {
+            controls.latched.morph = true;
+            *opened = Some(now);
+            info!("jason demo: map out for a Morph");
+        }
+        Some(at) if map.morph && now - at > 8.0 => {
+            map.click = Some(Vec2::new(window.width(), window.height()) / 2.0);
+            *opened = Some(f32::MAX);
+            info!("jason demo: Morph map click at its centre");
+        }
+        _ => {}
+    }
     let (knife, swung, last) = &mut *done;
     debug!("jason demo: {:?} at {:.1}, {dist:.1} m from her, velocity {:.0}", j.state, jxf.translation, j.velocity);
     // Holding her: a kill by its key (3: the left slot).
@@ -270,6 +311,23 @@ fn demo(
         *last = now;
         controls.latched.grab = true;
         info!("jason demo: grab at {dist:.1} m");
+    }
+}
+
+/// The map out for a Morph frees the mouse (its cursor at the screen's centre: SetMouseLocation); put away, the mouse
+/// turns his view again.
+fn map_cursor(map: Res<MorphMap>, mut cursor: Single<&mut CursorOptions>, mut window: Single<&mut bevy::window::Window, With<bevy::window::PrimaryWindow>>, mut was: Local<bool>) {
+    if map.morph != *was {
+        *was = map.morph;
+        if map.morph {
+            cursor.visible = true;
+            cursor.grab_mode = CursorGrabMode::None;
+            let centre = Vec2::new(window.width(), window.height()) / 2.0;
+            window.set_cursor_position(Some(centre));
+        } else {
+            cursor.visible = false;
+            cursor.grab_mode = CursorGrabMode::Locked;
+        }
     }
 }
 
