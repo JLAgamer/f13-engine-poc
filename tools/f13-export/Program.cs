@@ -97,9 +97,9 @@ void ExportAsset(string path)
     var n = 0;
     foreach (var e in pkg.GetExports())
     {
-        if (e is UStaticMesh or USkeletalMesh) { Queue(e); n++; }
+        if (e is UStaticMesh or USkeletalMesh or UTexture2D) { Queue(e); n++; }
     }
-    Console.WriteLine($"{path}: {n} meshes");
+    Console.WriteLine($"{path}: {n} meshes or textures");
 }
 
 // `extra`: levels the game loads from code rather than as streaming levels (the weather's).

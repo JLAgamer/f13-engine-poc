@@ -13,7 +13,8 @@ static class DdsExporter
         if (!Directory.Exists(dir)) return (0, 0);
         int written = 0, skipped = 0;
         var formats = new Dictionary<string, int>();
-        foreach (var png in Directory.EnumerateFiles(dir, "*.png", SearchOption.AllDirectories))
+        // PNGs, and the float textures' Radiance .hdr (no alpha: the .dds keeps it).
+        foreach (var png in Directory.EnumerateFiles(dir, "*.png", SearchOption.AllDirectories).Concat(Directory.EnumerateFiles(dir, "*.hdr", SearchOption.AllDirectories)))
         {
             var rel = Path.GetRelativePath(root, png).Replace(Path.DirectorySeparatorChar, '/')[..^".png".Length];
             UTexture2D? tex;
@@ -39,6 +40,7 @@ static class DdsExporter
         EPixelFormat.PF_BC7 => srgb ? 99u : 98u,
         EPixelFormat.PF_B8G8R8A8 => srgb ? 91u : 87u,
         EPixelFormat.PF_G8 => 61u,                    // R8_UNORM
+        EPixelFormat.PF_FloatRGBA => 10u,             // R16G16B16A16_FLOAT
         _ => null,
     };
 
