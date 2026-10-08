@@ -448,7 +448,8 @@ Decomp audit (nothing guessed: every rule read from the decomp or the game's dat
       f13-core::color_grading): the map volume baked into the engine's 32³ LUT (white balance, colour correction, the
       filmic curve, LutTestHorror at 0.25), the tonemap pass (vignette, grain quantization), bloom (six Gaussian stages
       as AddBloom builds them at Epic)
-- [ ] Post-processing, remaining: SSAO (FPostProcessAmbientOcclusion*: it darkens indirect light only); then compare
+- [ ] Post-processing, remaining: SSAO (FPostProcessAmbientOcclusion*: it darkens indirect light only; settings and
+      cvars read, see MODLOG "SSAO (started)"); then compare
       against the game's own screenshots. (Bloom's fast blur: ported, ComputeOutputDesc's half-width X pass)
 
 ## Milestone 2: more escapes
