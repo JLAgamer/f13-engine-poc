@@ -332,7 +332,7 @@ fn stun(
 }
 
 #[derive(Resource)]
-struct ShiftPipeline {
+pub(crate) struct ShiftPipeline {
     layout: BindGroupLayoutDescriptor,
     sampler: Sampler,
     fullscreen_shader: FullscreenShader,
@@ -363,7 +363,7 @@ fn init_shift_pipeline(mut commands: Commands, device: Res<RenderDevice>, fullsc
 }
 
 #[derive(Component)]
-struct ShiftPipelineId(CachedRenderPipelineId);
+pub(crate) struct ShiftPipelineId(CachedRenderPipelineId);
 
 impl SpecializedRenderPipeline for ShiftPipeline {
     type Key = TextureFormat;
@@ -396,7 +396,7 @@ fn prepare_shift_pipelines(
     }
 }
 
-fn shift(
+pub(crate) fn shift(
     view: ViewQuery<(&ViewTarget, &ShiftBlur, &ShiftPipelineId)>,
     pipeline: Res<ShiftPipeline>,
     cache: Res<PipelineCache>,
@@ -425,7 +425,7 @@ fn shift(
 }
 
 #[derive(Resource)]
-struct VhsPipeline {
+pub(crate) struct VhsPipeline {
     layout: BindGroupLayoutDescriptor,
     sampler: Sampler,
     fullscreen_shader: FullscreenShader,
@@ -452,7 +452,7 @@ fn init_pipeline(mut commands: Commands, device: Res<RenderDevice>, fullscreen_s
 }
 
 #[derive(Component)]
-struct VhsPipelineId(CachedRenderPipelineId);
+pub(crate) struct VhsPipelineId(CachedRenderPipelineId);
 
 impl SpecializedRenderPipeline for VhsPipeline {
     type Key = TextureFormat;
@@ -485,7 +485,7 @@ fn prepare_pipelines(
     }
 }
 
-fn vhs(
+pub(crate) fn vhs(
     view: ViewQuery<(&ViewTarget, &VhsPipelineId, &DynamicUniformIndex<VhsUniform>)>,
     pipeline: Res<VhsPipeline>,
     cache: Res<PipelineCache>,

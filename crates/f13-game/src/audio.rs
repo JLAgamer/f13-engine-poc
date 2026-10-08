@@ -1093,7 +1093,7 @@ fn apply_mixes(
 }
 
 /// The camera hears.
-fn add_listener(mut commands: Commands, cameras: Query<Entity, (With<Camera3d>, Without<SpatialListener>)>) {
+fn add_listener(mut commands: Commands, cameras: Query<Entity, (With<Camera3d>, Without<SpatialListener>, Without<crate::sense_view::SenseMaskCamera>)>) {
     for e in &cameras {
         commands.entity(e).insert(SpatialListener::new(EAR_GAP_M));
     }

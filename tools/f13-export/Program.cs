@@ -894,6 +894,8 @@ static class Mvp
         "/Game/Effects/ColorGrades/CG_Sense",
         "/Game/Effects/Textures/PostProcess/Stun4",
         "/Game/Effects/Textures/PostProcess/Stun2",
+        // SenseCounselorMaterial's (PP_Jason_Sense_Counselor_01_MASKED) WispySmoke1A/1B/1C.
+        "/Game/Effects/Textures/smoke/T_Wispy_Smoke_Tiled_01",
     ];
     // Classes the game spawns by reference from native code rather than from level data.
     // Classes no level places but the game reads (the cars' wheels: SCWheeledVehicleMovementComponent WheelSetups).

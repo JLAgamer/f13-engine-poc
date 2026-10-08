@@ -170,11 +170,13 @@ Mechanics: Jason side
       grade (CG_Stalk_B through his ForcedPostProcessVolume: FInterpTo speed 1, off in context kills), the stun's
       blur and veins (PP_Player_StunEffect_01: DistortionDelta / AlphaDelta to 4 / 5 at speed 8 while stunned),
       Sense's colour grade (CG_Sense, sharing the volume's LUT slot with Stalk's) and exposure (auto exposure
-      brightness eased 1.2 -> 0.8)
-- [ ] Shift, Morph, Stalk, remaining: the dissolve; Sense's counselor and cabin highlights
-      (PP_Jason_Sense_Counselor_01_MASKED, PP_Jason_Sense_Cabin_01) and the AOE light's screen effect
-      (PP_Killer_AOE_Light); Sense's and the stun's depth of field overrides; the stun's SceneFringeIntensity (to 5:
-      the tonemapper's fringe permutation) (Morph's
+      brightness eased 1.2 -> 0.8), Sense's counselor highlight (PP_Jason_Sense_Counselor_01_MASKED through a
+      custom-stencil mask camera: her meshes through walls; sense_view.rs). The AOE light (PP_Killer_AOE_Light) is
+      checked and does nothing for J2 (AOELightRadius 0: the shader returns the scene)
+- [ ] Shift, Morph, Stalk, remaining: the dissolve; Sense's cabin and hiding spot highlights
+      (PP_Jason_Sense_Cabin_01 and their Blueprints' SetSenseEffects) and the counselor's SenseEffect emitter
+      (particles); Sense's and the stun's depth of field overrides; the stun's SceneFringeIntensity (to 5: the
+      tonemapper's fringe permutation) (Morph's
       excluded areas: the map's Boundary image has no texture in this level's widget, so none refuse a click)
 - [x] Throwing knives (J2's two, the knife's damage and cooldown, the throw montage and its ThrowKnife notify,
   SCJasonAIProperties' 5..25 m; placeholder knife speed) and Jason's traps (J2's seven KillerTraps, set in doorways

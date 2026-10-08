@@ -66,6 +66,8 @@ pub struct Knowledge {
     pub sense_until: f32,
     /// What Sense showed last (logged when it changes).
     sense_shows: Option<Clue>,
+    /// Sense shows her outside and not hiding: her meshes' custom depth is on (FUN_1404111f0; sense_view.rs).
+    pub highlight: bool,
     next_blip: f32,
     next_sight: f32,
 }
@@ -137,6 +139,7 @@ fn setup(
             abilities: KillerAbilities::new(a.0.clone(), None),
             sense_until: 0.0,
             sense_shows: None,
+            highlight: false,
             next_blip: 0.0,
             next_sight: 0.0,
         });
@@ -245,6 +248,7 @@ fn perceive(
             info!("Jason: Sense ({:.0} s)", v.sense.duration);
         }
         let mut shows = None;
+        k.highlight = false;
         if k.sensing(now) {
             let radius = perception::sense_radius(&v.sense, p.fear, hidden, k.abilities.rage_active, k.abilities.rage_timer) / 100.0;
             if flat.length() <= radius {
@@ -254,6 +258,7 @@ fn perceive(
                 );
                 let clue = if indoors { Clue::SensedIndoors } else { Clue::Sensed };
                 shows = Some(clue);
+                k.highlight = !indoors && !hidden;
                 if k.sense_shows != shows {
                     info!("Jason: Sense shows her ({}, {:.0} m, radius {radius:.0} m)", if indoors { "in a cabin" } else { "outside" }, flat.length());
                 }
