@@ -168,9 +168,13 @@ Mechanics: Jason side
 - [x] Screen effects on the played Jason (screen_effects.rs, tonemap.rs): Shift's blur (PP_Player_Jason_Shift_01's
       compiled shader), the teleport static she sees (PP_VHS_GlitchEffect, TeleportJitterCurve), Stalk's colour
       grade (CG_Stalk_B through his ForcedPostProcessVolume: FInterpTo speed 1, off in context kills), the stun's
-      blur and veins (PP_Player_StunEffect_01: DistortionDelta / AlphaDelta to 4 / 5 at speed 8 while stunned)
-- [ ] Shift, Morph, Stalk, remaining: the dissolve; Sense's and the AOE light's screen effects; the stun's
-      SceneFringeIntensity (to 5) and depth of field overrides (the tonemapper's fringe permutation) (Morph's
+      blur and veins (PP_Player_StunEffect_01: DistortionDelta / AlphaDelta to 4 / 5 at speed 8 while stunned),
+      Sense's colour grade (CG_Sense, sharing the volume's LUT slot with Stalk's) and exposure (auto exposure
+      brightness eased 1.2 -> 0.8)
+- [ ] Shift, Morph, Stalk, remaining: the dissolve; Sense's counselor and cabin highlights
+      (PP_Jason_Sense_Counselor_01_MASKED, PP_Jason_Sense_Cabin_01) and the AOE light's screen effect
+      (PP_Killer_AOE_Light); Sense's and the stun's depth of field overrides; the stun's SceneFringeIntensity (to 5:
+      the tonemapper's fringe permutation) (Morph's
       excluded areas: the map's Boundary image has no texture in this level's widget, so none refuse a click)
 - [x] Throwing knives (J2's two, the knife's damage and cooldown, the throw montage and its ThrowKnife notify,
   SCJasonAIProperties' 5..25 m; placeholder knife speed) and Jason's traps (J2's seven KillerTraps, set in doorways

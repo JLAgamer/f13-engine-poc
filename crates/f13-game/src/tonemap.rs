@@ -10,12 +10,18 @@
 //! LUT; x 1.05; the 1/256 grain quantization dither. The result is display-encoded sRGB, decoded here for Bevy's sRGB
 //! output.
 //!
-//! Stalk's colour grade (the played Jason's): OnRep_Stalk (0x1403fd970) sets his ForcedPostProcessVolume's
-//! ColorGradingLUT to StalkColorGrade (CG_Stalk_B) and his tick (FUN_14040d900) eases its ColorGradingIntensity
-//! (FInterpTo at speed 1) to 1 while he stalks and back to 0, the volume's LUT overrides off while he's in a context
-//! kill. Blending a volume's LUT at weight i scales the others by 1 - i; after the weighted sum CombineLUTs is the
-//! identity here (sRGB decode then encode, the identity polynomial, gamma 1), so the pass blends this LUT's table
-//! (the Stalk LUT alone) with the map's by i.
+//! Stalk's and Sense's colour grades (the played Jason's ForcedPostProcessVolume: priority 100, unbound, FUN_1402ea6a0).
+//! Its ColorGradingLUT is one slot: OnRep_Stalk (0x1403fd970) sets StalkColorGrade (CG_Stalk_B) unless Sense is on;
+//! Sense (FUN_14040a230) sets SenseColorGrade (CG_Sense); Sense's end (FUN_1403ea820) puts Stalk's back if he's still
+//! stalking. Each sets the flag his tick (FUN_14040d900) eases ColorGradingIntensity toward (FInterpTo at speed 1: 1
+//! while Sense or Stalk is on, else 0), the LUT overrides off while he's in a context kill. Blending a volume's LUT at
+//! weight i scales the others by 1 - i; after the weighted sum CombineLUTs is the identity here (sRGB decode then
+//! encode, the identity polynomial, gamma 1), so the pass blends the slot's LUT's table (that LUT alone) with the
+//! map's by i.
+//!
+//! Sense's exposure: it overrides the volume's AutoExposureMin/MaxBrightness, which the tick eases (FInterpTo at
+//! speed 1) toward 0.8 while Sense is on and 1.2 otherwise (BeginPlay, FUN_1403fb4a0, starts it at 1.2); its end turns
+//! the override off. Eye adaptation clamps to [min, max] (FPostProcessEyeAdaptationPS), so the exposure is 1 / it.
 
 use bevy::asset::{embedded_asset, load_embedded_asset, RenderAssetUsages};
 use bevy::core_pipeline::schedule::{Core3d, Core3dSystems};
@@ -42,7 +48,7 @@ impl Plugin for TonemapPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shaders/tonemap.wgsl");
         app.add_plugins((ExtractComponentPlugin::<GameTonemap>::default(), UniformComponentPlugin::<TonemapUniform>::default()))
-            .add_systems(Update, (setup, stalk_grade));
+            .add_systems(Update, (setup, killer_grade));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else { return };
         render_app
             .init_gpu_resource::<SpecializedRenderPipelines<TonemapPipeline>>()
@@ -56,9 +62,12 @@ impl Plugin for TonemapPlugin {
 #[derive(Component, Clone)]
 pub struct GameTonemap {
     pub lut: Handle<Image>,
-    /// The same baked with the Stalk colour grade alone, and its weight now.
+    /// The same baked with the Stalk and the Sense colour grades alone, the one in his volume's slot now, and its
+    /// weight.
     pub stalk_lut: Handle<Image>,
-    pub stalk: f32,
+    pub sense_lut: Handle<Image>,
+    pub grade_lut: Handle<Image>,
+    pub grade: f32,
     /// SceneColorTint.
     pub color_scale0: Vec3,
     pub vignette_intensity: f32,
@@ -75,8 +84,8 @@ pub struct TonemapUniform {
     grain: Vec4,
     /// ColorScale1: BloomIntensity (white x it).
     color_scale1: Vec4,
-    /// x: the Stalk LUT's weight.
-    stalk: Vec4,
+    /// x: the grade LUT's weight.
+    grade: Vec4,
 }
 
 impl SyncComponent for GameTonemap {
@@ -96,8 +105,8 @@ impl ExtractComponent for GameTonemap {
         let frame = (FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 8) & 1023;
         let grain = Vec4::new(halton(frame, 2), halton(frame, 3), 0.0, 0.0);
         let color_scale1 = Vec4::new(t.bloom.intensity, t.bloom.intensity, t.bloom.intensity, 0.0);
-        let stalk = Vec4::new(t.stalk, 0.0, 0.0, 0.0);
-        Some((t.clone(), TonemapUniform { color_scale0: t.color_scale0.extend(0.0), vignette: Vec4::new(t.vignette_intensity, aspect, 0.0, 0.0), grain, color_scale1, stalk }))
+        let grade = Vec4::new(t.grade, 0.0, 0.0, 0.0);
+        Some((t.clone(), TonemapUniform { color_scale0: t.color_scale0.extend(0.0), vignette: Vec4::new(t.vignette_intensity, aspect, 0.0, 0.0), grain, color_scale1, grade }))
     }
 }
 
@@ -250,14 +259,16 @@ fn setup(
         };
         let started = std::time::Instant::now();
         let image = bake(&f13_core::color_grading::combine_luts(&params, &sample));
-        // The Stalk grade alone (Jason_Base's StalkColorGrade), the volume's other settings as they are.
-        let stalk = read_strip(&export.0.join(STALK_LUT));
-        if stalk.is_none() {
-            warn!("tonemap: {STALK_LUT} isn't in the export (f13-export mvp): no Stalk colour grade");
-        }
-        let stalk_sample = |u: f32, t: f32| stalk.as_ref().map_or(Vec3::ZERO, |s| s.sample(u, t));
-        let stalk_params = CombineLuts { weights: [0.0, 1.0], ..params };
-        let stalk_image = if stalk.is_some() { bake(&f13_core::color_grading::combine_luts(&stalk_params, &stalk_sample)) } else { image.clone() };
+        // Jason_Base's StalkColorGrade and SenseColorGrade alone, the volume's other settings as they are.
+        let alone = |file: &str| {
+            let Some(strip) = read_strip(&export.0.join(file)) else {
+                warn!("tonemap: {file} isn't in the export (f13-export mvp): no such colour grade");
+                return image.clone();
+            };
+            let params = CombineLuts { weights: [0.0, 1.0], ..params };
+            bake(&f13_core::color_grading::combine_luts(&params, &|u: f32, t: f32| strip.sample(u, t)))
+        };
+        let (stalk_image, sense_image) = (alone(STALK_LUT), alone(SENSE_LUT));
         info!(
             "tonemap: the volume's LUT (grading {:.2}, white {:.0} K) in {:.0} ms",
             params.weights[1],
@@ -267,7 +278,9 @@ fn setup(
         *built = Some(GameTonemap {
             lut: images.add(image),
             stalk_lut: images.add(stalk_image),
-            stalk: 0.0,
+            sense_lut: images.add(sense_image),
+            grade_lut: Handle::default(),
+            grade: 0.0,
             color_scale0: v.color("SceneColorTint"),
             vignette_intensity: v.f("VignetteIntensity", 0.4),
             bloom: v.bloom(),
@@ -279,8 +292,9 @@ fn setup(
     }
 }
 
-/// Jason_Base's StalkColorGrade.
+/// Jason_Base's StalkColorGrade and SenseColorGrade.
 const STALK_LUT: &str = "SummerCamp/Content/Effects/ColorGrades/CG_Stalk_B.png";
+const SENSE_LUT: &str = "SummerCamp/Content/Effects/ColorGrades/CG_Sense.png";
 
 /// A colour grading LUT texture (its 256 x 16 strip; not sRGB: its bytes are the values), sampled bilinear, clamped.
 struct Strip {
@@ -338,21 +352,49 @@ pub(crate) fn finterp_to(current: f32, target: f32, dt: f32, speed: f32) -> f32 
     current + dist * (dt * speed).clamp(0.0, 1.0)
 }
 
-/// Stalk's colour grade on the played Jason's camera (see the module docs).
-fn stalk_grade(
+/// Which colour grade is in his volume's slot.
+#[derive(Clone, Copy, PartialEq, Default)]
+enum Grade {
+    #[default]
+    Stalk,
+    Sense,
+}
+
+/// The played Jason's colour grade and Sense's exposure on his camera (see the module docs).
+fn killer_grade(
     time: Res<Time>,
     play: Option<Res<crate::jason_player::PlayJason>>,
-    jasons: Query<&crate::jason::Jason>,
-    mut cameras: Query<&mut GameTonemap>,
-    mut intensity: Local<f32>,
+    jasons: Query<(&crate::jason::Jason, Option<&crate::senses::Knowledge>)>,
+    mut cameras: Query<(&mut GameTonemap, Option<&mut bevy::camera::Exposure>)>,
+    mut state: Local<(f32, Grade, Option<f32>)>,
 ) {
-    let Some(j) = jasons.iter().next().filter(|_| play.is_some()) else { return };
-    let target = if j.stalking() { 1.0 } else { 0.0 };
-    *intensity = finterp_to(*intensity, target, time.delta_secs(), 1.0);
+    let Some((j, know)) = jasons.iter().next().filter(|_| play.is_some()) else { return };
+    let (intensity, slot, brightness) = &mut *state;
+    let dt = time.delta_secs();
+    let sensing = know.is_some_and(|k| k.sensing(time.elapsed_secs()));
+    if sensing {
+        *slot = Grade::Sense;
+    } else if j.stalking() {
+        *slot = Grade::Stalk;
+    }
+    let target = if sensing || j.stalking() { 1.0 } else { 0.0 };
+    *intensity = finterp_to(*intensity, target, dt, 1.0);
     let weight = if j.in_context_kill() { 0.0 } else { *intensity };
-    for mut t in &mut cameras {
-        if t.stalk != weight {
-            t.stalk = weight;
+    let b = brightness.get_or_insert(1.2);
+    *b = finterp_to(*b, if sensing { 0.8 } else { 1.2 }, dt, 1.0);
+    // Bevy's exposure is 1 / (1.2 x 2^ev100).
+    let ev100 = if sensing { (*b / 1.2).log2() } else { 0.0 };
+    for (mut t, exposure) in &mut cameras {
+        let lut = match slot {
+            Grade::Stalk => t.stalk_lut.clone(),
+            Grade::Sense => t.sense_lut.clone(),
+        };
+        if t.grade != weight || t.grade_lut != lut {
+            t.grade = weight;
+            t.grade_lut = lut;
+        }
+        if let Some(mut e) = exposure.filter(|e| e.ev100 != ev100) {
+            e.ev100 = ev100;
         }
     }
 }
@@ -444,12 +486,14 @@ pub(crate) fn game_tonemap(
     mut ctx: RenderContext,
 ) {
     let (target, settings, id, index, bloom) = view.into_inner();
-    let (Some(render_pipeline), Some(lut), Some(stalk_lut), Some(binding)) = (cache.get_render_pipeline(id.0), images.get(&settings.lut), images.get(&settings.stalk_lut), uniforms.binding()) else { return };
+    // Before Jason's camera picks a grade: the Stalk one (at weight 0).
+    let grade = if settings.grade_lut == Handle::default() { &settings.stalk_lut } else { &settings.grade_lut };
+    let (Some(render_pipeline), Some(lut), Some(grade_lut), Some(binding)) = (cache.get_render_pipeline(id.0), images.get(&settings.lut), images.get(grade), uniforms.binding()) else { return };
     let post = target.post_process_write();
     let bind_group = ctx.render_device().create_bind_group(
         None,
         &cache.get_bind_group_layout(&pipeline.layout),
-        &BindGroupEntries::sequential((post.source, &pipeline.sampler, &lut.texture_view, &pipeline.lut_sampler, binding.clone(), bloom.result(), &stalk_lut.texture_view)),
+        &BindGroupEntries::sequential((post.source, &pipeline.sampler, &lut.texture_view, &pipeline.lut_sampler, binding.clone(), bloom.result(), &grade_lut.texture_view)),
     );
     let mut pass = ctx.command_encoder().begin_render_pass(&RenderPassDescriptor {
         label: Some("game_tonemap"),

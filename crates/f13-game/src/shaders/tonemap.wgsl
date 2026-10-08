@@ -10,8 +10,8 @@ struct Params {
     grain: vec4<f32>,
     // ColorScale1: BloomIntensity.
     color_scale1: vec4<f32>,
-    // x: the Stalk colour grade's weight (tonemap.rs).
-    stalk: vec4<f32>,
+    // x: Jason's colour grade's weight (tonemap.rs: Stalk's or Sense's).
+    grade: vec4<f32>,
 }
 
 @group(0) @binding(0) var scene: texture_2d<f32>;
@@ -20,7 +20,7 @@ struct Params {
 @group(0) @binding(3) var lut_sampler: sampler;
 @group(0) @binding(4) var<uniform> p: Params;
 @group(0) @binding(5) var bloom: texture_2d<f32>;
-@group(0) @binding(6) var stalk_lut: texture_3d<f32>;
+@group(0) @binding(6) var grade_lut: texture_3d<f32>;
 
 fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     let lo = c / 12.92;
@@ -46,7 +46,7 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     c = c * (f * f);
     let encoded = clamp(log2(c + 0.002667719265446067) * 0.0714285746216774 + 0.6107269525527954, vec3<f32>(0.0), vec3<f32>(1.0));
     let at = encoded * 0.96875 + 0.015625;
-    let graded = mix(textureSample(lut, lut_sampler, at).rgb, textureSample(stalk_lut, lut_sampler, at).rgb, p.stalk.x);
+    let graded = mix(textureSample(lut, lut_sampler, at).rgb, textureSample(grade_lut, lut_sampler, at).rgb, p.grade.x);
     let out = graded * 1.0499999523162842 + (grain * 0.00390625 - 0.001953125);
     // Display-encoded sRGB; Bevy's output encodes again.
     return vec4<f32>(srgb_to_linear(max(out, vec3<f32>(0.0))), 1.0);
