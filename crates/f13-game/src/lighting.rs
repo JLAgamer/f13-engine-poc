@@ -162,8 +162,12 @@ fn unreal_falloff_lumens(intensity: f32, r: f32, exponent: f32) -> f32 {
 /// actor's own values over its class's; the properties also hold the component's name (`ComponentName`).
 pub fn placed_components(level: &crate::Level, classes: &ClassDb, keep: impl Fn(&str) -> bool) -> Vec<(String, Xform, Map<String, Value>)> {
     let mut out = Vec::new();
+    // The actor's index in the match's actors (f13-data::world::MatchWorld lists the level's placed actors first, in
+    // this order).
+    let mut index = 0;
     for a in level.layouts.iter().flat_map(|l| &l.actors) {
         let Some(t) = a.transform else { continue };
+        index += 1;
         let class: &[ComponentInfo] = classes.get(&a.class).map_or(&[], |c| &c.components);
         let mut comps: Vec<(&ComponentInfo, Option<&ComponentInfo>)> = class.iter().map(|c| (c, a.components.iter().find(|i| i.name == c.name))).collect();
         comps.extend(a.components.iter().filter(|i| !class.iter().any(|c| c.name == i.name)).map(|i| (i, None)));
@@ -179,6 +183,8 @@ pub fn placed_components(level: &crate::Level, classes: &ClassDb, keep: impl Fn(
                 }
             }
             props.insert("ComponentName".into(), Value::String(c.name.clone()));
+            props.insert("ActorIndex".into(), Value::from(index - 1));
+            props.insert("ActorClass".into(), Value::String(a.class.clone()));
             out.push((c.kind.clone(), world, props));
         }
     }

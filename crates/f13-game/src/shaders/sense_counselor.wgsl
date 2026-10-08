@@ -18,7 +18,7 @@ struct Params {
 @group(0) @binding(0) var scene: texture_2d<f32>;
 @group(0) @binding(1) var scene_sampler: sampler;
 @group(0) @binding(2) var<uniform> p: Params;
-// The custom stencil (sense_view.rs's mask: 1 where her meshes are).
+// The custom stencil (sense_view.rs's mask: red where her meshes are).
 @group(0) @binding(3) var stencil: texture_2d<f32>;
 // WispySmoke1A, 1B, 1C (all T_Wispy_Smoke_Tiled_01). Wrapped.
 @group(0) @binding(4) var smoke: texture_2d<f32>;

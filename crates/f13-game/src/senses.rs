@@ -68,6 +68,8 @@ pub struct Knowledge {
     sense_shows: Option<Clue>,
     /// Sense shows her outside and not hiding: her meshes' custom depth is on (FUN_1404111f0; sense_view.rs).
     pub highlight: bool,
+    /// Sense shows her indoors: her cabin (match actor index), unless he's in it too (its SetSenseEffects).
+    pub sensed_cabin: Option<usize>,
     next_blip: f32,
     next_sight: f32,
 }
@@ -140,6 +142,7 @@ fn setup(
             sense_until: 0.0,
             sense_shows: None,
             highlight: false,
+            sensed_cabin: None,
             next_blip: 0.0,
             next_sight: 0.0,
         });
@@ -186,6 +189,8 @@ fn perceive(
                 AbilityEvent::RequestRageFromServer => {}
             }
         }
+        k.highlight = false;
+        k.sensed_cabin = None;
         if matches!(j.state, JasonState::Waiting(_) | JasonState::Done) || !p.counselor.alive() {
             k.sees = false;
             continue;
@@ -248,7 +253,6 @@ fn perceive(
             info!("Jason: Sense ({:.0} s)", v.sense.duration);
         }
         let mut shows = None;
-        k.highlight = false;
         if k.sensing(now) {
             let radius = perception::sense_radius(&v.sense, p.fear, hidden, k.abilities.rage_active, k.abilities.rage_timer) / 100.0;
             if flat.length() <= radius {
@@ -259,6 +263,10 @@ fn perceive(
                 let clue = if indoors { Clue::SensedIndoors } else { Clue::Sensed };
                 shows = Some(clue);
                 k.highlight = !indoors && !hidden;
+                if indoors {
+                    let cabin_at = |at: Vec3| surroundings.as_ref().and_then(|s| s.cabin_at(at));
+                    k.sensed_cabin = cabin_at(her).filter(|&c| cabin_at(jxf.translation) != Some(c));
+                }
                 if k.sense_shows != shows {
                     info!("Jason: Sense shows her ({}, {:.0} m, radius {radius:.0} m)", if indoors { "in a cabin" } else { "outside" }, flat.length());
                 }

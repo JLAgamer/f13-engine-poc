@@ -1,16 +1,19 @@
-//! Sense's counselor highlight on the played Jason's screen (SenseCounselorMaterial, PP_Jason_Sense_Counselor_01_MASKED:
-//! shaders/sense_counselor.wgsl).
+//! Sense's highlights on the played Jason's screen: the counselor's (SenseCounselorMaterial,
+//! PP_Jason_Sense_Counselor_01_MASKED: shaders/sense_counselor.wgsl) and her cabin's (SenseCabinMaterial,
+//! PP_Jason_Sense_Cabin_01: shaders/sense_cabin.wgsl).
 //!
 //! From the game: Sense (FUN_14040a230) adds the material's instance to his ForcedPostProcessVolume's blendables (weight
 //! 1) and its end (FUN_1403ea820) removes it. While it's on, his tick (FUN_1404111f0) turns on the custom depth of a
 //! sensed counselor's meshes (FUN_1403d3cf0: her Mesh and three more parts; SetRenderCustomDepth) when she's within
 //! the Sense radius, alive, not hiding and not indoors (indoors her cabin's SetSenseEffects instead; hiding, the
 //! spot's): senses.rs's `highlight`. Custom depth draws her meshes alone, so the stencil the material reads has her
-//! through walls.
+//! through walls (stencil 2). Indoors, her cabin's SetSenseEffects (Cabin_Base) calls SetSenseSettings on each of its
+//! child actors that is a door (BP_DoorBase) or window (Cabin_Window_BP): custom depth on all their primitives,
+//! stencil 1 (senses.rs's `sensed_cabin`; not while he's in that cabin too).
 //!
-//! Here the custom stencil is a mask: a second camera at his camera's view, drawing copies of her meshes (same mesh
-//! and skin, an unlit white material) on their own render layer, before his camera. The pass reads it, his camera's
-//! depth (bound as a texture) and the scene.
+//! Here the custom stencil is a mask: a second camera at his camera's view, drawing copies of those meshes (same mesh
+//! and skin, unlit: red for hers, green for the cabin's) on their own render layer, before his camera. The passes read
+//! it, his camera's depth (bound as a texture) and the scene; hers first (the order Sense adds them).
 
 use bevy::asset::{embedded_asset, load_embedded_asset};
 use bevy::camera::visibility::RenderLayers;
@@ -44,6 +47,7 @@ pub struct SenseViewPlugin;
 impl Plugin for SenseViewPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shaders/sense_counselor.wgsl");
+        embedded_asset!(app, "shaders/sense_cabin.wgsl");
         app.add_plugins((ExtractComponentPlugin::<SenseHighlight>::default(), UniformComponentPlugin::<SenseUniform>::default()))
             .add_systems(Update, (mask_camera, mirrors, highlight).chain());
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else { return };
@@ -60,13 +64,20 @@ impl Plugin for SenseViewPlugin {
 #[derive(Component)]
 pub struct SenseMaskCamera;
 
-/// A copy of one of her meshes on the mask's layer.
+/// A copy of one of her (or the cabin's) meshes on the mask's layer.
 #[derive(Component)]
 struct SenseMirror;
 
-/// The highlight on a camera: the mask, the smoke texture, the view's forward axis (Unreal's) and time, its near plane.
+/// A door or window spawned by a cabin (Cabin_Base): the cabin's match actor index.
+#[derive(Component)]
+pub struct CabinPart(pub usize);
+
+/// The highlights on a camera (hers, the cabin's): the mask, the smoke texture, the view's forward axis (Unreal's)
+/// and time, its near plane.
 #[derive(Component, Clone)]
 pub struct SenseHighlight {
+    counselor: bool,
+    cabin: bool,
     mask: Handle<Image>,
     smoke: Handle<Image>,
     forward_time: Vec4,
@@ -149,47 +160,77 @@ fn mask_camera(
     commands.insert_resource(Mask { image, size, camera });
 }
 
-/// Copies of her meshes on the mask's layer while Sense highlights her.
+/// What Sense highlights now: her (outside), and the cabin she's in.
+fn sensed(play: &Option<Res<crate::jason_player::PlayJason>>, knowledge: &Query<&crate::senses::Knowledge>) -> (bool, Option<usize>) {
+    if play.is_none() {
+        return (false, None);
+    }
+    (knowledge.iter().any(|k| k.highlight), knowledge.iter().find_map(|k| k.sensed_cabin))
+}
+
+/// Copies of the highlighted meshes on the mask's layer.
+#[allow(clippy::too_many_arguments)]
 fn mirrors(
     mut commands: Commands,
     mut materials: ResMut<Assets<StandardMaterial>>,
     play: Option<Res<crate::jason_player::PlayJason>>,
     knowledge: Query<&crate::senses::Knowledge>,
     rigs: Query<(Entity, &crate::character::Rig)>,
+    parts: Query<(Entity, &CabinPart)>,
     children: Query<&Children>,
     meshes: Query<(&Mesh3d, Option<&SkinnedMesh>, Option<&MeshMorphWeights>), Without<SenseMirror>>,
     mut mask_cameras: Query<&mut Camera, With<SenseMaskCamera>>,
     mut mirrored: Local<HashMap<Entity, Entity>>,
-    mut white: Local<Option<Handle<StandardMaterial>>>,
+    mut colours: Local<Option<(Handle<StandardMaterial>, Handle<StandardMaterial>)>>,
 ) {
-    let on = play.is_some() && knowledge.iter().any(|k| k.highlight);
+    let (her, cabin) = sensed(&play, &knowledge);
+    let on = her || cabin.is_some();
     // The mask draws only while there's something to draw.
     for mut c in &mut mask_cameras {
         if c.is_active != on {
             c.is_active = on;
         }
     }
-    if !on {
-        for (_, m) in mirrored.drain() {
-            if let Ok(mut e) = commands.get_entity(m) {
+    let (red, green) = colours
+        .get_or_insert_with(|| {
+            let unlit = |c: Color| StandardMaterial { base_color: c, unlit: true, ..default() };
+            (materials.add(unlit(Color::linear_rgb(1.0, 0.0, 0.0))), materials.add(unlit(Color::linear_rgb(0.0, 1.0, 0.0))))
+        })
+        .clone();
+    // The meshes to mirror, and their mask colour.
+    let mut wanted: HashMap<Entity, Handle<StandardMaterial>> = HashMap::new();
+    if her {
+        for (rig_entity, rig) in &rigs {
+            if matches!(rig.model, crate::character::Model::Counselor) {
+                wanted.extend(children.iter_descendants(rig_entity).filter(|e| meshes.contains(*e)).map(|e| (e, red.clone())));
+            }
+        }
+    }
+    if let Some(c) = cabin {
+        for (root, part) in &parts {
+            if part.0 == c {
+                wanted.extend(children.iter_descendants(root).filter(|e| meshes.contains(*e)).map(|e| (e, green.clone())));
+            }
+        }
+    }
+    mirrored.retain(|source, mirror| {
+        let keep = wanted.contains_key(source);
+        if !keep {
+            if let Ok(mut e) = commands.get_entity(*mirror) {
                 e.despawn();
             }
         }
-        return;
-    }
-    let material = white.get_or_insert_with(|| materials.add(StandardMaterial { base_color: Color::WHITE, unlit: true, ..default() })).clone();
-    for (rig_entity, rig) in &rigs {
-        if !matches!(rig.model, crate::character::Model::Counselor) {
+        keep
+    });
+    for (e, material) in wanted {
+        if mirrored.contains_key(&e) {
             continue;
         }
-        for e in children.iter_descendants(rig_entity) {
-            let Ok((mesh, skin, morphs)) = meshes.get(e) else { continue };
-            if mirrored.contains_key(&e) {
-                continue;
-            }
+        let Ok((mesh, skin, morphs)) = meshes.get(e) else { continue };
+        {
             let mut m = commands.spawn((
                 Mesh3d(mesh.0.clone()),
-                MeshMaterial3d(material.clone()),
+                MeshMaterial3d(material),
                 Transform::IDENTITY,
                 RenderLayers::layer(SENSE_LAYER),
                 NotShadowCaster,
@@ -207,7 +248,7 @@ fn mirrors(
     }
 }
 
-/// The pass on his camera while the mirrors are up.
+/// The passes on his camera while the mirrors are up.
 fn highlight(
     mut commands: Commands,
     time: Res<Time>,
@@ -218,7 +259,8 @@ fn highlight(
     cameras: Query<(Entity, &GlobalTransform, &Projection, Has<SenseHighlight>), With<crate::player::PlayerCamera>>,
     mut smoke: Local<Option<Handle<Image>>>,
 ) {
-    let on = play.is_some() && knowledge.iter().any(|k| k.highlight);
+    let (her, cabin) = sensed(&play, &knowledge);
+    let on = her || cabin.is_some();
     for (e, xf, projection, has) in &cameras {
         match mask.as_deref().filter(|_| on) {
             Some(m) => {
@@ -230,7 +272,7 @@ fn highlight(
                     _ => 0.1,
                 };
                 let smoke = smoke.get_or_insert_with(|| assets.load(SMOKE)).clone();
-                commands.entity(e).insert(SenseHighlight { mask: m.image.clone(), smoke, forward_time, near });
+                commands.entity(e).insert(SenseHighlight { counselor: her, cabin: cabin.is_some(), mask: m.image.clone(), smoke, forward_time, near });
             }
             None if has => {
                 commands.entity(e).remove::<SenseHighlight>();
@@ -248,6 +290,7 @@ struct SensePipeline {
     wrap: Sampler,
     fullscreen_shader: FullscreenShader,
     shader: Handle<Shader>,
+    cabin_shader: Handle<Shader>,
 }
 
 fn init_pipeline(mut commands: Commands, device: Res<RenderDevice>, fullscreen_shader: Res<FullscreenShader>, asset_server: Res<AssetServer>) {
@@ -292,24 +335,26 @@ fn init_pipeline(mut commands: Commands, device: Res<RenderDevice>, fullscreen_s
         wrap,
         fullscreen_shader: fullscreen_shader.clone(),
         shader: load_embedded_asset!(asset_server.as_ref(), "shaders/sense_counselor.wgsl"),
+        cabin_shader: load_embedded_asset!(asset_server.as_ref(), "shaders/sense_cabin.wgsl"),
     });
 }
 
+/// The passes' pipelines: hers and the cabin's (when on).
 #[derive(Component)]
-struct SensePipelineId(CachedRenderPipelineId);
+struct SensePipelineIds(Option<CachedRenderPipelineId>, Option<CachedRenderPipelineId>);
 
 impl SpecializedRenderPipeline for SensePipeline {
-    /// The target format, and whether the depth is multisampled.
-    type Key = (TextureFormat, bool);
+    /// The target format, whether the depth is multisampled, and whether it's the cabin's.
+    type Key = (TextureFormat, bool, bool);
 
-    fn specialize(&self, (format, ms): Self::Key) -> RenderPipelineDescriptor {
+    fn specialize(&self, (format, ms, cabin): Self::Key) -> RenderPipelineDescriptor {
         let shader_defs: Vec<ShaderDefVal> = if ms { vec!["MULTISAMPLED".into()] } else { vec![] };
         RenderPipelineDescriptor {
-            label: Some("sense_counselor".into()),
+            label: Some(if cabin { "sense_cabin" } else { "sense_counselor" }.into()),
             layout: vec![if ms { self.layout_ms.clone() } else { self.layout.clone() }],
             vertex: self.fullscreen_shader.to_vertex_state(),
             fragment: Some(FragmentState {
-                shader: self.shader.clone(),
+                shader: if cabin { self.cabin_shader.clone() } else { self.shader.clone() },
                 shader_defs,
                 targets: vec![Some(ColorTargetState { format, blend: None, write_mask: ColorWrites::ALL })],
                 ..default()
@@ -324,44 +369,43 @@ fn prepare_pipelines(
     cache: Res<PipelineCache>,
     mut pipelines: ResMut<SpecializedRenderPipelines<SensePipeline>>,
     pipeline: Res<SensePipeline>,
-    views: Query<(Entity, &ExtractedView, &Msaa), With<SenseHighlight>>,
+    views: Query<(Entity, &ExtractedView, &Msaa, &SenseHighlight)>,
 ) {
-    for (e, view, msaa) in &views {
-        let id = pipelines.specialize(&cache, &pipeline, (view.target_format, msaa.samples() > 1));
-        commands.entity(e).insert(SensePipelineId(id));
+    for (e, view, msaa, h) in &views {
+        let mut id = |cabin: bool| pipelines.specialize(&cache, &pipeline, (view.target_format, msaa.samples() > 1, cabin));
+        let ids = SensePipelineIds(h.counselor.then(|| id(false)), h.cabin.then(|| id(true)));
+        commands.entity(e).insert(ids);
     }
 }
 
 fn sense(
-    view: ViewQuery<(&ViewTarget, &ViewDepthTexture, &Msaa, &SenseHighlight, &SensePipelineId, &DynamicUniformIndex<SenseUniform>)>,
+    view: ViewQuery<(&ViewTarget, &ViewDepthTexture, &Msaa, &SenseHighlight, &SensePipelineIds, &DynamicUniformIndex<SenseUniform>)>,
     pipeline: Res<SensePipeline>,
     cache: Res<PipelineCache>,
     images: Res<RenderAssets<GpuImage>>,
     uniforms: Res<ComponentUniforms<SenseUniform>>,
     mut ctx: RenderContext,
 ) {
-    let (target, depth, msaa, highlight, id, index) = view.into_inner();
-    let (Some(render_pipeline), Some(mask), Some(smoke), Some(binding)) =
-        (cache.get_render_pipeline(id.0), images.get(&highlight.mask), images.get(&highlight.smoke), uniforms.binding())
-    else {
-        return;
-    };
+    let (target, depth, msaa, highlight, ids, index) = view.into_inner();
+    let (Some(mask), Some(smoke), Some(binding)) = (images.get(&highlight.mask), images.get(&highlight.smoke), uniforms.binding()) else { return };
     let layout = if msaa.samples() > 1 { &pipeline.layout_ms } else { &pipeline.layout };
-    let post = target.post_process_write();
-    let bind_group = ctx.render_device().create_bind_group(
-        None,
-        &cache.get_bind_group_layout(layout),
-        &BindGroupEntries::sequential((post.source, &pipeline.sampler, binding.clone(), &mask.texture_view, &smoke.texture_view, &pipeline.wrap, depth.view())),
-    );
-    let mut pass = ctx.command_encoder().begin_render_pass(&RenderPassDescriptor {
-        label: Some("sense_counselor"),
-        color_attachments: &[Some(RenderPassColorAttachment { view: post.destination, depth_slice: None, resolve_target: None, ops: Operations::default() })],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        multiview_mask: None,
-    });
-    pass.set_pipeline(render_pipeline);
-    pass.set_bind_group(0, &bind_group, &[index.index()]);
-    pass.draw(0..3, 0..1);
+    for render_pipeline in [ids.0, ids.1].into_iter().flatten().filter_map(|id| cache.get_render_pipeline(id)) {
+        let post = target.post_process_write();
+        let bind_group = ctx.render_device().create_bind_group(
+            None,
+            &cache.get_bind_group_layout(layout),
+            &BindGroupEntries::sequential((post.source, &pipeline.sampler, binding.clone(), &mask.texture_view, &smoke.texture_view, &pipeline.wrap, depth.view())),
+        );
+        let mut pass = ctx.command_encoder().begin_render_pass(&RenderPassDescriptor {
+            label: Some("sense"),
+            color_attachments: &[Some(RenderPassColorAttachment { view: post.destination, depth_slice: None, resolve_target: None, ops: Operations::default() })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(render_pipeline);
+        pass.set_bind_group(0, &bind_group, &[index.index()]);
+        pass.draw(0..3, 0..1);
+    }
 }

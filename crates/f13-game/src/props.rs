@@ -542,6 +542,13 @@ fn spawn_props(
             commands.entity(root).insert(crate::windows::Barricade { enabled: false, door: None, plank });
             *counts.entry("barricades").or_default() += 1;
         }
+        // A cabin's doors and windows: its SetSenseEffects (Cabin_Base) lights them for Sense (sense_view.rs).
+        if classes.is_child_of(&actor.class, "BP_DoorBase_C") || classes.is_child_of(&actor.class, "Cabin_Window_BP_C") {
+            let owner = actor.spawned_by.map(|by| world.spawners[by].owner).filter(|&o| classes.is_child_of(&world.actors[o].class, "Cabin_Base_C"));
+            if let Some(o) = owner {
+                commands.entity(root).insert(crate::sense_view::CabinPart(o));
+            }
+        }
         if classes.is_child_of(&actor.class, "SCWindow") {
             let wi = info.components.iter().find(|c| c.kind == "SCInteractComponent");
             let f = |name: &str, default: f32| classes.prop(&actor.class, name).as_f64().map_or(default, |v| v as f32);

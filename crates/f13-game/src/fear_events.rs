@@ -46,8 +46,9 @@ pub struct Surroundings {
     pub lights: Vec<Light>,
     /// Each light's power grid (power.rs): it only lights while that grid is on.
     light_grids: Vec<Option<usize>>,
-    /// SCIndoorComponent boxes: transform and half extent.
-    indoors: Vec<(Xform, Vec3)>,
+    /// SCIndoorComponent boxes: transform, half extent, and its owner's match actor index if that's a cabin
+    /// (SCCabin).
+    indoors: Vec<(Xform, Vec3, Option<usize>)>,
     /// Item class -> its PickedUpFearEvent.
     item_events: HashMap<String, String>,
 }
@@ -55,9 +56,18 @@ pub struct Surroundings {
 impl Surroundings {
     /// Whether a counselor capsule at `feet` (Bevy space) overlaps an indoor volume.
     pub fn indoors(&self, feet: Vec3) -> bool {
+        self.overlapping(feet).next().is_some()
+    }
+
+    /// The cabin (match actor index) of the first indoor volume a capsule at `feet` overlaps whose owner is one.
+    pub fn cabin_at(&self, feet: Vec3) -> Option<usize> {
+        self.overlapping(feet).find_map(|(_, _, cabin)| *cabin)
+    }
+
+    fn overlapping(&self, feet: Vec3) -> impl Iterator<Item = &(Xform, Vec3, Option<usize>)> {
         let centre = to_unreal(feet + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M);
         let (r, hh) = (crate::player::CAPSULE_RADIUS_M * 100.0, crate::player::CAPSULE_HALF_HEIGHT_M * 100.0);
-        self.indoors.iter().any(|(xf, ext)| {
+        self.indoors.iter().filter(move |(xf, ext, _)| {
             let q = Quat::from_array(xf.r).inverse();
             let local = q * (centre - Vec3::from_array(xf.t));
             let ext = *ext * Vec3::from_array(xf.s);
@@ -116,7 +126,8 @@ fn load_surroundings(mut commands: Commands, level: Res<crate::Level>, export: R
     // Unreal's BoxExtent default is 32.
     for (_, world, props) in crate::lighting::placed_components(&level, &classes, |k| classes.is_child_of(k, "SCIndoorComponent") || k == "SCIndoorComponent") {
         let ext = |k: &str| props.get("BoxExtent").and_then(|e| e.get(k)).and_then(|v| v.as_f64()).map_or(32.0, |v| v as f32);
-        s.indoors.push((world, Vec3::new(ext("X"), ext("Y"), ext("Z"))));
+        let cabin = props.get("ActorClass").and_then(|c| c.as_str()).filter(|c| classes.is_child_of(c, "SCCabin")).and_then(|_| props.get("ActorIndex")?.as_u64());
+        s.indoors.push((world, Vec3::new(ext("X"), ext("Y"), ext("Z")), cabin.map(|i| i as usize)));
     }
     let grids = crate::power::PowerGrids::from_level(&level);
     let placed = crate::lighting::placed_lights(&level, &classes);
