@@ -560,6 +560,11 @@ fn spawn_props(
             });
             *counts.entry("windows").or_default() += 1;
         }
+        // A placed kill from a cabin's spawner.
+        if let Some(k) = crate::placed_kills::placed_kill(&classes, &actor.class, &actor.transform, &serde_json::Value::Null, |c| parts.get(c).copied()) {
+            commands.entity(root).insert(k);
+            *counts.entry("placed kills").or_default() += 1;
+        }
         if classes.is_child_of(&actor.class, "SCItem") && counselor_can_use {
             let large = f13_core::spawn::ClassQuery::is_large(&classes, &actor.class);
             commands.entity(root).insert(Item {

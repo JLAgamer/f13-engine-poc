@@ -9,8 +9,13 @@
 //! the direction from it to him within MaxYawOffset (15 unless set) of its facing, and (his manager's
 //! bUseCameraRotation, the constructor's true) his view within MaxYawOffset of facing back at it; with bUsePitchLimit
 //! the same in pitch against MaxPitchOffset (90 unless set; here his view's pitch is taken as level). Its
-//! bCheckForOcclusion isn't set on any placed kill. The props' own animations (the bird bath, the water pump, the
-//! chair) aren't played.
+//! bCheckForOcclusion isn't set on any placed kill.
+//!
+//! The bird bath, the water pump and the chair animate as the kill starts (their Blueprints' BeginPlay sets the
+//! KillMesh and KillMeshAnimation, SetAnimatedKillMesh 0x14035a8f0, which pauses it; KillStarted 0x14034d180 plays it
+//! once and pauses it again at its end); the bird bath's Blueprint also turns its mesh to (0, 0, -90) on KillStarted.
+//! Placed kills come from the level and from the cabins' spawners (runtime actors, props.rs). Not ported: the bird
+//! bath's bShouldOrientTowardKiller (where it's applied isn't found).
 
 use bevy::prelude::*;
 use f13_data::classes::ClassDb;
@@ -67,6 +72,52 @@ pub struct PlacedKill {
     pub pitch_limit: Option<f32>,
     pub only_once: bool,
     pub used: bool,
+    /// Its KillMesh, its KillMeshAnimation, and the transform its Blueprint gives the mesh as the kill starts.
+    pub prop: Option<(Entity, &'static str, Option<Transform>)>,
+}
+
+/// The placed kills whose prop plays its own animation as the kill starts: the class, its KillMesh component, its
+/// KillMeshAnimation, and the relative rotation (pitch, yaw, roll) its Blueprint sets on KillStarted.
+pub const KILL_PROPS: [(&str, &str, &str, Option<[f32; 3]>); 3] = [
+    ("Birdbath_PlacedKill_C", "BirdBathSM", "cinematic_hand_birdbath", Some([0.0, 0.0, -90.0])),
+    ("WaterPump_PlacedKill_C", "WaterPumpSM", "A_Interactive_WaterPump_01_Kill", None),
+    ("AdirondackChair_PlacedKill_C", "AdirondackChair", "cinematic_f_adirondackchair_kill_01", None),
+];
+
+/// A placed kill of `class` at `t` (its actor's own properties `actor_props`): None for other classes. `prop` is the
+/// entity of its KillMesh component, when it has one.
+pub fn placed_kill(classes: &ClassDb, class: &str, t: &Xform, actor_props: &serde_json::Value, prop: impl Fn(&str) -> Option<Entity>) -> Option<PlacedKill> {
+    let kind = KINDS.iter().position(|k| k.0 == class)?;
+    let info = classes.get(class)?;
+    let comp = |name: &str| info.components.iter().find(|c| c.name == name);
+    let world = |c: &f13_data::level::ComponentInfo| crate::to_transform(&c.local.unwrap_or(Xform::IDENTITY).then(t));
+    let kill = info.components.iter().find(|c| c.kind == "SCContextKillComponent")?;
+    let camera = info.components.iter().find(|c| c.kind == "SCCameraSplineComponent")?;
+    let interact = comp("Interactable")?;
+    let spot = world(kill);
+    let iw = world(interact);
+    let f = (iw.rotation * Vec3::X).normalize_or(Vec3::X);
+    let prop = KILL_PROPS.iter().find(|p| p.0 == class).and_then(|&(_, component, anim, rotation)| {
+        let at_start = rotation.zip(comp(component)).map(|(r, c)| {
+            let x = c.local.unwrap_or(Xform::IDENTITY);
+            crate::to_transform(&Xform { r: f13_core::camera_spline::quaternion(Vec3::from_array(r)).to_array(), ..x })
+        });
+        Some((prop(component)?, anim, at_start))
+    });
+    Some(PlacedKill {
+        kind,
+        camera_key: class.trim_end_matches("_C").to_string(),
+        spot: Transform { rotation: spot.rotation * Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), ..spot },
+        camera: world(camera),
+        interact: iw.translation,
+        forward: f,
+        reach_m: interact.props["DistanceLimit"].as_f64().map_or(DEFAULT_REACH_CM, |d| d as f32) / 100.0,
+        yaw_limit: interact.props["bUseYawLimit"].as_bool().unwrap_or(false).then(|| interact.props["MaxYawOffset"].as_f64().unwrap_or(DEFAULT_MAX_YAW) as f32),
+        pitch_limit: interact.props["bUsePitchLimit"].as_bool().unwrap_or(false).then(|| interact.props["MaxPitchOffset"].as_f64().unwrap_or(DEFAULT_MAX_PITCH) as f32),
+        only_once: actor_props["bOnlyUseableOnce"].as_bool().or(info.props["bOnlyUseableOnce"].as_bool()).unwrap_or(false),
+        used: false,
+        prop,
+    })
 }
 
 impl PlacedKill {
@@ -97,37 +148,33 @@ impl PlacedKill {
     }
 }
 
-fn spawn_placed_kills(mut commands: Commands, level: Res<crate::Level>, export: Res<crate::ExportRoot>) {
+fn spawn_placed_kills(mut commands: Commands, level: Res<crate::Level>, export: Res<crate::ExportRoot>, assets: Res<AssetServer>) {
     let Ok(classes) = ClassDb::load(&export.0.join("classes.json")) else { return };
-    let mut n = 0;
+    let (mut n, mut props) = (0, 0);
     for a in level.layouts.iter().flat_map(|l| &l.actors) {
-        let Some(kind) = KINDS.iter().position(|k| k.0 == a.class) else { continue };
+        if !KINDS.iter().any(|k| k.0 == a.class) {
+            continue;
+        }
         let (Some(t), Some(info)) = (a.transform, classes.get(&a.class)) else { continue };
-        let comp = |name: &str| info.components.iter().find(|c| c.name == name);
-        let world = |c: &f13_data::level::ComponentInfo| crate::to_transform(&c.local.unwrap_or(Xform::IDENTITY).then(&t));
-        let Some(kill) = info.components.iter().find(|c| c.kind == "SCContextKillComponent") else { continue };
-        let Some(camera) = info.components.iter().find(|c| c.kind == "SCCameraSplineComponent") else { continue };
-        let Some(interact) = comp("Interactable") else { continue };
-        let spot = world(kill);
-        let iw = world(interact);
-        let f = (iw.rotation * Vec3::X).normalize_or(Vec3::X);
-        commands.spawn((
-            PlacedKill {
-                kind,
-                camera_key: a.class.trim_end_matches("_C").to_string(),
-                spot: Transform { rotation: spot.rotation * Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), ..spot },
-                camera: world(camera),
-                interact: iw.translation,
-                forward: f,
-                reach_m: interact.props["DistanceLimit"].as_f64().map_or(DEFAULT_REACH_CM, |d| d as f32) / 100.0,
-                yaw_limit: interact.props["bUseYawLimit"].as_bool().unwrap_or(false).then(|| interact.props["MaxYawOffset"].as_f64().unwrap_or(DEFAULT_MAX_YAW) as f32),
-                pitch_limit: interact.props["bUsePitchLimit"].as_bool().unwrap_or(false).then(|| interact.props["MaxPitchOffset"].as_f64().unwrap_or(DEFAULT_MAX_PITCH) as f32),
-                only_once: a.props["bOnlyUseableOnce"].as_bool().or(info.props["bOnlyUseableOnce"].as_bool()).unwrap_or(false),
-                used: false,
-            },
-            Name::new(a.name.clone()),
-        ));
-        n += 1;
+        let root = commands.spawn((crate::to_transform(&t), Visibility::default(), Name::new(a.name.clone()))).id();
+        // Its skeletal meshes (the level's placements hold only its static ones).
+        let mut parts = std::collections::HashMap::new();
+        for c in info.components.iter().filter(|c| c.kind.contains("SkeletalMeshComponent") && !c.hidden) {
+            let Some(mesh) = &c.mesh else { continue };
+            let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(mesh.clone()));
+            let local = crate::to_transform(&c.local.unwrap_or(Xform::IDENTITY));
+            parts.insert(c.name.clone(), commands.spawn((bevy::world_serialization::WorldAssetRoot(scene), local, ChildOf(root))).id());
+            props += 1;
+        }
+        match placed_kill(&classes, &a.class, &t, &a.props, |c| parts.get(c).copied()) {
+            Some(k) => {
+                commands.entity(root).insert(k);
+                n += 1;
+            }
+            None => {
+                commands.entity(root).despawn();
+            }
+        }
     }
-    info!("placed kills: {n}");
+    info!("placed kills: {n} ({props} skeletal props)");
 }

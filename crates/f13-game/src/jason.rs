@@ -1973,6 +1973,13 @@ pub(crate) fn update_jason(
                     let (his, hers, name) = pk.takes();
                     info!("Jason: {name} (placed kill)");
                     pk.used = true;
+                    // KillStarted: its prop plays its own animation.
+                    if let Some((prop, anim, at_start)) = pk.prop {
+                        commands.entity(prop).insert(crate::prop_anim::PropAnim::new(anim));
+                        if let Some(xf) = at_start {
+                            commands.entity(prop).insert(xf);
+                        }
+                    }
                     j.kill_move = (his, hers, name);
                     *xf = killer.place(his, pk.spot).0;
                     j.state = JasonState::Killing { t: 0.0 };

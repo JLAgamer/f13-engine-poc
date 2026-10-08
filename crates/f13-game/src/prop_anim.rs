@@ -45,7 +45,7 @@ impl PropAnim {
 }
 
 fn load(export: Res<crate::ExportRoot>, mut anims: ResMut<PropAnims>) {
-    for mesh in ["A_Trap_Bear_01", "A_Camp_Tent_Yellow_01_LOD0"] {
+    for mesh in ["A_Trap_Bear_01", "A_Camp_Tent_Yellow_01_LOD0", "birdbath_rig", "A_Interactive_WaterPump_01", "adirondack_chair"] {
         let file = export.0.join("props").join(format!("{mesh}.json"));
         let Some(index) = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str::<HashMap<String, AnimInfo>>(&t).ok()) else {
             warn!("{}: missing (f13-export props): {mesh} doesn't animate", file.display());

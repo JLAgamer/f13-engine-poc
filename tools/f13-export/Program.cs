@@ -580,6 +580,7 @@ switch (rest[0])
         new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims, Mvp.KeepRoot);
         new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, Mvp.KillerAnims, Mvp.KeepRoot);
         new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TrapMesh, Mvp.TrapAnims); new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TentMesh, Mvp.TentAnims);
+        foreach (var (mesh, anim) in Mvp.PlacedKillProps) new CounselorExporter(provider, outDir, Queue).ExportPropAnims(mesh, [anim]);
         WriteKillCameras();
         WriteWater();
         WriteCollision();
@@ -629,6 +630,7 @@ switch (rest[0])
         break;
     case "props": // skeletal props' own animations (props/): the bear trap
         new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TrapMesh, Mvp.TrapAnims); new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TentMesh, Mvp.TentAnims);
+        foreach (var (mesh, anim) in Mvp.PlacedKillProps) new CounselorExporter(provider, outDir, Queue).ExportPropAnims(mesh, [anim]);
         break;
     case "anims":
         AnimExporter.Write(provider, outDir, Mvp.Montages);
@@ -1096,6 +1098,14 @@ static class Mvp
     ];
     // Jason_AnimBP's BS_Jason_Normal_Move (SpeedState 0 idle, 1 walk, 2 fast walk, 3 run), the pickaxe's combat idle,
     // attacks (PickAxe's NeutralAttack and ForwardAttack), the grab, and the grab kill.
+    /// The placed kills' props that play their own animation as the kill starts (SetAnimatedKillMesh in their
+    /// Blueprints' BeginPlay; SCContextKillActor::KillStarted plays it).
+    public static readonly (string Mesh, string Anim)[] PlacedKillProps =
+    [
+        ("/Game/Props/SkeletalMeshes/General/birdbath_rig", "/Game/Props/SkeletalMeshes/General/Animation/cinematic_hand_birdbath"),
+        ("/Game/Props/SkeletalMeshes/Interaction/A_Interactive_WaterPump_01", "/Game/Props/SkeletalMeshes/Interaction/Animation/A_Interactive_WaterPump_01_Kill"),
+        ("/Game/Props/SkeletalMeshes/General/adirondack_chair", "/Game/Props/SkeletalMeshes/General/Animation/cinematic_f_adirondackchair_kill_01"),
+    ];
     /// The tent's own animations (its flaps as she goes in and out, and while she hides).
     public const string TentMesh = "/Game/Props/SkeletalMeshes/Camp/A_Camp_Tent_Yellow_01_LOD0";
     public static readonly string[] TentAnims =
