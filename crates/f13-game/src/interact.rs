@@ -18,7 +18,6 @@ use bevy::prelude::*;
 use f13_core::minigame::{HoldInteraction, MinigameEvent};
 
 /// Counselor `MaxSmallItems` default (constructor).
-pub const MAX_SMALL_ITEMS: usize = 3;
 /// Interaction distance is measured from about chest height.
 pub(crate) const CHEST_M: f32 = 1.0;
 /// ILLInteractableManagerComponent's constructor (0x1402524a0): its scoring weights (choose_target).
@@ -93,7 +92,22 @@ impl InteractLimit {
 #[derive(Component, Default, Debug)]
 pub struct Inventory {
     pub hand: Option<Entity>,
+    /// Her small items (SmallItemInventory), at most `max_small` (MaxSmallItems).
     pub pockets: Vec<Entity>,
+    /// Special items (SpecialItemInventory: the map).
+    pub special: Vec<Entity>,
+    pub max_small: usize,
+    /// SmallItemIndex: the selected pocket. Like the game's it can point past the last one (then none is).
+    pub selected: usize,
+    /// The selected small item, to be used this frame (G, or 1-3 once its pocket is selected).
+    pub use_small: Option<Entity>,
+}
+
+impl Inventory {
+    /// GetCurrentSmallItem: the selected pocket's item.
+    pub fn current_small(&self) -> Option<Entity> {
+        self.pockets.get(self.selected).copied()
+    }
 }
 
 /// Class of the first aid spray.
@@ -570,7 +584,7 @@ impl Plugin for InteractPlugin {
             .add_systems(Startup, spawn_prompt)
             .add_systems(
             Update,
-            (add_inventory, crate::windows::link_barricades, choose_target, act, crate::cabinets::cabinet_uses, crate::cabinets::follow_items, moves_to_spots, door_moves, window_moves, barricade_moves, repair_anims, drop_item, use_item, update_prompt)
+            (add_inventory, crate::windows::link_barricades, choose_target, act, crate::cabinets::cabinet_uses, crate::cabinets::follow_items, moves_to_spots, door_moves, window_moves, barricade_moves, repair_anims, small_items, dropping, use_item, update_prompt)
                 .chain()
                 .before(crate::doors::swing_doors),
         )
@@ -588,9 +602,12 @@ fn spawn_prompt(mut commands: Commands) {
     ));
 }
 
-fn add_inventory(mut commands: Commands, players: Query<Entity, (With<Player>, Without<Inventory>)>) {
+fn add_inventory(mut commands: Commands, players: Query<Entity, (With<Player>, Without<Inventory>)>, model: Option<Res<crate::character::CounselorCharacter>>) {
+    let Some(model) = model else { return };
     for p in &players {
-        commands.entity(p).insert(Inventory::default());
+        // MaxSmallItems (her class's; the constructor's 3 for an older export).
+        let max_small = model.info.values.get("MaxSmallItems").map_or(3, |&v| v as usize);
+        commands.entity(p).insert(Inventory { max_small, ..default() });
     }
 }
 
@@ -703,9 +720,6 @@ fn choose_target(
         if in_cab.is_some() {
             continue;
         }
-        if !item.large && inv.pockets.len() >= MAX_SMALL_ITEMS {
-            continue; // can't be taken, so don't let it hide what's next to it
-        }
         let at = limits.get(e).ok().and_then(|l| l.0.get("Interactable")).map_or(gxf.translation(), |l| gxf.transform_point(l.at.translation));
         consider(e, "Interactable", at, item.reach, Target::Item(e));
     }
@@ -773,7 +787,7 @@ fn act(
     tuning: Res<PlayerTuning>,
     mut rng: ResMut<crate::GameRng>,
     mut player: Single<(Entity, &mut Transform, &mut Inventory, &mut Player, Has<MoveToSpot>), (Without<Driving>, Without<crate::hiding::Hiding>, Without<crate::jason::Held>)>,
-    items: Query<&Item>,
+    (items, item_xfs): (Query<&Item>, Query<&GlobalTransform, With<Item>>),
     (mut spots, model): (Query<(&mut crate::hiding::HidingSpot, &GlobalTransform)>, Option<Res<crate::character::CounselorCharacter>>),
     (cabinets, cabinet_xfs): (Query<&Cabinet>, Query<&GlobalTransform, With<Cabinet>>),
     mut vehicles: Query<&mut Vehicle>,
@@ -795,10 +809,9 @@ fn act(
                     drop_at(&mut commands, &mut visibility, old, player_xf);
                 }
                 inv.hand = Some(e);
-            } else if inv.pockets.len() < MAX_SMALL_ITEMS {
-                inv.pockets.push(e);
             } else {
-                return;
+                let at = item_xfs.get(e).map_or(player_xf.translation, |g| g.translation());
+                take_small(&mut commands, &mut visibility, inv, item, e, Swap::Drop(at));
             }
             info!("picked up {}", item.name);
             commands.trigger(ClassScore::new(&item.class, "PickupScoreEvent"));
@@ -1207,7 +1220,11 @@ fn barricade_of(barricades: &Query<&Barricade>, door: Entity) -> Option<bool> {
 /// Puts an item back in the world at the counselor's feet.
 pub(crate) fn drop_at(commands: &mut Commands, visibility: &mut Query<&mut Visibility>, item: Entity, player: &Transform) {
     let forward = player.rotation * Vec3::Z;
-    let at = player.translation + forward * 0.5 + Vec3::Y * 0.05;
+    drop_on(commands, visibility, item, player.translation + forward * 0.5 + Vec3::Y * 0.05);
+}
+
+/// Puts a carried item down at `at`.
+pub(crate) fn drop_on(commands: &mut Commands, visibility: &mut Query<&mut Visibility>, item: Entity, at: Vec3) {
     commands.entity(item).remove::<(Carried, ChildOf, crate::items::InHand)>().insert(Transform::from_translation(at));
     commands.trigger(crate::audio::Dropped { item, at });
     if let Ok(mut v) = visibility.get_mut(item) {
@@ -1215,25 +1232,147 @@ pub(crate) fn drop_at(commands: &mut Commands, visibility: &mut Query<&mut Visib
     }
 }
 
-fn drop_item(
+/// Her take of DropLargeItemMontage (AM_normal_stand_drop_item_right) and of DropSmallItemMontage (_left).
+const DROP_LARGE_TAKE: &str = "f_normal_stand_item_drop_right";
+const DROP_SMALL_TAKE: &str = "f_normal_stand_item_drop_left";
+
+/// She's dropping an item (bDroppingLargeItem / bDroppingSmallItem): her drop take, seconds in.
+#[derive(Component)]
+pub struct Dropping {
+    large: bool,
+    t: f32,
+}
+
+/// The drop take: at its DropLargeItem / DropSmallItem notify (SCCounselorAnimInstance::OnDropLargeItem /
+/// OnDropSmallItem) the item in her hands, or the selected small item, goes down; the take ends the drop.
+fn dropping(
     mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
-    mut player: Single<(&Transform, &mut Inventory), (With<Player>, Without<Driving>)>,
+    time: Res<Time>,
+    model: Option<Res<crate::character::CounselorCharacter>>,
+    mut players: Query<(Entity, &Transform, &mut Inventory, &mut Dropping)>,
     mut visibility: Query<&mut Visibility>,
 ) {
-    if !keys.just_pressed(KeyCode::KeyG) {
-        return;
-    }
-    let (xf, ref mut inv) = *player;
-    if let Some(item) = inv.hand.take() {
-        drop_at(&mut commands, &mut visibility, item, xf);
+    let Some(model) = model else { return };
+    for (pe, xf, mut inv, mut d) in &mut players {
+        let take = if d.large { DROP_LARGE_TAKE } else { DROP_SMALL_TAKE };
+        let info = model.info.animations.get(take);
+        let at = info.and_then(|a| a.window(if d.large { "DropLargeItem" } else { "DropSmallItem" })).map_or(0.0, |w| w.0);
+        let before = d.t;
+        d.t += time.delta_secs();
+        if before < at && d.t >= at || at <= 0.0 && before == 0.0 {
+            let item = if d.large { inv.hand.take() } else { inv.current_small() };
+            if let Some(item) = item {
+                inv.pockets.retain(|&x| x != item);
+                drop_at(&mut commands, &mut visibility, item, xf);
+            }
+        }
+        if d.t >= info.map_or(0.0, |a| a.length) {
+            commands.entity(pe).remove::<(Dropping, crate::character::PlayAction)>();
+        }
     }
 }
 
-/// 1-3: use the small item in that pocket. Only first aid has a use so far.
+/// Where the selected small item goes when a small item is taken with her pockets full.
+pub(crate) enum Swap {
+    /// Dropped where the new item lay (its OnDropped at the picked item's location).
+    Drop(Vec3),
+    /// Left in the drawer the new item came from (the cabinet's ContainedItem), where that one rested.
+    Cabinet(Entity, usize, Transform),
+}
+
+/// Her pickup (0x1403a4e30, at the pickup's OnPickupItem): a special item goes to her special items; a small one, with
+/// her pockets full, takes the selected pocket's place (that item is dropped where the new one lay, or left in its
+/// drawer), and is selected.
+pub(crate) fn take_small(commands: &mut Commands, visibility: &mut Query<&mut Visibility>, inv: &mut Inventory, item: &Item, e: Entity, swap: Swap) {
+    if item.special {
+        inv.special.push(e);
+        return;
+    }
+    if inv.pockets.len() >= inv.max_small {
+        if let Some(old) = inv.current_small() {
+            inv.pockets.retain(|&x| x != old);
+            match swap {
+                Swap::Drop(at) => drop_on(commands, visibility, old, at),
+                Swap::Cabinet(cabinet, slot, rest) => {
+                    commands.entity(old).remove::<(Carried, ChildOf, crate::items::InHand)>().insert((rest, crate::props::InCabinet(cabinet, slot)));
+                    if let Ok(mut v) = visibility.get_mut(old) {
+                        *v = Visibility::Inherited;
+                    }
+                }
+            }
+            info!("swapped a small item out of her pockets");
+        }
+    }
+    inv.pockets.push(e);
+    inv.selected = inv.pockets.len() - 1;
+}
+
+/// Her small items' keys (DefaultInput.ini's counselor actions): the mouse wheel selects the next (down) or previous
+/// (up) pocket, wrapping (0x1403c0060, 0x1403cbea0; not while one is in use); 1-3 select that pocket and use it
+/// (SERVER_OnUseSmallItem 0x1403ce550, if it holds one); G uses the selected one (CSLR_SmallItem). Z drops
+/// (OnDropItemPressed / Released 0x1403c1570, the tick 0x1403dbc70): held for DropItemHoldTime with a large item, that
+/// one; released sooner, or with no large item, the selected small item: her drop montage plays
+/// (DropLargeItemMontage / DropSmallItemMontage) and the item goes at its DropLargeItem / DropSmallItem notify
+/// ([`dropping`]). PLACEHOLDER: the press's own check (FUN_1403a7500) is unread.
+#[allow(clippy::type_complexity)]
+fn small_items(
+    mut commands: Commands,
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    scroll: Res<bevy::input::mouse::AccumulatedMouseScroll>,
+    model: Option<Res<crate::character::CounselorCharacter>>,
+    interaction: Res<Interaction>,
+    mut player: Single<(Entity, &mut Inventory, &Player, Has<UsingItem>, Has<crate::items::ItemAction>, Has<Dropping>), (With<Player>, Without<Driving>)>,
+    mut drop_held: Local<Option<f32>>,
+) {
+    let (pe, ref mut inv, p, using, acting, dropping) = *player;
+    inv.use_small = None;
+    let count = inv.pockets.len();
+    if !using && !acting && count > 0 {
+        if scroll.delta.y < 0.0 {
+            inv.selected = if inv.selected + 1 >= count { 0 } else { inv.selected + 1 };
+        } else if scroll.delta.y > 0.0 {
+            inv.selected = if inv.selected == 0 { count - 1 } else { inv.selected - 1 };
+        }
+        if let Some(slot) = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3].iter().position(|&k| keys.just_pressed(k)) {
+            if slot < count {
+                inv.selected = slot;
+                inv.use_small = inv.current_small();
+            }
+        }
+    }
+    if keys.just_pressed(KeyCode::KeyG) {
+        inv.use_small = inv.current_small();
+    }
+    // The drop key: not in water nor during a special move.
+    let hold_time = model.as_ref().and_then(|m| m.info.values.get("DropItemHoldTime").copied()).unwrap_or(1.5);
+    let free = p.counselor.stance != f13_core::counselor::Stance::Swimming && !interaction.busy();
+    if keys.just_pressed(KeyCode::KeyZ) {
+        *drop_held = Some(0.0);
+    }
+    if let Some(held) = drop_held.as_mut() {
+        if free && keys.pressed(KeyCode::KeyZ) {
+            *held += time.delta_secs();
+            if *held >= hold_time {
+                if inv.hand.is_some() && !dropping {
+                    commands.entity(pe).insert((Dropping { large: true, t: 0.0 }, crate::character::PlayAction(DROP_LARGE_TAKE.into())));
+                }
+                *drop_held = None;
+            }
+        }
+    }
+    if keys.just_released(KeyCode::KeyZ) {
+        if let Some(held) = drop_held.take() {
+            if free && !dropping && (inv.hand.is_none() || held < hold_time) && !inv.pockets.is_empty() {
+                commands.entity(pe).insert((Dropping { large: false, t: 0.0 }, crate::character::PlayAction(DROP_SMALL_TAKE.into())));
+            }
+        }
+    }
+}
+
+/// The selected small item used (`Inventory::use_small`): first aid here (items.rs throws firecrackers).
 fn use_item(
     mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     tuning: Res<PlayerTuning>,
     mut player: Single<(Entity, &mut Player, &mut Inventory, Option<&mut UsingItem>), Without<Driving>>,
@@ -1253,8 +1392,7 @@ fn use_item(
         commands.entity(entity).remove::<UsingItem>();
         return;
     }
-    let slot = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3].iter().position(|&k| keys.just_pressed(k));
-    let Some(&item) = slot.and_then(|i| inv.pockets.get(i)) else { return };
+    let Some(item) = inv.use_small else { return };
     if !p.counselor.alive() || items.get(item).map_or(true, |i| i.class != FIRST_AID) {
         return;
     }
@@ -1282,7 +1420,7 @@ fn update_prompt(
         inv.hand.map_or("-".to_string(), name),
         inv.pockets.iter().map(|&e| name(e)).collect::<Vec<_>>().join(", "),
         inv.pockets.len(),
-        MAX_SMALL_ITEMS
+        inv.max_small
     )];
     for v in &vehicles {
         let mut parts: Vec<String> = v.repairs.iter().map(|r| format!("{} {}", r.name.trim_end_matches("Repair"), if r.done { "ok" } else { "--" })).collect();
@@ -1302,8 +1440,7 @@ fn update_prompt(
     } else {
         match interaction.target {
             Some(Target::Item(e)) => {
-                let full = items.get(e).is_ok_and(|i| !i.large) && inv.pockets.len() >= MAX_SMALL_ITEMS;
-                lines.push(if full { format!("Pockets full ({})", name(e)) } else { format!("[E] Pick up {}", name(e)) });
+                lines.push(format!("[E] Pick up {}", name(e)));
             }
             Some(Target::Cabinet(c, i)) => match cabinets.get(c).ok().and_then(|c| c.slots.get(i)) {
                 Some(s) if s.ready => {

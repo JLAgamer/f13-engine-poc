@@ -1,7 +1,8 @@
 //! A playable counselor (Vanessa) driven by the f13-core movement and stamina rules.
 //!
-//! Placeholder controls: WASD move (running by default), Shift sprint, Caps Lock toggle walk, Ctrl crouch,
-//! mouse look (click to capture, Esc to release); E interact and G drop (interact.rs), F leave a car (vehicle.rs). The capsule moves through the game's own
+//! Controls (DefaultInput.ini's): WASD move (running by default), Shift sprint, X toggle walk, Ctrl crouch,
+//! mouse look (click to capture, Esc to release); E interact, mouse wheel / 1-3 / G select and use a small item, Z drop
+//! (interact.rs: the game's DefaultInput.ini keys), F leave a car (vehicle.rs). The capsule moves through the game's own
 //! collision (collision.rs, f13-core::collision).
 
 use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings};
@@ -270,7 +271,8 @@ fn read_intent(
     intent.movement = movement;
     intent.sprint_held = keys.pressed(KeyCode::ShiftLeft);
     intent.sprint_changed |= keys.just_pressed(KeyCode::ShiftLeft) || keys.just_released(KeyCode::ShiftLeft);
-    intent.toggle_walk |= keys.just_pressed(KeyCode::CapsLock);
+    // CSLR_Run (X), on release.
+    intent.toggle_walk |= keys.just_released(KeyCode::KeyX);
     intent.toggle_crouch |= keys.just_pressed(KeyCode::ControlLeft);
     intent.toggle_combat |= keys.just_pressed(KeyCode::KeyC);
     let now = time.elapsed_secs();
@@ -303,7 +305,11 @@ fn update_counselor(
     let once = Intent { movement: intent.movement, sprint_held: intent.sprint_held, ..default() };
     let intent = std::mem::replace(&mut *intent, once);
     let p = &mut **player;
+    // The run toggle (0x1403cab00): crouching, she stands first (0x1403c09c0); then bIsRunning flips.
     if intent.toggle_walk {
+        if p.counselor.stance == Stance::Crouching {
+            p.counselor.stance = Stance::Standing;
+        }
         p.walk_toggle = !p.walk_toggle;
     }
     let c = &mut p.counselor;

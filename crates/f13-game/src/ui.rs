@@ -424,8 +424,11 @@ fn build_hud(
         return;
     }
     let pockets: Vec<String> = player.as_ref().and_then(|p| **p).map_or(vec![], |inv| inv.pockets.iter().filter_map(|&e| items.get(e).ok()).map(|i| i.class.clone()).collect());
+    let selected = player.as_ref().and_then(|p| **p).map_or(0, |inv| inv.selected);
+    // Rebuilt when they or the selection change.
+    let pocket_key: Vec<String> = pockets.iter().cloned().chain([format!("#{selected}")]).collect();
     let lines = game.as_ref().map_or(0, |g| g.score_lines().len());
-    if hud.built.as_ref().is_some_and(|(s, p, j, c, l)| *s == size && *p == pockets && *j == jason && *c == (police, game_timer) && *l == lines) {
+    if hud.built.as_ref().is_some_and(|(s, p, j, c, l)| *s == size && *p == pocket_key && *j == jason && *c == (police, game_timer) && *l == lines) {
         return;
     }
     if let Some(root) = hud.root.take() {
@@ -436,7 +439,7 @@ fn build_hud(
     let virt = size / scale;
     let mut tree = if jason { hud.killer.clone().unwrap_or_else(|| hud.hud.clone()) } else { hud.hud.clone() };
     if !jason {
-        fill_inventory(&hud, &mut tree, &pockets);
+        fill_inventory(&hud, &mut tree, &pockets, selected);
         fill_xp_lines(&hud, &mut tree, game.as_ref().map_or(&[], |g| g.score_lines()));
     }
     if police {
@@ -475,14 +478,17 @@ fn build_hud(
     hud.names = names;
     hud.root = Some(root);
     hud.scale = scale;
-    hud.built = Some((size, pockets, jason, (police, game_timer), lines));
+    hud.built = Some((size, pocket_key, jason, (police, game_timer), lines));
 }
 
 /// Puts an item widget in the inventory's Grid for each pocket item (SCInventory_Widget does it as items are
 /// picked up): its ImageOn icon, the count hidden (one item each); ObjectText names the first.
-fn fill_inventory(hud: &Hud, tree: &mut Widget, pockets: &[String]) {
+/// SCInventory_Widget's InventoryChanged: an SC_InventoryItem_Widget per small item, Active for the selected one
+/// (SmallItemIndex: ImageOn shown, else ImageOff), and ObjectText the selected item's name. Not here: the uses left
+/// (NumUses - TimesUsed, shown above 1).
+fn fill_inventory(hud: &Hud, tree: &mut Widget, pockets: &[String], selected: usize) {
     if let Some(text) = tree.find_mut("ObjectText") {
-        match pockets.first() {
+        match pockets.get(selected) {
             Some(class) => {
                 let name = hud.classes.display_name(class);
                 text.props["Text"] = json!({ "LocalizedString": name });
@@ -498,20 +504,22 @@ fn fill_inventory(hud: &Hud, tree: &mut Widget, pockets: &[String]) {
         w.name = format!("Item{i}");
         w.slot_kind = "HorizontalBoxSlot".into();
         w.slot = json!({});
-        let icon = class_texture(hud, class, "ImageOn").or_else(|| class_texture(hud, class, "HUDPickupIcon"));
-        if let Some(on) = w.find_mut("Image_On") {
-            match &icon {
-                Some(file) => {
-                    let size = png_size(&hud.export.join(file)).unwrap_or(Vec2::splat(64.0));
-                    on.props["Brush"] = json!({ "ImageSize": { "X": size.x, "Y": size.y }, "ResourceObject": { "File": file } });
+        let active = i == selected;
+        for (widget, prop, shown) in [("Image_On", "ImageOn", active), ("Image_Off", "ImageOff", !active)] {
+            let icon = class_texture(hud, class, prop).or_else(|| class_texture(hud, class, "HUDPickupIcon"));
+            if let Some(image) = w.find_mut(widget) {
+                match icon.filter(|_| shown) {
+                    Some(file) => {
+                        let size = png_size(&hud.export.join(&file)).unwrap_or(Vec2::splat(64.0));
+                        image.props["Brush"] = json!({ "ImageSize": { "X": size.x, "Y": size.y }, "ResourceObject": { "File": file } });
+                        image.set_visibility(Vis::Visible);
+                    }
+                    None => image.set_visibility(Vis::Hidden),
                 }
-                None => on.set_visibility(Vis::Collapsed),
             }
         }
-        for hidden in ["Image_Off", "TextBlock_0"] {
-            if let Some(h) = w.find_mut(hidden) {
-                h.set_visibility(Vis::Collapsed);
-            }
+        if let Some(h) = w.find_mut("TextBlock_0") {
+            h.set_visibility(Vis::Collapsed);
         }
         grid.children.push(w);
     }

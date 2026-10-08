@@ -75,6 +75,7 @@ struct Args {
     near_car: bool,
     bot_escape: bool,
     bot_heal: bool,
+    bot_drop: bool,
     bot_dodge: bool,
     bot_door: bool,
     bot_jason: bool,
@@ -149,6 +150,7 @@ fn parse_args() -> Args {
     let mut near_car = false;
     let mut bot_escape = false;
     let mut bot_heal = false;
+    let mut bot_drop = false;
     let mut bot_dodge = false;
     let mut bot_door = false;
     let mut bot_jason = false;
@@ -203,6 +205,7 @@ fn parse_args() -> Args {
             "--near-car" => near_car = true,
             "--bot-escape" => bot_escape = true,
             "--bot-heal" => bot_heal = true,
+            "--bot-drop" => bot_drop = true,
             "--bot-dodge" => bot_dodge = true,
             "--bot-door" => bot_door = true,
             "--bot-jason" => bot_jason = true,
@@ -283,7 +286,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight, rain }
+    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight, rain }
 }
 
 #[derive(Resource)]
@@ -396,7 +399,7 @@ fn main() {
             rules.round_time = t;
         }
         app.insert_resource(match_flow::MatchTuning { rules, events: tuning.score_events.clone() });
-        let bot = args.bot_car_grab || args.bot_power || args.bot_police || args.bot_placed_kill || args.bot_drown || args.bot_escape || args.bot_heal || args.bot_dodge || args.bot_door || args.bot_jason || args.bot_abilities || args.bot_block || args.bot_trap || args.bot_fight || args.bot_hide || args.bot_hide_seen || args.bot_locked_in.is_some();
+        let bot = args.bot_car_grab || args.bot_power || args.bot_police || args.bot_placed_kill || args.bot_drown || args.bot_escape || args.bot_heal || args.bot_drop || args.bot_dodge || args.bot_door || args.bot_jason || args.bot_abilities || args.bot_block || args.bot_trap || args.bot_fight || args.bot_hide || args.bot_hide_seen || args.bot_locked_in.is_some();
         app.insert_resource(player::PlayerTuning {
             counselor: tuning.counselor,
             movement: tuning.counselor_movement,
@@ -426,6 +429,8 @@ fn main() {
             app.add_plugins(bot::BotPlugin(bot::Goal::PlacedKill));
         } else if args.bot_drown {
             app.add_plugins(bot::BotPlugin(bot::Goal::Drown));
+        } else if args.bot_drop {
+            app.add_plugins(bot::BotPlugin(bot::Goal::Drop));
         } else if args.bot_heal {
             app.add_plugins(bot::BotPlugin(bot::Goal::Heal));
         } else if args.bot_dodge {
@@ -453,7 +458,7 @@ fn main() {
             app.insert_resource(items::Give(args.give.clone()));
         }
         // The counselor bots test her alone; --bot-jason tests him.
-        let bot_alone = args.bot_escape || args.bot_heal || args.bot_dodge || args.bot_door || args.bot_trap;
+        let bot_alone = args.bot_escape || args.bot_heal || args.bot_drop || args.bot_dodge || args.bot_door || args.bot_trap;
         if !args.no_jason && !bot_alone {
             app.add_plugins(jason::JasonPlugin { delay: args.jason_delay, kill: args.kill });
         }

@@ -280,6 +280,10 @@ pub struct Rig {
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct PlayAction(pub String);
 
+/// Plays the current PlayAction again from its start (a montage section that repeats its segment).
+#[derive(Component)]
+pub struct RestartAction;
+
 /// A part's scene finished spawning.
 #[derive(Component)]
 struct SceneReady;
@@ -416,7 +420,7 @@ pub(crate) fn animate(
     tuning: Res<PlayerTuning>,
     forced: Option<Res<ForcedPose>>,
     anim_sounds: Option<Res<crate::audio::AnimSounds>>,
-    players: Query<(&Player, &Transform, Option<&crate::interact::UsingItem>, Option<&PlayAction>, Has<crate::items::Blocking>)>,
+    players: Query<(Entity, &Player, &Transform, Option<&crate::interact::UsingItem>, Option<&PlayAction>, Has<crate::items::Blocking>, Has<RestartAction>)>,
     mut rigs: Query<(&ChildOf, &mut Rig, &mut AnimationPlayer), Without<crate::ragdoll::Ragdolled>>,
 ) {
     let Some(character) = character else { return };
@@ -436,7 +440,11 @@ pub(crate) fn animate(
         return;
     }
     for (parent, mut rig, mut anim) in &mut rigs {
-        let Ok((p, xf, using, scripted, blocking)) = players.get(parent.parent()) else { continue };
+        let Ok((pe, p, xf, using, scripted, blocking, restart)) = players.get(parent.parent()) else { continue };
+        if restart {
+            rig.action = None;
+            commands.entity(pe).remove::<RestartAction>();
+        }
         let c = &p.counselor;
         let t = &tuning.counselor;
         let speed = p.velocity.length();

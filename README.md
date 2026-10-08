@@ -97,10 +97,11 @@ cargo run -p f13-game --release -- --export "<export dir>"
 ```
 
 By default you play Vanessa, in her default outfit and animated (idle, walk/run/sprint, crouch, combat strafing,
-dodges, stumbles, first aid; `--capsule` for the old placeholder): WASD move (running by default), Shift sprint, Caps Lock toggle walk, Ctrl crouch, C combat stance (double-tap
+dodges, stumbles, first aid; `--capsule` for the old placeholder): WASD move (running by default), Shift sprint, X toggle walk, Ctrl crouch, C combat stance (double-tap
 A/D/S to dodge), click to capture the mouse,
 Esc to release. The HUD is the game's own (its UMG widgets laid out as Slate does, in its textures and font): the
-match timer, the stamina ring, the pocket items and, while hiding, the breath bars; like the game it has no health or
+match and police timers (the counselor's match timer shows only at the end, as in the game), the stamina ring, the
+noise rings on the minimap, XP lines, the pocket items and, while hiding, the breath bars; like the game it has no health or
 fear meter. F3 shows debug text instead (health, stamina, fear, speed, Jason's state). `--demo` sprints in a straight line and logs stamina every second.
 Counselors stumble as in the game (by fear, stamina and wounds). Fear comes from the game's fear events: darkness
 (out of reach of the map's lamps and cabin lights), being outdoors and alone, wounded, Jason near (by distance), Jason
@@ -175,8 +176,10 @@ own (time bonus, unscathed, match complete, team escaped). Each one shows on the
 `--round-time s` shortens the match for testing; `--kill <name>` makes Jason use one grab kill (e.g. `curbstomp`; else one of the pickaxe's five at random); `--cut-power` starts every fuse box destroyed (hold E at one to repair it); `--spawn x,y,z` starts her there (metres, Bevy axes). The level intro and outro sequences aren't played.
 
 Items, cabinets and cars spawn as in the game (`--seed n` repeats a match; the log lists where the cars and parts
-are). E picks up (preferring what the camera looks at), searches drawers and installs parts, G drops the held
-item, 1-3 use the small item in that pocket. Doors: E opens/closes, hold E from inside a closed door to lock or
+are). E picks up (preferring what the camera looks at), searches drawers and installs parts. The game's keys for
+items: the mouse wheel selects a pocket, G uses the selected small item, 1-3 select that pocket and use it, Z drops
+the selected small item (held, the item in her hands); a small item picked up with full pockets takes the selected
+one's place. Doors: E opens/closes, hold E from inside a closed door to lock or
 unlock it, or to put up / take down its barricade (from outside, hold E unlocks a locked one). Windows: E opens a
 closed window or climbs through an open or broken one; sprint + E dives through (breaking the glass, 20 damage);
 hold E closes an open one (first aid heals after its 2 s animation). Repairs are the game's skill check: hold E

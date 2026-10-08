@@ -1009,6 +1009,10 @@ static class Mvp
         // Searching a cabinet (Counselor_OpenDrawer / OpenDrawerLow): open, idle, close, take.
         $"{Shared}/Interaction/Search/Drawer/AM_normal_stand_drawer_open_mid",
         $"{Shared}/Interaction/Search/Drawer/AM_normal_stand_drawer_open_low",
+        // Dropping items (Base_Counselor_AnimBP's DropLargeItemMontage / DropSmallItemMontage; their DropLargeItem /
+        // DropSmallItem notifies drop them).
+        $"{Shared}/Interaction/Items/AM_normal_stand_drop_item_right",
+        $"{Shared}/Interaction/Items/AM_normal_stand_drop_item_left",
         // Pulled out of the car by Jason (the driver seat's CounselorGrabbedMontage).
         CarGrab[0],
         // The phone box's fuse (AM_normal_stand_repair_phonebox) and calling the police (AM_normal_stand_use_phone).

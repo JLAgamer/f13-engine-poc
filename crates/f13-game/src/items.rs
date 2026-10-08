@@ -433,8 +433,7 @@ fn start_action(
         }
         return;
     }
-    let slot = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3].iter().position(|&k| keys.just_pressed(k));
-    let Some(&item) = slot.and_then(|i| inv.pockets.get(i)) else { return };
+    let Some(item) = inv.use_small else { return };
     if let Ok(Item { kind: ItemKind::Firecracker { throw_delay }, .. }) = items.get(item) {
         info!("throwing firecrackers");
         xf.rotation = face;
@@ -812,7 +811,7 @@ fn toggle_map(
         }
     }
     let Ok((inv, xf)) = player.single() else { return };
-    let has_map = inv.pockets.iter().chain(inv.hand.iter()).any(|&e| items.get(e).is_ok_and(|i| i.kind == ItemKind::Map));
+    let has_map = inv.special.iter().chain(inv.pockets.iter()).chain(inv.hand.iter()).any(|&e| items.get(e).is_ok_and(|i| i.kind == ItemKind::Map));
     let open = !panels.is_empty();
     if open && (!has_map || keys.just_pressed(KeyCode::KeyM)) {
         for e in &panels {

@@ -432,6 +432,8 @@ pub struct Jason {
     path: Vec<Vec3>,
     /// Whether the path gets to the goal (else it ends at the nearest point it can reach).
     path_reaches: bool,
+    /// At the end of a path that stops short of a goal in the water (the shore): straight on from here.
+    at_shore: bool,
     replan: f32,
     cooldown: f32,
     wants_grab: bool,
@@ -897,6 +899,7 @@ fn spawn_jason(
                 grounded: true,
                 path: Vec::new(),
                 path_reaches: true,
+                at_shore: false,
                 replan: 0.0,
                 cooldown: 0.0,
                 wants_grab: rng.0.frand() < GRAB_ODDS,
@@ -1633,7 +1636,10 @@ pub(crate) fn update_jason(
                 // Close in: straight at the goal when near, else along a path. A goal in the water (the AI's choice;
                 // the navmesh ends at the shore): straight in once his path runs out there, and along the bottom.
                 let wet_goal = water.as_ref().is_some_and(|w| w.surface_at(goal + Vec3::Y * 0.5).is_some());
-                let direct = gdist < 1.5 || (wet_goal && (surface.is_some() || (!j.path_reaches && j.path.len() <= 1)));
+                // At the shore: the last point of a path that stops short of the water (its end reached, not cut).
+                let shore_end = j.path.len() == 1 && j.path.first().is_some_and(|p| Vec2::new(p.x - xf.translation.x, p.z - xf.translation.z).length() < 1.5);
+                j.at_shore = wet_goal && !j.path_reaches && (j.at_shore || shore_end);
+                let direct = gdist < 1.5 || (wet_goal && (surface.is_some() || j.at_shore));
                 let mut wish = if direct { gflat.normalize_or_zero() } else { steer(&mut j, &mut nav.0, navmesh, &world, xf.translation, goal, dt) };
                 if sees && dist < t.attack_range_m * 0.7 {
                     wish = Vec2::ZERO; // close enough for anything; don't walk into her

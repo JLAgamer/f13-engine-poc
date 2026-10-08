@@ -25,6 +25,8 @@ pub struct Item {
     pub drop_cue: Option<String>,
     /// How many of its class she can carry (InventoryMax; 0: no limit).
     pub inventory_max: u32,
+    /// bIsSpecial (SCSpecialItem's constructor sets it: the map): kept apart from her pockets.
+    pub special: bool,
 }
 
 /// What an item does (by its native class).
@@ -577,6 +579,7 @@ fn spawn_props(
                 // A soft reference: "/Game/Sounds/ItemDrops/Name.Name".
                 drop_cue: classes.prop(&actor.class, "DroppedSoundCue")["AssetPathName"].as_str().and_then(|p| p.rsplit('.').next()).map(String::from),
                 inventory_max: classes.prop(&actor.class, "InventoryMax").as_u64().unwrap_or(0) as u32,
+                special: classes.is_child_of(&actor.class, "SCSpecialItem"),
             });
             *item_classes.entry(actor.class.clone()).or_default() += 1;
             *counts.entry(if actor.kind == Some(SpawnKind::RepairPart) { "repair parts" } else { "items" }).or_default() += 1;

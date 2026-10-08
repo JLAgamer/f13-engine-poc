@@ -75,6 +75,9 @@ pub enum Goal {
     /// Swim out in the lake where it's deep enough for his drowning kill: he should follow under the water and drown
     /// her.
     Drown,
+    /// With a large and a small item given (--give): tap Z (the small item goes at its drop take's notify), then hold Z
+    /// past DropItemHoldTime (the large item goes).
+    Drop,
 }
 
 pub struct BotPlugin(pub Goal);
@@ -91,6 +94,8 @@ impl Plugin for BotPlugin {
 enum Step {
     /// Waiting for the match to spawn.
     Start,
+    /// The drop test's phase.
+    DropTest(u8),
     /// Fetch the part for repair point `i`.
     Fetch(usize),
     /// Install it (hold E).
@@ -121,6 +126,8 @@ enum Step {
 
 #[derive(Resource)]
 struct Bot {
+    /// Where Jason was first seen (his spawn): scenarios placed from it don't depend on how far he got meanwhile.
+    jason_spawn: Option<Vec3>,
     goal: Goal,
     step: Step,
     vehicle: Option<Entity>,
@@ -154,7 +161,7 @@ struct Bot {
 
 impl Default for Bot {
     fn default() -> Self {
-        Self { goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false, hold_e: false, cabinet_hold: false, fixtures: [None; 3], door_ok: false, jason_shots: Vec::new(), door_hits: Vec::new(), fear_seen: Vec::new(), last_health: 100.0, min_breath: f32::MAX }
+        Self { jason_spawn: None, goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false, hold_e: false, cabinet_hold: false, fixtures: [None; 3], door_ok: false, jason_shots: Vec::new(), door_hits: Vec::new(), fear_seen: Vec::new(), last_health: 100.0, min_breath: f32::MAX }
     }
 }
 
@@ -285,12 +292,15 @@ fn run_bot(
         Query<(Entity, &crate::power::FuseBox, &Transform), (Without<Player>, Without<Vehicle>)>,
         Option<Res<crate::power::PowerGrids>>,
     ),
-    (collision, dynamic, (mut phone_boxes, mut phones, arrived, police_cars, jason_entities, placed_kills), water): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<Res<crate::police::PoliceArrived>>, Query<&Transform, (With<crate::police::PoliceCar>, Without<Player>, Without<Vehicle>)>, Query<Entity, With<crate::jason::Jason>>, Query<(Entity, &crate::placed_kills::PlacedKill)>), Option<Res<crate::water::Water>>),
+    (collision, dynamic, (mut phone_boxes, mut phones, arrived, police_cars, jason_entities, placed_kills), water, navmesh): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<Res<crate::police::PoliceArrived>>, Query<&Transform, (With<crate::police::PoliceCar>, Without<Player>, Without<Vehicle>)>, Query<Entity, With<crate::jason::Jason>>, Query<(Entity, &crate::placed_kills::PlacedKill)>), Option<Res<crate::water::Water>>, Option<Res<crate::navigation::Navmesh>>),
 ) {
     let world = collision.with(&dynamic);
     let dt = time.delta_secs();
     bot.timer += dt;
     bot.total += dt;
+    if bot.jason_spawn.is_none() {
+        bot.jason_spawn = jasons.iter().next().map(|(_, x)| x.translation);
+    }
     mouse.release(MouseButton::Left);
     mouse.release(MouseButton::Right);
     if !bot.hold_e && !std::mem::take(&mut bot.cabinet_hold) {
@@ -444,14 +454,16 @@ fn run_bot(
             }
             if bot.goal == Goal::Drown {
                 // Lake water 3.0 to 3.8 m deep (deep enough for his kill, the bottom within the 3.5 m of its trace
-                // under her), the spot nearest Jason.
-                let Some((_, jxf)) = jasons.iter().next() else {
+                // under her), the spot nearest where Jason spawned. (The navmesh loads in the background.)
+                if navmesh.is_none() {
+                    return;
+                }
+                let Some(jat) = bot.jason_spawn else {
                     error!("bot: no Jason");
                     bot.step = Step::Done;
                     return;
                 };
-                let jat = jxf.translation;
-                let mut best: Option<(f32, Vec3)> = None;
+                let mut spots: Vec<(f32, Vec3)> = Vec::new();
                 for (lo, hi) in water.as_ref().map(|w| w.boxes.clone()).unwrap_or_default() {
                     let mut x = lo.x;
                     while x < hi.x {
@@ -462,8 +474,8 @@ fn run_bot(
                                 let d = Vec2::new(x - jat.x, z - jat.z).length();
                                 // Open water: nothing over it (no pier).
                                 let open = f13_core::collision::segment_hit(&world, Vec3::new(x, hi.y, z), Vec3::new(x, hi.y + 10.0, z), 1.0).is_none();
-                                if (3.0..=3.8).contains(&depth) && open && best.is_none_or(|b| d < b.0) {
-                                    best = Some((d, Vec3::new(x, hi.y - 1.2, z)));
+                                if (3.0..=3.8).contains(&depth) && open {
+                                    spots.push((d, Vec3::new(x, hi.y - 1.2, z)));
                                 }
                             }
                             z += 2.0;
@@ -471,6 +483,17 @@ fn run_bot(
                         x += 2.0;
                     }
                 }
+                // The nearest one his path can lead him into: nothing standing between the path's end (where the
+                // navmesh stops at the shore; the AI goes straight on from there) and the spot, on a level line at his
+                // chest over the bank.
+                spots.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let mesh = navmesh.as_ref().map(|m| m.0.clone());
+                let best = spots.into_iter().find(|(_, at)| {
+                    let Some((path, _)) = mesh.as_ref().and_then(|m| m.find_path(jat, *at, 20000)) else { return false };
+                    let Some(end) = path.last() else { return false };
+                    let over = *end + Vec3::Y * 1.5;
+                    f13_core::collision::segment_hit(&world, over, Vec3::new(at.x, over.y, at.z), 0.5).is_none()
+                });
                 let Some((d, at)) = best else {
                     error!("bot: no lake water deep enough");
                     bot.step = Step::Done;
@@ -524,6 +547,11 @@ fn run_bot(
                 bot.timer = 0.0;
                 return;
             }
+            if bot.goal == Goal::Drop {
+                bot.step = Step::DropTest(0);
+                bot.timer = 0.0;
+                return;
+            }
             if bot.goal == Goal::Heal {
                 info!("bot: health {:.0}, going for first aid", p.counselor.health);
                 bot.step = Step::FetchAid;
@@ -556,6 +584,51 @@ fn run_bot(
             let parts = parts.clone();
             if !go_fetch(&world, &mut bot, &mut camera, &parts, near, pxf, &items, &cabinets, &mut keys) {
                 bot.step = Step::Done;
+            }
+        }
+        Step::DropTest(phase) => {
+            let Some(inv) = inv else { return };
+            match phase {
+                // Wait for the given items, then tap Z.
+                0 if inv.hand.is_some() && !inv.pockets.is_empty() && bot.timer > 0.5 => {
+                    info!("bot: tapping Z with {} pocket item(s)", inv.pockets.len());
+                    bot.door_hits.push((0.0, inv.pockets.len() as f32));
+                    keys.press(KeyCode::KeyZ);
+                    bot.step = Step::DropTest(1);
+                    bot.timer = 0.0;
+                }
+                1 => {
+                    keys.release(KeyCode::KeyZ);
+                    if bot.timer > 1.5 {
+                        let before = bot.door_hits.first().map_or(0.0, |h| h.1) as usize;
+                        if inv.pockets.len() + 1 == before && inv.hand.is_some() {
+                            info!("bot: the small item dropped, the large one kept");
+                            bot.jason_shots.push("small");
+                        }
+                        keys.press(KeyCode::KeyZ);
+                        bot.step = Step::DropTest(2);
+                        bot.timer = 0.0;
+                    }
+                }
+                // Hold Z past DropItemHoldTime.
+                2 => {
+                    if bot.timer > 0.8 {
+                        keys.release(KeyCode::KeyZ);
+                        bot.step = Step::DropTest(3);
+                        bot.timer = 0.0;
+                    } else {
+                        keys.press(KeyCode::KeyZ);
+                    }
+                }
+                3 if bot.timer > 1.5 => {
+                    if inv.hand.is_none() {
+                        info!("bot: the large item dropped");
+                        bot.jason_shots.push("large");
+                    }
+                    bot.step = Step::Done;
+                    bot.timer = 0.0;
+                }
+                _ => {}
             }
         }
         Step::FetchAid => {
@@ -1578,6 +1651,7 @@ fn run_bot(
                     // With Jason about, the police must have shot him.
                     Goal::Police => escaped.is_some() && (jasons.is_empty() || bot.jason_shots.contains(&"police stun")),
                     Goal::Heal => p.counselor.health >= 100.0,
+                    Goal::Drop => bot.jason_shots.contains(&"small") && bot.jason_shots.contains(&"large"),
                     Goal::Dodge => bot.dodges_ok == 3,
                     Goal::Door => bot.door_ok,
                     Goal::Jason => !p.counselor.alive(),

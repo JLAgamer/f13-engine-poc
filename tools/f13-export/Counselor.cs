@@ -248,6 +248,9 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         // Stealth 0.2).
         foreach (var (name, fallback) in new[] { ("MaxBreath", 100f), ("MinHoldBreathThreshold", 50f), ("MinHoldBreathTimer", 1.5f) })
             values[name] = ClassValue<float?>(cls, name) ?? fallback;
+        // Her pockets and the drop key's hold (constructor 0x1403a08c0: MaxSmallItems 3, DropItemHoldTime 1.5).
+        values["MaxSmallItems"] = ClassValue<int?>(cls, "MaxSmallItems") ?? 3;
+        values["DropItemHoldTime"] = ClassValue<float?>(cls, "DropItemHoldTime") ?? 1.5f;
         info.Stats["BreathHoldModifier"] = StatValue(cls, "BreathHoldModifier", 10f, (6, 1f));
         info.Stats["BreathRechargeModifier"] = StatValue(cls, "BreathRechargeModifier", 10f, (5, 1f));
         info.Stats["BreathNoiseMod"] = StatValue(cls, "BreathNoiseMod", 1f, (6, 0.2f));

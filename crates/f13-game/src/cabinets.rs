@@ -12,7 +12,9 @@
 //!   constructor) takes the item.
 //! - **Close** (MULTICAST_Close 0x14034e180, take or not): not ready; not taking: an empty drawer stops her montage
 //!   and the move at once, else the montage jumps to Close and the move ends after it. Taking: Take, then TakeClose
-//!   when a small item meets full pockets; the item is hers at the montage's OnPickupItem notify.
+//!   (the same segment again) when a small item meets full pockets; the item is hers at the montage's OnPickupItem
+//!   notify, the selected pocket's item going into the drawer in its place (her pickup, 0x1403a4e30), which closes
+//!   on it when the move ends.
 //! - **The move ends** (OpenCloseCabinetCompleted 0x140353870; UseCabinetAborted the same): no interactor; a drawer
 //!   still holding an item closes (bIsOpen false, AnimatedMesh back to CloseTransform). An emptied drawer stays open,
 //!   and an open drawer can't be used again.
@@ -23,10 +25,10 @@
 //!   the FollowLocation on the drawer; at BeginPlay (0x1403376c0) it's put there too.
 //!
 //! Here the bone's poses are sampled from her takes of the montage's sections (the montage plays them full-body once
-//! blended in). PLACEHOLDER: a small item with her pockets full isn't taken (the game swaps it, playing TakeClose).
+//! blended in).
 
 use crate::character::PlayAction;
-use crate::interact::{Carried, Inventory, MAX_SMALL_ITEMS};
+use crate::interact::{Carried, Inventory};
 use crate::player::Player;
 use crate::props::{InCabinet, Item};
 use bevy::prelude::*;
@@ -91,8 +93,6 @@ pub fn can_take(item: Option<&Item>, inv: &Inventory, items: &Query<&Item>) -> b
     let Some(item) = item else { return false };
     let held = inv.hand.into_iter().chain(inv.pockets.iter().copied()).filter(|&e| items.get(e).is_ok_and(|i| i.class == item.class)).count();
     !(item.inventory_max > 0 && held as u32 >= item.inventory_max)
-        // PLACEHOLDER (see the module docs): a small item needs a free pocket.
-        && (item.large || inv.pockets.len() < MAX_SMALL_ITEMS)
 }
 
 fn take_name(low: bool, section: Section) -> String {
@@ -141,6 +141,8 @@ pub struct CabinetUse {
     /// The move's end (FUN_14043e9e0's timer).
     end_in: Option<f32>,
     picked: bool,
+    /// TakeClose follows Take (a small item swapped for her selected one).
+    take_close: bool,
 }
 
 /// Closes the drawer she's at (MULTICAST_Close), taking its item or not.
@@ -184,14 +186,20 @@ pub fn search(commands: &mut Commands, player: Entity, from: Transform, cabinet:
         };
         let open = w.get_resource::<crate::character::CounselorCharacter>().and_then(|m| m.info.animations.get(&take)).and_then(|a| a.section("Open"));
         let ready_in = open.map_or(0.0, |(a, b)| b - a);
-        w.entity_mut(player).insert((CabinetUse { cabinet, slot, section: Section::Open, t: 0.0, ready_in: Some(ready_in), end_in: None, picked: false }, PlayAction(take)));
+        w.entity_mut(player).insert((CabinetUse { cabinet, slot, section: Section::Open, t: 0.0, ready_in: Some(ready_in), end_in: None, picked: false, take_close: false }, PlayAction(take)));
         info!("searching a cabinet from ({:.2}, {:.2}, {:.2})", at.x, at.y, at.z);
     });
 }
 
 /// MULTICAST_Close: not ready any more; the montage to Close or Take, or (empty, not taking) the move ends.
-fn close_cabinet(ev: On<CloseCabinet>, mut players: Query<&mut CabinetUse>, mut cabinets: Query<&mut Cabinet>, model: Option<Res<crate::character::CounselorCharacter>>) {
-    let Ok(mut u) = players.get_mut(ev.player) else { return };
+fn close_cabinet(
+    ev: On<CloseCabinet>,
+    mut players: Query<(&mut CabinetUse, &Inventory)>,
+    mut cabinets: Query<&mut Cabinet>,
+    items: Query<&Item>,
+    model: Option<Res<crate::character::CounselorCharacter>>,
+) {
+    let Ok((mut u, inv)) = players.get_mut(ev.player) else { return };
     let Ok(mut cab) = cabinets.get_mut(u.cabinet) else { return };
     let Some(slot) = cab.slots.get_mut(u.slot) else { return };
     slot.ready = false;
@@ -206,6 +214,15 @@ fn close_cabinet(ev: On<CloseCabinet>, mut players: Query<&mut CabinetUse>, mut 
     u.section = section;
     u.t = start;
     u.end_in = Some(end - start);
+    // A small, not special item with her pockets full: TakeClose after Take (SetNextSection), its length added.
+    let small = slot.item.and_then(|(e, _)| items.get(e).ok()).is_some_and(|i| !i.large && !i.special);
+    if ev.take && small && inv.pockets.len() >= inv.max_small {
+        let take_close = model.as_ref().and_then(|m| m.info.animations.get(&slot.take(section))).and_then(|a| a.section("TakeClose"));
+        if let Some((a, b)) = take_close {
+            u.take_close = true;
+            u.end_in = Some(end - start + b - a);
+        }
+    }
 }
 
 /// Each drawer's montage: sections, timers, the item taken at OnPickupItem, the drawer following her bone, the move's
@@ -262,12 +279,21 @@ pub(crate) fn cabinet_uses(
             }
         }
 
+        // Take into TakeClose: the same segment again.
+        if u.section == Section::Take && u.take_close && bounds(Section::Take).is_some_and(|(_, end)| u.t >= end) {
+            if let Some((start, _)) = anim(Section::Take).and_then(|a| a.section("TakeClose")) {
+                u.t = start;
+                u.take_close = false;
+                commands.entity(pe).insert(crate::character::RestartAction);
+            }
+        }
+
         // OnPickupItem: the item is hers.
         if u.section == Section::Take && !u.picked {
             if let Some((at, _)) = anim(Section::Take).and_then(|a| a.window("OnPickupItem")) {
                 if before < at && u.t >= at {
                     u.picked = true;
-                    if let Some((e, _)) = slot.item.take() {
+                    if let Some((e, rest)) = slot.item.take() {
                         if let Ok(item) = items.get(e) {
                             if item.large {
                                 if let Some(old) = inv.hand.take() {
@@ -275,7 +301,7 @@ pub(crate) fn cabinet_uses(
                                 }
                                 inv.hand = Some(e);
                             } else {
-                                inv.pockets.push(e);
+                                crate::interact::take_small(&mut commands, &mut visibility, &mut inv, item, e, crate::interact::Swap::Cabinet(u.cabinet, u.slot, rest));
                             }
                             info!("took {} from a cabinet", item.name);
                             commands.trigger(crate::match_flow::ClassScore::new(&item.class, "PickupScoreEvent"));

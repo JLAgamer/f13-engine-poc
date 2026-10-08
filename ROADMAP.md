@@ -26,8 +26,8 @@ Mechanics: counselor side
 - [x] Jason in the water (jason.rs, decompiled): under it when his capsule's top is, his depth-scaled speed along the
       bottom, unseen there, no Shift; his drowning kill (Underwater_GrabKill) on a swimming counselor in reach when
       he's deep enough; the AI follows her in (`--bot-drown`)
-- [ ] Swimming, remaining: diving (counselors only swim at the surface here); Jason's underwater sound mix, his
-      underwater input, dropping a held counselor as he goes under
+- [ ] Swimming, remaining: Jason's underwater sound mix, his underwater input, dropping a held counselor as he goes
+      under. (Counselors don't dive in the game: SCCounselorCharacter has no diving, only MinWaterDepthForSwimming)
 - [x] Fear events pushed in the client (fear_events.rs): darkness (f13-core::light, the map's point and spot lights),
   indoors (the cabins' indoor volumes, also used by Sense), wounded, Jason near and in view, grabbed, hidden, items
   held, in water, blackouts (inside a grid's volume while its power is out)
@@ -162,8 +162,8 @@ Match
       opening, Jason turned back from it and shot (PoliceShootJasonStun), escaping on foot (walking its ExitPath for its 6 s EscapeDelay); the HUD's
       police timer (ShowPoliceTimer, PoliceTimerText); Jason (played) breaking the phone box
       (AM_Break_Phone_Box_Machete, PhoneBoxImpact): the phone dead, a call cut off, until it's repaired (its own minigame)
-- [ ] Match flow, remaining: the level intro and outro sequences, badges (award sites and classes read, see MODLOG;
-      to show on the results)
+- [ ] Match flow, remaining: the level intro and outro sequences. (Badges: their award sites and classes are read,
+      see MODLOG; the game shows them in the lobby's SCMatchEndLobbyWidget, so with the lobby in Milestone 3)
 - [x] Item and car spawning, as the game mode does it (f13-core::spawn, f13-data::world)
 - [x] How the game chooses one of the four cabin layouts per match: SCWorldSettings' RandomLevels, one picked at
   random when the level loads (`--layout` overrides)
@@ -272,6 +272,11 @@ Presentation
       Pamela's sweater can be used (CSLR_UseAbility's release and SERVER_UseAbility both check SweaterAbility; the
       multicast then uses it before ActiveAbility), so it never activates; SCAbility_Widget stays at its design
       Hidden (nothing shows it)
+- [x] Small items as the game handles them: the selected pocket (mouse wheel, 1-3, G to use), Z to drop (held for
+      DropItemHoldTime: the large item), a small item taken with full pockets swapping places with the selected one
+      (dropped where it lay, or left in its drawer, TakeClose), the map kept apart (special items); the HUD's active
+      pocket; the drop montages (the item goes at their DropLargeItem / DropSmallItem notify). Not yet: the uses-left
+      count
 - [ ] HUD, remaining: the items' minimap icons (they start hidden; what shows them isn't read)
 - [x] Night lighting, fog, flashlight (lighting.rs): the map's point/spot lights (inverse-square lumens, or Unreal's
   falloff-exponent lights matched at a third of their radius; colour temperature; draw-distance fades), the moon and
