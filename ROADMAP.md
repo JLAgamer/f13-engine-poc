@@ -174,8 +174,9 @@ Mechanics: Jason side
       custom-stencil mask camera: her meshes through walls; sense_view.rs) and her cabin's (PP_Jason_Sense_Cabin_01:
       Cabin_Base's SetSenseEffects lights its doors and windows, stencil 1). The AOE light (PP_Killer_AOE_Light) is
       checked and does nothing for J2 (AOELightRadius 0: the shader returns the scene)
-- [ ] Shift, Morph, Stalk, remaining: the dissolve; Sense's hiding spot highlight (the spot's SetSenseEffects) and
-      the counselor's SenseEffect emitter (particles); Sense's and the stun's depth of field overrides; the stun's SceneFringeIntensity (to 5: the
+- [ ] Shift, Morph, Stalk, remaining: the dissolve; the counselor's SenseEffect emitter (particles); (Sense's
+      hiding spot SetSenseEffects, Outhouse / Tent, turns on custom depth at stencil 0, which neither Sense material
+      shows: nothing to draw) Sense's and the stun's depth of field overrides; the stun's SceneFringeIntensity (to 5: the
       tonemapper's fringe permutation) (Morph's
       excluded areas: the map's Boundary image has no texture in this level's widget, so none refuse a click)
 - [x] Throwing knives (J2's two, the knife's damage and cooldown, the throw montage and its ThrowKnife notify,
