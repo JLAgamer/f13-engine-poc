@@ -14,6 +14,127 @@ Content (asset paths in the player's install):
   - Crystal Lake's world settings spawn both the 2-seat and the 4-seat Chevette; f13-rs follows the game
 
 Mechanics: counselor side
+- [ ] Car handling, remaining: suspension, sliding, collisions' impulses
+      (reference: PhysX 3.4's published vehicle source, downloaded to F13-decomp/ref with the user's OK; the game's
+      statically linked copy is stripped)
+
+Mechanics: Jason side
+- [ ] Played Jason, bugs to fix:
+      - his HUD: the abilities' unlock progress looks wrong
+      - he holds nothing while throwing a knife (no knife in his hand)
+      - walking into a door opens it and places a trap: the computer Jason's door and trap logic still running for
+        the player
+      - his pickaxe has no material: M_JasonV2_PickAxe is its own master, with only WeaponBloodMask as a parameter, so
+        its base textures are in the material graph, which the export doesn't read (may fold into Materials, remaining)
+      - his footsteps: some steps play no sound
+
+Presentation
+- [ ] Audio (audio.rs, f13-data::sound): done: SoundCue playback (the cue graph's random, modulator, mixer, looping, delay
+  and attenuation nodes; Unreal's attenuation falloff; left/right panning around the camera) and the counselor's
+  footsteps (her locomotion's Footstep notifies; the surface under her foot: a mesh's physical material or the
+  terrain's heaviest paint layer; Base_Counselor_AnimBP's tables); doors, windows and barricades (their classes' cues);
+  Jason's near music (NearCounselorMusic by distance, silenced by Stalk); the counselor's music (MusicCounselor:
+  MatchStart, CounselorIdle after each track, the two-minute warning, death and survival music; fades); Jason's
+  footsteps (Jason_AnimBP's tables, a step each half of his locomotion cycle); her landing (GetLandingSound, down
+  from a fall) and wading steps (GetFootstepInWater: shallow or deep); items put down (DroppedSoundCue); the car's
+  key turning and engine running (EngineStartCue, EngineCue, on the car; the engine's RPM parameter, as the car's
+  tick sets it, through V6Engine's ParamCrossFade bands and continuous pitch modulators); walls' hit and break cues; the
+  ability-unlock warning (KiKiKiMaMaMa) and JasonTeleportedNearStinger; the animations' own sounds (their
+  AnimNotify_PlaySound notifies, from each take's sequence and the montage segments playing it: anim_sounds.json):
+  item use (first aid, flare, firecracker, trap), swings, dodges, doors, locks, windows, hiding spots, repairs,
+  Jason's swings, door breaking, knives, traps and kills; the cycles' (the swim strokes) by their phase; the map's
+  ambience (CrystalLake_Sm_Audio's AmbientSounds: the campground and mood tone loops, the lake's within its box
+  attenuation); the car's horn (H) and brakes (their audio components' cues); her voice lines (Impact, Wounded,
+  Choke (Base_Counselor's graph: a second after a grab, stopped by a kill or her release), Stumble, Died, swings,
+  windows, each kill's, stunning Jason, car parts fitted; PLACEHOLDER triggers; one line at a time, as her voice
+  component plays them). Remaining:
+  the other stingers, scary sounds, the other voice lines (chases, calls, dead bodies), the audio volumes' reverb
+
+Decomp audit (nothing guessed: every rule read from the decomp or the game's data)
+- [ ] Check each PLACEHOLDER (9 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
+      them, in jason.rs, are the AI's own choices and stay) and each "guess"/"assumed"/"not read" note (about 10)
+      against the decomp and the export (Ghidra, MODLOG, f13-export `debug-json` / `pseudo` / `cdo` / `grep`); port
+      what the game does, or record in MODLOG why it can't be found. Most are in jason.rs, hiding.rs, audio.rs,
+      police.rs, doors.rs, items.rs, interact.rs. Jason's decisions stay ours (his AI was cut), marked as such.
+      Found so far: her "Choke" line on a grab (the game never plays it there: removed); the grab kills' camera
+      splines missed their component's place in the kill Blueprint (fixed); the barricade plank (one plank whose
+      pitch follows her "Barricade" curve: fixed); doors' interaction cameras (ported); which interactable she uses
+      (the interactable manager's score and its range test: yaw/pitch limits and the occlusion trace, ported);
+      barricades' doors (SCBarricade's BeginPlay overlap: ported); cabinets (instant before: their special move and
+      the drawer following her bone, ported); the firecracker's spawn point (her hand) and direction (the camera's
+      yaw); Jason's knife speed (ThrowStrength 12000; the knife Blueprint doesn't set it); the car seat's reach (an
+      added 60 cm, removed); the tonemapper's grain frame (FrameIndexMod8); the item keys (G dropped, 1-3 used a pocket:
+      now the game's wheel / 1-3 / G / Z, the selected pocket, the full-pocket swap, the drop montages); the run toggle
+      (Caps Lock: X); the XP popups' 4 s text (the XP line widgets' fades); the counselor's match timer (always shown:
+      the game shows it only at 0 s); a window's inside (reversed: she climbed from the far side's spot); the special
+      moves' slide (no sweep: SCSpecialMove_SoloMontage's sweep and MoveThreshold); the beds' trace channel (traced as
+      WorldDynamic: Visibility); help texts and Vanessa's SprintBoost (never shown / never usable in the game); the
+      Morph stinger (never played: removed) and the teleport static's reach (PlayDistortionEffect's
+      MaxTeleportViewDistance rule, also on Stalk); bTakeCameraControl's default (true: drawers' and windows'
+      cameras); the counselor's heavy swing (held in combat stance, not W); bIsStruggling (never set: Jason's grab
+      layer is always its Idle); the doors', windows' and barricades' cues (played on state changes: the windows'
+      as her move starts, the barricades' as she starts using one, the doors' open / close cues never by code); weapon
+      sweeps against Jason's physics bodies (his PhysicsAsset, exported; his capsule stood in); her seat (taken at the
+      enter take's end, OnEnterVehicleComplete, left at the exit's start: it was taken as she started getting in)
+
+## Milestone 2: more escapes
+Police, 4-seat car, boat, then the others, one at a time.
+- [ ] Police, remaining (the escape itself works in M1's match: see above): the escape's camera spline, the phone box's
+      broken mesh and lights, the computer Jason breaking boxes, the free-spot traces when he's turned back
+      (PoliceStunTrace)
+
+Moved out of Milestone 1 (they need more than one counselor; M1 has Vanessa alone):
+- [ ] Fear events near friendlies and corpses (other counselors)
+- [ ] Car passengers, and the car running counselors over
+- [ ] The lobby (M3), the Tommy Jarvis timer and Jason dying (killing him needs Tommy and other counselors;
+      Tommy is in "Afterwards")
+
+Moved from Milestone 1 (not tied to gameplay):
+- [ ] Match flow, remaining: the level intro and outro sequences. (Badges: their award sites and classes are read,
+      see MODLOG; the game shows them in the lobby's SCMatchEndLobbyWidget, so with the lobby in Milestone 3)
+- [ ] Materials, remaining: water (first pass only: colour, gloss, panning ripples; no depth fade, foam or
+      reflections), POM parallax, the other emissive masters (signs, the CB tower, the phone box), foliage
+      subsurface, the Chevette's paint mask
+- [ ] Particle effects (Cascade ParticleSystems): none ported yet. The walls' and doors' hit dust (HitParticle), the
+      knife's trail (P_Jason_ThrowingKnife_01), blood, the campfires and fireplaces, the cars' exhaust, rain
+- [ ] Counselor model, remaining: facial animation and hair dynamics (their own anim Blueprints), the eyes' iris and
+      lid overlays, outfit choice
+- [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: their root doesn't turn, the body turns about it; how the actor turns with them is unread), foot-marker
+      sync (now normalised time), aim offsets (Base_Counselor_AnimBP's AimOffsets, the Hunter's poses on the shared
+      skeleton, by AimPitch while bIsAiming), BS_Run_Lean, the rest of the anim Blueprints' graphs (f13-rs plays their
+      locomotion and the grab and block layers; their look-at, IK and additive nodes aren't ported). Not in the game:
+      turn-in-place takes, limp movement
+- [ ] Lighting, remaining: Enlighten GI, local light shadows, light functions, the sky texture, rain (the colour
+      grading and bloom: Decomp audit's post-processing)
+- [ ] Read the stock pak directly, so users don't need to extract it first (with the host CLI's first-run setup).
+      Its footer is known (an encrypted-index flag, magics 'Atae' and 'kcid', version 5, index offset and size,
+      hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold
+      for a decision on that
+- [ ] Post-processing, remaining: SSAO (FPostProcessAmbientOcclusion*: it darkens indirect light only; settings and
+      cvars read, see MODLOG "SSAO (started)"); then compare
+      against the game's own screenshots. (Bloom's fast blur: ported, ComputeOutputDesc's half-width X pass)
+
+## Milestone 3: networking
+Server-authoritative netcode, tested with bots, then an 8-player lobby.
+
+## Afterwards
+Gradually add content. Nice to have, not needed for the MVP: voice chat, Tommy Jarvis, cutscenes,
+more maps, Jasons and counselors, perks, skins, emotes, a main menu.
+
+Future plans:
+- All unlockables and perks available by default
+- Server browser using Steamworks
+- Mod support: a mod repository that clients pull from; modded lobbies are labelled in the browser and
+  joining one downloads its mods
+- Configurable community backends: progression, allowed mods, which servers are listed, player reports
+  (for example vanilla-only, cheater-banning communities as well as the default "anything goes")
+
+Mod ideas: custom game modes (infection), larger lobbies, custom counselors and Jasons, custom animations.
+
+## Milestone 1: done
+Completed Milestone 1 work, kept for its references to the decomp and the game's data.
+
+Mechanics: counselor side
 - [x] Stats and stat-modified values
 - [x] Fear (events, caps, delays, throttled updates)
 - [x] Stamina, walk/run/sprint/crouch speeds, sprint rules, wounded state (f13-core::counselor)
@@ -52,9 +173,6 @@ Mechanics: counselor side
       MaxRPM, automatic gearbox (ratios, shift points, latency), idle brake, the wheels' radius and steering lock,
       Unreal's defaults (mass, final ratio, brakes, drag, steering curve); a reduced model of the PhysX vehicle (no
       sliding, grip-capped drive, revs follow the wheels)
-- [ ] Car handling, remaining: suspension, sliding, collisions' impulses
-      (reference: PhysX 3.4's published vehicle source, downloaded to F13-decomp/ref with the user's OK; the game's
-      statically linked copy is stripped)
 - [x] Cabinets (drawers): search, items inside
 - [x] Doors: leaves exported and swinging on their pivot, open/close, lock/unlock by side (doors.rs; they open to the
   pivot's -90 yaw from either side, along the opener's DoorRotation curve: SCDoor's driver)
@@ -116,14 +234,6 @@ Mechanics: Jason side
 - [x] Kill cameras blend back (0.5 s, their special moves' BlendBackTime) to the follow camera
 - [x] Playing as Jason (`--play-jason`, jason_player.rs): walk, fast walk, look; attack (held in combat stance: the
       heavy attack), grab and kill, knives (aimed while held), traps, Shift, Morph (picked on his map), Stalk; doors as he walks into them; the counselor stands idle unless a `--bot-*` plays her
-- [ ] Played Jason, bugs to fix:
-      - his HUD: the abilities' unlock progress looks wrong
-      - he holds nothing while throwing a knife (no knife in his hand)
-      - walking into a door opens it and places a trap: the computer Jason's door and trap logic still running for
-        the player
-      - his pickaxe has no material: M_JasonV2_PickAxe is its own master, with only WeaponBloodMask as a parameter, so
-        its base textures are in the material graph, which the export doesn't read (may fold into Materials, remaining)
-      - his footsteps: some steps play no sound
 - [x] Jason's keys as the game binds them (SetupPlayerInputComponent 0x140407900 and DefaultInput.ini): LMB attack,
       RMB grab, MMB held aims a knife and letting go throws it (RMB puts it away), C combat stance (MaxCombatSpeed,
       facing the view), R trap, 1 Morph, 2 Sense, 3 Shift, 4 Stalk, Left Shift fast walk, E interact; holding her, 1-4
@@ -366,56 +476,11 @@ Presentation
   height fog of the clear-weather level (CLsm_RainOff), the post-process volume's fixed exposure and ambient cubemap,
   the sky's colour; the counselor's flashlight (F; its Blueprint values, attachment, turn rate, wall check; lit for
   fear); power cuts (power.rs)
-- [ ] Audio (audio.rs, f13-data::sound): done: SoundCue playback (the cue graph's random, modulator, mixer, looping, delay
-  and attenuation nodes; Unreal's attenuation falloff; left/right panning around the camera) and the counselor's
-  footsteps (her locomotion's Footstep notifies; the surface under her foot: a mesh's physical material or the
-  terrain's heaviest paint layer; Base_Counselor_AnimBP's tables); doors, windows and barricades (their classes' cues);
-  Jason's near music (NearCounselorMusic by distance, silenced by Stalk); the counselor's music (MusicCounselor:
-  MatchStart, CounselorIdle after each track, the two-minute warning, death and survival music; fades); Jason's
-  footsteps (Jason_AnimBP's tables, a step each half of his locomotion cycle); her landing (GetLandingSound, down
-  from a fall) and wading steps (GetFootstepInWater: shallow or deep); items put down (DroppedSoundCue); the car's
-  key turning and engine running (EngineStartCue, EngineCue, on the car; the engine's RPM parameter, as the car's
-  tick sets it, through V6Engine's ParamCrossFade bands and continuous pitch modulators); walls' hit and break cues; the
-  ability-unlock warning (KiKiKiMaMaMa) and JasonTeleportedNearStinger; the animations' own sounds (their
-  AnimNotify_PlaySound notifies, from each take's sequence and the montage segments playing it: anim_sounds.json):
-  item use (first aid, flare, firecracker, trap), swings, dodges, doors, locks, windows, hiding spots, repairs,
-  Jason's swings, door breaking, knives, traps and kills; the cycles' (the swim strokes) by their phase; the map's
-  ambience (CrystalLake_Sm_Audio's AmbientSounds: the campground and mood tone loops, the lake's within its box
-  attenuation); the car's horn (H) and brakes (their audio components' cues); her voice lines (Impact, Wounded,
-  Choke (Base_Counselor's graph: a second after a grab, stopped by a kill or her release), Stumble, Died, swings,
-  windows, each kill's, stunning Jason, car parts fitted; PLACEHOLDER triggers; one line at a time, as her voice
-  component plays them). Remaining:
-  the other stingers, scary sounds, the other voice lines (chases, calls, dead bodies), the audio volumes' reverb
 
 Setup
 - [x] Tools refuse a packed (stock) install with a clear message; they need the content extracted to loose files
 
 Decomp audit (nothing guessed: every rule read from the decomp or the game's data)
-- [ ] Check each PLACEHOLDER (9 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
-      them, in jason.rs, are the AI's own choices and stay) and each "guess"/"assumed"/"not read" note (about 10)
-      against the decomp and the export (Ghidra, MODLOG, f13-export `debug-json` / `pseudo` / `cdo` / `grep`); port
-      what the game does, or record in MODLOG why it can't be found. Most are in jason.rs, hiding.rs, audio.rs,
-      police.rs, doors.rs, items.rs, interact.rs. Jason's decisions stay ours (his AI was cut), marked as such.
-      Found so far: her "Choke" line on a grab (the game never plays it there: removed); the grab kills' camera
-      splines missed their component's place in the kill Blueprint (fixed); the barricade plank (one plank whose
-      pitch follows her "Barricade" curve: fixed); doors' interaction cameras (ported); which interactable she uses
-      (the interactable manager's score and its range test: yaw/pitch limits and the occlusion trace, ported);
-      barricades' doors (SCBarricade's BeginPlay overlap: ported); cabinets (instant before: their special move and
-      the drawer following her bone, ported); the firecracker's spawn point (her hand) and direction (the camera's
-      yaw); Jason's knife speed (ThrowStrength 12000; the knife Blueprint doesn't set it); the car seat's reach (an
-      added 60 cm, removed); the tonemapper's grain frame (FrameIndexMod8); the item keys (G dropped, 1-3 used a pocket:
-      now the game's wheel / 1-3 / G / Z, the selected pocket, the full-pocket swap, the drop montages); the run toggle
-      (Caps Lock: X); the XP popups' 4 s text (the XP line widgets' fades); the counselor's match timer (always shown:
-      the game shows it only at 0 s); a window's inside (reversed: she climbed from the far side's spot); the special
-      moves' slide (no sweep: SCSpecialMove_SoloMontage's sweep and MoveThreshold); the beds' trace channel (traced as
-      WorldDynamic: Visibility); help texts and Vanessa's SprintBoost (never shown / never usable in the game); the
-      Morph stinger (never played: removed) and the teleport static's reach (PlayDistortionEffect's
-      MaxTeleportViewDistance rule, also on Stalk); bTakeCameraControl's default (true: drawers' and windows'
-      cameras); the counselor's heavy swing (held in combat stance, not W); bIsStruggling (never set: Jason's grab
-      layer is always its Idle); the doors', windows' and barricades' cues (played on state changes: the windows'
-      as her move starts, the barricades' as she starts using one, the doors' open / close cues never by code); weapon
-      sweeps against Jason's physics bodies (his PhysicsAsset, exported; his capsule stood in); her seat (taken at the
-      enter take's end, OnEnterVehicleComplete, left at the exit's start: it was taken as she started getting in)
 - [x] Audit of hiding.rs, doors.rs, police.rs, items.rs, placed_kills.rs, character.rs, senses.rs, ui.rs, vehicle.rs
       (MODLOG "Decomp audit (worktree session)"): hiding voice lines and spot doors, the door's opening side, the
       police volume's obstruction, stun spot search and phone box rule, melee sweeps, guns, the firecracker throw,
@@ -436,57 +501,3 @@ Decomp audit (nothing guessed: every rule read from the decomp or the game's dat
       f13-core::color_grading): the map volume baked into the engine's 32³ LUT (white balance, colour correction, the
       filmic curve, LutTestHorror at 0.25), the tonemap pass (vignette, grain quantization), bloom (six Gaussian stages
       as AddBloom builds them at Epic)
-
-## Milestone 2: more escapes
-Police, 4-seat car, boat, then the others, one at a time.
-- [ ] Police, remaining (the escape itself works in M1's match: see above): the escape's camera spline, the phone box's
-      broken mesh and lights, the computer Jason breaking boxes, the free-spot traces when he's turned back
-      (PoliceStunTrace)
-
-Moved out of Milestone 1 (they need more than one counselor; M1 has Vanessa alone):
-- [ ] Fear events near friendlies and corpses (other counselors)
-- [ ] Car passengers, and the car running counselors over
-- [ ] The lobby (M3), the Tommy Jarvis timer and Jason dying (killing him needs Tommy and other counselors;
-      Tommy is in "Afterwards")
-
-Moved from Milestone 1 (not tied to gameplay):
-- [ ] Match flow, remaining: the level intro and outro sequences. (Badges: their award sites and classes are read,
-      see MODLOG; the game shows them in the lobby's SCMatchEndLobbyWidget, so with the lobby in Milestone 3)
-- [ ] Materials, remaining: water (first pass only: colour, gloss, panning ripples; no depth fade, foam or
-      reflections), POM parallax, the other emissive masters (signs, the CB tower, the phone box), foliage
-      subsurface, the Chevette's paint mask
-- [ ] Particle effects (Cascade ParticleSystems): none ported yet. The walls' and doors' hit dust (HitParticle), the
-      knife's trail (P_Jason_ThrowingKnife_01), blood, the campfires and fireplaces, the cars' exhaust, rain
-- [ ] Counselor model, remaining: facial animation and hair dynamics (their own anim Blueprints), the eyes' iris and
-      lid overlays, outfit choice
-- [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: their root doesn't turn, the body turns about it; how the actor turns with them is unread), foot-marker
-      sync (now normalised time), aim offsets (Base_Counselor_AnimBP's AimOffsets, the Hunter's poses on the shared
-      skeleton, by AimPitch while bIsAiming), BS_Run_Lean, the rest of the anim Blueprints' graphs (f13-rs plays their
-      locomotion and the grab and block layers; their look-at, IK and additive nodes aren't ported). Not in the game:
-      turn-in-place takes, limp movement
-- [ ] Lighting, remaining: Enlighten GI, local light shadows, light functions, the sky texture, rain (the colour
-      grading and bloom: Decomp audit's post-processing)
-- [ ] Read the stock pak directly, so users don't need to extract it first (with the host CLI's first-run setup).
-      Its footer is known (an encrypted-index flag, magics 'Atae' and 'kcid', version 5, index offset and size,
-      hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold
-      for a decision on that
-- [ ] Post-processing, remaining: SSAO (FPostProcessAmbientOcclusion*: it darkens indirect light only; settings and
-      cvars read, see MODLOG "SSAO (started)"); then compare
-      against the game's own screenshots. (Bloom's fast blur: ported, ComputeOutputDesc's half-width X pass)
-
-## Milestone 3: networking
-Server-authoritative netcode, tested with bots, then an 8-player lobby.
-
-## Afterwards
-Gradually add content. Nice to have, not needed for the MVP: voice chat, Tommy Jarvis, cutscenes,
-more maps, Jasons and counselors, perks, skins, emotes, a main menu.
-
-Future plans:
-- All unlockables and perks available by default
-- Server browser using Steamworks
-- Mod support: a mod repository that clients pull from; modded lobbies are labelled in the browser and
-  joining one downloads its mods
-- Configurable community backends: progression, allowed mods, which servers are listed, player reports
-  (for example vanilla-only, cheater-banning communities as well as the default "anything goes")
-
-Mod ideas: custom game modes (infection), larger lobbies, custom counselors and Jasons, custom animations.
