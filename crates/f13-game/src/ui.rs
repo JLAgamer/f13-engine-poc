@@ -940,12 +940,9 @@ fn minimap(
     let (Some(map), Some(player), Some(camera)) = (&hud.map, player, camera) else { return };
     let Some(&e) = hud.names.iter().find(|(k, _)| k.as_str() == MINIMAP_RETAINER).map(|(_, e)| e) else { return };
     let Ok(node) = nodes.get(e) else { return };
-    let [x0, y0, x1, y1] = map.area;
-    // Unreal x, y (cm) from Bevy x, z (m).
-    let (x, y) = (player.translation.x * 100.0, player.translation.z * 100.0);
-    let uv = Vec2::new((x - x0) / (x1 - x0), (y - y0) / (y1 - y0));
+    let uv = map_uv(map.area, player.translation);
     let f = camera.forward();
-    let dir = Vec2::new(f.x, f.z).normalize_or(Vec2::NEG_Y);
+    let dir = map_dir(map.area, *f).normalize_or(Vec2::NEG_Y);
     if let Some(mut m) = maps.get_mut(&node.0) {
         m.view = Vec4::new(uv.x, uv.y, map.zoom, MINIMAP_RADIUS);
         m.dir = Vec4::new(dir.x, dir.y, 0.0, 0.0);
@@ -954,6 +951,21 @@ fn minimap(
     if let Some((_, &compass)) = hud.names.iter().find(|(k, _)| k.ends_with(".ComapssPanel")) {
         commands.entity(compass).insert(UiTransform { rotation: Rot2::radians((-dir.x).atan2(-dir.y)), ..default() });
     }
+}
+
+/// Where a place (Bevy, m) is on the level's map texture: across it the world's Y from the volume's minimum, down
+/// it the world's X from its maximum (ILLMinimap's TopLeft = (max X, min Y): PositionMinimap 0x1402a4420 offsets the
+/// map by the pawn's Y across and X down; GetClickWorldLocationForSlot 0x140297e70 the same way back).
+pub(crate) fn map_uv(area: [f32; 4], p: Vec3) -> Vec2 {
+    let [x0, y0, x1, y1] = area;
+    let (x, y) = (p.x * 100.0, p.z * 100.0);
+    Vec2::new((y - y0) / (y1 - y0), (x1 - x) / (x1 - x0))
+}
+
+/// A world direction (Bevy) in the map texture's UV space (its scale: the map's size).
+fn map_dir(area: [f32; 4], d: Vec3) -> Vec2 {
+    let [x0, y0, x1, y1] = area;
+    Vec2::new(d.z / (y1 - y0), -d.x / (x1 - x0))
 }
 
 /// Something the minimap shows (its class's SCMinimapIconComponent): the icon widget counselors see (DefaultIcon)
@@ -1028,7 +1040,6 @@ fn map_icons(
     }
     let size = computed.size() * computed.inverse_scale_factor();
     let scale = (window.size().x / DESIGN.x).min(window.size().y / DESIGN.y);
-    let [x0, y0, x1, y1] = map.area;
     let f = m.dir.truncate().truncate().normalize_or(Vec2::NEG_Y);
     let r = Vec2::new(-f.y, f.x);
     let jason = play.is_some();
@@ -1037,7 +1048,7 @@ fn map_icons(
         let Some(widget) = (if jason { &icon.killer } else { &icon.counselor }) else { continue };
         let Some((file, isize)) = images.entry(widget.clone()).or_insert_with(|| icon_image(&dir, widget)).clone() else { continue };
         let p = gxf.translation();
-        let uv = Vec2::new((p.x * 100.0 - x0) / (x1 - x0), (p.z * 100.0 - y0) / (y1 - y0));
+        let uv = map_uv(map.area, p);
         let delta = (uv - m.view.truncate().truncate()) / m.view.z;
         let d = Vec2::new(delta.dot(r), -delta.dot(f));
         let shown = d.length() <= m.view.w;
