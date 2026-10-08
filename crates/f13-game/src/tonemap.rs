@@ -9,6 +9,13 @@
 //! vignette (1 / (1 + |v|²)², v the screen position scaled to a circle x VignetteIntensity); the log encoding into the
 //! LUT; x 1.05; the 1/256 grain quantization dither. The result is display-encoded sRGB, decoded here for Bevy's sRGB
 //! output.
+//!
+//! Stalk's colour grade (the played Jason's): OnRep_Stalk (0x1403fd970) sets his ForcedPostProcessVolume's
+//! ColorGradingLUT to StalkColorGrade (CG_Stalk_B) and his tick (FUN_14040d900) eases its ColorGradingIntensity
+//! (FInterpTo at speed 1) to 1 while he stalks and back to 0, the volume's LUT overrides off while he's in a context
+//! kill. Blending a volume's LUT at weight i scales the others by 1 - i; after the weighted sum CombineLUTs is the
+//! identity here (sRGB decode then encode, the identity polynomial, gamma 1), so the pass blends this LUT's table
+//! (the Stalk LUT alone) with the map's by i.
 
 use bevy::asset::{embedded_asset, load_embedded_asset, RenderAssetUsages};
 use bevy::core_pipeline::schedule::{Core3d, Core3dSystems};
@@ -35,7 +42,7 @@ impl Plugin for TonemapPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shaders/tonemap.wgsl");
         app.add_plugins((ExtractComponentPlugin::<GameTonemap>::default(), UniformComponentPlugin::<TonemapUniform>::default()))
-            .add_systems(Update, setup);
+            .add_systems(Update, (setup, stalk_grade));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else { return };
         render_app
             .init_gpu_resource::<SpecializedRenderPipelines<TonemapPipeline>>()
@@ -49,6 +56,9 @@ impl Plugin for TonemapPlugin {
 #[derive(Component, Clone)]
 pub struct GameTonemap {
     pub lut: Handle<Image>,
+    /// The same baked with the Stalk colour grade alone, and its weight now.
+    pub stalk_lut: Handle<Image>,
+    pub stalk: f32,
     /// SceneColorTint.
     pub color_scale0: Vec3,
     pub vignette_intensity: f32,
@@ -65,6 +75,8 @@ pub struct TonemapUniform {
     grain: Vec4,
     /// ColorScale1: BloomIntensity (white x it).
     color_scale1: Vec4,
+    /// x: the Stalk LUT's weight.
+    stalk: Vec4,
 }
 
 impl SyncComponent for GameTonemap {
@@ -84,7 +96,8 @@ impl ExtractComponent for GameTonemap {
         let frame = (FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 8) & 1023;
         let grain = Vec4::new(halton(frame, 2), halton(frame, 3), 0.0, 0.0);
         let color_scale1 = Vec4::new(t.bloom.intensity, t.bloom.intensity, t.bloom.intensity, 0.0);
-        Some((t.clone(), TonemapUniform { color_scale0: t.color_scale0.extend(0.0), vignette: Vec4::new(t.vignette_intensity, aspect, 0.0, 0.0), grain, color_scale1 }))
+        let stalk = Vec4::new(t.stalk, 0.0, 0.0, 0.0);
+        Some((t.clone(), TonemapUniform { color_scale0: t.color_scale0.extend(0.0), vignette: Vec4::new(t.vignette_intensity, aspect, 0.0, 0.0), grain, color_scale1, stalk }))
     }
 }
 
@@ -236,33 +249,111 @@ fn setup(
             top.lerp(bottom, ay)
         };
         let started = std::time::Instant::now();
-        let table = f13_core::color_grading::combine_luts(&params, &sample);
-        // The engine renders the SDR LUT to PF_A2B10G10R10: 10 bits a channel, round to nearest.
-        let mut bytes = Vec::with_capacity(table.len() * 4);
-        for c in &table {
-            let q = |x: f32| (x.clamp(0.0, 1.0) * 1023.0).round() as u32;
-            bytes.extend_from_slice(&(q(c.x) | q(c.y) << 10 | q(c.z) << 20 | 3 << 30).to_le_bytes());
+        let image = bake(&f13_core::color_grading::combine_luts(&params, &sample));
+        // The Stalk grade alone (Jason_Base's StalkColorGrade), the volume's other settings as they are.
+        let stalk = read_strip(&export.0.join(STALK_LUT));
+        if stalk.is_none() {
+            warn!("tonemap: {STALK_LUT} isn't in the export (f13-export mvp): no Stalk colour grade");
         }
-        let n = LUT_SIZE as u32;
-        let mut image = Image::new(
-            Extent3d { width: n, height: n, depth_or_array_layers: n },
-            TextureDimension::D3,
-            bytes,
-            TextureFormat::Rgb10a2Unorm,
-            RenderAssetUsages::RENDER_WORLD,
-        );
-        image.sampler = ImageSampler::linear();
+        let stalk_sample = |u: f32, t: f32| stalk.as_ref().map_or(Vec3::ZERO, |s| s.sample(u, t));
+        let stalk_params = CombineLuts { weights: [0.0, 1.0], ..params };
+        let stalk_image = if stalk.is_some() { bake(&f13_core::color_grading::combine_luts(&stalk_params, &stalk_sample)) } else { image.clone() };
         info!(
             "tonemap: the volume's LUT (grading {:.2}, white {:.0} K) in {:.0} ms",
             params.weights[1],
             params.white_temp,
             started.elapsed().as_secs_f32() * 1000.0
         );
-        *built = Some(GameTonemap { lut: images.add(image), color_scale0: v.color("SceneColorTint"), vignette_intensity: v.f("VignetteIntensity", 0.4), bloom: v.bloom() });
+        *built = Some(GameTonemap {
+            lut: images.add(image),
+            stalk_lut: images.add(stalk_image),
+            stalk: 0.0,
+            color_scale0: v.color("SceneColorTint"),
+            vignette_intensity: v.f("VignetteIntensity", 0.4),
+            bloom: v.bloom(),
+        });
     }
     let Some(t) = built.as_ref() else { return };
     for e in &cameras {
         commands.entity(e).insert((t.clone(), Tonemapping::None, DebandDither::Disabled));
+    }
+}
+
+/// Jason_Base's StalkColorGrade.
+const STALK_LUT: &str = "SummerCamp/Content/Effects/ColorGrades/CG_Stalk_B.png";
+
+/// A colour grading LUT texture (its 256 x 16 strip; not sRGB: its bytes are the values), sampled bilinear, clamped.
+struct Strip {
+    w: usize,
+    h: usize,
+    data: Vec<u8>,
+}
+
+impl Strip {
+    fn sample(&self, u: f32, t: f32) -> Vec3 {
+        let texel = |x: i32, y: i32| {
+            let (x, y) = (x.clamp(0, self.w as i32 - 1) as usize, y.clamp(0, self.h as i32 - 1) as usize);
+            let i = (y * self.w + x) * 4;
+            Vec3::new(self.data[i] as f32, self.data[i + 1] as f32, self.data[i + 2] as f32) / 255.0
+        };
+        let (fx, fy) = (u * self.w as f32 - 0.5, t * self.h as f32 - 0.5);
+        let (x0, y0) = (fx.floor(), fy.floor());
+        let (ax, ay) = (fx - x0, fy - y0);
+        let (x0, y0) = (x0 as i32, y0 as i32);
+        let top = texel(x0, y0).lerp(texel(x0 + 1, y0), ax);
+        let bottom = texel(x0, y0 + 1).lerp(texel(x0 + 1, y0 + 1), ax);
+        top.lerp(bottom, ay)
+    }
+}
+
+fn read_strip(path: &std::path::Path) -> Option<Strip> {
+    let bytes = std::fs::read(path).ok()?;
+    let img = Image::from_buffer(&bytes, ImageType::Extension("png"), CompressedImageFormats::NONE, false, ImageSampler::Default, RenderAssetUsages::default()).ok()?;
+    let size = img.size();
+    Some(Strip { w: size.x as usize, h: size.y as usize, data: img.data? })
+}
+
+/// The engine renders the SDR LUT to PF_A2B10G10R10: 10 bits a channel, round to nearest.
+fn bake(table: &[Vec3]) -> Image {
+    let mut bytes = Vec::with_capacity(table.len() * 4);
+    for c in table {
+        let q = |x: f32| (x.clamp(0.0, 1.0) * 1023.0).round() as u32;
+        bytes.extend_from_slice(&(q(c.x) | q(c.y) << 10 | q(c.z) << 20 | 3 << 30).to_le_bytes());
+    }
+    let n = LUT_SIZE as u32;
+    let mut image = Image::new(Extent3d { width: n, height: n, depth_or_array_layers: n }, TextureDimension::D3, bytes, TextureFormat::Rgb10a2Unorm, RenderAssetUsages::RENDER_WORLD);
+    image.sampler = ImageSampler::linear();
+    image
+}
+
+/// UKismetMathLibrary::FInterpTo.
+fn finterp_to(current: f32, target: f32, dt: f32, speed: f32) -> f32 {
+    if speed <= 0.0 {
+        return target;
+    }
+    let dist = target - current;
+    if dist * dist < 1e-8 {
+        return target;
+    }
+    current + dist * (dt * speed).clamp(0.0, 1.0)
+}
+
+/// Stalk's colour grade on the played Jason's camera (see the module docs).
+fn stalk_grade(
+    time: Res<Time>,
+    play: Option<Res<crate::jason_player::PlayJason>>,
+    jasons: Query<&crate::jason::Jason>,
+    mut cameras: Query<&mut GameTonemap>,
+    mut intensity: Local<f32>,
+) {
+    let Some(j) = jasons.iter().next().filter(|_| play.is_some()) else { return };
+    let target = if j.stalking() { 1.0 } else { 0.0 };
+    *intensity = finterp_to(*intensity, target, time.delta_secs(), 1.0);
+    let weight = if j.in_context_kill() { 0.0 } else { *intensity };
+    for mut t in &mut cameras {
+        if t.stalk != weight {
+            t.stalk = weight;
+        }
     }
 }
 
@@ -287,6 +378,7 @@ fn init_pipeline(mut commands: Commands, device: Res<RenderDevice>, fullscreen_s
                 sampler(SamplerBindingType::Filtering),
                 uniform_buffer::<TonemapUniform>(true),
                 texture_2d(TextureSampleType::Float { filterable: true }),
+                texture_3d(TextureSampleType::Float { filterable: true }),
             ),
         ),
     );
@@ -352,12 +444,12 @@ pub(crate) fn game_tonemap(
     mut ctx: RenderContext,
 ) {
     let (target, settings, id, index, bloom) = view.into_inner();
-    let (Some(render_pipeline), Some(lut), Some(binding)) = (cache.get_render_pipeline(id.0), images.get(&settings.lut), uniforms.binding()) else { return };
+    let (Some(render_pipeline), Some(lut), Some(stalk_lut), Some(binding)) = (cache.get_render_pipeline(id.0), images.get(&settings.lut), images.get(&settings.stalk_lut), uniforms.binding()) else { return };
     let post = target.post_process_write();
     let bind_group = ctx.render_device().create_bind_group(
         None,
         &cache.get_bind_group_layout(&pipeline.layout),
-        &BindGroupEntries::sequential((post.source, &pipeline.sampler, &lut.texture_view, &pipeline.lut_sampler, binding.clone(), bloom.result())),
+        &BindGroupEntries::sequential((post.source, &pipeline.sampler, &lut.texture_view, &pipeline.lut_sampler, binding.clone(), bloom.result(), &stalk_lut.texture_view)),
     );
     let mut pass = ctx.command_encoder().begin_render_pass(&RenderPassDescriptor {
         label: Some("game_tonemap"),

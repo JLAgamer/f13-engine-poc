@@ -570,6 +570,11 @@ impl Jason {
         matches!(self.state, JasonState::Shifting { .. })
     }
 
+    /// In a context kill (bInContextKill): a grab, placed or hiding spot kill.
+    pub fn in_context_kill(&self) -> bool {
+        matches!(self.state, JasonState::Killing { .. } | JasonState::HideKill { .. })
+    }
+
     /// Holding her in his grab (she can struggle), not killing her.
     pub fn holding(&self) -> bool {
         matches!(self.state, JasonState::Holding { .. })

@@ -165,8 +165,11 @@ Mechanics: Jason side
 - [x] Shift's rush (Jason_Base's ShiftAudioCue, on him) and the static a counselor hears as he Morphs in near her
       (TeleportCueCounselorHears: PlayDistortionEffect within MaxTeleportViewDistance of him or his destination,
       or with him in her view)
-- [ ] Shift, Morph, Stalk, remaining: the dissolve and screen effects (Morph's excluded areas: the map's Boundary
-      image has no texture in this level's widget, so none refuse a click)
+- [x] Screen effects on the played Jason (screen_effects.rs, tonemap.rs): Shift's blur (PP_Player_Jason_Shift_01's
+      compiled shader), the teleport static she sees (PP_VHS_GlitchEffect, TeleportJitterCurve), Stalk's colour
+      grade (CG_Stalk_B through his ForcedPostProcessVolume: FInterpTo speed 1, off in context kills)
+- [ ] Shift, Morph, Stalk, remaining: the dissolve; Sense's, the stun's and the AOE light's screen effects (Morph's
+      excluded areas: the map's Boundary image has no texture in this level's widget, so none refuse a click)
 - [x] Throwing knives (J2's two, the knife's damage and cooldown, the throw montage and its ThrowKnife notify,
   SCJasonAIProperties' 5..25 m; placeholder knife speed) and Jason's traps (J2's seven KillerTraps, set in doorways
   he opens; they catch counselors, not him; his trap's own mesh isn't exported)
