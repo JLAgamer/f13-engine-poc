@@ -41,6 +41,9 @@ pub struct Placement {
     /// Blocks the camera channel (the spring arms' probe).
     #[serde(default = "yes")]
     pub blocks_camera: bool,
+    /// Blocks traces on WorldDynamic (interactables' occlusion).
+    #[serde(default = "yes")]
+    pub blocks_world_dynamic: bool,
     /// Casts shadows (the component's CastShadow).
     #[serde(default = "yes")]
     pub cast_shadow: bool,
@@ -75,6 +78,8 @@ pub struct ActorInfo {
     pub hulls_block_pawn: bool,
     #[serde(default = "yes")]
     pub hulls_block_camera: bool,
+    #[serde(default = "yes")]
+    pub hulls_block_world_dynamic: bool,
     /// NavMeshBoundsVolumes: the box their brush covers (Unreal cm: min x, y, z, max x, y, z).
     #[serde(default)]
     pub bounds: Option<[f32; 6]>,
@@ -117,12 +122,18 @@ pub struct ComponentInfo {
     /// Static mesh components: blocks the camera channel.
     #[serde(default = "yes")]
     pub blocks_camera: bool,
+    /// Static mesh components: blocks traces on WorldDynamic.
+    #[serde(default = "yes")]
+    pub blocks_world_dynamic: bool,
     /// Box, sphere and capsule components that block counselors: a convex point set in component space (Unreal cm).
     #[serde(default)]
     pub hull: Option<Vec<f32>>,
     /// Whether the hull also blocks the camera channel.
     #[serde(default = "yes")]
     pub hull_blocks_camera: bool,
+    /// Whether the hull blocks traces on WorldDynamic.
+    #[serde(default = "yes")]
+    pub hull_blocks_world_dynamic: bool,
     /// Box, sphere and capsule components an overlap query on WorldDynamic finds: a convex point set in component
     /// space (Unreal cm).
     #[serde(default)]

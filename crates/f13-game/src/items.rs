@@ -34,7 +34,7 @@
 //! The firecracker's throw (SCNoiseMaker::ThrowProjectile 0x14039aa60): the control pitch is clamped between two
 //! unreflected fields (+0x5a8 / +0x5ac) that the constructor zeroes and nothing sets, so it's always 0: the pack
 //! leaves level along the camera's yaw at VelocityPitchCurve(0) (FirecrackerVelocityPitch_Curve: 500 cm/s), under
-//! DefaultGravityZ. PLACEHOLDER: it leaves from in front of her chest (the game: the item's own place in her hand).
+//! DefaultGravityZ, from the item's root: its place in her hand (its hand socket, WeaponSocket, as last posed).
 //!
 //! Bear traps (SCTrap::OnBeginOverlap and its trigger): an armed trap catches whoever steps into it, its armer too
 //! (bCanArmerTrigger, constructor), but not someone already standing in it when it was armed (it's an overlap's
@@ -455,7 +455,7 @@ fn tick_action(
     items: Query<&Item>,
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
     mut assets: (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>),
-    (globals, killer, character): (Query<&GlobalTransform>, Option<Res<crate::jason::KillerTuning>>, Option<Res<CounselorCharacter>>),
+    (globals, killer, character, rigs): (Query<&GlobalTransform>, Option<Res<crate::jason::KillerTuning>>, Option<Res<CounselorCharacter>>, Query<(&ChildOf, &Rig)>),
 ) {
     let Ok((pe, mut a, mut inv, xf)) = player.single_mut() else { return };
     a.t += time.delta_secs();
@@ -535,14 +535,18 @@ fn tick_action(
             Use::Fire { .. } => a.done = true,
             Use::Throw => {
                 a.done = true;
+                // From her hand (the item's socket on her rig, as last posed), along the camera's yaw.
+                let socket = items.get(a.item).map_or("WeaponSocket", |i| i.hand_socket.as_str());
+                let hand = character.as_ref().and_then(|c| rigs.iter().find(|(p, _)| p.parent() == pe).and_then(|(_, rig)| rig.socket(&c.info, socket, &globals)));
                 if let Ok(item) = items.get(a.item) {
                     commands.trigger(ClassScore::new(&item.class, "UseScoreEvent"));
                 }
                 inv.pockets.retain(|&e| e != a.item);
                 commands.entity(a.item).despawn();
                 let (mesh, mat) = (assets.0.add(Cuboid::new(0.06, 0.06, 0.14)), assets.1.add(StandardMaterial { base_color: Color::srgb(0.7, 0.05, 0.05), ..default() }));
-                let vel = facing.with_y(0.0).normalize_or_zero() * THROW_SPEED;
-                commands.spawn((Mesh3d(mesh), MeshMaterial3d(mat), Transform::from_translation(chest + facing * 0.4), Firecracker { vel, age: 0.0, stunned: false }));
+                let vel = camera.0.look().with_y(0.0).normalize_or(facing.with_y(0.0).normalize_or_zero()) * THROW_SPEED;
+                let from = hand.map_or(chest + facing * 0.4, |h| h.translation);
+                commands.spawn((Mesh3d(mesh), MeshMaterial3d(mat), Transform::from_translation(from), Firecracker { vel, age: 0.0, stunned: false }));
             }
             Use::PlaceTrap => {
                 a.done = true;

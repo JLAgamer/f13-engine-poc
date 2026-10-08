@@ -136,6 +136,7 @@ fn spawn_fuse_boxes(mut commands: Commands, level: Res<crate::Level>, export: Re
             Name::new(a.name.clone()),
             crate::audio::ClassSounds(sounds),
             Humming(false),
+            crate::interact::InteractLimits::of(&classes, &a.class),
         ));
         if let (Some(g), true) = (grid, destroyed) {
             grids.grids[g].on = false;

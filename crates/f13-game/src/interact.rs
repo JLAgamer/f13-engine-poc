@@ -27,6 +27,68 @@ const VIEW_WEIGHT: f32 = 0.7;
 const CHARACTER_ROTATION_WEIGHT: f32 = 0.5;
 const MOVEMENT_DIRECTION_WEIGHT: f32 = 0.8;
 const BEST_INTERACTABLE_STABILITY_SCORE: f32 = 0.1;
+/// ILLInteractableComponent's constructor: MaxYawOffset and MaxPitchOffset (degrees).
+const DEFAULT_MAX_YAW: f32 = 15.0;
+const DEFAULT_MAX_PITCH: f32 = 90.0;
+/// APawn's BaseEyeHeight (no counselor Blueprint sets it): her eyes above her capsule's centre (GetPawnViewLocation),
+/// where the interactables' occlusion traces start.
+const BASE_EYE_HEIGHT_M: f32 = 0.64;
+
+/// One interactable component's range test settings (ILLInteractableComponent, FUN_14022e940): where it is (actor
+/// space; GetInteractionLocation is its location), its yaw and pitch limits (bUseYawLimit / bUsePitchLimit:
+/// MaxYawOffset / MaxPitchOffset) and whether it checks for occlusion (bCheckForOcclusion; SCInteractComponent's
+/// constructor turns it on).
+#[derive(Clone, Debug)]
+pub struct InteractLimit {
+    pub at: Transform,
+    pub yaw: Option<f32>,
+    pub pitch: Option<f32>,
+    pub occlusion: bool,
+}
+
+/// An actor's interactable components, by name.
+#[derive(Component, Clone, Default)]
+pub struct InteractLimits(pub std::collections::HashMap<String, InteractLimit>);
+
+impl InteractLimits {
+    pub fn of(classes: &f13_data::classes::ClassDb, class: &str) -> Self {
+        let Some(info) = classes.get(class) else { return Self::default() };
+        Self(
+            info.components
+                .iter()
+                .filter(|c| classes.is_child_of(&c.kind, "ILLInteractableComponent"))
+                .map(|c| {
+                    let p = &c.props;
+                    let f = |k: &str, d: f32| p[k].as_f64().map_or(d, |v| v as f32);
+                    let limit = InteractLimit {
+                        at: crate::to_transform(&c.local.unwrap_or(f13_data::level::Xform::IDENTITY)),
+                        yaw: p["bUseYawLimit"].as_bool().unwrap_or(false).then(|| f("MaxYawOffset", DEFAULT_MAX_YAW)),
+                        pitch: p["bUsePitchLimit"].as_bool().unwrap_or(false).then(|| f("MaxPitchOffset", DEFAULT_MAX_PITCH)),
+                        occlusion: p["bCheckForOcclusion"].as_bool().unwrap_or(classes.is_child_of(&c.kind, "SCInteractComponent")),
+                    };
+                    (c.name.clone(), limit)
+                })
+                .collect(),
+        )
+    }
+}
+
+impl InteractLimit {
+    /// The range test's facing part: the direction from the interactable to her (`to_her`) within its limits of its
+    /// facing, and her view within them of facing back at it (the manager's bUseCameraRotation).
+    pub fn facing(&self, owner: &GlobalTransform, to_her: Vec3, view: Vec3) -> bool {
+        if self.yaw.is_none() && self.pitch.is_none() {
+            return true;
+        }
+        let forward = (owner.rotation() * self.at.rotation * Vec3::X).normalize_or(Vec3::X);
+        // Yaw and pitch (degrees) of a direction, as Unreal's rotator of it.
+        let yaw = |v: Vec3| v.z.atan2(v.x).to_degrees();
+        let pitch = |v: Vec3| v.y.atan2(Vec2::new(v.x, v.z).length()).to_degrees();
+        let off = |a: f32| ((a + 180.0).rem_euclid(360.0) - 180.0).abs();
+        let within = |v: Vec3, f: Vec3| self.yaw.is_none_or(|l| off(yaw(v) - yaw(f)) <= l) && self.pitch.is_none_or(|l| off(pitch(v) - pitch(f)) <= l);
+        within(to_her, forward) && within(view, -forward)
+    }
+}
 
 #[derive(Component, Default, Debug)]
 pub struct Inventory {
@@ -498,8 +560,12 @@ fn has_part(inv: &Inventory, carried: &Query<&Item, With<Carried>>, parts: &[Str
 /// the highest score = ViewWeight x (view . dir) + DistanceWeight x (1 - flat distance / DistanceLimit) +
 /// CharacterRotationWeight x (facing . dir) + MovementDirectionWeight x (moving direction . dir, when moving), plus
 /// BestInteractableStabilityScore for the current one; dir is flat from her to the point
-/// (bIgnoreHeightInDistanceComparison). PLACEHOLDER: the range test's MaxYawOffset / MaxPitchOffset and occlusion
-/// (FUN_14022e940) aren't exported, so aren't applied.
+/// (bIgnoreHeightInDistanceComparison). In range (FUN_14022e940): within DistanceLimit, the facing limits
+/// ([`InteractLimit::facing`]), and with bCheckForOcclusion not occluded (IsOccluded 0x14022f300: a line trace on its
+/// RayTraceChannel from her eyes (her view point, BaseEyeHeight up; RayTraceZOffset 0) to the interaction point,
+/// ignoring her and the interactable's actor). The trace runs against what blocks WorldDynamic (the level: the same
+/// as what blocks her). PLACEHOLDER: the beds' Visibility channel is traced like WorldDynamic.
+#[allow(clippy::too_many_arguments)]
 fn choose_target(
     player: Single<(Entity, &Transform, &Inventory, &Player, Option<&crate::cabinets::CabinetUse>), (Without<Driving>, Without<crate::hiding::Hiding>)>,
     camera: Single<&PlayerCamera>,
@@ -513,6 +579,15 @@ fn choose_target(
     (spots, fuse_boxes): (Query<(Entity, &crate::hiding::HidingSpot, &GlobalTransform)>, Query<(Entity, &crate::power::FuseBox)>),
     (phone_boxes, phones): (Query<(Entity, &crate::police::PhoneBox)>, Query<(Entity, &crate::police::Phone)>),
     mut interaction: ResMut<Interaction>,
+    (limits, globals, collision, dynamic, parents, no_world_dynamic, (names, actor_tris)): (
+        Query<&InteractLimits>,
+        Query<&GlobalTransform>,
+        Option<Res<crate::collision::WorldCollision>>,
+        Res<crate::collision::DynamicColliders>,
+        Query<&ChildOf>,
+        Query<(), With<crate::collision::NoWorldDynamic>>,
+        (Query<&Name>, Option<Res<crate::collision::ActorTris>>),
+    ),
 ) {
     if interaction.busy() {
         return; // keep the target while repairing
@@ -535,9 +610,37 @@ fn choose_target(
     let moving = (p.velocity.length_squared() > 0.0).then(|| Vec3::new(p.velocity.x, 0.0, p.velocity.y).normalize_or_zero());
     let current = interaction.target;
     let mut best: Option<(f32, Target)> = None;
-    let mut consider = |point: Vec3, reach_cm: f32, t: Target| {
+    let eyes = centre + Vec3::Y * BASE_EYE_HEIGHT_M;
+    // The owner's own colliders (or its parts').
+    let of_owner = |e: Entity, owner: Entity| {
+        let mut at = e;
+        for _ in 0..8 {
+            if at == owner {
+                return true;
+            }
+            match parents.get(at) {
+                Ok(p) => at = p.parent(),
+                Err(_) => return false,
+            }
+        }
+        false
+    };
+    let mut consider = |owner: Entity, component: &str, point: Vec3, reach_cm: f32, t: Target| {
         if point.distance(centre) * 100.0 > reach_cm {
             return;
+        }
+        if let (Some(limit), Ok(ogxf)) = (limits.get(owner).ok().and_then(|l| l.0.get(component)), globals.get(owner)) {
+            if !limit.facing(ogxf, centre - point, look) {
+                return;
+            }
+            if let Some(world) = collision.as_ref().filter(|_| limit.occlusion) {
+                let (grid, lists) = world.without(&dynamic, |e| no_world_dynamic.contains(e) || of_owner(e, owner) || e == pe);
+                // A level actor's own meshes are in the static grid.
+                let own = names.get(owner).ok().and_then(|n| actor_tris.as_ref()?.0.get(n.as_str()));
+                if f13_core::collision::segment_hit(&(&crate::collision::Excluding(grid, own), lists.as_slice()), eyes, point, 1.0).is_some() {
+                    return;
+                }
+            }
         }
         let flat = (point - centre).with_y(0.0);
         let dir = flat.normalize_or_zero();
@@ -560,52 +663,54 @@ fn choose_target(
         if !item.large && inv.pockets.len() >= MAX_SMALL_ITEMS {
             continue; // can't be taken, so don't let it hide what's next to it
         }
-        consider(gxf.translation(), item.reach, Target::Item(e));
+        let at = limits.get(e).ok().and_then(|l| l.0.get("Interactable")).map_or(gxf.translation(), |l| gxf.transform_point(l.at.translation));
+        consider(e, "Interactable", at, item.reach, Target::Item(e));
     }
     for (e, cab, gxf) in &cabinets {
         for (i, s) in cab.slots.iter().enumerate() {
             if s.searchable() {
-                consider(gxf.transform_point(s.interact), s.reach, Target::Cabinet(e, i));
+                consider(e, if i == 0 { "Interactable" } else { "Interactable2" }, gxf.transform_point(s.interact), s.reach, Target::Cabinet(e, i));
             }
         }
     }
     for (e, v, gxf) in &vehicles {
         for (i, r) in v.repairs.iter().enumerate() {
             if !r.done && has_part(inv, &carried, &r.parts) {
-                consider(gxf.transform_point(r.at), r.reach, Target::Repair(e, i));
+                consider(e, &r.name, gxf.transform_point(r.at), r.reach, Target::Repair(e, i));
             }
         }
         if v.repaired() {
-            consider(gxf.transform_point(v.driver_seat), v.seat_reach + 60.0, Target::Seat(e));
+            // The seat is an SCInteractComponent like any other (its range test and location are the base's).
+            consider(e, "DriverSeat", gxf.transform_point(v.driver_seat), v.seat_reach, Target::Seat(e));
         }
     }
     for (e, d, gxf) in &doors {
         let (press, hold) = d.can_interact(gxf, xf.translation, barricade_of(&barricades, e));
         if press || hold {
-            consider(gxf.transform_point(d.interact), d.reach, Target::Door(e));
+            consider(e, "InteractComponent", gxf.transform_point(d.interact), d.reach, Target::Door(e));
         }
     }
     for (e, w, gxf) in &windows {
-        consider(gxf.transform_point(w.interact), w.reach, Target::Window(e));
+        consider(e, "Indoor Interactable", gxf.transform_point(w.interact), w.reach, Target::Window(e));
     }
     for (e, s, gxf) in &spots {
         if s.usable() {
-            consider(gxf.transform_point(s.interact), s.reach, Target::Hide(e));
+            consider(e, "Interactable", gxf.transform_point(s.interact), s.reach, Target::Hide(e));
         }
     }
     for (e, f) in &fuse_boxes {
         if f.destroyed {
-            consider(f.interact, f.reach, Target::FuseBox(e));
+            consider(e, "Interactable", f.interact, f.reach, Target::FuseBox(e));
         }
     }
     for (e, b) in &phone_boxes {
         if b.broken || (!b.repaired && has_part(inv, &carried, &b.parts)) {
-            consider(b.interact, b.reach, Target::PhoneBox(e));
+            consider(e, "Interactable", b.interact, b.reach, Target::PhoneBox(e));
         }
     }
     for (e, p) in &phones {
         if p.enabled {
-            consider(p.interact, p.reach, Target::Phone(e));
+            consider(e, "Interactable", p.interact, p.reach, Target::Phone(e));
         }
     }
     let target = best.map(|(_, t)| t);

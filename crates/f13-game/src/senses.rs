@@ -22,7 +22,7 @@ use crate::jason::{Jason, JasonState};
 use crate::player::Player;
 
 /// His capsule's half height (88 cm) plus BaseEyeHeight (64 cm).
-const EYE_M: f32 = 1.52;
+pub(crate) const EYE_M: f32 = 1.52;
 /// SCJasonAIProperties' PeripheralVisionAngle (its constructor).
 const FIELD_OF_VIEW_DEG: f32 = 62.0;
 const NOTICE_M: f32 = 3.0;

@@ -76,8 +76,11 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
         {
             var cdo = Load(chain[i].ClassDefaultObject);
             if (cdo != null) Merge(props, Sanitize(PropsOf(cdo)));
-            // Doors' damage states (SCDoor's TakeDamage swaps the leaf for these): exported as meshes, by file.
-            foreach (var dm in new[] { "LightDestructionMesh", "MediumDestructionMesh", "HeavyDestructionMesh" })
+            // Doors' and walls' damage states (their TakeDamage swaps the section for these; walls have one per side):
+            // exported as meshes, by file.
+            foreach (var dm in new[] { "LightDestructionMesh", "MediumDestructionMesh", "HeavyDestructionMesh",
+                         "LightDestructionInsideMesh", "MediumDestructionInsideMesh", "HeavyDestructionInsideMesh",
+                         "LightDestructionOutsideMesh", "MediumDestructionOutsideMesh", "HeavyDestructionOutsideMesh" })
                 if (cdo != null && Load(cdo.GetOrDefault<FPackageIndex?>(dm)) is USkeletalMesh mesh)
                 {
                     queueMesh(mesh);
@@ -206,6 +209,7 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
                 j["Hidden"] = t.GetOrDefault("bHiddenInGame", false) || !t.GetOrDefault("bVisible", true);
                 j["BlocksPawn"] = Collision.BlocksPawn(t);
                 j["BlocksCamera"] = Collision.BlocksCamera(t);
+                j["BlocksWorldDynamic"] = Collision.BlocksWorldDynamic(t);
                 j["QueriedByWorldDynamic"] = Collision.QueriedByWorldDynamic(t);
                 return j;
             }
@@ -236,6 +240,7 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
         {
             j["Hull"] = new JArray(hull);
             j["HullBlocksCamera"] = Collision.BlocksCamera(t, "OverlapAllDynamic");
+            j["HullBlocksWorldDynamic"] = Collision.BlocksWorldDynamic(t, "OverlapAllDynamic");
         }
         // Shapes an overlap query on WorldDynamic finds (a barricade's BeginPlay finds its door that way).
         if (Collision.ShapeComponent(t, FVector.OneVector) is { } shape && Collision.QueriedByWorldDynamic(t, "OverlapAllDynamic"))

@@ -402,6 +402,9 @@ fn spawn_props(
                 if c.hull_blocks_camera {
                     commands.entity(e).insert(crate::collision::CameraBlocker);
                 }
+                if !c.hull_blocks_world_dynamic {
+                    commands.entity(e).insert(crate::collision::NoWorldDynamic);
+                }
                 continue;
             }
             match on_pivot {
@@ -412,11 +415,17 @@ fn spawn_props(
                     if c.hull_blocks_camera {
                         commands.entity(e).insert(crate::collision::CameraBlocker);
                     }
+                    if !c.hull_blocks_world_dynamic {
+                        commands.entity(e).insert(crate::collision::NoWorldDynamic);
+                    }
                 }
                 None => {
                     let e = commands.spawn((local(c), Visibility::default(), collider, ChildOf(root))).id();
                     if c.hull_blocks_camera {
                         commands.entity(e).insert(crate::collision::CameraBlocker);
+                    }
+                    if !c.hull_blocks_world_dynamic {
+                        commands.entity(e).insert(crate::collision::NoWorldDynamic);
                     }
                     hulls.insert(c.name.as_str(), e);
                 }
@@ -436,6 +445,10 @@ fn spawn_props(
             debug!("wall at {:.1} facing {:.1}", p.translation, p.rotation * Vec3::X);
         }
 
+        let limits = crate::interact::InteractLimits::of(&classes, &actor.class);
+        if !limits.0.is_empty() {
+            commands.entity(root).insert(limits);
+        }
         let interact = info.components.iter().find(|c| c.kind == "SCInteractComponent" && c.name.starts_with("Interact"));
         // Interactions can exclude a side (e.g. Jason's throwing knives ignore counselors).
         let counselor_can_use = interact.is_none_or(|c| {

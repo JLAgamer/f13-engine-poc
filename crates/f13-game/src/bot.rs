@@ -1629,9 +1629,11 @@ fn go_fetch(
     if let Some((inc, (cab, cxf))) = in_cab.and_then(|c| Some((c, cabinets.get(c.0).ok()?))) {
         let Some(slot) = cab.slots.get(inc.1) else { return false };
         if slot.searchable() {
-            // Stand at its interact point (feet a metre below it) and search it.
+            // Stand on its special move's spot, in front of it (its interactable answers only from the front: its
+            // yaw limit), and search it.
             let at = cxf.transform_point(slot.interact);
-            let stand = stand_spot(world, at, slot.reach / 100.0).unwrap_or(at - Vec3::Y * 1.0);
+            let spot = crate::hiding::HidingSpot::world(cxf, &slot.spot).translation;
+            let stand = f13_core::collision::surface_below(world, spot.x, spot.z, spot.y + 0.5, spot.y - 1.0).map_or(spot, |(y, _)| Vec3::new(spot.x, y, spot.z));
             if pxf.translation.distance(stand) > 0.05 {
                 place(pxf, stand);
             }

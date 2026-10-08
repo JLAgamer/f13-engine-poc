@@ -87,6 +87,9 @@ static class Collision
     /// Whether a primitive component blocks the camera channel (spring arm probes).
     public static bool BlocksCamera(UObject component, string defaultProfile = "BlockAll") => Blocks(component, "Camera", defaultProfile, false);
 
+    /// Whether a primitive component blocks traces on WorldDynamic (interactables' occlusion traces, RayTraceChannel 1).
+    public static bool BlocksWorldDynamic(UObject component, string defaultProfile = "BlockAll") => Blocks(component, "WorldDynamic", defaultProfile, false);
+
     /// Whether an overlap query on WorldDynamic finds the component (its response isn't Ignore): SCDoor's BeginPlay
     /// finds its barricade that way.
     public static bool QueriedByWorldDynamic(UObject component, string defaultProfile = "BlockAll") =>

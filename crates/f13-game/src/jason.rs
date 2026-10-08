@@ -37,8 +37,9 @@
 //! AM_normal_stand_knife_throw montage's select, aim and throw sections, the knife leaving at its ThrowKnife notify;
 //! SCJasonAIProperties' Min/MaxThrowingKnifeDistance 5..25 m for when the computer Jason throws) and traps (J2's
 //! InitialTrapCount 7; KillerTrap_C: armed at once, not triggered by him, not picked up; set TrapPlacementDistance
-//! 75 cm in front of him with AM_normal_stand_trap_set). PLACEHOLDERS: the knife's speed ([`KNIFE_SPEED`]; the
-//! knife Blueprint sets it) with its ProjectileGravityScale 8, aimed to arc onto her chest; how long he aims
+//! 75 cm in front of him with AM_normal_stand_trap_set). The knife (SCThrowable::Use 0x140413440, decompiled) leaves
+//! 120 cm ahead of the camera along its forward at his ThrowStrength (Jason_Base 12000 cm/s; FUN_1403f2f60), then
+//! falls at ProjectileGravityScale 8. PLACEHOLDERS (the AI's): from his eyes, aimed to arc onto her chest; how long he aims
 //! ([`KNIFE_AIM_SECONDS`]); he sets a trap in a doorway he has just opened when he isn't after her and has none of his
 //! within [`TRAP_SPACING_M`]; his trap looks like the counselors' bear trap (A_Trap_Jason isn't exported).
 //!
@@ -52,6 +53,7 @@
 //! audio).
 
 use bevy::prelude::*;
+use bevy::world_serialization::{WorldAsset, WorldAssetRoot};
 use f13_core::collision::{Capsule, WalkSettings};
 use f13_core::health::Hit;
 use f13_core::killer_abilities::{Ability, Blockers};
@@ -170,8 +172,9 @@ const UNREACHABLE_RADIUS_M: f32 = 5.0;
 const SHIFT_RANGE_M: (f32, f32) = (6.0, 30.0);
 /// SCJasonAIProperties (constructor): Min/MaxThrowingKnifeDistance (m).
 const KNIFE_RANGE_M: (f32, f32) = (5.0, 25.0);
-/// PLACEHOLDERS (see the module docs): the knife's speed (m/s), how long he aims, his traps' spacing (m).
-const KNIFE_SPEED: f32 = 40.0;
+/// SCThrowable::Use: the knife starts this far ahead of the camera (DAT_142108c74, 120 cm).
+const KNIFE_START_M: f32 = 1.2;
+/// PLACEHOLDERS (see the module docs): how long he aims, his traps' spacing (m).
 const KNIFE_AIM_SECONDS: f32 = 0.6;
 const TRAP_SPACING_M: f32 = 10.0;
 /// ThrowingKnife_C's ProjectileGravityScale; SCThrowable's TimeToDestroy (s).
@@ -224,7 +227,7 @@ pub(crate) struct JasonConfig {
 impl Plugin for JasonPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(JasonConfig { delay: self.delay, kill: self.kill })
-            .add_systems(Startup, spawn_jason)
+            .add_systems(Startup, (spawn_jason, load_knife_look))
             .add_systems(FixedUpdate, (update_jason, recover_counselor, fly_knives, pick_up_knives))
             .add_observer(spawn_knife)
             .add_observer(car_slam)
@@ -259,6 +262,8 @@ pub struct KillerTuning {
     /// Knives he starts with, their cooldown (s) and damage; traps he starts with, set this far in front (m).
     pub num_knives: u32,
     pub knife_cooldown: f32,
+    /// ThrowStrength: the knife's speed (m/s).
+    pub throw_strength: f32,
     pub knife_damage: f32,
     pub trap_count: u32,
     pub trap_placement_m: f32,
@@ -296,6 +301,7 @@ impl KillerTuning {
             heavy_window: info.animations.get(HEAVY_ATTACK).and_then(|a| a.window("AttackTraceNotify")).unwrap_or((0.3, 0.6)),
             num_knives: v("NumKnives", 0.0) as u32,
             knife_cooldown: v("ThrowingKnifeCooldown", 3.5),
+            throw_strength: v("ThrowStrength", 1000.0) / CM,
             knife_damage: v("ThrowingKnifeDamage", 30.0),
             trap_count: v("InitialTrapCount", 5.0) as u32,
             trap_placement_m: v("TrapPlacementDistance", 75.0) / CM,
@@ -617,15 +623,17 @@ struct Knife {
     age: f32,
     damage: f32,
     stuck: bool,
+    /// Its dart (shown once it stops).
+    dart: Option<Entity>,
 }
 
-/// The velocity that arcs a knife from `from` onto `to` at [`KNIFE_SPEED`] under its gravity (the low arc); straight
-/// at it when it's out of reach.
-fn knife_velocity(from: Vec3, to: Vec3) -> Vec3 {
+/// The velocity that arcs a knife from `from` onto `to` at `speed` (his ThrowStrength, m/s) under its gravity (the low
+/// arc); straight at it when it's out of reach.
+fn knife_velocity(from: Vec3, to: Vec3, speed: f32) -> Vec3 {
     let d = to - from;
     let flat = Vec2::new(d.x, d.z);
     let x = flat.length().max(1e-3);
-    let (v, g, y) = (KNIFE_SPEED, KNIFE_GRAVITY, d.y);
+    let (v, g, y) = (speed, KNIFE_GRAVITY, d.y);
     let disc = v.powi(4) - g * (g * x * x + 2.0 * y * v * v);
     if disc < 0.0 {
         return d.normalize_or_zero() * v;
@@ -635,16 +643,33 @@ fn knife_velocity(from: Vec3, to: Vec3) -> Vec3 {
     Vec3::new(h.x, v * angle.sin(), h.y)
 }
 
-fn spawn_knife(ev: On<ThrowKnife>, mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
-    // PLACEHOLDER look: a thin blade (the knife's mesh isn't exported).
-    let mesh = meshes.add(Cuboid::new(0.03, 0.01, 0.3));
-    let material = materials.add(StandardMaterial { base_color: Color::srgb(0.55, 0.55, 0.6), metallic: 0.8, perceptual_roughness: 0.3, ..default() });
-    commands.spawn((
-        Mesh3d(mesh),
-        MeshMaterial3d(material),
-        Transform::from_translation(ev.from).looking_to(ev.vel.normalize_or(Vec3::Z), Vec3::Y),
-        Knife { vel: ev.vel, age: 0.0, damage: ev.damage, stuck: false },
-    ));
+/// ThrowingKnife_C's dart (its SkeletalMesh component): its scene and its place on the knife. The knife's Blueprint
+/// turns it to pitch 270 and hides it as the ProjectileMovement activates (the throw: the particle trail shows
+/// instead) and shows it when the projectile stops.
+#[derive(Resource)]
+struct KnifeLook(Handle<WorldAsset>, Transform);
+
+fn load_knife_look(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<AssetServer>) {
+    use f13_core::camera_spline::quaternion;
+    let Ok(classes) = f13_data::classes::ClassDb::load(&export.0.join("classes.json")) else { return };
+    let Some((file, local)) = classes.get("ThrowingKnife_C").and_then(|c| c.components.iter().find(|c| c.name == "SkeletalMesh")).and_then(|c| Some((c.mesh.clone()?, c.local?))) else {
+        warn!("ThrowingKnife_C's dart isn't in classes.json (re-export: f13-export levels): stuck knives aren't shown");
+        return;
+    };
+    // K2_SetRelativeRotation(FRotator(270, 0, 0)) as it's thrown.
+    let local = f13_data::level::Xform { r: quaternion(Vec3::new(270.0, 0.0, 0.0)).to_array(), ..local };
+    commands.insert_resource(KnifeLook(assets.load(GltfAssetLabel::Scene(0).from_asset(file)), crate::to_transform(&local)));
+}
+
+/// The knife's rotation: its forward (Unreal +X) along its velocity (its ProjectileMovement's bRotationFollowsVelocity).
+fn knife_rotation(vel: Vec3) -> Quat {
+    Transform::IDENTITY.looking_to(vel.normalize_or(Vec3::X), Vec3::Y).rotation * Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)
+}
+
+fn spawn_knife(ev: On<ThrowKnife>, mut commands: Commands, look: Option<Res<KnifeLook>>) {
+    let knife = commands.spawn((Transform::from_translation(ev.from).with_rotation(knife_rotation(ev.vel)), Visibility::default())).id();
+    let dart = look.map(|l| commands.spawn((WorldAssetRoot(l.0.clone()), l.1, Visibility::Hidden, ChildOf(knife))).id());
+    commands.entity(knife).insert(Knife { vel: ev.vel, age: 0.0, damage: ev.damage, stuck: false, dart });
 }
 
 /// Knives fly (ProjectileGravityScale 8), hit her (its damage, a hit reaction) or stick in what they hit, and go after
@@ -693,10 +718,14 @@ fn fly_knives(
         if let Some(f) = f13_core::collision::segment_hit(&world, from, to, 1.0) {
             xf.translation = from + (to - from) * f;
             k.stuck = true;
+            // OnProjectileStop: the dart shows.
+            if let Some(d) = k.dart {
+                commands.entity(d).insert(Visibility::Inherited);
+            }
             continue;
         }
         xf.translation = to;
-        xf.look_to(k.vel.normalize_or(Vec3::Z), Vec3::Y);
+        xf.rotation = knife_rotation(k.vel);
     }
 }
 
@@ -1570,11 +1599,14 @@ pub(crate) fn update_jason(
                     thrown = true;
                     j.knives -= 1;
                     j.knife_cooldown = t.knife_cooldown;
-                    let yaw = yaw_of(xf.rotation);
-                    let from = xf.translation + Vec3::Y * 1.6 + Vec3::new(yaw.sin(), 0.0, yaw.cos()) * 0.5;
-                    // At her; the player's knife goes where they look.
-                    let target = player_input.map_or(pxf.translation + Vec3::Y * 1.2, |i| from + i.look * KNIFE_RANGE_M.1 * 0.5);
-                    commands.trigger(ThrowKnife { from, vel: knife_velocity(from, target), damage: t.knife_damage });
+                    // From his view point, 120 cm out along the aim: at her chest; the player's knife goes where they look.
+                    let eyes = xf.translation + Vec3::Y * crate::senses::EYE_M;
+                    let vel = match player_input {
+                        Some(i) => i.look.normalize_or(Vec3::Z) * t.throw_strength,
+                        None => knife_velocity(eyes, pxf.translation + Vec3::Y * 1.2, t.throw_strength),
+                    };
+                    let from = eyes + vel.normalize_or_zero() * KNIFE_START_M;
+                    commands.trigger(ThrowKnife { from, vel, damage: t.knife_damage });
                 }
                 if at >= end {
                     j.state = JasonState::Hunting;

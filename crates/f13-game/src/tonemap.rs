@@ -79,9 +79,9 @@ impl ExtractComponent for GameTonemap {
     fn extract_component((t, camera): bevy::ecs::query::QueryItem<'_, '_, Self::QueryData>) -> Option<Self::Out> {
         let size = camera.physical_viewport_size()?;
         let aspect = size.y as f32 / size.x.max(1) as f32;
-        // GrainRandomFromFrame: the frame's Halton (2, 3) point. PLACEHOLDER: the engine source's; the frame number
-        // here is the elapsed frames Bevy counts.
-        let frame = FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 1023;
+        // GrainRandomFromFrame (the tonemapper's SetPS 0x140c90190, decompiled): Halton (2, 3) of the view state's
+        // FrameIndexMod8 (vfunc 0x78, a byte) & 1023.
+        let frame = (FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 8) & 1023;
         let grain = Vec4::new(halton(frame, 2), halton(frame, 3), 0.0, 0.0);
         let color_scale1 = Vec4::new(t.bloom.intensity, t.bloom.intensity, t.bloom.intensity, 0.0);
         Some((t.clone(), TonemapUniform { color_scale0: t.color_scale0.extend(0.0), vignette: Vec4::new(t.vignette_intensity, aspect, 0.0, 0.0), grain, color_scale1 }))

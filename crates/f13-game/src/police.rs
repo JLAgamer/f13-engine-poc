@@ -144,6 +144,7 @@ fn spawn_phones(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
                 },
                 crate::to_transform(&t),
                 Name::new(a.name.clone()),
+                crate::interact::InteractLimits::of(&classes, &a.class),
             ))
             .id();
         phones.insert(a.name.clone(), e);
@@ -171,6 +172,7 @@ fn spawn_phones(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
             },
             crate::to_transform(&t),
             Name::new(a.name.clone()),
+            crate::interact::InteractLimits::of(&classes, &a.class),
         ));
     }
     for a in actors().filter(|a| classes.is_child_of(&a.class, "SCPoliceSpawner")) {

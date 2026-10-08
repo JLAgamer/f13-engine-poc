@@ -292,18 +292,22 @@ Decomp audit (nothing guessed: every rule read from the decomp or the game's dat
       Found so far: her "Choke" line on a grab (the game never plays it there: removed); the grab kills' camera
       splines missed their component's place in the kill Blueprint (fixed); the barricade plank (one plank whose
       pitch follows her "Barricade" curve: fixed); doors' interaction cameras (ported); which interactable she uses
-      (the interactable manager's score: ported; its range test's yaw/pitch limits and occlusion still to export)
+      (the interactable manager's score and its range test: yaw/pitch limits and the occlusion trace, ported);
+      barricades' doors (SCBarricade's BeginPlay overlap: ported); cabinets (instant before: their special move and
+      the drawer following her bone, ported); the firecracker's spawn point (her hand) and direction (the camera's
+      yaw); Jason's knife speed (ThrowStrength 12000; the knife Blueprint doesn't set it); the car seat's reach (an
+      added 60 cm, removed); the tonemapper's grain frame (FrameIndexMod8)
 - [x] Audit of hiding.rs, doors.rs, police.rs, items.rs, placed_kills.rs, character.rs, senses.rs, ui.rs, vehicle.rs
       (MODLOG "Decomp audit (worktree session)"): hiding voice lines and spot doors, the door's opening side, the
       police volume's obstruction, stun spot search and phone box rule, melee sweeps, guns, the firecracker throw,
       placed kills' Interactable range test, no start/stop takes, Jason's eye and view angle, the minimap's scale,
       the brake skid (the handbrake's). Left as placeholders: APEX door chunks, the block idle's upper-body slot,
-      sweeps against Jason's physics bodies, the firecracker's spawn point
+      sweeps against Jason's physics bodies
 - [x] The counselor's cameras (counselor_camera.rs, f13-core::dynamic_camera): Base_Counselor's nine
       ILLDynamicCameraComponents (their speed-picked settings and blends, this build's spring arm: RInterpTo/VInterpTo
       lag, the probe sweep on the camera channel), ILLCharacter's camera stack, the graph's ChangeCamera (stance,
       chase, indoors); the engine's mouse look (sensitivity, FOV scaling, input scales, ±87 pitch); her look in the
-      car; chases (her chase check, read: the game takes acosf of the angle). Not yet: the chase's camera shake, the
+      car; chases (her chase check, read: the game takes acosf of the angle) and their camera shake. Not yet: the
       spline cameras (pocket knife, rear view, grabbed, drowning), Jason's own cameras when he's played
 - [x] Special moves' approach (SCSpecialMove_SoloMontage, every counselor interaction move: it replaces
       ILLSpecialMove_MoveToward's walk and view turn with a 0.15 s slide onto the spot, bInterpToInteraction /

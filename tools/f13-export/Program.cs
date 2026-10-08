@@ -174,11 +174,12 @@ void ExportLevel(string mapPath, params string[] extra)
                 // Its brush's convex hulls, in world space.
                 var brush = root;
                 var bs = brush?.GetOrDefault<FPackageIndex?>("BrushBodySetup")?.Load() as CUE4Parse.UE4.Objects.PhysicsEngine.UBodySetup;
-                var (pawn, camera) = brush == null ? (false, false) : (Collision.BlocksPawn(brush, "BlockAll"), Collision.BlocksCamera(brush, "BlockAll"));
-                if (brush != null && bs?.AggGeom != null && (pawn || camera))
+                var (pawn, camera, worldDynamic) = brush == null ? (false, false, false) : (Collision.BlocksPawn(brush, "BlockAll"), Collision.BlocksCamera(brush, "BlockAll"), Collision.BlocksWorldDynamic(brush, "BlockAll"));
+                if (brush != null && bs?.AggGeom != null && (pawn || camera || worldDynamic))
                 {
                     info.HullsBlockPawn = pawn;
                     info.HullsBlockCamera = camera;
+                    info.HullsBlockWorldDynamic = worldDynamic;
                     var w = brush.GetAbsoluteTransform();
                     info.Hulls = bs.AggGeom.ConvexElems.Where(c => c.VertexData is { Length: >= 4 })
                         .Select(c => c.VertexData.SelectMany(v => { var p = w.TransformPosition(c.Transform.TransformPosition(v)); return new[] { p.X, p.Y, p.Z }; }).ToArray())
@@ -243,6 +244,7 @@ void ExportLevel(string mapPath, params string[] extra)
                 MaterialMap = MeshMaterials.OverrideMap(mesh, smc.GetOrDefault<FPackageIndex[]>("OverrideMaterials", []), Queue),
                 BlocksPawn = Collision.BlocksPawn(smc),
                 BlocksCamera = Collision.BlocksCamera(smc),
+                BlocksWorldDynamic = Collision.BlocksWorldDynamic(smc),
                 CastShadow = smc.GetOrDefault("CastShadow", true),
                 // Foliage instances fade out at InstanceEndCullDistance; other components at their max draw distance
                 // (LDMaxDrawDistance, or the cull distance volume's CachedMaxDrawDistance), the nearer one when both are set.
@@ -805,7 +807,9 @@ static class Mvp
     // Classes no level places but the game reads (the cars' wheels: SCWheeledVehicleMovementComponent WheelSetups).
     public static readonly string[] Classes = ["CarKeys_C", "Chevette_FrontWheel_C", "Chevette_BackWheel_C",
         // The police car SCPoliceSpawner spawns (its PoliceSpawnClass).
-        "Police_C"];
+        "Police_C",
+        // Jason's throwing knife (his ThrowingKnifeClass).
+        "ThrowingKnife_C"];
     // Montages whose length or root motion the rules use (anims.json).
     const string Shared = "/Game/Characters/Counselors/Base/Shared";
     public static readonly string[] Montages =
@@ -1218,6 +1222,8 @@ class Placement
     public bool BlocksPawn = true;
     /// Blocks the camera channel (the spring arms' probe).
     public bool BlocksCamera = true;
+    /// Blocks traces on WorldDynamic (interactables' occlusion).
+    public bool BlocksWorldDynamic = true;
     /// Casts shadows (CastShadow; baked ones included, which f13-game's dynamic sun stands in for).
     public bool CastShadow = true;
     /// Not drawn past this distance from the camera (cm; 0 = always drawn).
@@ -1232,7 +1238,7 @@ class ActorInfo
     /// BlockingVolumes: their convex hulls as world-space point sets (cm).
     public List<float[]>? Hulls;
     /// Whether the hulls block counselors (Pawn) and the camera channel.
-    public bool HullsBlockPawn = true, HullsBlockCamera = true;
+    public bool HullsBlockPawn = true, HullsBlockCamera = true, HullsBlockWorldDynamic = true;
     /// NavMeshBoundsVolumes and the minimap volume: the world-space box their brush covers (cm: min x, y, z, max x, y, z).
     public float[]? Bounds;
 }

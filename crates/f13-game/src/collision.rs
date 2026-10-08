@@ -3,9 +3,9 @@
 //! startup into a static grid; class actors (doors, windows, cars, furniture) carry `Collider`s that follow them.
 
 use bevy::prelude::*;
-use f13_core::collision::{convex_hull, Tri, TriGrid, TriList};
+use f13_core::collision::{convex_hull, Tri, TriGrid, TriList, TriSource};
 use f13_data::collision::{gltf_points, MeshShapes};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub struct CollisionPlugin;
 
@@ -53,6 +53,40 @@ pub struct Collider(pub std::sync::Arc<Vec<Tri>>);
 /// A [`Collider`] whose component also blocks the camera channel (the spring arms' probe).
 #[derive(Component, Clone, Copy)]
 pub struct CameraBlocker;
+
+/// The level's interactable actors' own triangles in the static grid (fuse boxes, phone boxes, phones), by actor name:
+/// an interactable's occlusion trace ignores its own actor.
+#[derive(Resource, Default)]
+pub struct ActorTris(pub HashMap<String, HashSet<TriKey>>);
+
+/// A triangle's identity (its corners' bits).
+pub type TriKey = [u32; 9];
+
+pub fn tri_key(t: &Tri) -> TriKey {
+    let [a, b, c] = [t.a, t.b, t.c].map(|v| v.to_array().map(f32::to_bits));
+    [a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]]
+}
+
+/// A triangle source without some triangles.
+pub struct Excluding<'a, S: ?Sized>(pub &'a S, pub Option<&'a HashSet<TriKey>>);
+
+impl<S: TriSource + ?Sized> TriSource for Excluding<'_, S> {
+    fn for_each_in(&self, min: Vec3, max: Vec3, f: &mut dyn FnMut(&Tri)) {
+        match self.1 {
+            Some(skip) => self.0.for_each_in(min, max, &mut |t| {
+                if !skip.contains(&tri_key(t)) {
+                    f(t)
+                }
+            }),
+            None => self.0.for_each_in(min, max, f),
+        }
+    }
+}
+
+/// A collider that blocks her but not traces on WorldDynamic (some roofs' invisible blockers, the cars' body boxes):
+/// interactables' occlusion traces pass it.
+#[derive(Component)]
+pub struct NoWorldDynamic;
 
 /// An actor's shapes that overlap queries on WorldDynamic find (convex hulls in the actor's space, as placed).
 #[derive(Component, Clone)]
@@ -131,11 +165,23 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
     let mut grid = TriGrid::new(4.0);
     let mut camera_grid = TriGrid::new(4.0);
     let (mut placed, mut volumes) = (0usize, 0usize);
+    // The level's interactable actors (their placements' triangles are kept by actor too).
+    let classes = f13_data::classes::ClassDb::load(&export.0.join("classes.json")).ok();
+    let interactables: HashSet<&str> = level
+        .layouts
+        .iter()
+        .flat_map(|l| &l.actors)
+        .filter(|a| classes.as_ref().and_then(|c| Some((c, c.get(&a.class)?))).is_some_and(|(c, info)| info.components.iter().any(|x| c.is_child_of(&x.kind, "ILLInteractableComponent"))))
+        .map(|a| a.name.as_str())
+        .collect();
+    let mut actor_tris = ActorTris::default();
     for layout in &level.layouts {
         for p in &layout.placements {
             if !p.blocks_pawn && !p.blocks_camera {
                 continue;
             }
+            // "<package>:PersistentLevel.<actor>.<component>".
+            let actor = p.component.split("PersistentLevel.").nth(1).and_then(|s| s.split('.').next()).filter(|a| interactables.contains(a));
             let tris = local(&p.file);
             if tris.is_empty() {
                 continue;
@@ -148,6 +194,9 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
             for x in xforms {
                 let m = crate::to_transform(x).compute_affine();
                 for t in transform_tris(&tris, &m) {
+                    if let Some(a) = actor {
+                        actor_tris.0.entry(a.to_string()).or_default().insert(tri_key(&t));
+                    }
                     if p.blocks_pawn {
                         grid.insert(t);
                     }
@@ -207,6 +256,7 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
         started.elapsed().as_secs_f32()
     );
     commands.insert_resource(WorldCollision { grid: std::sync::Arc::new(grid), camera_grid: std::sync::Arc::new(camera_grid), shapes });
+    commands.insert_resource(actor_tris);
 }
 
 /// Rebuilds the world-space triangles of moved, shown or hidden colliders.

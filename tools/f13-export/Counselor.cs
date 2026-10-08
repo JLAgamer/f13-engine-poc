@@ -493,6 +493,9 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         // 3.5); the knife's WeaponStats.Damage.
         foreach (var (name, fallback) in new[] { ("NumKnives", 0f), ("InitialTrapCount", 5f), ("TrapPlacementDistance", 75f), ("ThrowingKnifeCooldown", 3.5f) })
             values[name] = ClassValue<object>(cls, name) switch { int i => i, float f => f, _ => fallback };
+        // The knife's speed (SCThrowable's throw velocity: the camera's forward x ThrowStrength; SCCharacter's
+        // constructor 1000, Jason_Base 12000).
+        values["ThrowStrength"] = ClassValue<float?>(cls, "ThrowStrength") ?? 1000f;
         if (ClassValue<FPackageIndex>(cls, "ThrowingKnifeClass")?.Load<UStruct>() is { } knife)
             values["ThrowingKnifeDamage"] = ClassValue<FStructFallback>(knife, "WeaponStats")?.GetOrDefault<float>("Damage") ?? 0;
         // The music counselors hear near him (NearCounselorMusic: full volume within NearCounselorMusicMaxVolumeDistance,
