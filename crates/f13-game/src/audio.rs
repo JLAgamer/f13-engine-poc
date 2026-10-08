@@ -288,47 +288,43 @@ fn actor_sound(
     }
 }
 
-/// Doors, windows and barricades sound when their state changes.
+/// Doors, windows and barricades' own cues, where the game plays them: a door's DoorHitSoundCue or
+/// DoorDestroySoundCue as it's damaged (its TakeDamage, 0x1403608c0); a window's WindowOpenSound / WindowCloseSound as
+/// her move reaches it (SCWindow::NativeOpen/CloseDestinationReached); a barricade's EnableBarricadeAudio /
+/// DisableBarricadeAudio as she starts using it (SCBarricade::OnUseStarted). A door's OpenDoorSound and CloseDoorSound
+/// aren't played by any code or Blueprint: her and his door takes' own notifies sound them.
 #[allow(clippy::type_complexity)]
 fn actor_sounds(
     mut commands: Commands,
-    mut last: Local<HashMap<Entity, (bool, f32, bool)>>,
+    mut last: Local<HashMap<Entity, (f32, bool)>>,
     doors: Query<(Entity, &crate::doors::Door), With<ClassSounds>>,
-    windows: Query<(Entity, &crate::windows::Window), With<ClassSounds>>,
+    window_moves: Query<&crate::interact::WindowMove, Added<crate::interact::WindowMove>>,
+    barricade_moves: Query<&crate::interact::BarricadeMove, Added<crate::interact::BarricadeMove>>,
     barricades: Query<(Entity, &crate::windows::Barricade), With<ClassSounds>>,
-    rigs: Query<&crate::character::Rig>,
 ) {
     let mut play = |actor: Entity, prop: &'static str| commands.trigger(ActorSound { actor, prop });
-    // A character's door take plays the door's sounds itself (its notifies: anim_sounds.json). PLACEHOLDER rule.
-    let door_take = rigs.iter().any(|r| r.action.as_ref().is_some_and(|(a, _)| a.contains("_door_open_") || a.contains("_door_close_")));
     for (e, d) in &doors {
-        let now = (d.open, d.health, d.broken);
-        if let Some(&(open, health, broken)) = last.get(&e) {
+        let now = (d.health, d.broken);
+        if let Some(&(health, broken)) = last.get(&e) {
             if d.broken && !broken {
                 play(e, "DoorDestroySoundCue");
             } else if d.health < health {
                 play(e, "DoorHitSoundCue");
-            } else if d.open != open && !d.broken && !door_take {
-                play(e, if d.open { "OpenDoorSound" } else { "CloseDoorSound" });
             }
         }
         last.insert(e, now);
     }
-    for (e, w) in &windows {
-        if let Some(&(open, _, _)) = last.get(&e) {
-            if w.open != open {
-                play(e, if w.open { "WindowOpenSound" } else { "WindowCloseSound" });
-            }
+    for m in &window_moves {
+        match m.kind {
+            crate::interact::WindowMoveKind::Open => play(m.window, "WindowOpenSound"),
+            crate::interact::WindowMoveKind::Close => play(m.window, "WindowCloseSound"),
+            _ => {}
         }
-        last.insert(e, (w.open, 0.0, w.destroyed));
     }
-    for (e, b) in &barricades {
-        if let Some(&(on, _, _)) = last.get(&e) {
-            if b.enabled != on {
-                play(e, if b.enabled { "EnableBarricadeAudio" } else { "DisableBarricadeAudio" });
-            }
+    for m in &barricade_moves {
+        if let Some((e, b)) = barricades.iter().find(|(_, b)| b.door == Some(m.door)) {
+            play(e, if b.enabled { "DisableBarricadeAudio" } else { "EnableBarricadeAudio" });
         }
-        last.insert(e, (b.enabled, 0.0, false));
     }
 }
 

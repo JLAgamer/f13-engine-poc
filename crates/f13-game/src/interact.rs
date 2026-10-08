@@ -198,8 +198,8 @@ pub struct DoorMove {
 /// landing (f_normal_dive_land_01). She can't do anything else meanwhile.
 #[derive(Component)]
 pub struct WindowMove {
-    window: Entity,
-    kind: WindowMoveKind,
+    pub(crate) window: Entity,
+    pub(crate) kind: WindowMoveKind,
     t: f32,
     from: Vec3,
     to: Vec3,
@@ -209,7 +209,7 @@ pub struct WindowMove {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WindowMoveKind {
+pub(crate) enum WindowMoveKind {
     Open,
     Close,
     Vault,
@@ -591,7 +591,7 @@ fn door_anim(opening: bool, inside: bool) -> &'static str {
 /// as its UseBarricade driver window ends.
 #[derive(Component)]
 pub struct BarricadeMove {
-    door: Entity,
+    pub(crate) door: Entity,
     t: f32,
     /// The montage's UseBarricade driver window: the plank follows her "Barricade" curve in it, and the barricade
     /// toggles at its end.
