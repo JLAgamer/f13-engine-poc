@@ -258,8 +258,10 @@ Presentation
       PLACEHOLDER); widgets' RenderTransforms (the view cone's flip)
 - [x] The minimap's icons (ui.rs MapIcon): each SCMinimapIconComponent's DefaultIcon widget (Jason's KillerIcon when
       he's played) where its actor is: cabins, the cars, the police car
-- [ ] HUD, remaining: the items' minimap icons (they start hidden; what shows them isn't read), the noise meter, help
-      texts, XP popups, ability widgets
+- [x] The noise meter (SC_Noise_Widget's graph): while she moves, a ping every 5-15 s over her noise level, its two
+      rings growing on the minimap to 10 x her noise along NoisePulseCurve over PingTime
+- [ ] HUD, remaining: the items' minimap icons (they start hidden; what shows them isn't read), help texts, XP
+      popups, ability widgets
 - [x] Night lighting, fog, flashlight (lighting.rs): the map's point/spot lights (inverse-square lumens, or Unreal's
   falloff-exponent lights matched at a third of their radius; colour temperature; draw-distance fades), the moon and
   height fog of the clear-weather level (CLsm_RainOff), the post-process volume's fixed exposure and ambient cubemap,

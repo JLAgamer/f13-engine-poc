@@ -328,6 +328,30 @@ pub fn rich_curve(keys: &[CurveKey]) -> f13_core::curve::RichCurve {
     f13_core::curve::RichCurve { keys }
 }
 
+/// An FRichCurve as Unreal serializes it (`{"Keys": [{"InterpMode": "RCIM_Cubic", "Time", "Value", "ArriveTangent",
+/// "LeaveTangent"}]}`) as an f13-core curve.
+pub fn ue_rich_curve(v: &serde_json::Value) -> f13_core::curve::RichCurve {
+    use f13_core::curve::{Interp, Key};
+    let f = |k: &serde_json::Value, n: &str| k[n].as_f64().unwrap_or(0.0) as f32;
+    let keys = v["Keys"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|k| Key {
+            time: f(k, "Time"),
+            value: f(k, "Value"),
+            interp: match k["InterpMode"].as_str().unwrap_or("RCIM_Linear") {
+                "RCIM_Constant" => Interp::Constant,
+                "RCIM_Cubic" => Interp::Cubic,
+                _ => Interp::Linear,
+            },
+            arrive_tangent: f(k, "ArriveTangent"),
+            leave_tangent: f(k, "LeaveTangent"),
+        })
+        .collect();
+    f13_core::curve::RichCurve { keys }
+}
+
 impl CharacterInfo {
     pub fn load(path: &Path) -> Result<Self, crate::LoadError> {
         let text = std::fs::read_to_string(path).map_err(crate::LoadError::Io)?;

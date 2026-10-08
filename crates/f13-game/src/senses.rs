@@ -35,8 +35,8 @@ const INDOORS_ROOF_M: f32 = 6.0;
 pub struct KillerAbilityTuning(pub KillerTuning);
 
 #[derive(Resource)]
-struct SenseValues {
-    noise: NoiseTuning,
+pub(crate) struct SenseValues {
+    pub(crate) noise: NoiseTuning,
     hearing: HearingTuning,
     sense: SenseTuning,
     /// cm

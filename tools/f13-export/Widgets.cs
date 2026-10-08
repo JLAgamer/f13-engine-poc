@@ -11,6 +11,8 @@ using CUE4Parse.FileProvider;
 using CUE4Parse.UE4.Assets.Exports;
 using CUE4Parse.UE4.Assets.Exports.Texture;
 using CUE4Parse.UE4.Objects.UObject;
+using CUE4Parse.UE4.Assets.Objects;
+using CUE4Parse.UE4.Objects.Core.Misc;
 
 class WidgetExporter(IFileProvider provider, string outDir, Action<UObject> queue, Func<string, string> toFile)
 {
@@ -87,6 +89,48 @@ class WidgetExporter(IFileProvider provider, string outDir, Action<UObject> queu
         }
         var nested = new List<string>();
         var j = new JObject { ["Name"] = name, ["Root"] = Node(root, null, nested) };
+        // The class's defaults (its variables' values that its graphs use: sizes, times, curves).
+        if (exports.FirstOrDefault(e => e.Name.StartsWith("Default__")) is { } cdo)
+            j["Defaults"] = Props(cdo, "WidgetTree", "UberGraphFrame");
+        // Its animations (UWidgetAnimation): each bound widget's animated property and its channels' curves.
+        var anims = new JObject();
+        foreach (var a in cls!.GetOrDefault<FPackageIndex[]>("Animations", []))
+        {
+            if (a.Load<UObject>() is not { } wa || wa.GetOrDefault<FPackageIndex?>("MovieScene")?.Load<UObject>() is not { } scene) continue;
+            var sp = JObject.Parse(JsonConvert.SerializeObject(scene))["Properties"] as JObject ?? new JObject();
+            var names = new Dictionary<string, string>();
+            foreach (var b in JObject.Parse(JsonConvert.SerializeObject(wa))["Properties"]?["AnimationBindings"] ?? new JArray())
+                names[b["AnimationGuid"]!.ToString()] = b["WidgetName"]!.ToString();
+            var tracks = new JArray();
+            foreach (var ob in scene.GetOrDefault<UScriptArray?>("ObjectBindings")?.Properties ?? [])
+            {
+                if (ob.GetValue(typeof(FStructFallback)) is not FStructFallback binding) continue;
+                var guid = binding.GetOrDefault<FGuid>("ObjectGuid").ToString(EGuidFormats.UniqueObjectGuid);
+                foreach (var ti in binding.GetOrDefault<FPackageIndex[]>("Tracks", []))
+                {
+                    if (ti.Load<UObject>() is not { } track) continue;
+                    var sections = new JArray();
+                    foreach (var si in track.GetOrDefault<FPackageIndex[]>("Sections", []))
+                    {
+                        if (si.Load<UObject>() is not { } section) continue;
+                        var props = JObject.Parse(JsonConvert.SerializeObject(section))["Properties"] as JObject ?? new JObject();
+                        var channels = new JObject();
+                        foreach (var p in props.Properties())
+                            if (p.Value is JObject c && (c["Keys"] != null || c["DefaultValue"] != null)) channels[p.Name] = c;
+                        sections.Add(new JObject { ["Type"] = section.ExportType, ["Start"] = props["StartTime"] ?? 0, ["End"] = props["EndTime"], ["Channels"] = channels });
+                    }
+                    tracks.Add(new JObject
+                    {
+                        ["Widget"] = names.GetValueOrDefault(guid, guid),
+                        ["Type"] = track.ExportType,
+                        ["Property"] = track.GetOrDefault<FName>("PropertyName").Text,
+                        ["Sections"] = sections,
+                    });
+                }
+            }
+            anims[wa.Name.Replace("_INST", "")] = new JObject { ["Length"] = sp["PlaybackRange"]?["UpperBound"]?["Value"], ["Tracks"] = tracks };
+        }
+        if (anims.Count > 0) j["Animations"] = anims;
         File.WriteAllText(Path.Combine(Dir, name + ".json"), j.ToString(Formatting.Indented));
         var n = 1;
         foreach (var p in nested.Distinct()) n += Export(p);
@@ -176,6 +220,19 @@ class WidgetExporter(IFileProvider provider, string outDir, Action<UObject> queu
                     catch (Exception e)
                     {
                         Console.WriteLine($"material {path}: {e.Message}");
+                    }
+                }
+                if (name.StartsWith("CurveFloat'"))
+                {
+                    // A float curve: its keys (FRichCurve).
+                    try
+                    {
+                        if (provider.LoadPackage(path.Split('.')[0]).GetExports().FirstOrDefault(e => e.ExportType == "CurveFloat") is { } curve)
+                            r["FloatCurve"] = JObject.Parse(JsonConvert.SerializeObject(curve))["Properties"]?["FloatCurve"];
+                    }
+                    catch (Exception e)
+                    {
+                        Console.WriteLine($"curve {path}: {e.Message}");
                     }
                 }
                 if (name.StartsWith("Texture2D'"))

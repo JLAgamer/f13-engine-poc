@@ -100,7 +100,7 @@ impl Plugin for UiPlugin {
         embedded_asset!(app, "shaders/minimap.wgsl");
         app.add_plugins((UiMaterialPlugin::<RadialFill>::default(), UiMaterialPlugin::<Minimap>::default()))
             .add_systems(Startup, load_hud)
-            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, jason_hud), hide_for_jason).chain().run_if(resource_exists::<Hud>));
+            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, jason_hud, noise_meter), hide_for_jason).chain().run_if(resource_exists::<Hud>));
     }
 }
 
@@ -181,6 +181,31 @@ pub struct Hud {
     /// "<user widget class>.<widget name>" -> entity.
     names: HashMap<String, Entity>,
     map: Option<MapInfo>,
+    /// Design units to pixels, as last built.
+    scale: f32,
+    noise: Option<NoiseWidget>,
+}
+
+/// SC_Noise_Widget's defaults: its rings' start sizes, the pulse's time and curve.
+struct NoiseWidget {
+    ring1_start: Vec2,
+    ring2_start: Vec2,
+    ping_time: f32,
+    curve: f13_core::curve::RichCurve,
+}
+
+impl NoiseWidget {
+    fn load(dir: &std::path::Path) -> Option<Self> {
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("ui/SC_Noise_Widget.json")).ok()?).ok()?;
+        let d = v.get("Defaults")?;
+        let v2 = |n: &str| Vec2::new(d[n]["X"].as_f64().unwrap_or(0.0) as f32, d[n]["Y"].as_f64().unwrap_or(0.0) as f32);
+        Some(NoiseWidget {
+            ring1_start: v2("Ring1StartSize"),
+            ring2_start: v2("Ring2StartSize"),
+            ping_time: d["PingTime"].as_f64().unwrap_or(0.0) as f32,
+            curve: f13_data::character::ue_rich_curve(&d["PingCurve"]["FloatCurve"]),
+        })
+    }
 }
 
 /// A progress bar's fill.
@@ -263,6 +288,11 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         root: None,
         names: HashMap::new(),
         map,
+        scale: 1.0,
+        noise: NoiseWidget::load(dir).or_else(|| {
+            warn!("ui: SC_Noise_Widget has no defaults (re-export with f13-export ui): no noise meter");
+            None
+        }),
     });
 }
 
@@ -346,6 +376,7 @@ fn build_hud(
     }
     hud.names = names;
     hud.root = Some(root);
+    hud.scale = scale;
     hud.built = Some((size, pockets, jason, police));
 }
 
@@ -826,6 +857,82 @@ fn breath(
         if let Some(p) = hud.names.get(name).and_then(|&e| bars.get(e).ok()) {
             set_progress(&mut commands, p.fill, p, percent);
         }
+    }
+}
+
+/// SC_Noise_Widget's pulse (its Tick, UpdateRings, BeginPulse, EndPulse): the time to the next ping, the pulse's
+/// time, whether the rings are out, their end size; the rings' centres (pixels) on the HUD it was built for.
+#[derive(Default)]
+struct NoisePulse {
+    next: f32,
+    current: f32,
+    active: bool,
+    end: Vec2,
+    root: Option<Entity>,
+    centres: HashMap<Entity, Vec2>,
+}
+
+/// The minimap's noise rings: while she moves, a ping every 5-15 s over her noise level (GetNoiseLevel); each ping
+/// grows both rings from their start sizes to 10 x her noise along PingCurve over PingTime, then hides them (0.1).
+fn noise_meter(
+    time: Res<Time>,
+    hud: Res<Hud>,
+    player: Option<Single<&Player>>,
+    values: Option<Res<crate::senses::SenseValues>>,
+    mut rng: ResMut<crate::GameRng>,
+    mut nodes: Query<&mut Node>,
+    mut s: Local<NoisePulse>,
+) {
+    let (Some(w), Some(p)) = (hud.noise.as_ref(), player) else { return };
+    let rings: Vec<Entity> = ["SC_Noise_Widget.Ring1", "SC_Noise_Widget.Ring2"].iter().filter_map(|n| hud.names.get(*n).copied()).collect();
+    if rings.len() < 2 {
+        return;
+    }
+    if s.root != hud.root {
+        s.root = hud.root;
+        s.centres.clear();
+    }
+    for &e in &rings {
+        if !s.centres.contains_key(&e) {
+            let Ok(n) = nodes.get(e) else { return };
+            let px = |v: Val| if let Val::Px(x) = v { x } else { 0.0 };
+            s.centres.insert(e, Vec2::new(px(n.left) + px(n.width) / 2.0, px(n.top) + px(n.height) / 2.0));
+        }
+    }
+    let mut set = |e: Entity, size: Vec2, centres: &HashMap<Entity, Vec2>| {
+        if let (Ok(mut n), Some(c)) = (nodes.get_mut(e), centres.get(&e)) {
+            let size = size * hud.scale;
+            n.left = Val::Px(c.x - size.x / 2.0);
+            n.top = Val::Px(c.y - size.y / 2.0);
+            n.width = Val::Px(size.x);
+            n.height = Val::Px(size.y);
+        }
+    };
+    let dt = time.delta_secs();
+    s.next -= dt;
+    // UpdateRings.
+    s.current = (s.current + dt).clamp(0.0, w.ping_time);
+    let c = w.curve.eval(if w.ping_time > 0.0 { s.current / w.ping_time } else { 1.0 });
+    set(rings[0], w.ring1_start.lerp(s.end, c), &s.centres);
+    set(rings[1], w.ring2_start.lerp(s.end, c), &s.centres);
+    if s.current == w.ping_time {
+        // EndPulse.
+        s.active = false;
+        set(rings[0], Vec2::splat(0.1), &s.centres);
+        set(rings[1], Vec2::splat(0.1), &s.centres);
+    }
+    // BeginPulse, while she moves.
+    if s.next <= 0.0 && !s.active && p.velocity.length() > 0.0 {
+        let noise = values.as_ref().map_or(0.0, |v| {
+            let c = &p.counselor;
+            f13_core::perception::noise_level(&v.noise, &c.stats, c.stance, c.sprinting, c.running, true)
+        });
+        s.next = (5.0 + 10.0 * rng.0.frand()) / noise.max(0.001);
+        s.active = true;
+        set(rings[0], w.ring1_start, &s.centres);
+        set(rings[1], w.ring2_start, &s.centres);
+        s.end = Vec2::splat(10.0) * noise;
+        s.current = 0.0;
     }
 }
 
