@@ -22,6 +22,12 @@
 //! Sense's exposure: it overrides the volume's AutoExposureMin/MaxBrightness, which the tick eases (FInterpTo at
 //! speed 1) toward 0.8 while Sense is on and 1.2 otherwise (BeginPlay, FUN_1403fb4a0, starts it at 1.2); its end turns
 //! the override off. Eye adaptation clamps to [min, max] (FPostProcessEyeAdaptationPS), so the exposure is 1 / it.
+//!
+//! The stun's colour fringe: OnStunned (0x1403f6070) sets the volume's SceneFringeIntensity target to 5 and the stun's
+//! end (0x1403f66a0) back to 0; the tick eases it there (FInterpTo at speed 8 while stunned, else 1), its override on
+//! outside context kills. A fringe above 0 takes the tonemapper's ColorFringe permutation (TonemapperConfBitmaskPC
+//! 0x12c0, PS3): red and green read from the scene scaled about the view's centre by 1 / (1 + I x 0.01 x 1.029) and
+//! 1 / (1 + I x 0.01 x 0.5936) (0x140c9c190; 0.007 x the primaries' wavelengths less blue's), blue at the pixel.
 
 use bevy::asset::{embedded_asset, load_embedded_asset, RenderAssetUsages};
 use bevy::core_pipeline::schedule::{Core3d, Core3dSystems};
@@ -68,6 +74,8 @@ pub struct GameTonemap {
     pub sense_lut: Handle<Image>,
     pub grade_lut: Handle<Image>,
     pub grade: f32,
+    /// SceneFringeIntensity.
+    pub fringe: f32,
     /// SceneColorTint.
     pub color_scale0: Vec3,
     pub vignette_intensity: f32,
@@ -84,7 +92,7 @@ pub struct TonemapUniform {
     grain: Vec4,
     /// ColorScale1: BloomIntensity (white x it).
     color_scale1: Vec4,
-    /// x: the grade LUT's weight.
+    /// x: the grade LUT's weight; y, z: the colour fringe's scales for green and red (1: none).
     grade: Vec4,
 }
 
@@ -105,7 +113,8 @@ impl ExtractComponent for GameTonemap {
         let frame = (FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 8) & 1023;
         let grain = Vec4::new(halton(frame, 2), halton(frame, 3), 0.0, 0.0);
         let color_scale1 = Vec4::new(t.bloom.intensity, t.bloom.intensity, t.bloom.intensity, 0.0);
-        let grade = Vec4::new(t.grade, 0.0, 0.0, 0.0);
+        let fringe = |scale: f32| 1.0 / (1.0 + t.fringe * 0.01 * scale);
+        let grade = Vec4::new(t.grade, fringe(FRINGE_SCALE_G), fringe(FRINGE_SCALE_R), 0.0);
         Some((t.clone(), TonemapUniform { color_scale0: t.color_scale0.extend(0.0), vignette: Vec4::new(t.vignette_intensity, aspect, 0.0, 0.0), grain, color_scale1, grade }))
     }
 }
@@ -281,6 +290,7 @@ fn setup(
             sense_lut: images.add(sense_image),
             grade_lut: Handle::default(),
             grade: 0.0,
+            fringe: 0.0,
             color_scale0: v.color("SceneColorTint"),
             vignette_intensity: v.f("VignetteIntensity", 0.4),
             bloom: v.bloom(),
@@ -352,6 +362,10 @@ pub(crate) fn finterp_to(current: f32, target: f32, dt: f32, speed: f32) -> f32 
     current + dist * (dt * speed).clamp(0.0, 1.0)
 }
 
+/// 0.007 x (611.3 - 464.3) and 0.007 x (549.1 - 464.3), as the exe holds them (0x14241d3a0, 0x14241d39c).
+const FRINGE_SCALE_R: f32 = 1.029;
+const FRINGE_SCALE_G: f32 = 0.5936;
+
 /// Which colour grade is in his volume's slot.
 #[derive(Clone, Copy, PartialEq, Default)]
 enum Grade {
@@ -366,10 +380,10 @@ fn killer_grade(
     play: Option<Res<crate::jason_player::PlayJason>>,
     jasons: Query<(&crate::jason::Jason, Option<&crate::senses::Knowledge>)>,
     mut cameras: Query<(&mut GameTonemap, Option<&mut bevy::camera::Exposure>)>,
-    mut state: Local<(f32, Grade, Option<f32>)>,
+    mut state: Local<(f32, Grade, Option<f32>, f32)>,
 ) {
     let Some((j, know)) = jasons.iter().next().filter(|_| play.is_some()) else { return };
-    let (intensity, slot, brightness) = &mut *state;
+    let (intensity, slot, brightness, fringe) = &mut *state;
     let dt = time.delta_secs();
     let sensing = know.is_some_and(|k| k.sensing(time.elapsed_secs()));
     if sensing {
@@ -384,14 +398,18 @@ fn killer_grade(
     *b = finterp_to(*b, if sensing { 0.8 } else { 1.2 }, dt, 1.0);
     // Bevy's exposure is 1 / (1.2 x 2^ev100).
     let ev100 = if sensing { (*b / 1.2).log2() } else { 0.0 };
+    let (fringe_target, fringe_speed) = if j.stunned() { (5.0, 8.0) } else { (0.0, 1.0) };
+    *fringe = finterp_to(*fringe, fringe_target, dt, fringe_speed);
+    let fringe_now = if j.in_context_kill() { 0.0 } else { *fringe };
     for (mut t, exposure) in &mut cameras {
         let lut = match slot {
             Grade::Stalk => t.stalk_lut.clone(),
             Grade::Sense => t.sense_lut.clone(),
         };
-        if t.grade != weight || t.grade_lut != lut {
+        if t.grade != weight || t.grade_lut != lut || t.fringe != fringe_now {
             t.grade = weight;
             t.grade_lut = lut;
+            t.fringe = fringe_now;
         }
         if let Some(mut e) = exposure.filter(|e| e.ev100 != ev100) {
             e.ev100 = ev100;

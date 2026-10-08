@@ -10,7 +10,8 @@ struct Params {
     grain: vec4<f32>,
     // ColorScale1: BloomIntensity.
     color_scale1: vec4<f32>,
-    // x: Jason's colour grade's weight (tonemap.rs: Stalk's or Sense's).
+    // x: Jason's colour grade's weight (tonemap.rs: Stalk's or Sense's); y, z: the colour fringe's scales for green
+    // and red about the view's centre (1: none).
     grade: vec4<f32>,
 }
 
@@ -40,7 +41,11 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let grain = fract(sin(seed.y * 543.3099975585938 + seed.x) * 493013.0);
     // Scene colour x ColorScale0 + bloom x ColorScale1 (the dirt mask's intensity is 0); Bevy has applied the exposure.
     let b = textureSample(bloom, scene_sampler, uv).rgb;
-    var c = textureSample(scene, scene_sampler, uv).rgb * p.color_scale0.rgb + b * p.color_scale1.rgb;
+    // The colour fringe (the ColorFringe permutation): red and green from scaled positions, blue at the pixel.
+    var s = textureSample(scene, scene_sampler, uv).rgb;
+    s.r = textureSample(scene, scene_sampler, (uv - 0.5) * p.grade.z + 0.5).r;
+    s.g = textureSample(scene, scene_sampler, (uv - 0.5) * p.grade.y + 0.5).g;
+    var c = s * p.color_scale0.rgb + b * p.color_scale1.rgb;
     let v = vignette_space * p.vignette.x;
     let f = 1.0 / (dot(v, v) + 1.0);
     c = c * (f * f);
