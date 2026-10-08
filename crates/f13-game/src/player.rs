@@ -385,7 +385,7 @@ pub(crate) fn move_player(
     tuning: Res<PlayerTuning>,
     camera: Single<&PlayerCamera>,
     mut player: Single<
-        (Entity, &mut Player, &mut Transform, Option<&crate::interact::UsingItem>, Option<&Unsettled>, (Has<crate::jason::Held>, Has<crate::hiding::Hiding>, Has<crate::items::Trapped>, (Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>, Has<crate::interact::BarricadeMove>)), Has<crate::jason::Staggered>, Has<crate::items::ItemAction>),
+        (Entity, &mut Player, &mut Transform, Option<&crate::interact::UsingItem>, Option<&Unsettled>, (Has<crate::jason::Held>, Has<crate::hiding::Hiding>, Has<crate::items::Trapped>, (Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>, Has<crate::interact::BarricadeMove>, Has<crate::interact::MoveToSpot>)), Has<crate::jason::Staggered>, Has<crate::items::ItemAction>),
         Without<Driving>,
     >,
     interaction: Option<Res<crate::interact::Interaction>>,
@@ -395,10 +395,11 @@ pub(crate) fn move_player(
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
-    let (entity, ref mut p, ref mut xf, using, settle, (held, hiding, trapped, (door_move, window_move, barricade_move)), staggered, item_action) = *player;
+    let (entity, ref mut p, ref mut xf, using, settle, (held, hiding, trapped, (door_move, window_move, barricade_move, sliding)), staggered, item_action) = *player;
     p.hidden = hiding;
-    if held || hiding {
-        // In Jason's hands (he places her), or in a hiding spot (hiding.rs places her).
+    if held || hiding || sliding {
+        // In Jason's hands (he places her), in a hiding spot (hiding.rs places her) or sliding onto a move's spot
+        // (interact.rs places her).
         p.velocity = Vec2::ZERO;
         return;
     }
@@ -406,7 +407,7 @@ pub(crate) fn move_player(
     let forward = Vec2::new(-sin, -cos);
     let right = Vec2::new(cos, -sin);
     let repairing = interaction.as_ref().is_some_and(|i| i.busy());
-    let busy = !p.counselor.alive() || using.is_some() || repairing || staggered || item_action || trapped || door_move || window_move || barricade_move;
+    let busy = !p.counselor.alive() || using.is_some() || repairing || staggered || item_action || trapped || door_move || window_move || barricade_move || sliding;
     let wish = match autopilot.get(entity) {
         _ if busy => Vec2::ZERO,
         Ok(a) => a.0.normalize_or_zero(),

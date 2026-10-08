@@ -104,6 +104,8 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         /// MovementBasedSettings: FCameraBehaviorSettings), "Use2DVelocity", and its "SpringArm" and "Camera"
         /// subobjects' own properties.
         public Newtonsoft.Json.Linq.JObject? Cameras;
+        /// The camera shakes her graph plays (ED_Shake2 on a chase), by class name: their CDO's properties.
+        public Newtonsoft.Json.Linq.JObject? CameraShakes;
     }
 
     /// A physics asset body: its bone's capsules ("Sphyl": Radius, Length between the sphere centres, along the
@@ -247,6 +249,10 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         info.Stats["BreathNoiseMod"] = StatValue(cls, "BreathNoiseMod", 1f, (6, 0.2f));
         info.Music = MusicObject(cls);
         info.Cameras = DynamicCameras(cls);
+        info.CameraShakes = new Newtonsoft.Json.Linq.JObject();
+        foreach (var shake in new[] { "SummerCamp/Content/Cameras/CameraShakes/ED_Shake2" })
+            if (provider.LoadPackageObject<UBlueprintGeneratedClass>(shake + "." + shake.Split('/')[^1] + "_C").ClassDefaultObject.Load() is { } shakeCdo)
+                info.CameraShakes[shake.Split('/')[^1]] = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(shakeCdo))["Properties"] ?? new Newtonsoft.Json.Linq.JObject();
         // Her voice lines (VoiceOverObjectClass's VoiceOverData), as Sounds "VO:<name>".
         info.Sounds = VoiceOvers(cls);
 

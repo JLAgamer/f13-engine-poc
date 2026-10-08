@@ -492,6 +492,126 @@ pub fn rotator_of(q: glam::Quat) -> Vec3 {
     rotator(q)
 }
 
+/// An FFOscillator: amplitude, frequency (radians of its sine per second) and whether it starts at a random phase
+/// (EOO_OffsetRandom, the default) or at 0.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Oscillator {
+    pub amplitude: f32,
+    pub frequency: f32,
+    pub random_offset: bool,
+}
+
+impl Oscillator {
+    /// FFOscillator::UpdateOffset: the phase advances by dt x frequency; the sine of it x amplitude.
+    fn update(&self, offset: &mut f32, dt: f32) -> f32 {
+        if self.amplitude == 0.0 {
+            return 0.0;
+        }
+        *offset += dt * self.frequency;
+        self.amplitude * offset.sin()
+    }
+}
+
+/// A UCameraShake class's oscillation (its CDO): duration (negative: until stopped), blend in and out, and the
+/// oscillators of the view's rotation (pitch, yaw, roll), location (x, y, z) and field of view.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Shake {
+    pub duration: f32,
+    pub blend_in: f32,
+    pub blend_out: f32,
+    pub rot: [Oscillator; 3],
+    pub loc: [Oscillator; 3],
+    pub fov: Oscillator,
+}
+
+/// A playing camera shake (UCameraShake::UpdateAndApplyCameraShake, camera-local play space).
+#[derive(Clone, Debug)]
+pub struct ShakeInstance {
+    pub shake: Shake,
+    /// PlayCameraShake's scale.
+    pub scale: f32,
+    rot_offset: [f32; 3],
+    loc_offset: [f32; 3],
+    fov_offset: f32,
+    remaining: f32,
+    blend_in_time: f32,
+    blending_in: bool,
+    blend_out_time: f32,
+    blending_out: bool,
+}
+
+/// What a shake does to the view this frame: a camera-local location and rotation offset, and degrees of FOV.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct ShakeOffset {
+    pub location: Vec3,
+    pub rotation: Vec3,
+    pub fov: f32,
+}
+
+impl ShakeInstance {
+    pub fn new(shake: Shake, scale: f32, rand: &mut impl FnMut() -> f32) -> Self {
+        // FFOscillator::GetInitialOffset: a random phase in [0, 2 pi), or 0.
+        let mut rnd = |o: &Oscillator| if o.random_offset { rand() * std::f32::consts::TAU } else { 0.0 };
+        ShakeInstance {
+            rot_offset: [rnd(&shake.rot[0]), rnd(&shake.rot[1]), rnd(&shake.rot[2])],
+            loc_offset: [rnd(&shake.loc[0]), rnd(&shake.loc[1]), rnd(&shake.loc[2])],
+            fov_offset: rnd(&shake.fov),
+            remaining: if shake.duration > 0.0 { shake.duration } else { -1.0 },
+            blend_in_time: 0.0,
+            blending_in: shake.blend_in > 0.0,
+            blend_out_time: 0.0,
+            blending_out: false,
+            shake,
+            scale,
+        }
+    }
+
+    /// One frame; None once it has finished (it then leaves the camera).
+    pub fn update(&mut self, dt: f32) -> Option<ShakeOffset> {
+        let s = self.shake;
+        if self.remaining > 0.0 {
+            self.remaining = (self.remaining - dt).max(0.0);
+        }
+        let mut finished = false;
+        if self.remaining == 0.0 {
+            finished = true;
+        } else if self.remaining > 0.0 && self.remaining < s.blend_out {
+            self.blending_out = true;
+            self.blend_out_time = s.blend_out - self.remaining;
+        }
+        if self.blending_in {
+            self.blend_in_time += dt;
+            if self.blend_in_time > s.blend_in {
+                self.blending_in = false;
+            }
+        }
+        if self.blending_out {
+            self.blend_out_time += dt;
+            if self.blend_out_time > s.blend_out {
+                self.blending_out = false;
+                finished = true;
+            }
+        }
+        if finished {
+            return None;
+        }
+        let w_in = if self.blending_in { self.blend_in_time / s.blend_in } else { 1.0 };
+        let w_out = if self.blending_out { 1.0 - self.blend_out_time / s.blend_out } else { 1.0 };
+        let scale = self.scale * w_in.min(w_out);
+        if scale <= 0.0 {
+            return Some(ShakeOffset::default());
+        }
+        let mut loc = Vec3::ZERO;
+        let mut rot = Vec3::ZERO;
+        for i in 0..3 {
+            loc[i] = s.loc[i].update(&mut self.loc_offset[i], dt) * scale;
+            rot[i] = s.rot[i].update(&mut self.rot_offset[i], dt) * scale;
+        }
+        let fov = scale * s.fov.update(&mut self.fov_offset, dt);
+        Some(ShakeOffset { location: loc, rotation: rot, fov })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,5 +716,17 @@ mod tests {
         stack.update(0.5, |_| true, &mut ev);
         let w: Vec<(usize, f32)> = stack.entries.iter().map(|e| (e.camera, e.normalized)).collect();
         assert_eq!(w, vec![(1, 0.25), (0, 0.75)]);
+    }
+
+    #[test]
+    fn a_shake_blends_in_and_runs_until_stopped() {
+        let shake = Shake { duration: -420.0, blend_in: 0.8, blend_out: 0.8, rot: [Oscillator::default(), Oscillator::default(), Oscillator { amplitude: 10.0, frequency: 2.0, random_offset: false }], loc: Default::default(), fov: Oscillator { amplitude: 2.5, frequency: 1.5, random_offset: false } };
+        let mut s = ShakeInstance::new(shake, 0.08, &mut || 0.0);
+        let a = s.update(0.4).unwrap();
+        // Half blended in: 0.04 x 10 x sin(0.8).
+        assert!((a.rotation.z - 0.04 * 10.0 * 0.8f32.sin()).abs() < 1e-5, "{}", a.rotation.z);
+        for _ in 0..1000 {
+            assert!(s.update(0.1).is_some());
+        }
     }
 }

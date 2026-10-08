@@ -352,19 +352,26 @@ pub fn enter(
     let side = spot.nearest_side(gxf, xf.translation);
     let s = &spot.sides[side];
     let (origin, end) = model.place(s.enter_anim, HidingSpot::world(gxf, &s.enter));
-    *xf = origin;
+    let enter_anim = s.enter_anim;
     p.velocity = Vec2::ZERO;
     p.counselor.set_sprinting(false);
     if p.counselor.stance != f13_core::counselor::Stance::Standing {
         p.counselor.stance = f13_core::counselor::Stance::Standing;
     }
     spot.occupant = Some(player);
-    spot.door = DoorMotion::Entering(0.0);
-    if let (SpotKind::Tent, Some(prop)) = (spot.kind, spot.prop) {
-        commands.entity(prop).insert(crate::prop_anim::PropAnim::new(crate::prop_anim::TENT_ENTER));
-    }
     info!("Vanessa: hiding ({:?}, side {side})", spot.kind);
-    commands.entity(player).insert((Hiding { spot: spot_entity, side, phase: HidePhase::Entering, t: 0.0, end, wants_exit: false }, PlayAction(s.enter_anim.into())));
+    // Its enter move (Counselor_EnterArmoire etc., SCSpecialMove_SoloMontage): she slides onto its spot, then the
+    // take plays and the spot's door and flaps move.
+    let tent = (spot.kind == SpotKind::Tent).then_some(spot.prop).flatten();
+    crate::interact::move_to_spot(commands, player, *xf, origin, move |w| {
+        if let Some(mut s) = w.get_mut::<HidingSpot>(spot_entity) {
+            s.door = DoorMotion::Entering(0.0);
+        }
+        if let Some(prop) = tent {
+            w.entity_mut(prop).insert(crate::prop_anim::PropAnim::new(crate::prop_anim::TENT_ENTER));
+        }
+        w.entity_mut(player).insert((Hiding { spot: spot_entity, side, phase: HidePhase::Entering, t: 0.0, end, wants_exit: false }, PlayAction(enter_anim.into())));
+    });
 }
 
 fn read_exit(keys: Res<ButtonInput<KeyCode>>, mut hiding: Query<&mut Hiding>) {

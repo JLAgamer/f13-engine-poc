@@ -25,7 +25,9 @@
 //! acos(clamp(angle in radians, -1, 1)) of StartChaseKillerAngle / EndChaseKillerAngle (the game takes acosf of the
 //! angle, not cos). It ends ChaseTimeout after the last time that held.
 //!
-//! PLACEHOLDERS: the chase's camera shake (ED_Shake2 at 0.08 on OnChaseStart) isn't played; her seat is taken as
+//! The chase shakes the camera (ED_Shake2 at 0.08 from OnChaseStart until OnChaseEnd; UCameraShake's oscillators).
+//!
+//! PLACEHOLDERS: her seat is taken as
 //! she starts getting in (Driving from its enter take on); dead, the arm stays on her capsule (the game's death and
 //! spectating cameras aren't ported).
 
@@ -55,6 +57,9 @@ const WATER: &str = "WaterCamera";
 const DRIVING: &str = "DrivingCamera";
 const COMBAT: &str = "CombatCamera";
 const GRAB: &str = "GrabCamera";
+/// OnChaseStart's camera shake and its scale.
+const CHASE_SHAKE: &str = "ED_Shake2";
+const CHASE_SHAKE_SCALE: f32 = 0.08;
 
 pub struct CounselorCameraPlugin;
 
@@ -224,6 +229,8 @@ pub struct Rig {
     pub view: View,
     /// What the stack asked of the cameras when the rig was made (applied on its first frame).
     pending: Vec<CameraEvent>,
+    /// The chase's camera shake while it plays.
+    shake: Option<f13_core::dynamic_camera::ShakeInstance>,
 }
 
 impl Rig {
@@ -285,6 +292,7 @@ fn new_rig(info: &f13_data::character::CharacterInfo, now: f32, events: &mut Vec
         vehicle_look: Vec2::ZERO,
         view: View::default(),
         pending: Vec::new(),
+        shake: None,
     };
     let outdoor = rig.index(OUTDOOR)?;
     rig.stack.set_active(outdoor, now, events);
@@ -311,6 +319,7 @@ pub(crate) fn counselor_camera(
     mut camera: Single<(&mut PlayerCamera, &mut Transform, &mut Projection)>,
     windows: Query<&Window>,
     (collision, dynamic, blockers): (Option<Res<crate::collision::WorldCollision>>, Res<crate::collision::DynamicColliders>, Query<(), With<crate::collision::CameraBlocker>>),
+    mut rng: ResMut<crate::GameRng>,
 ) {
     let (p, pxf, driving, held, trapped) = *player;
     let (ref mut cam, ref mut xf, ref mut proj) = *camera;
@@ -371,6 +380,11 @@ pub(crate) fn counselor_camera(
     }
     if chase.chased != rig.chased {
         rig.chased = chase.chased;
+        // OnChaseStart: PlayCameraShake(ED_Shake2, 0.08); OnChaseEnd: StopCameraShakeInstances(ED_Shake2), at once.
+        rig.shake = match (chase.chased, counselor.as_ref().and_then(|c| c.info.camera_shakes.get(CHASE_SHAKE))) {
+            (true, Some(s)) => Some(f13_core::dynamic_camera::ShakeInstance::new(f13_data::character::camera_shake(s), CHASE_SHAKE_SCALE, &mut || rng.0.frand())),
+            _ => None,
+        };
         let blend = if chase.chased {
             if rig.stance_event == Stance::Driving { 0.0 } else { 0.5 }
         } else if rig.indoors_event {
@@ -423,8 +437,20 @@ pub(crate) fn counselor_camera(
     rig.stack.update(now, |i| active[i], &mut events);
     apply(rig, &mut events);
     let views: Vec<View> = rig.cameras.iter().map(|c| View { location: c.arm.socket.0, rotation: c.arm.socket.1, fov: c.arm.settings.field_of_view }).collect();
-    let Some(view) = rig.stack.view(|i| views[i]) else { return };
+    let Some(mut view) = rig.stack.view(|i| views[i]) else { return };
     rig.view = view;
+    // The camera manager's shakes, in the camera's own space.
+    if let Some(s) = rig.shake.as_mut() {
+        match s.update(dt) {
+            Some(o) => {
+                let q = f13_core::camera_spline::quaternion(view.rotation);
+                view.location += q * o.location;
+                view.rotation = f13_core::camera_spline::rotator(q * f13_core::camera_spline::quaternion(o.rotation));
+                view.fov += o.fov;
+            }
+            None => rig.shake = None,
+        }
+    }
     xf.translation = to_bevy(view.location);
     xf.rotation = crate::interaction_camera::from_rotator(view.rotation);
     if let Projection::Perspective(persp) = &mut **proj {

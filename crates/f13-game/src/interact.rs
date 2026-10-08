@@ -156,9 +156,9 @@ fn start_window_move(commands: &mut Commands, player: Entity, window: Entity, ki
 
 /// Through the window on her take's own root motion, from its special move spot: where the take plays from and
 /// where it leaves her.
-fn start_window_root_move(commands: &mut Commands, player: Entity, window: Entity, kind: WindowMoveKind, root: (Transform, Transform)) {
+fn window_root_move(window: Entity, kind: WindowMoveKind, root: (Transform, Transform)) -> (WindowMove, crate::character::PlayAction) {
     let m = WindowMove { window, kind, t: 0.0, from: root.0.translation, to: root.1.translation, effect_done: false, root: Some(root) };
-    commands.entity(player).insert((m, crate::character::PlayAction(kind.take().0.into())));
+    (m, crate::character::PlayAction(kind.take().0.into()))
 }
 
 fn window_moves(
@@ -206,7 +206,9 @@ fn window_moves(
                 let w = m.window;
                 let land = WindowMoveKind::Land.take().0;
                 match (m.root, model.as_ref()) {
-                    (Some((_, end)), Some(c)) if c.root_motion(land).is_some() => start_window_root_move(&mut commands, pe, w, WindowMoveKind::Land, c.place(land, end)),
+                    (Some((_, end)), Some(c)) if c.root_motion(land).is_some() => {
+                        commands.entity(pe).insert(window_root_move(w, WindowMoveKind::Land, c.place(land, end)));
+                    }
                     _ => {
                         let to = m.to;
                         start_window_move(&mut commands, pe, w, WindowMoveKind::Land, to, to);
@@ -240,15 +242,52 @@ fn repair_take(base: &str, part: &str) -> String {
     format!("{base}_{part}")
 }
 
-fn start_repair_anim(commands: &mut Commands, player: Entity, base: &str) {
-    commands.entity(player).insert((RepairAnim { base: base.to_string(), part: "start", t: 0.0 }, crate::character::PlayAction(repair_take(base, "start"))));
+fn repair_start(base: &str) -> (RepairAnim, crate::character::PlayAction) {
+    (RepairAnim { base: base.to_string(), part: "start", t: 0.0 }, crate::character::PlayAction(repair_take(base, "start")))
 }
 
 /// On a special move's spot (world), facing its forward (Unreal +X; she faces +Z), on her floor.
-fn stand_on(player: &mut Transform, at: Transform) {
+fn standing_on(player: &Transform, at: Transform) -> Transform {
     let (yaw, _, _) = at.rotation.to_euler(EulerRot::YXZ);
-    player.translation = Vec3::new(at.translation.x, player.translation.y, at.translation.z);
-    player.rotation = Quat::from_rotation_y(yaw + std::f32::consts::FRAC_PI_2);
+    Transform { translation: Vec3::new(at.translation.x, player.translation.y, at.translation.z), rotation: Quat::from_rotation_y(yaw + std::f32::consts::FRAC_PI_2), ..*player }
+}
+
+/// SCSpecialMove_SoloMontage's InterpolationTime (its constructor; no counselor move overrides it).
+pub const INTERPOLATION_TIME_S: f32 = 0.15;
+
+/// SCSpecialMove_SoloMontage's way onto its spot (its tick 0x140448320 with bInterpToInteraction, which every counselor
+/// interaction move keeps): her transform goes from where she stood to the spot over [`INTERPOLATION_TIME_S`]
+/// (location lerped, rotation by normalised lerp), then the move begins (DestinationReached: its montage and its
+/// camera). PLACEHOLDER: the game sweeps her capsule as she slides (bSweepTestOnLerp) and cancels the move if she's
+/// stopped short.
+#[derive(Component)]
+pub struct MoveToSpot {
+    from: Transform,
+    to: Transform,
+    t: f32,
+    begin: Option<Box<dyn FnOnce(&mut World) + Send + Sync>>,
+}
+
+/// Starts a special move from `to`: she slides there, then `begin` runs.
+pub fn move_to_spot(commands: &mut Commands, player: Entity, from: Transform, to: Transform, begin: impl FnOnce(&mut World) + Send + Sync + 'static) {
+    commands.entity(player).insert(MoveToSpot { from, to, t: 0.0, begin: Some(Box::new(begin)) });
+}
+
+fn moves_to_spots(mut commands: Commands, time: Res<Time>, mut players: Query<(Entity, &mut Transform, &mut MoveToSpot), With<Player>>) {
+    for (pe, mut xf, mut m) in &mut players {
+        m.t += time.delta_secs();
+        let a = (m.t / INTERPOLATION_TIME_S).clamp(0.0, 1.0);
+        let (from, to) = (m.from.rotation, m.to.rotation);
+        let to = if from.dot(to) < 0.0 { -to } else { to };
+        *xf = Transform { translation: m.from.translation.lerp(m.to.translation, a), rotation: (from * (1.0 - a) + to * a).normalize(), ..m.to };
+        if a >= 1.0 {
+            *xf = m.to;
+            commands.entity(pe).remove::<MoveToSpot>();
+            if let Some(begin) = m.begin.take() {
+                commands.queue(begin);
+            }
+        }
+    }
 }
 
 fn repair_anims(
@@ -278,6 +317,8 @@ fn repair_anims(
 
 /// Ends her repair take: its stop (done) or cancel (let go).
 fn end_repair_anim(commands: &mut Commands, player: Entity, base: Option<&String>, done: bool) {
+    // Let go while she's still sliding onto the spot: the move never begins.
+    commands.entity(player).remove::<MoveToSpot>();
     let Some(base) = base else { return };
     let part = if done { "stop" } else { "cancel" };
     commands.entity(player).insert((RepairAnim { base: base.clone(), part, t: 0.0 }, crate::character::PlayAction(repair_take(base, part))));
@@ -423,7 +464,7 @@ impl Plugin for InteractPlugin {
             .add_systems(Startup, spawn_prompt)
             .add_systems(
             Update,
-            (add_inventory, crate::windows::link_barricades, choose_target, act, door_moves, window_moves, barricade_moves, repair_anims, drop_item, use_item, update_prompt)
+            (add_inventory, crate::windows::link_barricades, choose_target, act, moves_to_spots, door_moves, window_moves, barricade_moves, repair_anims, drop_item, use_item, update_prompt)
                 .chain()
                 .before(crate::doors::swing_doors),
         )
@@ -569,7 +610,7 @@ fn act(
     mouse: Res<ButtonInput<MouseButton>>,
     tuning: Res<PlayerTuning>,
     mut rng: ResMut<crate::GameRng>,
-    mut player: Single<(Entity, &mut Transform, &mut Inventory, &mut Player), (Without<Driving>, Without<crate::hiding::Hiding>, Without<crate::jason::Held>)>,
+    mut player: Single<(Entity, &mut Transform, &mut Inventory, &mut Player, Has<MoveToSpot>), (Without<Driving>, Without<crate::hiding::Hiding>, Without<crate::jason::Held>)>,
     items: Query<&Item>,
     (mut spots, model): (Query<(&mut crate::hiding::HidingSpot, &GlobalTransform)>, Option<Res<crate::character::CounselorCharacter>>),
     mut cabinets: Query<&mut Cabinet>,
@@ -580,7 +621,11 @@ fn act(
     (mut visibility, mut fuse_boxes, mut grids, vehicle_xfs): (Query<&mut Visibility>, Query<&mut crate::power::FuseBox>, Option<ResMut<crate::power::PowerGrids>>, Query<&GlobalTransform, With<Vehicle>>),
 ) {
     let Some(target) = interaction.target else { return };
-    let (player_entity, ref mut player_xf, ref mut inv, ref mut p) = *player;
+    let (player_entity, ref mut player_xf, ref mut inv, ref mut p, sliding) = *player;
+    // On her way onto a move's spot: only the hold that started it goes on.
+    if sliding && !interaction.hold.as_ref().is_some_and(|h| h.started) {
+        return;
+    }
     match target {
         Target::Item(e) if keys.just_pressed(KeyCode::KeyE) => {
             let Ok(item) = items.get(e) else { return };
@@ -635,11 +680,14 @@ fn act(
                     MinigameEvent::Started => {
                         info!("repair started: {} pips, {:.1}s at x{:.2}", hold.pips.len(), hold.hold_time, tuning.minigame.speed_mod.value(&p.counselor.stats, false));
                         // On its special move's spot, facing its forward (Unreal +X; she faces +Z), on her floor.
-                        if let (Some(stand), Ok(vxf)) = (r.stand, vehicle_xfs.get(v)) {
-                            stand_on(player_xf, vxf.mul_transform(stand).compute_transform());
-                        }
-                        if let Some(base) = &r.anim {
-                            start_repair_anim(&mut commands, player_entity, base);
+                        let to = match (r.stand, vehicle_xfs.get(v)) {
+                            (Some(stand), Ok(vxf)) => standing_on(player_xf, vxf.mul_transform(stand).compute_transform()),
+                            _ => **player_xf,
+                        };
+                        if let Some(base) = r.anim.clone() {
+                            move_to_spot(&mut commands, player_entity, **player_xf, to, move |w| {
+                                w.entity_mut(player_entity).insert(repair_start(&base));
+                            });
                         }
                     }
                     MinigameEvent::Hit => info!("pip hit (bonus x{:.1})", hold.bonus),
@@ -723,10 +771,10 @@ fn act(
             hold.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
             if events.contains(&MinigameEvent::Started) {
                 info!("phone box {} started: {} pips, {:.1}s", if fixing { "repair" } else { "fuse" }, hold.pips.len(), hold.hold_time);
-                if let Some(stand) = pb.stand {
-                    stand_on(player_xf, stand);
-                }
-                start_repair_anim(&mut commands, player_entity, crate::police::PHONE_BOX_TAKE);
+                let to = pb.stand.map_or(**player_xf, |stand| standing_on(player_xf, stand));
+                move_to_spot(&mut commands, player_entity, **player_xf, to, move |w| {
+                    w.entity_mut(player_entity).insert(repair_start(crate::police::PHONE_BOX_TAKE));
+                });
             }
             if !events.contains(&MinigameEvent::Completed) {
                 return;
@@ -768,10 +816,10 @@ fn act(
             hold.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
             if events.contains(&MinigameEvent::Started) {
                 info!("calling the police: {:.1}s", hold.hold_time);
-                if let Some(stand) = phone.stand {
-                    stand_on(player_xf, stand);
-                }
-                start_repair_anim(&mut commands, player_entity, crate::police::PHONE_TAKE);
+                let to = phone.stand.map_or(**player_xf, |stand| standing_on(player_xf, stand));
+                move_to_spot(&mut commands, player_entity, **player_xf, to, move |w| {
+                    w.entity_mut(player_entity).insert(repair_start(crate::police::PHONE_TAKE));
+                });
             }
             if !events.contains(&MinigameEvent::Completed) {
                 return;
@@ -805,18 +853,21 @@ fn act(
                     Some(t) => {
                         let swing = t.window("Driver: OpenCloseDoor").unwrap_or((0.0, 0.5));
                         let root = door_root(&door, gxf, player_xf.translation.y, anim, model.as_deref());
-                        // bMoveToward: she goes to the move's spot first (its camera is placed for her there).
-                        if let (None, Some(spot)) = (root, door.spots.get(door_spot(anim))) {
-                            let at = crate::hiding::HidingSpot::world(gxf, spot);
-                            player_xf.translation = at.translation.with_y(player_xf.translation.y);
-                            player_xf.rotation = at.rotation;
-                        }
-                        commands.entity(player_entity).insert((
-                            DoorMove { door: d, t: 0.0, swing, curve: t.curve("DoorRotation"), length: t.length, swung: false, root },
-                            crate::character::PlayAction(anim.into()),
-                        ));
-                        // Its handler takes the camera (doors' open and close moves have bTakeCameraControl).
-                        commands.trigger(crate::interaction_camera::PlayInteractionCamera { actor: d, handler: door_spot(anim) });
+                        // She slides onto the move's spot (its take's start), then the take plays and its handler takes
+                        // the camera (doors' open and close moves have bTakeCameraControl).
+                        let to = match (root, door.spots.get(door_spot(anim))) {
+                            (Some((origin, _)), _) => origin,
+                            (None, Some(spot)) => {
+                                let at = crate::hiding::HidingSpot::world(gxf, spot);
+                                Transform { translation: at.translation.with_y(player_xf.translation.y), rotation: at.rotation, ..**player_xf }
+                            }
+                            (None, None) => **player_xf,
+                        };
+                        let m = DoorMove { door: d, t: 0.0, swing, curve: t.curve("DoorRotation"), length: t.length, swung: false, root };
+                        move_to_spot(&mut commands, player_entity, **player_xf, to, move |w| {
+                            w.entity_mut(player_entity).insert((m, crate::character::PlayAction(anim.into())));
+                            w.trigger(crate::interaction_camera::PlayInteractionCamera { actor: d, handler: door_spot(anim) });
+                        });
                     }
                     None => {
                         let what = door.press(gxf, player_xf.translation);
@@ -828,7 +879,7 @@ fn act(
             let barricaded_door = barricades.iter().any(|b| b.door == Some(d));
             if !keys.pressed(KeyCode::KeyE) || !hold {
                 if interaction.hold.take().is_some_and(|h| h.started) && !barricaded_door {
-                    commands.entity(player_entity).remove::<(LockAnim, crate::character::PlayAction)>();
+                    commands.entity(player_entity).remove::<(LockAnim, crate::character::PlayAction, MoveToSpot)>();
                 }
                 return;
             }
@@ -844,12 +895,13 @@ fn act(
                 } else {
                     door_spot(anim)
                 };
-                if let Some(s) = door.spots.get(spot) {
+                let to = door.spots.get(spot).map_or(**player_xf, |s| {
                     let at = crate::hiding::HidingSpot::world(gxf, s);
-                    player_xf.translation = Vec3::new(at.translation.x, player_xf.translation.y, at.translation.z);
-                    player_xf.rotation = at.rotation;
-                }
-                commands.entity(player_entity).insert((LockAnim, crate::character::PlayAction(anim.into())));
+                    Transform { translation: Vec3::new(at.translation.x, player_xf.translation.y, at.translation.z), rotation: at.rotation, ..**player_xf }
+                });
+                move_to_spot(&mut commands, player_entity, **player_xf, to, move |w| {
+                    w.entity_mut(player_entity).insert((LockAnim, crate::character::PlayAction(anim.into())));
+                });
             }
             if events.contains(&MinigameEvent::Completed) {
                 commands.entity(player_entity).remove::<(LockAnim, crate::character::PlayAction)>();
@@ -879,6 +931,7 @@ fn act(
         }
         Target::Window(w) => {
             let Ok((window, gxf)) = windows.get(w) else { return };
+            let w_entity = w;
             if interaction.hold_done {
                 interaction.hold_done = keys.pressed(KeyCode::KeyE);
                 return;
@@ -902,7 +955,10 @@ fn act(
                             (Some(spot), Some(c)) if c.root_motion(take).is_some() => {
                                 let mut at = crate::hiding::HidingSpot::world(gxf, &spot);
                                 at.translation.y = player_xf.translation.y;
-                                start_window_root_move(&mut commands, player_entity, w, kind, c.place(take, at));
+                                let root = c.place(take, at);
+                                move_to_spot(&mut commands, player_entity, **player_xf, root.0, move |w| {
+                                    w.entity_mut(player_entity).insert(window_root_move(w_entity, kind, root));
+                                });
                             }
                             _ => start_window_move(&mut commands, player_entity, w, kind, player_xf.translation, landing),
                         }

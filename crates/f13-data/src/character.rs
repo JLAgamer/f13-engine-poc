@@ -50,6 +50,33 @@ pub struct CharacterInfo {
     /// The character's dynamic cameras (ILLDynamicCameraComponent), by component name.
     #[serde(default, deserialize_with = "crate::level::null_as_empty")]
     pub cameras: HashMap<String, DynamicCameraInfo>,
+    /// The camera shakes her graph plays, by class name: their CDO's properties.
+    #[serde(default, deserialize_with = "crate::level::null_as_empty")]
+    pub camera_shakes: HashMap<String, serde_json::Map<String, serde_json::Value>>,
+}
+
+/// A UCameraShake CDO's oscillation. UCameraShake's defaults: duration 1, blend in and out 0.1; an FOscillator's
+/// amplitude and frequency 0, its InitialOffset EOO_OffsetRandom.
+pub fn camera_shake(m: &serde_json::Map<String, serde_json::Value>) -> f13_core::dynamic_camera::Shake {
+    use f13_core::dynamic_camera::{Oscillator, Shake};
+    let f = |k: &str, d: f32| m.get(k).and_then(|v| v.as_f64()).map_or(d, |v| v as f32);
+    let osc = |v: Option<&serde_json::Value>| Oscillator {
+        amplitude: v.and_then(|v| v.get("Amplitude")).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        frequency: v.and_then(|v| v.get("Frequency")).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+        random_offset: v.and_then(|v| v.get("InitialOffset")).and_then(|v| v.as_str()) != Some("EOO_OffsetZero"),
+    };
+    let group = |name: &str, axes: [&str; 3]| {
+        let g = m.get(name);
+        axes.map(|a| osc(g.and_then(|g| g.get(a))))
+    };
+    Shake {
+        duration: f("OscillationDuration", 1.0),
+        blend_in: f("OscillationBlendInTime", 0.1),
+        blend_out: f("OscillationBlendOutTime", 0.1),
+        rot: group("RotOscillation", ["Pitch", "Yaw", "Roll"]),
+        loc: group("LocOscillation", ["X", "Y", "Z"]),
+        fov: osc(m.get("FOVOscillation")),
+    }
 }
 
 /// An ILLDynamicCameraComponent as exported: its MovementBasedSettings, bUse2DVelocity and its spring arm's own

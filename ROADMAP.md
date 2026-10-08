@@ -301,7 +301,10 @@ Decomp audit (nothing guessed: every rule read from the decomp or the game's dat
       chase, indoors); the engine's mouse look (sensitivity, FOV scaling, input scales, ±87 pitch); her look in the
       car; chases (her chase check, read: the game takes acosf of the angle). Not yet: the chase's camera shake, the
       spline cameras (pocket knife, rear view, grabbed, drowning), Jason's own cameras when he's played
-- [ ] Special moves' look (ILLSpecialMove_MoveToward: her view turns to the move's spot, MODLOG)
+- [x] Special moves' approach (SCSpecialMove_SoloMontage, every counselor interaction move: it replaces
+      ILLSpecialMove_MoveToward's walk and view turn with a 0.15 s slide onto the spot, bInterpToInteraction /
+      InterpolationTime), then the take and its camera (DestinationReached): doors, locks, windows, repairs, the phone,
+      hiding spots. Not yet: the slide's capsule sweep, the Fast takes (SpeedUpTimelimit)
 - [ ] Post-processing the map's volume asks for: the colour grading LUT (LutTestHorror at 0.25), the engine's filmic
       tonemapper, SSAO and bloom (DefaultFeature.*); then compare against the game's own screenshots
 
