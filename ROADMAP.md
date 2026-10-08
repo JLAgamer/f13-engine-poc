@@ -116,6 +116,14 @@ Mechanics: Jason side
 - [x] Kill cameras blend back (0.5 s, their special moves' BlendBackTime) to the follow camera
 - [x] Playing as Jason (`--play-jason`, jason_player.rs): walk, fast walk, look; attack (held in combat stance: the
       heavy attack), grab and kill, knives (aimed while held), traps, Shift, Morph (picked on his map), Stalk; doors as he walks into them; the counselor stands idle unless a `--bot-*` plays her
+- [ ] Played Jason, bugs to fix:
+      - his HUD: the abilities' unlock progress looks wrong
+      - he holds nothing while throwing a knife (no knife in his hand)
+      - walking into a door opens it and places a trap: the computer Jason's door and trap logic still running for
+        the player
+      - his pickaxe has no material: M_JasonV2_PickAxe is its own master, with only WeaponBloodMask as a parameter, so
+        its base textures are in the material graph, which the export doesn't read (may fold into Materials, remaining)
+      - his footsteps: some steps play no sound
 - [x] Jason's keys as the game binds them (SetupPlayerInputComponent 0x140407900 and DefaultInput.ini): LMB attack,
       RMB grab, MMB held aims a knife and letting go throws it (RMB puts it away), C combat stance (MaxCombatSpeed,
       facing the view), R trap, 1 Morph, 2 Sense, 3 Shift, 4 Stalk, Left Shift fast walk, E interact; holding her, 1-4
