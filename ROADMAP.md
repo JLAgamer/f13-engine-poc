@@ -185,7 +185,7 @@ Mechanics: Jason side
       counselor within the Interactable's HighlightDistance, the kill's spot, camera and Interactable turn to face
       along his line to it (the bird bath's kill-start mesh turn follows). Not ported: their ignored meshes' own turn
       to world yaw 0
-- [ ] Kills, remaining: none for J2 (the other weapons' kills are other Jasons': not Part 2's)
+- [x] Kills, remaining: none for J2 (the other weapons' kills are other Jasons': not Part 2's)
 - [x] Generators (power.rs): the fuse boxes and their power grids; a destroyed fuse box puts out the powered lights
       in its grid's box (and they stop lighting her: darkness fear) and lights its red power-out light; counselors
       repair it (hold E, 15 s, pips), Jason destroys it (the player's E: Jason_Generator_Destruction_Machete's
