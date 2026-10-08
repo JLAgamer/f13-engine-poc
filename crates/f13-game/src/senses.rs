@@ -9,8 +9,8 @@
 //! AI's SCJasonAIProperties PeripheralVisionAngle) or anywhere within 3 m, from his eyes (APawn's BaseEyeHeight, 64 cm
 //! above his capsule's centre, which no Jason Blueprint overrides: 1.52 m) to her head or chest, through the world's
 //! blocking collision only (foliage and darkness don't hide her). He uses Sense whenever it's ready and he can't see
-//! her. PLACEHOLDER: indoors (where Sense shows her cabin, not her) without the cabins' SCIndoorComponent volumes
-//! (fear_events.rs) is something above her head within 6 m.
+//! her. Indoors (Sense lights her cabin, not her: SCIndoorComponent's volumes, fear_events.rs); an export without
+//! those volumes falls back to something above her head within 6 m.
 
 use bevy::prelude::*;
 use f13_core::killer_abilities::{Ability, AbilityEvent, Blockers, KillerAbilities, KillerTuning};
