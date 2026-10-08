@@ -176,7 +176,11 @@ Mechanics: Jason side
       checked and does nothing for J2 (AOELightRadius 0: the shader returns the scene); the stun's colour fringe
       and the stun's and Sense's Gaussian depth of field (dof.rs). Sense's hiding spot SetSenseEffects (Outhouse /
       Tent) turns on custom depth at stencil 0, which neither Sense material shows: nothing to draw
-- [ ] Shift, Morph, Stalk, remaining: the dissolve; the counselor's SenseEffect emitter (particles) (Morph's
+- [x] Shift's fade (killer_fade.rs): his materials' 0_AlphaDelta eased over a second as Shift starts and ends,
+      turned into each master's exact opacity-mask cutoff (the base pass's temporal dither isn't drawn: no TAA);
+      Morph has no fade (EnableTeleportEffect is Shift's and Paranoia's)
+- [ ] Shift, Morph, Stalk, remaining: the counselor's SenseEffect emitter (particles); Shift hides Jason_Hair and
+      shakes the camera (ED_Shake) on his ShiftCamera (Jason_Base OnShiftChange) (Morph's
       excluded areas: the map's Boundary image has no texture in this level's widget, so none refuse a click)
 - [x] The level's bounded post-process volume (underwater_PostProcessVolume: Gaussian DOF, fringe 1.5): checked;
       its box tops out at -242 cm (blend radius 53 cm), the lake's surface is at -185 cm and no camera goes below it

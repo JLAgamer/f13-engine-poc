@@ -416,6 +416,33 @@ impl MaterialExtension for SkinMaskExt {
 }
 
 impl MaterialIndex {
+    /// The opacity mask's alpha cutoff of one of Jason's masked materials (its masters' 0_AlphaDelta fade) at an
+    /// AlphaDelta, from their compiled masked depth shaders (MODLOG "Jason's fade"); None for any other material.
+    /// With a = AlphaDelta x 4.5, B = 0_BaseContrastLevel, F = 0_ContrastFadeConstant, M = 0_AlphaContrastMultiplier:
+    /// - ClothMaster_Jason_m, SkinMaster_jason_m: alpha x saturate(saturate(B F (1 + 2a) - a) x M) >= 0.3333;
+    /// - MiscMaster_jason_m, EyeMaster_02_jason_m: saturate(saturate(B F (1 + 2a) - a) x M) >= 0.3333 (no texture);
+    /// - HairMaster_jason_m: saturate(saturate(alpha^AlphaContrast B F (1 + 2a) - a) x M) >= 0.3333.
+    /// (Their base passes add a temporal dither, DitherTemporalAA, before the clip: without temporal AA here the hard
+    /// cutoff of the shadow pass is used for both.)
+    pub(crate) fn fade_cutoff(&self, name: &str, alpha_delta: f32) -> Option<f32> {
+        let info = self.entries.get(&name.to_lowercase())?;
+        let a = alpha_delta * 4.5;
+        let (b, f, m) = (info.scalar("0_BaseContrastLevel", 1.0), info.scalar("0_ContrastFadeConstant", 0.45), info.scalar("0_AlphaContrastMultiplier", 20.0));
+        let clip = 0.3333;
+        let gate = ((b * f * (1.0 + 2.0 * a) - a).clamp(0.0, 1.0) * m).clamp(0.0, 1.0);
+        let never = 2.0;
+        match info.master.to_lowercase().as_str() {
+            "clothmaster_jason_m" | "skinmaster_jason_m" => Some(if gate > 0.0 { clip / gate } else { never }),
+            "miscmaster_jason_m" | "eyemaster_02_jason_m" => Some(if gate >= clip { 0.0 } else { never }),
+            "hairmaster_jason_m" => {
+                // saturate(y) x M >= clip  <=>  y >= clip / M; y = alpha^C B F (1 + 2a) - a.
+                let need = (clip / m + a) / ((1.0 + 2.0 * a) * b * f);
+                Some(if need > 1.0 { never } else { need.max(0.0).powf(1.0 / info.scalar("AlphaContrast", 2.0)) })
+            }
+            _ => None,
+        }
+    }
+
     /// A skin material clipped by two exported masks (export-relative texture paths), on top of `base` (the skin's
     /// own material as built from the export). None if a mask is missing from the export.
     pub(crate) fn skin_material(&self, base: StandardMaterial, masks: &[String], assets: &AssetServer) -> Option<SkinMaterial> {
