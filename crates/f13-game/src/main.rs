@@ -53,6 +53,7 @@ mod ui;
 mod windows;
 mod vehicle;
 mod water;
+mod weather;
 
 use bevy::asset::AssetPlugin;
 use bevy::camera_controller::free_camera::{FreeCamera, FreeCameraPlugin};
@@ -134,6 +135,8 @@ struct Args {
     camera: Option<(Vec3, Vec3)>,
     /// --round-time: the match's length (s) instead of the game's.
     round_time: Option<i32>,
+    /// `--rain on|off`: the weather, as the game's `rain=` URL option (else rolled).
+    rain: Option<bool>,
     /// --flashlight: start with the flashlight on.
     flashlight: bool,
 }
@@ -172,6 +175,7 @@ fn parse_args() -> Args {
     let mut jason_delay = 0.0;
     let mut unlit = false;
     let mut round_time = None;
+    let mut rain = None;
     let mut flashlight = false;
     let mut grass = false;
     let mut aerial = false;
@@ -250,6 +254,7 @@ fn parse_args() -> Args {
             "--tuning" => tuning = it.next().map(PathBuf::from),
             "--flashlight" => flashlight = true,
             "--round-time" => round_time = it.next().and_then(|v| v.parse().ok()).map(|t: i32| t.max(1)),
+            "--rain" => rain = it.next().map(|v| v == "on" || v == "true"),
             "--no-foliage" => foliage = false,
             "--unlit" => unlit = true,
             "--screenshot" => screenshot = it.next().map(PathBuf::from),
@@ -275,7 +280,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight }
+    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight, rain }
 }
 
 #[derive(Resource)]
@@ -346,7 +351,15 @@ fn main() {
         None => random_level(&main, seed).unwrap_or_else(|| "CLsm_Design_SL1".into()),
     };
     println!("cabin layout {layout}");
-    let layouts = vec![main, load(&layout)];
+    // The weather (SCWorldSettings: rolled after the layout).
+    let rain = args.rain.unwrap_or_else(|| rain_roll(&main, seed));
+    let weather = if rain { "CLsm_RainOn" } else { "CLsm_RainOff" };
+    println!("weather: {}", if rain { "rain" } else { "clear" });
+    let mut layouts = vec![main, load(&layout)];
+    match LevelLayout::load(&args.export.join("levels").join(format!("{weather}.json"))) {
+        Ok(w) => layouts.push(w),
+        Err(e) => eprintln!("{weather}: {e} (re-export: f13-export levels): no weather level"),
+    }
     let spawn = args.spawn.unwrap_or_else(|| counselor_start(&layouts));
     let mut app = App::new();
     // Gameplay randomness (stumbles, ...), separate from the match layout so both repeat with --seed.
@@ -361,6 +374,7 @@ fn main() {
         });
     }
     app.insert_resource(GameRng(f13_core::spawn::Rng::new(seed ^ 0x5eed_f13)));
+    app.insert_resource(weather::Weather { rain });
     if !(args.fly || args.aerial) {
         let path = args.tuning.clone().unwrap_or_else(f13_data::default_path);
         let tuning = f13_data::load(&path).unwrap_or_else(|e| {
@@ -395,7 +409,7 @@ fn main() {
             // Playing Jason, the bot playing her doesn't decide when the run ends.
             .add_plugins(match_flow::MatchPlugin { leave: !bot || args.play_jason })
             .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }, collision::CollisionPlugin, audio::AudioPlugin, water::WaterPlugin, power::PowerPlugin { cut: args.cut_power }, kill_camera::KillCameraPlugin, prop_anim::PropAnimPlugin, doors::DebrisPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin, navigation::NavigationPlugin { debug: args.nav_debug }))
-            .add_plugins((police::PolicePlugin, placed_kills::PlacedKillsPlugin, interaction_camera::InteractionCameraPlugin, counselor_camera::CounselorCameraPlugin, cabinets::CabinetsPlugin));
+            .add_plugins((police::PolicePlugin, placed_kills::PlacedKillsPlugin, interaction_camera::InteractionCameraPlugin, counselor_camera::CounselorCameraPlugin, cabinets::CabinetsPlugin, weather::WeatherPlugin));
         // Playing Jason without a --bot-*: the escape bot plays her (the scripted Jason's test leaves her idle).
         if args.bot_escape || (args.play_jason && !bot && !args.play_jason_demo) {
             app.add_plugins(bot::BotPlugin(bot::Goal::Escape));
@@ -518,6 +532,13 @@ fn random_level(main: &LevelLayout, seed: u64) -> Option<String> {
         .collect();
     let mut rng = f13_core::spawn::Rng::new(seed ^ 0x1a40_u64);
     levels.get(rng.index(levels.len())).map(|l| l.to_string())
+}
+
+/// SCWorldSettings' rain roll: rand()/32767 <= RainChance (its constructor's 0.5 unless the map sets it).
+fn rain_roll(main: &LevelLayout, seed: u64) -> bool {
+    let chance = main.actors.iter().filter(|a| a.class == "SCWorldSettings").find_map(|a| a.props.get("RainChance").and_then(|v| v.as_f64())).unwrap_or(0.5) as f32;
+    let mut rng = f13_core::spawn::Rng::new(seed ^ 0x7a17_u64);
+    weather::rains(chance, rng.frand())
 }
 
 fn counselor_start(layouts: &[LevelLayout]) -> Vec3 {

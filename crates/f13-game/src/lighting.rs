@@ -1,5 +1,5 @@
 //! The map's night lighting, from the export: its point and spot lights, the moon and height fog of its weather
-//! level (CLsm_RainOff, clear), the post-process volume's exposure and ambient light, and the counselor's
+//! level (CLsm_RainOff, or CLsm_RainOn when the match rolls rain: weather.rs), the post-process volume's exposure and ambient light, and the counselor's
 //! flashlight.
 //!
 //! Units carry over from Unreal 4.18 as follows:
@@ -316,6 +316,7 @@ fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
                     DirectionalLight { color: l.color().into(), illuminance: l.num("Intensity", 10.0), shadow_maps_enabled: true, ..default() },
                     CascadeShadowConfigBuilder { num_cascades: 3, maximum_distance: shadow_m, first_cascade_far_bound: 8.0, ..default() }.build(),
                     Transform::default().looking_to(dir, Vec3::Y),
+                    crate::weather::Moon,
                 ));
             }
             LightKind::Point | LightKind::Spot => {

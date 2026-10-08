@@ -309,7 +309,7 @@ impl AnimInfo {
 }
 
 /// Exported RichCurve keys as an f13-core curve.
-fn rich_curve(keys: &[CurveKey]) -> f13_core::curve::RichCurve {
+pub fn rich_curve(keys: &[CurveKey]) -> f13_core::curve::RichCurve {
     use f13_core::curve::{Interp, Key};
     let keys = keys
         .iter()

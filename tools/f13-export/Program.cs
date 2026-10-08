@@ -4,6 +4,7 @@
 //   f13-export --game <F13Game dir> --out <dir> assets <object path>...   e.g. /Game/Characters/Counselors/Athlete/Meshes/Body/Athlete_Body
 //   f13-export --game <F13Game dir> --out <dir> level <map path>          e.g. /Game/Maps/CrystalLake_Small/CrystalLake_Small
 //   f13-export --game <F13Game dir> --out <dir> mvp                       everything the MVP needs
+using CUE4Parse.UE4.Objects.Engine.Curves;
 using System.Text.Json;
 using Serilog;
 using CUE4Parse.FileProvider;
@@ -354,6 +355,34 @@ void WriteCollision()
         + string.Join(", ", Collision.Used.Select(kv => $"{kv.Key} {kv.Value}")));
 }
 
+// The storm's values (SCZeus_BP's class defaults over SCZeus's constructor: InitialDelay 2, MinTimeBetweenLightning 8,
+// MaxTimeBetweenLightning 25, LightningSoundThreshold 3) and its LightningCurves' keys (weather.json).
+void WriteWeather()
+{
+    var cls = provider.LoadPackageObject<UBlueprintGeneratedClass>("SummerCamp/Content/Blueprints/SCZeus_BP.SCZeus_BP_C");
+    var cdo = cls.ClassDefaultObject.Load()!;
+    var curves = new Newtonsoft.Json.Linq.JArray();
+    foreach (var c in cdo.GetOrDefault<FPackageIndex[]>("LightningCurves", []))
+    {
+        var keys = c.Load()?.GetOrDefault<FStructFallback>("FloatCurve")?.GetOrDefault<FRichCurveKey[]>("Keys", []) ?? [];
+        curves.Add(new Newtonsoft.Json.Linq.JArray(keys.Select(k => new Newtonsoft.Json.Linq.JObject
+        {
+            ["Time"] = k.Time, ["Value"] = k.Value, ["ArriveTangent"] = k.ArriveTangent, ["LeaveTangent"] = k.LeaveTangent,
+            ["Interp"] = k.InterpMode switch { ERichCurveInterpMode.RCIM_Linear => "linear", ERichCurveInterpMode.RCIM_Constant => "constant", _ => "cubic" },
+        })));
+    }
+    var json = new Newtonsoft.Json.Linq.JObject
+    {
+        ["InitialDelay"] = cdo.GetOrDefault("InitialDelay", 2),
+        ["MinTimeBetweenLightning"] = cdo.GetOrDefault("MinTimeBetweenLightning", 8),
+        ["MaxTimeBetweenLightning"] = cdo.GetOrDefault("MaxTimeBetweenLightning", 25),
+        ["LightningSoundThreshold"] = cdo.GetOrDefault("LightningSoundThreshold", 3f),
+        ["LightningCurves"] = curves,
+    };
+    File.WriteAllText(Path.Combine(outDir!, "weather.json"), json.ToString());
+    Console.WriteLine($"weather.json: {curves.Count} lightning curves");
+}
+
 void WriteClasses()
 {
     foreach (var c in Mvp.Classes) AddClassByName(c);
@@ -492,11 +521,13 @@ switch (rest[0])
         foreach (var a in rest.Skip(1)) ExportAsset(a);
         break;
     case "level":
-        if (rest[1] == Mvp.Map) ExportLevel(Mvp.Map, Mvp.Weather);
+        if (rest[1] == Mvp.Map) ExportLevel(Mvp.Map);
         else ExportLevel(rest[1]);
         break;
     case "levels": // the MVP map and its cabin layouts, and the classes they use (classes.json)
-        ExportLevel(Mvp.Map, Mvp.Weather);
+        ExportLevel(Mvp.Map);
+        foreach (var w in Mvp.Weathers) ExportLevel(w);
+        WriteWeather();
         foreach (var l in Mvp.Layouts) ExportLevel(l);
         WriteClasses();
         break;
@@ -572,7 +603,9 @@ switch (rest[0])
         return 0;
     case "mvp":
         foreach (var a in Mvp.Assets) ExportAsset(a);
-        ExportLevel(Mvp.Map, Mvp.Weather);
+        ExportLevel(Mvp.Map);
+        foreach (var w in Mvp.Weathers) ExportLevel(w);
+        WriteWeather();
         foreach (var l in Mvp.Layouts) ExportLevel(l);
         WriteClasses();
         NavMeshExporter.Write(provider, outDir, Mvp.Map);
@@ -603,7 +636,9 @@ switch (rest[0])
         return 0;
     }
     case "collision": // levels (for collision flags), classes and collision.json; no meshes or textures
-        ExportLevel(Mvp.Map, Mvp.Weather);
+        ExportLevel(Mvp.Map);
+        foreach (var w in Mvp.Weathers) ExportLevel(w);
+        WriteWeather();
         foreach (var l in Mvp.Layouts) ExportLevel(l);
         WriteClasses();
         WriteCollision();
@@ -788,8 +823,9 @@ static LandscapeMaterial? LandscapeLayers(UObject master)
 static class Mvp
 {
     public const string Map = "/Game/Maps/CrystalLake_Small/CrystalLake_Small";
-    // The weather level (moon, height fog, sky); the game loads it, or CLsm_RainOn, from code. Clear for now.
-    public const string Weather = "/Game/Maps/CrystalLake_Small/CLsm_RainOff";
+    // The weather levels (moon, height fog, sky; the storm): the game loads one from code, CLsm_RainOn when it rolls
+    // rain (SCWorldSettings::RainChance).
+    public static readonly string[] Weathers = ["/Game/Maps/CrystalLake_Small/CLsm_RainOff", "/Game/Maps/CrystalLake_Small/CLsm_RainOn"];
     // Alternative cabin/spawn layouts; the game streams in one of these per match.
     public static readonly string[] Layouts = [.. Enumerable.Range(1, 4).Select(i => $"/Game/Maps/CrystalLake_Small/CLsm_Design_SL{i}")];
     public static readonly string[] Assets =
@@ -811,7 +847,9 @@ static class Mvp
         // The police car SCPoliceSpawner spawns (its PoliceSpawnClass).
         "Police_C",
         // Jason's throwing knife (his ThrowingKnifeClass).
-        "ThrowingKnife_C"];
+        "ThrowingKnife_C",
+        // The storm (CLsm_RainOn's).
+        "SCZeus_BP_C"];
     // Montages whose length or root motion the rules use (anims.json).
     const string Shared = "/Game/Characters/Counselors/Base/Shared";
     public static readonly string[] Montages =

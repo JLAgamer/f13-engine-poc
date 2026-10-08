@@ -163,8 +163,11 @@ Match
 - [x] Item and car spawning, as the game mode does it (f13-core::spawn, f13-data::world)
 - [x] How the game chooses one of the four cabin layouts per match: SCWorldSettings' RandomLevels, one picked at
   random when the level loads (`--layout` overrides)
-- [ ] Level choices, remaining: the rain roll (RainChance, the `rain=` option; the rain level isn't used), the
-      randomized pods
+- [x] The weather (weather.rs, decompiled): SCWorldSettings' rain roll after the layout pick (RainChance 0.5;
+      `--rain on|off` as the `rain=` option) loads CLsm_RainOn or CLsm_RainOff (their moon, fog and sky); in the rain
+      SCZeus's storm: its lightning timings and curves on the moon, the thunder as a curve passes its threshold, the
+      rain loop. (The randomized pods are SCEscapePods: Crystal Lake has none.) Not yet: the rain itself (particles)
+      and wet materials, the sky's lightning (its material graph is stripped in the cook)
 
 Host CLI (`f13-host`; f13-game `--host`, host.rs: line commands on 127.0.0.1)
 - [x] Spawn items (`give <Class>`: one of the match's items of the class into her hands or pockets)
