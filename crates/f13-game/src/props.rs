@@ -433,12 +433,21 @@ fn spawn_props(
         }
         // A wall Jason can break through: its section (mesh and Collision box) goes when it gives way.
         if classes.is_child_of(&actor.class, "SCDestructableWall") {
+            // Defaults: SCDestructableWall's constructor.
+            let f = |name: &str, default: f32| classes.prop(&actor.class, name).as_f64().map_or(default, |v| v as f32);
+            let section = info.components.iter().find(|c| c.name == "DestructibleSection");
+            let damaged = ["Inside", "Outside"].map(|side| ["Light", "Medium", "Heavy"].map(|k| classes.prop(&actor.class, &format!("{k}Destruction{side}MeshFile")).as_str().map(&mut scene)));
             commands.entity(root).insert(crate::doors::Wall {
-                health: classes.prop(&actor.class, "BaseHealth").as_f64().map_or(60.0, |v| v as f32),
+                health: f("BaseHealth", 150.0),
+                base_health: f("BaseHealth", 150.0),
+                thresholds: [f("LightDestructionThreshold", 0.8), f("MediumDestructionThreshold", 0.6), f("HeavyDestructionThreshold", 0.4)],
                 broken: false,
                 section: parts.get("DestructibleSection").copied(),
                 collision: hulls.get("Collision").copied(),
-                burst_force: classes.prop(&actor.class, "BurstExplosionForce").as_f64().map_or(2000.0, |v| v as f32),
+                burst_force: f("BurstExplosionForce", 5000.0),
+                section_xf: section.map(local).unwrap_or_default(),
+                overrides: section.and_then(|c| crate::materials::MaterialOverrides::new(&c.material_map)),
+                damaged,
             });
             *counts.entry("walls").or_default() += 1;
             let p = to_transform(&actor.transform);

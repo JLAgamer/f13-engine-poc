@@ -30,22 +30,47 @@ const BARRICADE_DAMAGE_SCALE: f32 = 0.5;
 /// through (its mesh and its Collision box; the frame stays).
 #[derive(Component)]
 pub struct Wall {
+    /// Health left (of BaseHealth; the game keeps it as a fraction of BaseHealth: the same thresholds).
     pub health: f32,
+    pub base_health: f32,
+    /// Light, Medium and HeavyDestructionThreshold (fractions of BaseHealth).
+    pub thresholds: [f32; 3],
     pub broken: bool,
     pub section: Option<Entity>,
     pub collision: Option<Entity>,
     /// BurstExplosionForce: how hard its section's chunks fly when it's broken through.
     pub burst_force: f32,
+    /// The section's place and look, and the Light / Medium / Heavy DestructionInside and Outside meshes it's swapped
+    /// for as it takes damage (`[inside, outside][stage]`).
+    pub section_xf: Transform,
+    pub overrides: Option<crate::materials::MaterialOverrides>,
+    pub damaged: [[Option<Handle<WorldAsset>>; 3]; 2],
 }
 
 impl Wall {
-    /// A blow of `damage`: whether it broke through.
-    pub fn damage(&mut self, damage: f32, commands: &mut Commands) -> bool {
+    /// SCDestructableWall::IsInteractorInside (0x14034bdf0): the direction from `at` to the wall (flat) along its
+    /// Facing arrow (the wall's +X).
+    pub fn is_inside(wall: &GlobalTransform, at: Vec3) -> bool {
+        let to = (wall.translation() - at).with_y(0.0).normalize_or_zero();
+        (wall.rotation() * Vec3::X).dot(to) > 0.0
+    }
+
+    /// A blow of `damage` on `wall` (this) from `inside` or out (its TakeDamage 0x140360430 and OnRep_Health
+    /// 0x140352db0): whether it broke through. Short of that the section shows the damage state the blow crossed
+    /// into, the side's mesh.
+    pub fn damage(&mut self, wall: Entity, damage: f32, inside: bool, commands: &mut Commands) -> bool {
         if self.broken {
             return false;
         }
-        self.health -= damage;
+        let before = self.health;
+        self.health = (self.health - damage).max(0.0);
         if self.health > 0.0 {
+            let base = self.base_health.max(1.0);
+            let (was, now) = (before / base, self.health / base);
+            // Heavy if it crossed that threshold, else medium, else light.
+            if let Some(stage) = (0..3).rev().find(|&i| now <= self.thresholds[i] && self.thresholds[i] < was) {
+                self.show_damage(wall, inside, stage, commands);
+            }
             return false;
         }
         self.broken = true;
@@ -57,6 +82,20 @@ impl Wall {
             commands.entity(c).despawn();
         }
         true
+    }
+
+    /// Swaps the section for damage state `stage`'s mesh on that side (SetDestructibleMesh: a new section entity, same
+    /// place).
+    fn show_damage(&mut self, wall: Entity, inside: bool, stage: usize, commands: &mut Commands) {
+        let Some(scene) = self.damaged[usize::from(!inside)][stage].clone() else { return };
+        if let Some(old) = self.section {
+            commands.entity(old).despawn();
+        }
+        let mut section = commands.spawn((bevy::world_serialization::WorldAssetRoot(scene), self.section_xf, ChildOf(wall)));
+        if let Some(o) = &self.overrides {
+            section.insert(o.clone());
+        }
+        self.section = Some(section.id());
     }
 }
 
@@ -387,6 +426,44 @@ mod tests {
         assert_eq!(hit(&mut d, false), (true, None));
         assert!(d.broken && d.open && !d.locked);
         assert_eq!(hit(&mut d, false), (false, None), "already broken");
+    }
+
+    #[test]
+    fn a_wall_shows_its_sides_damage_and_breaks() {
+        let mut world = World::new();
+        let wall_e = world.spawn_empty().id();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &mut world);
+        let mesh = || Some(Handle::<WorldAsset>::default());
+        let mut w = Wall {
+            health: 60.0,
+            base_health: 60.0,
+            thresholds: [0.8, 0.6, 0.4],
+            broken: false,
+            section: None,
+            collision: None,
+            burst_force: 2000.0,
+            section_xf: Transform::IDENTITY,
+            overrides: None,
+            damaged: [[mesh(), mesh(), mesh()], [None, None, None]],
+        };
+        // 60 -> 40 (2/3: light) from inside: a new section.
+        assert!(!w.damage(wall_e, 20.0, true, &mut commands));
+        let light = w.section.expect("light mesh");
+        // 40 -> 20 (1/3: past medium and heavy: heavy).
+        assert!(!w.damage(wall_e, 20.0, true, &mut commands));
+        assert_ne!(w.section, Some(light));
+        // The outside has no meshes here: no swap.
+        let heavy = w.section;
+        assert!(w.damage(wall_e, 20.0, false, &mut commands));
+        assert!(w.broken && w.section == heavy);
+    }
+
+    #[test]
+    fn a_wall_is_hit_from_inside_when_its_facing_points_away_from_him() {
+        let wall = GlobalTransform::from(Transform::from_xyz(0.0, 0.0, 0.0));
+        assert!(Wall::is_inside(&wall, Vec3::new(-1.0, 0.0, 0.0)));
+        assert!(!Wall::is_inside(&wall, Vec3::new(1.0, 0.0, 0.0)));
     }
 
     #[test]

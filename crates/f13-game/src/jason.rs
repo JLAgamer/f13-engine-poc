@@ -1862,7 +1862,7 @@ pub(crate) fn update_jason(
                         (at, section) = (0.0, 2);
                     } else {
                         hit = true;
-                        if w.damage(t.world_damage, &mut commands) {
+                        if w.damage(we, t.world_damage, crate::doors::Wall::is_inside(g, xf.translation), &mut commands) {
                             info!("Jason: broke through the wall");
                             if let Some(s) = w.section {
                                 commands.trigger(crate::doors::BreakApart { piece: s, from: xf.translation, force: w.burst_force });

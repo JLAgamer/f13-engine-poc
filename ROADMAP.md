@@ -136,7 +136,9 @@ Mechanics: Jason side
 - [x] Breaking walls (SCDestructibleWall in the cabin layouts): Jason breaks through a wall in his way (the player
       walking into it; the AI when it stands between him and her), the door break's montage and timing, his world
       damage against its BaseHealth 60; the section and its collision go
-- [ ] Breaking walls, remaining: the wall break montages, dust (its section's chunks fly as the doors' do)
+- [x] Wall damage states (SCDestructableWall's TakeDamage and OnRep_Health, decompiled): its section swaps to the
+      Light / Medium / Heavy destruction mesh of the side he hits from (IsInteractorInside: its Facing arrow) at its
+      0.8 / 0.6 / 0.4 thresholds of BaseHealth; the section's chunks fly when it goes (as the doors')
 - [x] Car interactions: Jason in front of (or behind) a moving car stops it dead (KillersInFrontOfCar); with the car
       under MinUseCarDoorSpeed (50 cm/s), Jason at the driver door pulls her out into his grab (the AI goes for the
       door; the player grabs)
@@ -194,6 +196,8 @@ Presentation
 - [x] Each placement's CastShadow and cull distance (foliage InstanceEndCullDistance, max draw distance); sun shadows
       to 100 m in 3 cascades
 - [x] Door damage states (the Light/Medium/Heavy destructible meshes at 75/50/25% health); Jason's rage burst
+- [ ] Particle effects (Cascade ParticleSystems): none ported yet. The walls' and doors' hit dust (HitParticle), the
+      knife's trail (P_Jason_ThrowingKnife_01), blood, the campfires and fireplaces, the cars' exhaust, rain
 - [x] Door break effects: the leaf's destructible chunks fly from the blow (Break/BurstExplosionForce; PLACEHOLDER
       flight, not the APEX simulation), fall to the floor and clear after a few seconds; the break's sounds (the door's
       DoorDestroySoundCue, the montage's notifies)
