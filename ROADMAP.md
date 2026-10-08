@@ -231,7 +231,9 @@ Presentation
       sets: the counselor goes straight between idle and moving)
 - [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: their root doesn't turn, the body turns about it; how the actor turns with them is unread), foot-marker
       sync (now normalised time), aim offsets (Base_Counselor_AnimBP's AimOffsets, the Hunter's poses on the shared
-      skeleton, by AimPitch while bIsAiming), BS_Run_Lean. Not in the game: turn-in-place takes, limp movement
+      skeleton, by AimPitch while bIsAiming), BS_Run_Lean, upper-body layered bone blends (Jason's grab over his
+      locomotion, her block idle; plan in MODLOG "Jason walking with a held counselor"). Not in the game: turn-in-place
+      takes, limp movement
       (bShouldPlayWounded only swaps in F_hurt_stand_idle_01, done)
 - [x] Door special moves: her open and close takes (inside or outside), the leaf swinging in the montage's
       OpenCloseDoor driver window; she stands while they play
@@ -322,7 +324,8 @@ Setup
       for a decision on that
 
 Decomp audit (nothing guessed: every rule read from the decomp or the game's data)
-- [ ] Check each PLACEHOLDER (31, `grep -rn PLACEHOLDER crates`) and each "guess"/"assumed"/"not read" note (about 10)
+- [ ] Check each PLACEHOLDER (15 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
+      them, in jason.rs, are the AI's own choices and stay) and each "guess"/"assumed"/"not read" note (about 10)
       against the decomp and the export (Ghidra, MODLOG, f13-export `debug-json` / `pseudo` / `cdo` / `grep`); port
       what the game does, or record in MODLOG why it can't be found. Most are in jason.rs, hiding.rs, audio.rs,
       police.rs, doors.rs, items.rs, interact.rs. Jason's decisions stay ours (his AI was cut), marked as such.
@@ -333,7 +336,12 @@ Decomp audit (nothing guessed: every rule read from the decomp or the game's dat
       barricades' doors (SCBarricade's BeginPlay overlap: ported); cabinets (instant before: their special move and
       the drawer following her bone, ported); the firecracker's spawn point (her hand) and direction (the camera's
       yaw); Jason's knife speed (ThrowStrength 12000; the knife Blueprint doesn't set it); the car seat's reach (an
-      added 60 cm, removed); the tonemapper's grain frame (FrameIndexMod8)
+      added 60 cm, removed); the tonemapper's grain frame (FrameIndexMod8); the item keys (G dropped, 1-3 used a pocket:
+      now the game's wheel / 1-3 / G / Z, the selected pocket, the full-pocket swap, the drop montages); the run toggle
+      (Caps Lock: X); the XP popups' 4 s text (the XP line widgets' fades); the counselor's match timer (always shown:
+      the game shows it only at 0 s); a window's inside (reversed: she climbed from the far side's spot); the special
+      moves' slide (no sweep: SCSpecialMove_SoloMontage's sweep and MoveThreshold); the beds' trace channel (traced as
+      WorldDynamic: Visibility); help texts and Vanessa's SprintBoost (never shown / never usable in the game)
 - [x] Audit of hiding.rs, doors.rs, police.rs, items.rs, placed_kills.rs, character.rs, senses.rs, ui.rs, vehicle.rs
       (MODLOG "Decomp audit (worktree session)"): hiding voice lines and spot doors, the door's opening side, the
       police volume's obstruction, stun spot search and phone box rule, melee sweeps, guns, the firecracker throw,
