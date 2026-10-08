@@ -158,7 +158,8 @@ Mechanics: Jason side
   nearest SCKillerMorphPoint within 30 m of the spot after TeleportScreenTime; the teleport fade (he's hidden below
   half). When the computer Jason uses them is a placeholder
 - [x] Shift's rush (Jason_Base's ShiftAudioCue, on him) and the static a counselor hears as he Morphs in near her
-      (TeleportCueCounselorHears; PLACEHOLDER: near = his near music's reach)
+      (TeleportCueCounselorHears: PlayDistortionEffect within MaxTeleportViewDistance of him or his destination,
+      or with him in her view)
 - [ ] Shift, Morph, Stalk, remaining: the dissolve and screen effects (Morph's excluded areas: the map's Boundary
       image has no texture in this level's widget, so none refuse a click)
 - [x] Throwing knives (J2's two, the knife's damage and cooldown, the throw montage and its ThrowKnife notify,
@@ -179,8 +180,12 @@ Mechanics: Jason side
       with Jason_AnimBP's grab layer over his locomotion (character.rs layered_blend: LayeredBoneBlend's mask weights
       and mesh-space rotation blend on the CPU; GrabWeight = GrabValue). The computer Jason still uses only the placed
       kills in reach (his AI's choice)
-- [ ] Kills, remaining: the bird bath's bShouldOrientTowardKiller (where it's applied isn't found). (The other
-      weapons' kills are other Jasons': not Part 2's)
+- [x] Placed kills that turn toward Jason (bShouldOrientTowardKiller: the bird bath, the tree and light post arm
+      ripoffs, the campfire stick, the stump slam; SCContextKillActor's tick FUN_140361770): while he holds a
+      counselor within the Interactable's HighlightDistance, the kill's spot, camera and Interactable turn to face
+      along his line to it (the bird bath's kill-start mesh turn follows). Not ported: their ignored meshes' own turn
+      to world yaw 0
+- [ ] Kills, remaining: none for J2 (the other weapons' kills are other Jasons': not Part 2's)
 - [x] Generators (power.rs): the fuse boxes and their power grids; a destroyed fuse box puts out the powered lights
       in its grid's box (and they stop lighting her: darkness fear) and lights its red power-out light; counselors
       repair it (hold E, 15 s, pips), Jason destroys it (the player's E: Jason_Generator_Destruction_Machete's

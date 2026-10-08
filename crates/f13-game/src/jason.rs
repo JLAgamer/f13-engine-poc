@@ -2377,8 +2377,9 @@ pub(crate) fn update_jason(
                     // KillStarted: its prop plays its own animation.
                     if let Some((prop, anim, at_start)) = pk.prop {
                         commands.entity(prop).insert(crate::prop_anim::PropAnim::new(anim));
+                        // Its relative transform under the actor as it now is (turned toward him, if it turns).
                         if let Some(xf) = at_start {
-                            commands.entity(prop).insert(xf);
+                            commands.entity(prop).insert(pk.prop_start(xf));
                         }
                     }
                     j.kill_move = (his, hers, name);

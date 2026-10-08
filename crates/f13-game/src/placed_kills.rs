@@ -14,8 +14,14 @@
 //! The bird bath, the water pump and the chair animate as the kill starts (their Blueprints' BeginPlay sets the
 //! KillMesh and KillMeshAnimation, SetAnimatedKillMesh 0x14035a8f0, which pauses it; KillStarted 0x14034d180 plays it
 //! once and pauses it again at its end); the bird bath's Blueprint also turns its mesh to (0, 0, -90) on KillStarted.
-//! Placed kills come from the level and from the cabins' spawners (runtime actors, props.rs). Not ported: the bird
-//! bath's bShouldOrientTowardKiller (where it's applied isn't found).
+//! Placed kills come from the level and from the cabins' spawners (runtime actors, props.rs).
+//!
+//! bShouldOrientTowardKiller (the bird bath, the tree and light post arm ripoffs, the campfire stick, the stump slam):
+//! SCContextKillActor's tick (FUN_140361770) turns the actor, while the local killer holds a counselor outside a
+//! context kill within its Interactable's HighlightDistance (flat), to face along the line from him to it (yaw only),
+//! so its kill spot, camera and Interactable come round to him. Its IgnoredRotationComponents (each Blueprint's
+//! visible mesh: BirdBathSM, the trees, CampFire, Cylinder) get the actor's negated rotation as their relative one.
+//! Not ported: those meshes' own turn (to world yaw 0) as the actor turns.
 
 use bevy::prelude::*;
 use f13_data::classes::ClassDb;
@@ -25,7 +31,7 @@ pub struct PlacedKillsPlugin;
 
 impl Plugin for PlacedKillsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_placed_kills);
+        app.add_systems(Startup, spawn_placed_kills).add_systems(FixedUpdate, orient_toward_killer.before(crate::jason::update_jason));
     }
 }
 
@@ -53,9 +59,23 @@ const DEFAULT_REACH_CM: f32 = 200.0;
 const DEFAULT_MAX_YAW: f64 = 15.0;
 const DEFAULT_MAX_PITCH: f64 = 90.0;
 
+/// A placed kill's actor: where the level put it, where it is now (turned toward Jason: bShouldOrientTowardKiller),
+/// its components' places in it (Bevy: the ContextKillComponent, the camera spline, the Interactable), and how near
+/// he must be for it to turn (HighlightDistance, m).
+#[derive(Debug, Clone)]
+pub struct KillActor {
+    pub root: Transform,
+    pub now: Transform,
+    kill: Transform,
+    camera: Transform,
+    interact: Transform,
+    pub orient_m: Option<f32>,
+}
+
 /// A placed kill in the level.
 #[derive(Component, Debug)]
 pub struct PlacedKill {
+    pub actor: KillActor,
     /// Index into [`KINDS`].
     pub kind: usize,
     /// Its kill camera's key (kill_cameras.json: the actor's package name).
@@ -90,13 +110,20 @@ pub fn placed_kill(classes: &ClassDb, class: &str, t: &Xform, actor_props: &serd
     let kind = KINDS.iter().position(|k| k.0 == class)?;
     let info = classes.get(class)?;
     let comp = |name: &str| info.components.iter().find(|c| c.name == name);
-    let world = |c: &f13_data::level::ComponentInfo| crate::to_transform(&c.local.unwrap_or(Xform::IDENTITY).then(t));
+    let local = |c: &f13_data::level::ComponentInfo| crate::to_transform(&c.local.unwrap_or(Xform::IDENTITY));
     let kill = info.components.iter().find(|c| c.kind == "SCContextKillComponent")?;
     let camera = info.components.iter().find(|c| c.kind == "SCCameraSplineComponent")?;
     let interact = comp("Interactable")?;
-    let spot = world(kill);
-    let iw = world(interact);
-    let f = (iw.rotation * Vec3::X).normalize_or(Vec3::X);
+    let root = crate::to_transform(t);
+    let orient = info.props["bShouldOrientTowardKiller"].as_bool().unwrap_or(false);
+    let actor = KillActor {
+        root,
+        now: root,
+        kill: local(kill),
+        camera: local(camera),
+        interact: local(interact),
+        orient_m: orient.then(|| interact.props["HighlightDistance"].as_f64().unwrap_or(0.0) as f32 / 100.0),
+    };
     let prop = KILL_PROPS.iter().find(|p| p.0 == class).and_then(|&(_, component, anim, rotation)| {
         let at_start = rotation.zip(comp(component)).map(|(r, c)| {
             let x = c.local.unwrap_or(Xform::IDENTITY);
@@ -104,23 +131,43 @@ pub fn placed_kill(classes: &ClassDb, class: &str, t: &Xform, actor_props: &serd
         });
         Some((prop(component)?, anim, at_start))
     });
-    Some(PlacedKill {
+    let mut k = PlacedKill {
+        actor,
         kind,
         camera_key: class.trim_end_matches("_C").to_string(),
-        spot: Transform { rotation: spot.rotation * Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), ..spot },
-        camera: world(camera),
-        interact: iw.translation,
-        forward: f,
+        spot: Transform::IDENTITY,
+        camera: Transform::IDENTITY,
+        interact: Vec3::ZERO,
+        forward: Vec3::X,
         reach_m: interact.props["DistanceLimit"].as_f64().map_or(DEFAULT_REACH_CM, |d| d as f32) / 100.0,
         yaw_limit: interact.props["bUseYawLimit"].as_bool().unwrap_or(false).then(|| interact.props["MaxYawOffset"].as_f64().unwrap_or(DEFAULT_MAX_YAW) as f32),
         pitch_limit: interact.props["bUsePitchLimit"].as_bool().unwrap_or(false).then(|| interact.props["MaxPitchOffset"].as_f64().unwrap_or(DEFAULT_MAX_PITCH) as f32),
         only_once: actor_props["bOnlyUseableOnce"].as_bool().or(info.props["bOnlyUseableOnce"].as_bool()).unwrap_or(false),
         used: false,
         prop,
-    })
+    };
+    k.place(root);
+    Some(k)
 }
 
 impl PlacedKill {
+    /// Puts the actor at `now`: its kill spot (turned to face as characters do), camera and Interactable with it.
+    pub fn place(&mut self, now: Transform) {
+        self.actor.now = now;
+        let spot = now.mul_transform(self.actor.kill);
+        self.spot = Transform { rotation: spot.rotation * Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), ..spot };
+        self.camera = now.mul_transform(self.actor.camera);
+        let iw = now.mul_transform(self.actor.interact);
+        self.interact = iw.translation;
+        self.forward = (iw.rotation * Vec3::X).normalize_or(Vec3::X);
+    }
+
+    /// The kill mesh's place (under the actor's entity, which stays where the level put it) as KillStarted sets its
+    /// relative transform: relative to the actor as it is now.
+    pub fn prop_start(&self, relative: Transform) -> Transform {
+        Transform::from_matrix(self.actor.root.to_matrix().inverse() * self.actor.now.mul_transform(relative).to_matrix())
+    }
+
     /// Jason, his capsule's centre at `center` and looking along `view` (ground plane), can use it.
     pub fn in_reach(&self, center: Vec3, view: Vec2) -> bool {
         if self.used && self.only_once {
@@ -145,6 +192,26 @@ impl PlacedKill {
     pub fn takes(&self) -> (&'static str, &'static str, &'static str) {
         let (_, his, hers, name) = KINDS[self.kind];
         (his, hers, name)
+    }
+}
+
+/// bShouldOrientTowardKiller (FUN_140361770): Jason holding a counselor (not in a kill) within HighlightDistance (flat)
+/// of the actor turns it to face along the line from him to it.
+fn orient_toward_killer(jasons: Query<(&crate::jason::Jason, &Transform)>, mut kills: Query<&mut PlacedKill>) {
+    let Some((_, jxf)) = jasons.iter().find(|(j, _)| j.holding()) else { return };
+    for mut k in &mut kills {
+        let Some(reach) = k.actor.orient_m else { continue };
+        let d = k.actor.root.translation - jxf.translation;
+        let flat = Vec2::new(d.x, d.z);
+        if flat.length() > reach || flat == Vec2::ZERO {
+            continue;
+        }
+        // MakeRotFromX of the flat line: the actor's Unreal +X (Bevy +X) along it.
+        let rotation = Quat::from_rotation_y((-flat.y).atan2(flat.x));
+        if k.actor.now.rotation.angle_between(rotation) > 1e-4 {
+            let now = Transform { rotation, ..k.actor.root };
+            k.place(now);
+        }
     }
 }
 
