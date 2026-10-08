@@ -251,8 +251,8 @@ Presentation
   height fog of the clear-weather level (CLsm_RainOff), the post-process volume's fixed exposure and ambient cubemap,
   the sky's colour; the counselor's flashlight (F; its Blueprint values, attachment, turn rate, wall check; lit for
   fear); power cuts (power.rs)
-- [ ] Lighting, remaining: Enlighten GI, local light shadows, light functions, colour grading LUT/contrast, bloom,
-      the sky texture, rain
+- [ ] Lighting, remaining: Enlighten GI, local light shadows, light functions, the sky texture, rain (the colour
+      grading and bloom: Decomp audit's post-processing)
 - [ ] Audio (audio.rs, f13-data::sound): done: SoundCue playback (the cue graph's random, modulator, mixer, looping and
   attenuation nodes; Unreal's attenuation falloff; left/right panning around the camera) and the counselor's
   footsteps (her locomotion's Footstep notifies; the surface under her foot: a mesh's physical material or the
@@ -305,8 +305,12 @@ Decomp audit (nothing guessed: every rule read from the decomp or the game's dat
       ILLSpecialMove_MoveToward's walk and view turn with a 0.15 s slide onto the spot, bInterpToInteraction /
       InterpolationTime), then the take and its camera (DestinationReached): doors, locks, windows, repairs, the phone,
       hiding spots. Not yet: the slide's capsule sweep, the Fast takes (SpeedUpTimelimit)
-- [ ] Post-processing the map's volume asks for: the colour grading LUT (LutTestHorror at 0.25), the engine's filmic
-      tonemapper, SSAO and bloom (DefaultFeature.*); then compare against the game's own screenshots
+- [x] Post-processing from the game's own shaders (its GlobalShaderCache, constants exact; tonemap.rs, bloom.rs,
+      f13-core::color_grading): the map volume baked into the engine's 32³ LUT (white balance, colour correction, the
+      filmic curve, LutTestHorror at 0.25), the tonemap pass (vignette, grain quantization), bloom (six Gaussian stages
+      as AddBloom builds them at Epic)
+- [ ] Post-processing, remaining: SSAO (FPostProcessAmbientOcclusion*: it darkens indirect light only), bloom's fast
+      blur on its two largest stages; then compare against the game's own screenshots
 
 ## Milestone 2: more escapes
 Police, 4-seat car, boat, then the others, one at a time.
