@@ -27,7 +27,6 @@ Mechanics: counselor side
 - [x] Fear events pushed in the client (fear_events.rs): darkness (f13-core::light, the map's point and spot lights),
   indoors (the cabins' indoor volumes, also used by Sense), wounded, Jason near and in view, grabbed, hidden, items
   held, in water, blackouts (inside a grid's volume while its power is out)
-- [ ] Fear events, remaining: near friendlies and corpses (other counselors)
 - [x] Hit reactions and death animations when Jason hits
 - [x] Collision: the counselor's capsule (34 x 82 cm) against the game's simple collision (convex hulls, boxes,
   spheres, capsules of every mesh whose profile blocks pawns, BlockingVolumes, terrain), doors, windows and cars
@@ -145,7 +144,6 @@ Mechanics: Jason side
 - [x] Pulled out of the car: Jason on the car's DriverGrab spot, both sides' paired take (AM_normal_stand_car_grab_left,
       she on his GrabSocket as in kills), into his grab
 - [x] A car hitting Jason at speed: he slams it (AM_normal_stand_car_stop_slam, its crash sound) as it stops dead
-- [ ] Car interactions, remaining: passengers, the car running counselors over
 
 Match
 - [x] Match flow (f13-core::game_mode, match_flow.rs): the game mode's states and timer, the end (dead or
@@ -157,11 +155,8 @@ Match
       opening, Jason turned back from it and shot (PoliceShootJasonStun), escaping on foot (walking its ExitPath for its 6 s EscapeDelay); the HUD's
       police timer (ShowPoliceTimer, PoliceTimerText); Jason (played) breaking the phone box
       (AM_Break_Phone_Box_Machete, PhoneBoxImpact): the phone dead, a call cut off, until it's repaired (its own minigame)
-- [ ] Police, remaining: the escape's camera spline, the phone box's broken mesh and lights, the computer Jason breaking
-      boxes, the free-spot traces when he's turned back (PoliceStunTrace)
-- [ ] Match flow, remaining: lobby, level intro and outro sequences, the Tommy Jarvis timer, badges (award sites and
-      classes read, see MODLOG; to show on the results), Jason
-      dying
+- [ ] Match flow, remaining: the level intro and outro sequences, badges (award sites and classes read, see MODLOG;
+      to show on the results)
 - [x] Item and car spawning, as the game mode does it (f13-core::spawn, f13-data::world)
 - [x] How the game chooses one of the four cabin layouts per match: SCWorldSettings' RandomLevels, one picked at
   random when the level loads (`--layout` overrides)
@@ -326,6 +321,15 @@ Decomp audit (nothing guessed: every rule read from the decomp or the game's dat
 
 ## Milestone 2: more escapes
 Police, 4-seat car, boat, then the others, one at a time.
+- [ ] Police, remaining (the escape itself works in M1's match: see above): the escape's camera spline, the phone box's
+      broken mesh and lights, the computer Jason breaking boxes, the free-spot traces when he's turned back
+      (PoliceStunTrace)
+
+Moved out of Milestone 1 (they need more than one counselor; M1 has Vanessa alone):
+- [ ] Fear events near friendlies and corpses (other counselors)
+- [ ] Car passengers, and the car running counselors over
+- [ ] The lobby (M3), the Tommy Jarvis timer and Jason dying (killing him needs Tommy and other counselors;
+      Tommy is in "Afterwards")
 
 ## Milestone 3: networking
 Server-authoritative netcode, tested with bots, then an 8-player lobby.
