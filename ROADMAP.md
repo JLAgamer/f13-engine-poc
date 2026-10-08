@@ -26,8 +26,10 @@ Mechanics: counselor side
 - [x] Jason in the water (jason.rs, decompiled): under it when his capsule's top is, his depth-scaled speed along the
       bottom, unseen there, no Shift; his drowning kill (Underwater_GrabKill) on a swimming counselor in reach when
       he's deep enough; the AI follows her in (`--bot-drown`)
-- [ ] Swimming, remaining: Jason's underwater sound mix, his underwater input, dropping a held counselor as he goes
-      under. (Counselors don't dive in the game: SCCounselorCharacter has no diving, only MinWaterDepthForSwimming)
+- [x] Jason going under (OnRep_UnderWater): a counselor he holds dropped where she is (MULTICAST_DropCounselor,
+      OnDropped in water), his Shift ended
+- [ ] Swimming, remaining: Jason's underwater sound mix and input (his own player's: pushed only when he's locally
+      controlled). (Counselors don't dive in the game: SCCounselorCharacter has no diving, only MinWaterDepthForSwimming)
 - [x] Fear events pushed in the client (fear_events.rs): darkness (f13-core::light, the map's point and spot lights),
   indoors (the cabins' indoor volumes, also used by Sense), wounded, Jason near and in view, grabbed, hidden, items
   held, in water, blackouts (inside a grid's volume while its power is out)

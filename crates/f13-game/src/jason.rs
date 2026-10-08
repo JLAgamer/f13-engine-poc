@@ -60,7 +60,7 @@
 //! UnderwaterKillDepth down and her within his UnderwaterInteractComponent's reach (its DistanceLimit: his distance
 //! to the surface over him plus 104 cm), he drowns her (Underwater_GrabKill: he takes the kill's place at her, turned
 //! as his mesh; she stays). The AI follows her into the water and only closes in under her there (its choice).
-//! Not ported: dropping a counselor he holds as he goes under (MULTICAST_DropCounselor's implementation isn't read),
+//! Going under drops a counselor he holds (OnRep_UnderWater, MULTICAST_DropCounselor). Not ported:
 //! the underwater sound mix and loop, the player's underwater input bindings.
 
 use bevy::prelude::*;
@@ -1185,6 +1185,21 @@ pub(crate) fn update_jason(
         if under != j.underwater {
             j.underwater = under;
             info!("Jason: {} the water", if under { "under" } else { "out of" });
+            // OnRep_UnderWater (0x1403fdb30): going under drops a counselor he holds, unless in a context kill
+            // (MULTICAST_DropCounselor 0x1403f6450: his grab and its animation end). In the water she isn't moved
+            // or staggered (SCCounselorCharacter::OnDropped 0x1403c1610 with bInWater): her grab and its animation
+            // end and she swims (or stands, in shallow water) from where he held her.
+            if under && matches!(j.state, JasonState::Holding { .. }) {
+                info!("Jason: dropped her going under");
+                commands.entity(pe).remove::<(Held, PlayAction)>();
+                commands.entity(je).remove::<PlayAction>();
+                j.state = JasonState::Hunting;
+            }
+            // And ends a Shift.
+            if under && matches!(j.state, JasonState::Shifting { .. }) {
+                info!("Jason: Shift over (under the water)");
+                j.state = JasonState::Hunting;
+            }
         }
         j.underwater_speed = surface.filter(|_| under).map(|s| {
             let depth = ((s - xf.translation.y) * CM).clamp(0.0, t.underwater_full_speed_depth);
