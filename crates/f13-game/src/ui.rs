@@ -1214,7 +1214,7 @@ fn jason_hud(
     mut map_shown: Local<bool>,
     (grab_info, grab_available, asset_server, mut images): (
         Option<Res<crate::jason::GrabKillInfo>>,
-        Res<crate::jason::GrabKillsAvailable>,
+        Option<Res<crate::jason::GrabKillsAvailable>>,
         Res<AssetServer>,
         Query<&mut ImageNode>,
     ),
@@ -1253,7 +1253,7 @@ fn jason_hud(
                     img.image = handle;
                 }
             }
-            let c = linear(if grab_available.0[slot] { USABLE } else { LOCKED });
+            let c = linear(if grab_available.as_ref().is_some_and(|a| a.0[slot]) { USABLE } else { LOCKED });
             if img.color != c {
                 img.color = c;
             }
