@@ -44,6 +44,9 @@ pub struct Placement {
     /// Blocks traces on WorldDynamic (interactables' occlusion).
     #[serde(default = "yes")]
     pub blocks_world_dynamic: bool,
+    /// Blocks traces on Visibility (SCInteractComponents' occlusion: window glass doesn't).
+    #[serde(default = "yes")]
+    pub blocks_visibility: bool,
     /// Casts shadows (the component's CastShadow).
     #[serde(default = "yes")]
     pub cast_shadow: bool,
@@ -134,6 +137,9 @@ pub struct ComponentInfo {
     /// Whether the hull blocks traces on WorldDynamic.
     #[serde(default = "yes")]
     pub hull_blocks_world_dynamic: bool,
+    /// Whether the hull blocks traces on Visibility.
+    #[serde(default = "yes")]
+    pub hull_blocks_visibility: bool,
     /// Box, sphere and capsule components an overlap query on WorldDynamic finds: a convex point set in component
     /// space (Unreal cm).
     #[serde(default)]

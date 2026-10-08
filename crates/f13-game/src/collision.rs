@@ -88,6 +88,18 @@ impl<S: TriSource + ?Sized> TriSource for Excluding<'_, S> {
 #[derive(Component)]
 pub struct NoWorldDynamic;
 
+/// A dynamic collider that doesn't block traces on Visibility (its component's response).
+#[derive(Component)]
+pub struct NoVisibility;
+
+/// The level placements' triangles that block her but not traces on Visibility (window glass and more).
+#[derive(Resource, Default)]
+pub struct NotVisibility(pub HashSet<TriKey>);
+
+/// The level placements' triangles that block her but not traces on WorldDynamic.
+#[derive(Resource, Default)]
+pub struct NotWorldDynamic(pub HashSet<TriKey>);
+
 /// An actor's shapes that overlap queries on WorldDynamic find (convex hulls in the actor's space, as placed).
 #[derive(Component, Clone)]
 pub struct QueryShapes(pub Vec<Vec<Tri>>);
@@ -175,6 +187,8 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
         .map(|a| a.name.as_str())
         .collect();
     let mut actor_tris = ActorTris::default();
+    let mut not_visibility = NotVisibility::default();
+    let mut not_world_dynamic = NotWorldDynamic::default();
     for layout in &level.layouts {
         for p in &layout.placements {
             if !p.blocks_pawn && !p.blocks_camera {
@@ -196,6 +210,12 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
                 for t in transform_tris(&tris, &m) {
                     if let Some(a) = actor {
                         actor_tris.0.entry(a.to_string()).or_default().insert(tri_key(&t));
+                    }
+                    if p.blocks_pawn && !p.blocks_visibility {
+                        not_visibility.0.insert(tri_key(&t));
+                    }
+                    if p.blocks_pawn && !p.blocks_world_dynamic {
+                        not_world_dynamic.0.insert(tri_key(&t));
                     }
                     if p.blocks_pawn {
                         grid.insert(t);
@@ -257,6 +277,9 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
     );
     commands.insert_resource(WorldCollision { grid: std::sync::Arc::new(grid), camera_grid: std::sync::Arc::new(camera_grid), shapes });
     commands.insert_resource(actor_tris);
+    info!("collision: {} level triangles pass Visibility traces, {} WorldDynamic ones", not_visibility.0.len(), not_world_dynamic.0.len());
+    commands.insert_resource(not_visibility);
+    commands.insert_resource(not_world_dynamic);
 }
 
 /// Rebuilds the world-space triangles of moved, shown or hidden colliders.

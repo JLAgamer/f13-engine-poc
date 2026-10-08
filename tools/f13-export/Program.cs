@@ -246,6 +246,7 @@ void ExportLevel(string mapPath, params string[] extra)
                 BlocksPawn = Collision.BlocksPawn(smc),
                 BlocksCamera = Collision.BlocksCamera(smc),
                 BlocksWorldDynamic = Collision.BlocksWorldDynamic(smc),
+                BlocksVisibility = Collision.BlocksVisibility(smc),
                 CastShadow = smc.GetOrDefault("CastShadow", true),
                 // Foliage instances fade out at InstanceEndCullDistance; other components at their max draw distance
                 // (LDMaxDrawDistance, or the cull distance volume's CachedMaxDrawDistance), the nearer one when both are set.
@@ -678,6 +679,7 @@ switch (rest[0])
         WriteClasses();
         WriteSpecialMoves();
         WriteCollision();
+        foreach (var (k, n) in Collision.VisibilityDiffers) Console.WriteLine($"visibility differs from WorldDynamic: {n} x {k}");
         return 0;
     case "counselor": // the MVP counselor's parts and animations (and the meshes they need)
         new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims, Mvp.KeepRoot);
@@ -1325,6 +1327,7 @@ class Placement
     public bool BlocksCamera = true;
     /// Blocks traces on WorldDynamic (interactables' occlusion).
     public bool BlocksWorldDynamic = true;
+    public bool BlocksVisibility = true;
     /// Casts shadows (CastShadow; baked ones included, which f13-game's dynamic sun stands in for).
     public bool CastShadow = true;
     /// Not drawn past this distance from the camera (cm; 0 = always drawn).

@@ -43,6 +43,8 @@ pub struct InteractLimit {
     pub yaw: Option<f32>,
     pub pitch: Option<f32>,
     pub occlusion: bool,
+    /// Its occlusion trace runs on Visibility (RayTraceChannel ECC_Visibility: SCInteractComponents), else WorldDynamic.
+    pub visibility: bool,
 }
 
 /// An actor's interactable components, by name.
@@ -64,6 +66,7 @@ impl InteractLimits {
                         yaw: p["bUseYawLimit"].as_bool().unwrap_or(false).then(|| f("MaxYawOffset", DEFAULT_MAX_YAW)),
                         pitch: p["bUsePitchLimit"].as_bool().unwrap_or(false).then(|| f("MaxPitchOffset", DEFAULT_MAX_PITCH)),
                         occlusion: p["bCheckForOcclusion"].as_bool().unwrap_or(classes.is_child_of(&c.kind, "SCInteractComponent")),
+                        visibility: p["RayTraceChannel"].as_str() == Some("ECC_Visibility"),
                     };
                     (c.name.clone(), limit)
                 })
@@ -727,8 +730,9 @@ fn has_part(inv: &Inventory, carried: &Query<&Item, With<Carried>>, parts: &[Str
 /// (bIgnoreHeightInDistanceComparison). In range (FUN_14022e940): within DistanceLimit, the facing limits
 /// ([`InteractLimit::facing`]), and with bCheckForOcclusion not occluded (IsOccluded 0x14022f300: a line trace on its
 /// RayTraceChannel from her eyes (her view point, BaseEyeHeight up; RayTraceZOffset 0) to the interaction point,
-/// ignoring her and the interactable's actor). The trace runs against what blocks WorldDynamic (the level: the same
-/// as what blocks her). PLACEHOLDER: the beds' Visibility channel is traced like WorldDynamic.
+/// ignoring her and the interactable's actor). The trace runs against what blocks its channel: WorldDynamic, or
+/// Visibility for SCInteractComponents (the beds' and such: window glass doesn't block it), by each level placement's
+/// and collider's own response to it (f13-export collision lists where the two channels differ).
 #[allow(clippy::too_many_arguments)]
 fn choose_target(
     player: Single<(Entity, &Transform, &Inventory, &Player, Option<&crate::cabinets::CabinetUse>), (Without<Driving>, Without<crate::hiding::Hiding>)>,
@@ -743,14 +747,14 @@ fn choose_target(
     (spots, fuse_boxes): (Query<(Entity, &crate::hiding::HidingSpot, &GlobalTransform)>, Query<(Entity, &crate::power::FuseBox)>),
     (phone_boxes, phones): (Query<(Entity, &crate::police::PhoneBox)>, Query<(Entity, &crate::police::Phone)>),
     mut interaction: ResMut<Interaction>,
-    (limits, globals, collision, dynamic, parents, no_world_dynamic, (names, actor_tris)): (
+    (limits, globals, collision, dynamic, parents, no_world_dynamic, (names, actor_tris, no_visibility, (not_visibility, not_world_dynamic))): (
         Query<&InteractLimits>,
         Query<&GlobalTransform>,
         Option<Res<crate::collision::WorldCollision>>,
         Res<crate::collision::DynamicColliders>,
         Query<&ChildOf>,
         Query<(), With<crate::collision::NoWorldDynamic>>,
-        (Query<&Name>, Option<Res<crate::collision::ActorTris>>),
+        (Query<&Name>, Option<Res<crate::collision::ActorTris>>, Query<(), With<crate::collision::NoVisibility>>, (Option<Res<crate::collision::NotVisibility>>, Option<Res<crate::collision::NotWorldDynamic>>)),
     ),
 ) {
     if interaction.busy() {
@@ -798,10 +802,14 @@ fn choose_target(
                 return;
             }
             if let Some(world) = collision.as_ref().filter(|_| limit.occlusion) {
-                let (grid, lists) = world.without(&dynamic, |e| no_world_dynamic.contains(e) || of_owner(e, owner) || e == pe);
+                // Its channel's blockers: dynamic colliders and level placements by their response to it.
+                let passes = |e: Entity| if limit.visibility { no_visibility.contains(e) } else { no_world_dynamic.contains(e) };
+                let (grid, lists) = world.without(&dynamic, |e| passes(e) || of_owner(e, owner) || e == pe);
                 // A level actor's own meshes are in the static grid.
                 let own = names.get(owner).ok().and_then(|n| actor_tris.as_ref()?.0.get(n.as_str()));
-                if f13_core::collision::segment_hit(&(&crate::collision::Excluding(grid, own), lists.as_slice()), eyes, point, 1.0).is_some() {
+                let glass = if limit.visibility { not_visibility.as_ref().map(|g| &g.0) } else { not_world_dynamic.as_ref().map(|g| &g.0) };
+                let level = crate::collision::Excluding(grid, own);
+                if f13_core::collision::segment_hit(&(&crate::collision::Excluding(&level, glass), lists.as_slice()), eyes, point, 1.0).is_some() {
                     return;
                 }
             }

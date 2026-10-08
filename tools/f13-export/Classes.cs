@@ -241,6 +241,7 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
             j["Hull"] = new JArray(hull);
             j["HullBlocksCamera"] = Collision.BlocksCamera(t, "OverlapAllDynamic");
             j["HullBlocksWorldDynamic"] = Collision.BlocksWorldDynamic(t, "OverlapAllDynamic");
+            j["HullBlocksVisibility"] = Collision.BlocksVisibility(t, "OverlapAllDynamic");
         }
         // Shapes an overlap query on WorldDynamic finds (a barricade's BeginPlay finds its door that way).
         if (Collision.ShapeComponent(t, FVector.OneVector) is { } shape && Collision.QueriedByWorldDynamic(t, "OverlapAllDynamic"))

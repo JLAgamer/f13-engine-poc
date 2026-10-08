@@ -407,6 +407,9 @@ fn spawn_props(
                 if !c.hull_blocks_world_dynamic {
                     commands.entity(e).insert(crate::collision::NoWorldDynamic);
                 }
+                if !c.hull_blocks_visibility {
+                    commands.entity(e).insert(crate::collision::NoVisibility);
+                }
                 continue;
             }
             match on_pivot {
@@ -420,6 +423,9 @@ fn spawn_props(
                     if !c.hull_blocks_world_dynamic {
                         commands.entity(e).insert(crate::collision::NoWorldDynamic);
                     }
+                    if !c.hull_blocks_visibility {
+                        commands.entity(e).insert(crate::collision::NoVisibility);
+                    }
                 }
                 None => {
                     let e = commands.spawn((local(c), Visibility::default(), collider, ChildOf(root))).id();
@@ -428,6 +434,9 @@ fn spawn_props(
                     }
                     if !c.hull_blocks_world_dynamic {
                         commands.entity(e).insert(crate::collision::NoWorldDynamic);
+                    }
+                    if !c.hull_blocks_visibility {
+                        commands.entity(e).insert(crate::collision::NoVisibility);
                     }
                     hulls.insert(c.name.as_str(), e);
                 }

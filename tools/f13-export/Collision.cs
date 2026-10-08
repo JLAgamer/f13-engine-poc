@@ -48,7 +48,10 @@ static class Collision
     }
 
     /// Profile name -> (query collision enabled, Pawn, Camera and WorldDynamic channel responses).
-    static readonly Dictionary<string, (bool Query, string Pawn, string Camera, string WorldDynamic)> profiles = new(StringComparer.OrdinalIgnoreCase);
+    static readonly Dictionary<string, (bool Query, string Pawn, string Camera, string WorldDynamic, string Visibility)> profiles = new(StringComparer.OrdinalIgnoreCase);
+    /// Components whose Visibility trace response differs from their WorldDynamic one (by profile): checked to see
+    /// whether traces on Visibility need their own geometry.
+    public static readonly SortedDictionary<string, int> VisibilityDiffers = new();
     static readonly HashSet<string> unknown = new(StringComparer.OrdinalIgnoreCase);
     /// How often each profile decided BlocksPawn (summary for the log).
     public static readonly SortedDictionary<string, int> Used = new();
@@ -70,7 +73,7 @@ static class Collision
                 var m = System.Text.RegularExpressions.Regex.Match(line, "\\(Channel=\"" + channel + "\",Response=(ECR_\\w+)\\)");
                 return m.Success ? m.Groups[1].Value : "ECR_Block";
             }
-            profiles[name] = (enabled.StartsWith("Query"), Response("Pawn"), Response("Camera"), Response("WorldDynamic"));
+            profiles[name] = (enabled.StartsWith("Query"), Response("Pawn"), Response("Camera"), Response("WorldDynamic"), Response("Visibility"));
         }
     }
 
@@ -88,7 +91,21 @@ static class Collision
     public static bool BlocksCamera(UObject component, string defaultProfile = "BlockAll") => Blocks(component, "Camera", defaultProfile, false);
 
     /// Whether a primitive component blocks traces on WorldDynamic (interactables' occlusion traces, RayTraceChannel 1).
-    public static bool BlocksWorldDynamic(UObject component, string defaultProfile = "BlockAll") => Blocks(component, "WorldDynamic", defaultProfile, false);
+    public static bool BlocksWorldDynamic(UObject component, string defaultProfile = "BlockAll")
+    {
+        var wd = Blocks(component, "WorldDynamic", defaultProfile, false);
+        if (wd != Blocks(component, "Visibility", defaultProfile, false))
+        {
+            var bi = component.GetOrDefault<FStructFallback?>("BodyInstance");
+            var p = bi?.GetOrDefault<FName>("CollisionProfileName").Text is { Length: > 0 } n && n != "None" ? n : defaultProfile;
+            var key = $"{p} ({component.ExportType}, WorldDynamic {(wd ? "blocks" : "doesn't")}) {component.GetPathName()}";
+            VisibilityDiffers[key] = VisibilityDiffers.GetValueOrDefault(key) + 1;
+        }
+        return wd;
+    }
+
+    /// Whether a primitive component blocks traces on Visibility (SCInteractComponents' RayTraceChannel).
+    public static bool BlocksVisibility(UObject component, string defaultProfile = "BlockAll") => Blocks(component, "Visibility", defaultProfile, false);
 
     /// Whether an overlap query on WorldDynamic finds the component (its response isn't Ignore): SCDoor's BeginPlay
     /// finds its barricade that way.
@@ -114,7 +131,7 @@ static class Collision
             return "ECR_Block"; // the engine channels' default response is Block
         }
         if (profiles.TryGetValue(profile, out var p))
-            return p.Query ? channel switch { "Pawn" => p.Pawn, "Camera" => p.Camera, _ => p.WorldDynamic } : null;
+            return p.Query ? channel switch { "Pawn" => p.Pawn, "Camera" => p.Camera, "Visibility" => p.Visibility, _ => p.WorldDynamic } : null;
         if (unknown.Add(profile)) Console.WriteLine($"  collision profile {profile} not in DefaultEngine.ini: treated as blocking");
         return "ECR_Block";
     }
