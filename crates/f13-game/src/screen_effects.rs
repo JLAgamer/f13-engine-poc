@@ -486,7 +486,9 @@ fn prepare_pipelines(
 }
 
 pub(crate) fn vhs(
-    view: ViewQuery<(&ViewTarget, &VhsPipelineId, &DynamicUniformIndex<VhsUniform>)>,
+    // With VhsGlitch: the render world keeps the camera's entity, and its pipeline id and uniform index outlive the
+    // effect (they kept the static on after it ended).
+    view: ViewQuery<(&ViewTarget, &VhsPipelineId, &DynamicUniformIndex<VhsUniform>), With<VhsGlitch>>,
     pipeline: Res<VhsPipeline>,
     cache: Res<PipelineCache>,
     uniforms: Res<ComponentUniforms<VhsUniform>>,
