@@ -132,7 +132,7 @@ impl Plugin for UiPlugin {
             .init_resource::<Prompts>()
             .init_resource::<prompts::PromptUi>()
             .add_systems(Startup, load_hud)
-            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, (map_screen, counselor_map_icons).chain(), jason_hud, ability_popup, noise_meter, xp_lines, wiggle_state.pipe(wiggle_widget)), prompts::prompts, widget_anims, fear_widgets, content_alpha, widget_colors, additive_brushes, hide_for_jason).chain().run_if(resource_exists::<Hud>));
+            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, (map_screen, counselor_map_icons).chain(), jason_hud, ability_popup, rage_hud, noise_meter, xp_lines, wiggle_state.pipe(wiggle_widget)), prompts::prompts, widget_anims, fear_widgets, content_alpha, widget_colors, additive_brushes, hide_for_jason).chain().run_if(resource_exists::<Hud>));
     }
 }
 
@@ -434,9 +434,9 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
     });
     let mut killer = Widget::load(dir, "KillerHUDWidget");
     if let Some(k) = killer.as_mut() {
-        // Shown by things not ported: the rage overlay; the help text never shows (see the module docs).
+        // Shown by things not ported; the help text never shows (see the module docs). (RageBorder, at its alpha 0.005
+        // until rage plays RageActive on it, stays: rage_hud.)
         for name in [
-            "RageBorder",
             "KillerHelpTextWidget",
             "SaveGameThreadActiveIcon_0",
             "HUDLaggingIconWidget",
@@ -485,7 +485,7 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         names: HashMap::new(),
         map,
         scale: 1.0,
-        anims: ["SCCounselorTimerWidget", "SCBreathWidget", "KillerHUDWidget", "ObjectivesWidget", "KillerAbilityWidget", "AbilityAvailable"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
+        anims: ["SCCounselorTimerWidget", "SCBreathWidget", "KillerHUDWidget", "ObjectivesWidget", "KillerAbilityWidget", "AbilityAvailable", "RageWidget"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
         ability_icon_colors: {
             let d = std::fs::read_to_string(dir.join("ui/KillerAbilityWidget.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
             ["IconUsableColor", "IconUnusableColor", "IconLockedColor"].map(|k| color(&d["Defaults"][k], [1.0; 4]))
@@ -2125,6 +2125,54 @@ fn ability_popup(
             state.2 = None;
         }
         _ => {}
+    }
+}
+
+/// Rage on his HUD, once as it starts (it lasts the match): KillerHUDWidget's OnRageActive plays RageActive (RageBorder,
+/// the screen's red edge: pulsing over 5 s, then clear), calls KillerAbilityWidget's OnRageActive (FrameRage
+/// SelfHitTestInvisible, at its designed alpha 0; OnRageActiveAnim, the diamond's glow over 4 s; each ability bar's
+/// M_UI_JasonHud_01: background Smoke 0, Brightness 0, fill Smoke 1, Brightness 10) and RageWidget's ActivateRage
+/// (OnRageActive: its glow pulsing over 5 s, then lit). Its AbilityAvailable notice: [`ability_popup`]. (Smoke isn't
+/// drawn: see [`Additive`].)
+#[allow(clippy::type_complexity)]
+fn rage_hud(
+    time: Res<Time>,
+    hud: Res<Hud>,
+    play: Option<Res<crate::jason_player::PlayJason>>,
+    jasons: Query<&crate::senses::Knowledge, With<crate::jason::Jason>>,
+    mut playing: ResMut<PlayingAnims>,
+    mut vis: Query<&mut Visibility>,
+    bars: Query<&Progress>,
+    mut brushes: Query<&mut AdditiveBrush>,
+    mut was: Local<bool>,
+) {
+    use f13_core::killer_abilities::Ability;
+    if play.is_none() || hud.built.as_ref().is_none_or(|b| !b.2) {
+        return;
+    }
+    let Some(k) = jasons.iter().next() else { return };
+    let rage = k.abilities.rage_active;
+    if rage == *was {
+        return;
+    }
+    *was = rage;
+    if !rage {
+        return;
+    }
+    let now = time.elapsed_secs();
+    playing.play("KillerHUDWidget", "RageActive", now, false);
+    playing.play("KillerAbilityWidget", "OnRageActiveAnim", now, false);
+    playing.play("RageWidget", "OnRageActive", now, false);
+    if let Some(mut v) = hud.names.get("KillerAbilityWidget.FrameRage").and_then(|&e| vis.get_mut(e).ok()) {
+        v.set_if_neq(Visibility::Inherited);
+    }
+    for ability in Ability::ALL {
+        let Some(bar) = hud.names.get(&format!("KillerAbilityWidget.{ability:?}Bar")).and_then(|&e| bars.get(e).ok().map(|b| (e, b.image))) else { continue };
+        for (e, brightness) in [(bar.0, 0.0), (bar.1, 10.0)] {
+            if let Ok(mut b) = brushes.get_mut(e) {
+                b.brightness = brightness;
+            }
+        }
     }
 }
 
