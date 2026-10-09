@@ -89,7 +89,8 @@ impl Plugin for ItemsPlugin {
         app.init_resource::<crate::jason::Struggle>()
             .add_systems(PreUpdate, crate::jason::read_struggle.after(bevy::input::InputSystems))
             .add_systems(PostUpdate, give_items)
-            .add_systems(Update, (hold_in_hand, start_action, block, toggle_map, follow_map).chain())
+            .init_resource::<MapScreen>()
+            .add_systems(Update, (hold_in_hand, start_action, block, toggle_map).chain())
             .add_observer(wear_on_block)
             .add_observer(set_killer_trap)
             .add_systems(FixedUpdate, (tick_action, fly, spring_traps, struggle_in_trap).chain().after(crate::player::move_player));
@@ -854,115 +855,15 @@ fn struggle_in_trap(
     }
 }
 
-/// The map: a picture of the camp from straight above, rendered once (the camp doesn't change), shown in the corner
-/// with a dot where she is.
-#[derive(Resource)]
-struct MapPicture {
-    image: Handle<Image>,
-    /// World XZ at the picture's centre.
-    center: Vec2,
-    /// Frames the snapshot camera has left (it needs a few before its target image is ready on the GPU).
-    frames: u32,
-    camera: Option<Entity>,
-}
+/// GLB_Map for her: the HUD's ShowCounselorMap (0x14043a430: when no menu is up, or the one up is the objectives
+/// menu) toggles CounselorHUDWidget's OnShowCounselorMap, her objectives and map screen (ui.rs `map_screen`), with the
+/// map or without it.
+#[derive(Resource, Default)]
+pub struct MapScreen(pub bool);
 
-#[derive(Component)]
-struct MapPanel;
-
-#[derive(Component)]
-struct MapDot;
-
-/// Metres across the map picture, and its size on screen and in pixels.
-const MAP_SPAN_M: f32 = 300.0;
-const MAP_PANEL_PX: f32 = 360.0;
-const MAP_IMAGE_PX: u32 = 1024;
-
-/// M: the map (when carried).
-#[allow(clippy::too_many_arguments)]
-fn toggle_map(
-    mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
-    player: Query<(&Inventory, &Transform), With<Player>>,
-    items: Query<&Item>,
-    panels: Query<Entity, With<MapPanel>>,
-    mut picture: Option<ResMut<MapPicture>>,
-    mut images: ResMut<Assets<Image>>,
-    mut cameras: Query<&mut Camera>,
-) {
-    // Stop the snapshot camera once it has rendered.
-    if let Some(p) = picture.as_mut() {
-        if let Some(cam) = p.camera {
-            if p.frames == 0 {
-                commands.entity(cam).despawn();
-                p.camera = None;
-            } else {
-                p.frames -= 1;
-                if let Ok(mut c) = cameras.get_mut(cam) {
-                    c.is_active = true;
-                }
-            }
-        }
-    }
-    let Ok((inv, xf)) = player.single() else { return };
-    let has_map = inv.special.iter().chain(inv.pockets.iter()).chain(inv.hand.iter()).any(|&e| items.get(e).is_ok_and(|i| i.kind == ItemKind::Map));
-    let open = !panels.is_empty();
-    if open && (!has_map || keys.just_pressed(KeyCode::KeyM)) {
-        for e in &panels {
-            commands.entity(e).despawn();
-        }
-        return;
-    }
-    if !keys.just_pressed(KeyCode::KeyM) {
-        return;
-    }
-    if !has_map {
-        info!("no map (find one in a cabin)");
-        return;
-    }
-    let image = match picture.as_ref() {
-        Some(p) => p.image.clone(),
-        None => {
-            let image = images.add(Image::new_target_texture(MAP_IMAGE_PX, MAP_IMAGE_PX, bevy::render::render_resource::TextureFormat::Bgra8UnormSrgb, None));
-            let center = Vec2::new(xf.translation.x, xf.translation.z);
-            let camera = commands
-                .spawn((
-                    Camera3d::default(),
-                    Camera { order: -1, ..default() },
-                    bevy::camera::RenderTarget::Image(image.clone().into()),
-                    Projection::Orthographic(OrthographicProjection {
-                        scaling_mode: bevy::camera::ScalingMode::Fixed { width: MAP_SPAN_M, height: MAP_SPAN_M },
-                        far: 2000.0,
-                        ..OrthographicProjection::default_3d()
-                    }),
-                    Transform::from_xyz(center.x, xf.translation.y + 500.0, center.y).looking_at(Vec3::new(center.x, xf.translation.y, center.y), Vec3::NEG_Z),
-                ))
-                .id();
-            commands.insert_resource(MapPicture { image: image.clone(), center, frames: 30, camera: Some(camera) });
-            image
-        }
-    };
-    commands
-        .spawn((
-            Node { position_type: PositionType::Absolute, top: Val::Px(12.0), right: Val::Px(12.0), width: Val::Px(MAP_PANEL_PX), height: Val::Px(MAP_PANEL_PX), ..default() },
-            ImageNode::new(image),
-            MapPanel,
-        ))
-        .with_child((
-            Node { position_type: PositionType::Absolute, width: Val::Px(10.0), height: Val::Px(10.0), border_radius: BorderRadius::all(Val::Px(5.0)), ..default() },
-            BackgroundColor(Color::srgb(1.0, 0.1, 0.1)),
-            MapDot,
-        ));
-}
-
-/// The dot follows her.
-fn follow_map(picture: Option<Res<MapPicture>>, player: Query<&Transform, With<Player>>, mut dots: Query<&mut Node, With<MapDot>>) {
-    let (Some(picture), Ok(p)) = (picture, player.single()) else { return };
-    for mut n in &mut dots {
-        // The picture's up is -Z, its right +X.
-        let u = (p.translation.x - picture.center.x) / MAP_SPAN_M + 0.5;
-        let v = (p.translation.z - picture.center.y) / MAP_SPAN_M + 0.5;
-        n.left = Val::Px(u.clamp(0.0, 1.0) * MAP_PANEL_PX - 5.0);
-        n.top = Val::Px(v.clamp(0.0, 1.0) * MAP_PANEL_PX - 5.0);
+fn toggle_map(keys: Res<ButtonInput<KeyCode>>, mut screen: ResMut<MapScreen>, play: Option<Res<crate::jason_player::PlayJason>>) {
+    if play.is_none() && keys.just_pressed(KeyCode::KeyM) {
+        screen.0 = !screen.0;
     }
 }
 

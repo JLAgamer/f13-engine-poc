@@ -122,8 +122,9 @@ impl Plugin for UiPlugin {
         embedded_asset!(app, "shaders/minimap.wgsl");
         app.add_plugins((UiMaterialPlugin::<RadialFill>::default(), UiMaterialPlugin::<Minimap>::default()))
             .init_resource::<PlayingAnims>()
+            .init_resource::<MapScreenUi>()
             .add_systems(Startup, load_hud)
-            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, jason_hud, noise_meter, xp_lines), widget_anims, fear_widgets, content_alpha, widget_colors, hide_for_jason).chain().run_if(resource_exists::<Hud>));
+            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, (map_screen, counselor_map_icons).chain(), jason_hud, noise_meter, xp_lines), widget_anims, fear_widgets, content_alpha, widget_colors, hide_for_jason).chain().run_if(resource_exists::<Hud>));
     }
 }
 
@@ -197,6 +198,10 @@ pub struct Hud {
     breath: Option<Widget>,
     dial: Option<Widget>,
     item: Option<Widget>,
+    /// Her objectives and map screen (ObjectivesWidget) and the objective rows its FindObjectives adds.
+    objectives: Option<Widget>,
+    car_objective: Option<Widget>,
+    police_objective: Option<Widget>,
     export: PathBuf,
     classes: ClassDb,
     /// Texture name -> PNG (ui/textures.json).
@@ -384,6 +389,9 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         breath,
         dial,
         item: Widget::load(dir, "SC_InventoryItem_Widget"),
+        objectives: Widget::load(dir, "ObjectivesWidget"),
+        car_objective: Widget::load(dir, "Objective_Car_Widget"),
+        police_objective: Widget::load(dir, "Objective_Police_Widget"),
         export: dir.clone(),
         classes: ClassDb::load(&dir.join("classes.json")).unwrap_or_default(),
         textures,
@@ -394,7 +402,7 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         names: HashMap::new(),
         map,
         scale: 1.0,
-        anims: ["SCCounselorTimerWidget", "SCBreathWidget", "KillerHUDWidget"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
+        anims: ["SCCounselorTimerWidget", "SCBreathWidget", "KillerHUDWidget", "ObjectivesWidget"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
         ability_icon_colors: {
             let d = std::fs::read_to_string(dir.join("ui/KillerAbilityWidget.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
             ["IconUsableColor", "IconUnusableColor", "IconLockedColor"].map(|k| color(&d["Defaults"][k], [1.0; 4]))
@@ -1075,7 +1083,7 @@ const PLAYER_ARROW: &str = "PlayerArrow_Widget";
 /// opacity (MapFade).
 #[allow(clippy::too_many_arguments)]
 fn killer_map_icons(
-    mut commands: Commands,
+    commands: Commands,
     hud: Res<Hud>,
     play: Option<Res<crate::jason_player::PlayJason>>,
     window: Single<&Window, With<PrimaryWindow>>,
@@ -1083,21 +1091,263 @@ fn killer_map_icons(
     icons: Query<(Entity, &MapIcon, &GlobalTransform)>,
     jasons: Query<(Entity, &GlobalTransform), With<crate::jason::Jason>>,
     (panels, tints): (Query<&ComputedNode>, Query<&WidgetColor>),
-    mut nodes: Query<(&mut Node, &mut ImageNode, &mut UiTransform), With<MapIconNode>>,
+    nodes: Query<(&mut Node, &mut ImageNode, &mut UiTransform), With<MapIconNode>>,
     mut placed: Local<(Option<Entity>, HashMap<Entity, Entity>)>,
     mut images: Local<HashMap<String, Option<(String, Vec2, [f32; 4])>>>,
 ) {
     let (Some(_), Some(map)) = (play, &hud.map) else { return };
     let Some(&panel) = hud.names.get("SC_KillerMap_Widget.IconPanel") else { return };
+    let tint = hud.names.get("KillerHUDWidget.SC_KillerMap_Widget").and_then(|&e| tints.get(e).ok()).map_or([1.0; 4], |c| c.0);
+    let shown: Vec<(Entity, String, GlobalTransform)> =
+        icons.iter().filter_map(|(e, i, g)| Some((e, i.killer.clone()?, *g))).chain(jasons.iter().map(|(e, g)| (e, PLAYER_ARROW.to_string(), *g))).collect();
+    place_map_icons(commands, &hud, map, panel, tint, &window, &assets, &panels, nodes, &mut placed, &mut images, shown);
+}
+
+/// Her map screen's icons (UpdateObjectLocations on CounselorMap_Widget, which isn't turned: FUN_140430e20 turns a map
+/// only with bCanEverRotate, which only her corner minimap sets): each MapIcon's DefaultIcon in its IconPanel where
+/// its place falls across the map. And her place: PLACEHOLDER (the user's account of the game): PlayerArrow_Widget,
+/// as Jason's map shows him; her MinimapIconComponent has no DefaultIcon and the map no PlayerViewIcon.
+#[allow(clippy::too_many_arguments)]
+fn counselor_map_icons(
+    commands: Commands,
+    hud: Res<Hud>,
+    screen: Res<MapScreenUi>,
+    window: Single<&Window, With<PrimaryWindow>>,
+    assets: Res<AssetServer>,
+    icons: Query<(Entity, &MapIcon, &GlobalTransform)>,
+    her: Query<(Entity, &GlobalTransform), With<Player>>,
+    panels: Query<&ComputedNode>,
+    nodes: Query<(&mut Node, &mut ImageNode, &mut UiTransform), With<MapIconNode>>,
+    mut placed: Local<(Option<Entity>, HashMap<Entity, Entity>)>,
+    mut images: Local<HashMap<String, Option<(String, Vec2, [f32; 4])>>>,
+) {
+    let Some(map) = &hud.map else { return };
+    let Some(&panel) = screen.names.get("CounselorMap_Widget.IconPanel") else { return };
+    let shown: Vec<(Entity, String, GlobalTransform)> =
+        icons.iter().filter_map(|(e, i, g)| Some((e, i.counselor.clone()?, *g))).chain(her.iter().map(|(e, g)| (e, PLAYER_ARROW.to_string(), *g))).collect();
+    place_map_icons(commands, &hud, map, panel, [1.0; 4], &window, &assets, &panels, nodes, &mut placed, &mut images, shown);
+}
+
+/// Her objectives and map screen as built: its root, its widgets by "<class>.<name>", and what it was built for.
+#[derive(Resource, Default)]
+pub struct MapScreenUi {
+    root: Option<Entity>,
+    names: HashMap<String, Entity>,
+    built: Option<(Vec2, Vec<bool>)>,
+    /// When it opened (its AnimIn and BorderIn play from then).
+    opened: Option<f32>,
+}
+
+/// The objective rows' state (UpdateObjectives, checked every 0.2 s by ObjectivesWidget's CheckObjectives): per row
+/// in FindObjectives' order, its lines' IsCompleted.
+fn objective_rows(
+    vehicles: &Query<&crate::props::Vehicle>,
+    boxes: &Query<&crate::police::PhoneBox>,
+    phones: &Query<&crate::police::Phone>,
+    game: Option<&crate::match_flow::GameMatch>,
+    escaped: Option<&crate::vehicle::Escaped>,
+) -> Vec<(&'static str, Vec<bool>)> {
+    let mut rows = Vec::new();
+    // FindPhone: the phone (Objective_Police_Widget): the box repaired (IsPhoneBoxRepaired), the police called
+    // (IsPoliceCalled), on the scene (called and PoliceTimeRemaining at 0); its escape line is never ticked.
+    if !phones.is_empty() {
+        let repaired = boxes.iter().any(|b| b.repaired);
+        let called = phones.iter().any(|p| p.called);
+        let here = called && game.is_some_and(|g| g.state.police_time_remaining <= 0 && g.state.police_time_remaining > -1);
+        rows.push(("police", vec![repaired, called, here, false]));
+    }
+    // Find4DoorCar, Find2DoorCar (GetCarVehicle(bFourDoor): the 4-seat Chevette_BP, the 2-seat Chevette_2Seat_BP):
+    // the hood's and gas tank's repairs, the first start (bFirstStartComplete), escaped in it.
+    for four in [true, false] {
+        let Some(v) = vehicles.iter().find(|v| v.class.contains("2Seat") != four) else { continue };
+        let done = |name: &str| v.repairs.iter().any(|r| r.name == name && r.done);
+        let gone = escaped.is_some_and(|e| e.how.contains(&format!("({})", v.class.trim_end_matches("_C"))));
+        rows.push((if four { "car4" } else { "car2" }, vec![done("HoodRepair"), done("GasTankRepair"), v.started, gone]));
+    }
+    rows
+}
+
+/// An objective row as its widgets' Construct and bindings leave it: each ObjectivesHeader's icon and text, each
+/// ObjectivesLineWidget's text (ObjectiveText) and its tick (BGImg and Check visible when IsCompleted).
+fn fill_objective_row(w: &mut Widget, done: &[bool], four: Option<bool>) {
+    fn walk(w: &mut Widget, lines: &mut std::slice::Iter<'_, bool>) {
+        match w.class.as_deref() {
+            Some("ObjectivesHeader") => {
+                let (text, icon) = (w.props["ObjectiveHeaderText"].clone(), w.props["ObjectiveIcon"]["File"].clone());
+                if let Some(t) = w.find_mut("txtObjectiveHeader") {
+                    t.props["Text"] = text;
+                }
+                if let (Some(i), Some(file)) = (w.find_mut("imgIcon"), icon.as_str()) {
+                    i.props["Brush"]["ResourceObject"] = json!({ "File": file });
+                }
+            }
+            Some("ObjectivesLineWidget") => {
+                let text = w.props["ObjectiveText"].clone();
+                let done = lines.next().copied().unwrap_or(false);
+                if let Some(t) = w.find_mut("ObjectiveTxt") {
+                    t.props["Text"] = text;
+                }
+                for n in ["BGImg", "Check"] {
+                    if let Some(i) = w.find_mut(n) {
+                        i.set_visibility(if done { Vis::Visible } else { Vis::Hidden });
+                    }
+                }
+            }
+            _ => {}
+        }
+        for c in &mut w.children {
+            walk(c, lines);
+        }
+    }
+    // Objective_Car_Widget: the 4 or 2 seat header by Is4DoorCar; CrossOutImage and the destroyed texts stay hidden
+    // (no car is destroyed here).
+    if let Some(four) = four {
+        for (n, shown) in [("4SeaterHeader", four), ("2SeaterHeader", !four)] {
+            if let Some(h) = w.find_mut(n) {
+                h.set_visibility(if shown { Vis::Visible } else { Vis::Collapsed });
+            }
+        }
+    }
+    walk(w, &mut done.iter());
+}
+
+/// GLB_Map for her (items.rs `MapScreen`): CounselorHUDWidget's OnShowCounselorMap pushes ObjectivesWidget and plays
+/// HideHUD; closing it, ShowHUD. ObjectivesWidget opens on its objectives page (Construct: OpenObjectives: MainSwitcher
+/// 0, ObjectivesButtonSwitcher 1), its rows from FindObjectives, CounselorMap_Widget shown with the Map (or the
+/// Preparedness perk: GetVisibility_0), else NoMapImage and NoMapText (GetVisibility_NoMap). The map is its
+/// MapTexture whole (unturned, and drawn as UI: no lighting).
+#[allow(clippy::too_many_arguments)]
+fn map_screen(
+    mut commands: Commands,
+    hud: Res<Hud>,
+    mut ui: ResMut<MapScreenUi>,
+    open: Option<Res<crate::items::MapScreen>>,
+    window: Single<&Window, With<PrimaryWindow>>,
+    assets: Res<AssetServer>,
+    mut materials: ResMut<Assets<RadialFill>>,
+    player: Query<&Inventory, With<Player>>,
+    items: Query<&Item>,
+    (vehicles, boxes, phones, game, escaped): (
+        Query<&crate::props::Vehicle>,
+        Query<&crate::police::PhoneBox>,
+        Query<&crate::police::Phone>,
+        Option<Res<crate::match_flow::GameMatch>>,
+        Option<Res<crate::vehicle::Escaped>>,
+    ),
+    mut vis: Query<&mut Visibility>,
+    (time, mut borders, mut colors): (Res<Time>, Query<&mut ContentAlpha>, Query<&mut WidgetColor>),
+) {
+    let open = open.is_some_and(|o| o.0) && hud.objectives.is_some();
+    let now = time.elapsed_secs();
+    // Its Construct's AnimIn (the nav and action bars, the backdrop dimmed to half) and OpenObjectives' BorderIn (the
+    // page): 0.15 s fades from when it opened.
+    match (open, ui.opened) {
+        (true, None) => ui.opened = Some(now),
+        (false, Some(_)) => ui.opened = None,
+        _ => {}
+    }
+    if let (Some(at), Some(anims)) = (ui.opened, hud.anims.get("ObjectivesWidget")) {
+        for anim in ["AnimIn", "BorderIn"].iter().filter_map(|n| anims.get(*n)) {
+            let x = (now - at).clamp(0.0, anim.length);
+            for (widget, curve) in &anim.tracks {
+                if let Some(mut a) = ui.names.get(&format!("ObjectivesWidget.{widget}")).and_then(|&e| borders.get_mut(e).ok()) {
+                    a.set_if_neq(ContentAlpha(curve.eval(x)));
+                }
+            }
+            for (widget, curves) in &anim.colors {
+                if let Some(mut c) = ui.names.get(&format!("ObjectivesWidget.{widget}")).and_then(|&e| colors.get_mut(e).ok()) {
+                    c.set_if_neq(WidgetColor(curves.each_ref().map(|k| k.eval(x))));
+                }
+            }
+        }
+    }
+    let size = window.size();
+    let has_map = player.single().is_ok_and(|inv| inv.special.iter().any(|&e| items.get(e).is_ok_and(|i| i.kind == crate::props::ItemKind::Map)));
+    let rows = objective_rows(&vehicles, &boxes, &phones, game.as_deref(), escaped.as_deref());
+    let key: Vec<bool> = [open, has_map].into_iter().chain(rows.iter().flat_map(|(_, d)| d.iter().copied())).collect();
+    if ui.built.as_ref().is_some_and(|(s, k)| *s == size && *k == key) {
+        return;
+    }
+    ui.built = Some((size, key));
+    if let Some(root) = ui.root.take() {
+        commands.entity(root).despawn();
+    }
+    ui.names.clear();
+    // HideHUD / ShowHUD: her HUD under it.
+    if let Some(Ok(mut v)) = hud.root.map(|r| vis.get_mut(r)) {
+        v.set_if_neq(if open { Visibility::Hidden } else { Visibility::Inherited });
+    }
+    if !open || size.x < 1.0 || size.y < 1.0 {
+        return;
+    }
+    let Some(mut tree) = hud.objectives.clone() else { return };
+    // Its key prompts: the page tabs' CSLR_ObjectivePrev / Next are the gamepad's shoulders only (hidden).
+    action_keys(&mut tree);
+    // The switchers' active pages only.
+    for (n, active) in [("MainSwitcher", 0), ("ObjectivesButtonSwitcher", 1), ("StatusSwitcher", 0)] {
+        if let Some(w) = tree.find_mut(n) {
+            if active < w.children.len() {
+                let keep = w.children.swap_remove(active);
+                w.children = vec![keep];
+            }
+        }
+    }
+    if let Some(list) = tree.find_mut("ObjectivesVerticleBox") {
+        list.children.clear();
+        for (i, (kind, done)) in rows.iter().enumerate() {
+            let template = if *kind == "police" { &hud.police_objective } else { &hud.car_objective };
+            let Some(mut row) = template.clone() else { continue };
+            row.name = format!("Objective{i}");
+            row.slot_kind = "VerticalBoxSlot".into();
+            row.slot = json!({});
+            fill_objective_row(&mut row, done, (*kind != "police").then_some(*kind == "car4"));
+            list.children.push(row);
+        }
+    }
+    for (n, shown) in [("CounselorMap_Widget_554", has_map), ("NoMapImage", !has_map), ("NoMapText", !has_map)] {
+        if let Some(w) = tree.find_mut(n) {
+            w.set_visibility(if shown { Vis::Visible } else { Vis::Hidden });
+        }
+    }
+    // Its Map image: MiniMap_Mat_Inst, whose Texture SCMiniMapBase sets to the volume's MapTexture (0x140430e20).
+    if let (Some(map), Some(img)) = (&hud.map, tree.find_mut("Map")) {
+        img.props["Brush"] = json!({ "ImageSize": { "X": 730.0, "Y": 730.0 }, "ResourceObject": { "File": map.file } });
+    }
+    let scale = (size.x / DESIGN.x).min(size.y / DESIGN.y);
+    let virt = size / scale;
+    let root = commands.spawn((Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, GlobalZIndex(10), Pickable::IGNORE)).id();
+    let mut names = HashMap::new();
+    let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names };
+    let full = Rect { x: 0.0, y: 0.0, w: virt.x, h: virt.y };
+    let laid = tree.layout(full);
+    b.spawn(&laid, root, full, "ObjectivesWidget");
+    ui.names = names;
+    ui.root = Some(root);
+}
+
+/// Puts each (thing, icon widget, place) in a map's IconPanel where its place falls across the whole map.
+#[allow(clippy::too_many_arguments)]
+fn place_map_icons(
+    mut commands: Commands,
+    hud: &Hud,
+    map: &MapInfo,
+    panel: Entity,
+    tint: [f32; 4],
+    window: &Window,
+    assets: &AssetServer,
+    panels: &Query<&ComputedNode>,
+    mut nodes: Query<(&mut Node, &mut ImageNode, &mut UiTransform), With<MapIconNode>>,
+    placed: &mut (Option<Entity>, HashMap<Entity, Entity>),
+    images: &mut HashMap<String, Option<(String, Vec2, [f32; 4])>>,
+    shown: Vec<(Entity, String, GlobalTransform)>,
+) {
     let Ok(computed) = panels.get(panel) else { return };
     if placed.0 != Some(panel) {
         *placed = (Some(panel), HashMap::new());
     }
     let size = computed.size() * computed.inverse_scale_factor();
     let scale = (window.size().x / DESIGN.x).min(window.size().y / DESIGN.y);
-    let tint = hud.names.get("KillerHUDWidget.SC_KillerMap_Widget").and_then(|&e| tints.get(e).ok()).map_or([1.0; 4], |c| c.0);
     let dir = hud.export.clone();
-    let shown = icons.iter().filter_map(|(e, i, g)| Some((e, i.killer.clone()?, g))).chain(jasons.iter().map(|(e, g)| (e, PLAYER_ARROW.to_string(), g)));
     let mut seen = Vec::new();
     for (e, widget, g) in shown {
         let Some((file, isize, brush)) = images.entry(widget.clone()).or_insert_with(|| icon_image(&dir, &widget)).clone() else { continue };

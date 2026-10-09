@@ -1025,6 +1025,10 @@ static class Mvp
         // Jason's own icon on his map (Jason_Base's MinimapIconComponent KillerIcon), and his traps' (KillerTrap's).
         "/Game/UI/HUD/Minimap/PlayerArrow_Widget",
         "/Game/UI/HUD/Minimap/SC_Killer_Trap_Widget",
+        // Her objectives and map screen (CounselorHUDWidget's OnShowCounselorMap) and the rows its FindObjectives adds.
+        "/Game/UI/HUD/Objectives/ObjectivesWidget",
+        "/Game/UI/HUD/Objectives/Objective_Car_Widget",
+        "/Game/UI/HUD/Objectives/Objective_Police_Widget",
     ];
     // Sounds f13-game plays besides the footsteps (SoundCues or SoundWaves).
     /// The map's ambient loops (CrystalLake_Sm_Audio's AmbientSounds).

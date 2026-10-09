@@ -6,6 +6,7 @@
 //!       [--no-jason] [--jason-delay s] [--bot-jason]  (Jason hunts the counselor unless left out; counselor bots leave him out)
 //!       [--bot-abilities]  (Jason, every ability ready and told where she is, Morphs, Stalks and Shifts to her)
 //!       [--give Class,Class...] [--bot-fight]  (start with these items (testing); a bot that uses them on Jason)
+//!       [--map-open]  (her objectives and map screen open from the start (testing))
 //!       [--bot-block]  (block Jason's swings with the weapon given)
 //!       [--bot-trap]  (walk into the bear trap given, wiggle free; without Jason)
 //!       [--nav-debug]  (draw the navmesh around the counselor)
@@ -116,6 +117,8 @@ struct Args {
     /// Take the host's commands on this localhost port (host.rs, `f13-host`).
     host: Option<u16>,
     give: Vec<String>,
+    /// Her map screen open from the start (testing).
+    map_open: bool,
     /// Leave Jason out (the counselor-only bots always do).
     no_jason: bool,
     /// Seconds before Jason starts hunting.
@@ -180,6 +183,7 @@ fn parse_args() -> Args {
     let mut play_jason_demo = false;
     let mut host = None;
     let mut give = Vec::new();
+    let mut map_open = false;
     let mut no_jason = false;
     let mut jason_delay = 0.0;
     let mut unlit = false;
@@ -246,6 +250,7 @@ fn parse_args() -> Args {
             "--host" => host = Some(host.unwrap_or(f13_host_port())),
             "--host-port" => host = it.next().and_then(|v| v.parse().ok()).or(host),
             "--give" => give = it.next().map(|v| v.split(',').map(String::from).collect()).unwrap_or_default(),
+            "--map-open" => map_open = true,
             "--no-jason" => no_jason = true,
             "--jason-delay" => jason_delay = it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0f32).max(0.0),
             "--grass" => grass = true,
@@ -291,7 +296,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, no_jason, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight, rain }
+    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, map_open, no_jason, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight, rain }
 }
 
 #[derive(Resource)]
@@ -476,6 +481,9 @@ fn main() {
             app.add_plugins(bot::BotPlugin(bot::Goal::HideSeen));
         } else if let Some(barred) = args.bot_locked_in {
             app.add_plugins(bot::BotPlugin(bot::Goal::LockedIn { barred, raged: args.bot_raged }));
+        }
+        if args.map_open {
+            app.insert_resource(items::MapScreen(true));
         }
         if !args.give.is_empty() {
             app.insert_resource(items::Give(args.give.clone()));
