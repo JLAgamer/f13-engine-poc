@@ -56,6 +56,7 @@ Moved from Milestone 1 (not tied to gameplay):
 - [ ] Post-processing, remaining: SSAO (FPostProcessAmbientOcclusion*: it darkens indirect light only; settings and
       cvars read, see MODLOG "SSAO (started)"); then compare
       against the game's own screenshots. (Bloom's fast blur: ported, ComputeOutputDesc's half-width X pass)
+- [ ] The grab's struggle UI (her prompt and progress while she struggles in his grab)
 - [ ] Bugs:
   - [ ] Escaping a grab can put her through a cabin's wall
   - [ ] Context kills don't prompt Jason
