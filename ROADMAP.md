@@ -22,13 +22,7 @@ Presentation
 - [ ] Audio, remaining: the other stingers, scary sounds, the other voice lines (chases, calls, dead bodies), the
       audio volumes' reverb (what's done: MODLOG "Milestone 1, done")
 
-Decomp audit (nothing guessed: every rule read from the decomp or the game's data)
-- [ ] Check each PLACEHOLDER (9 notes, `grep -rn PLACEHOLDER crates`, besides Bevy's `Entity::PLACEHOLDER`; 6 of
-      them, in jason.rs, are the AI's own choices and stay) and each "guess"/"assumed"/"not read" note (about 10)
-      against the decomp and the export (Ghidra, MODLOG, f13-export `debug-json` / `pseudo` / `cdo` / `grep`); port
-      what the game does, or record in MODLOG why it can't be found. Most are in jason.rs, hiding.rs, audio.rs,
-      police.rs, doors.rs, items.rs, interact.rs. Jason's decisions stay ours (his AI was cut), marked as such.
-      (Found and fixed so far: MODLOG "Milestone 1, done".)
+Decomp audit: done; what's left marked and why is in MODLOG "Decomp audit, where it ends".
 
 The finished Milestone 1 work, with its references to the decomp, is in F13-decomp's MODLOG ("Milestone 1, done").
 
@@ -65,6 +59,9 @@ Moved from Milestone 1 (not tied to gameplay):
       Its footer is known (an encrypted-index flag, magics 'Atae' and 'kcid', version 5, index offset and size,
       hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold
       for a decision on that
+- [ ] Not from the game's code, so marked PLACEHOLDER (MODLOG "Decomp audit, where it ends"): the voice lines' audio
+      component's attachment (not found), which events say the counselor's other lines, X3DAudio's panning matrix,
+      the doors' APEX debris, the death and spectating cameras
 - [ ] Post-processing, remaining: SSAO (FPostProcessAmbientOcclusion*: it darkens indirect light only; settings and
       cvars read, see MODLOG "SSAO (started)"); then compare
       against the game's own screenshots. (Bloom's fast blur: ported, ComputeOutputDesc's half-width X pass)
