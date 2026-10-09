@@ -2532,6 +2532,7 @@ dependencies = [
  "glam",
  "serde",
  "serde_json",
+ "ttf-parser",
 ]
 
 [[package]]

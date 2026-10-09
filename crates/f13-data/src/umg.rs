@@ -7,11 +7,35 @@
 //! box slots fill across and take their content's size along the box, an image's brush is 32×32 and a text's font
 //! 24 points.
 //!
-//! Text sizes are estimated (Slate measures the shaped text): only autosized canvas children and boxes depend on
-//! them, and the HUD's texts are left-aligned.
+//! Text widths are the sum of the font's advances (Slate measures the shaped text: kerning isn't counted) once
+//! [`set_fonts`] has the HUD's fonts, else estimated; only autosized canvas children and boxes depend on them.
 
 use serde_json::Value;
 use std::path::Path;
+use std::sync::OnceLock;
+
+/// The HUD fonts' advances (per em) for U+0000..U+024F, regular and bold.
+static ADVANCES: OnceLock<[Vec<f32>; 2]> = OnceLock::new();
+
+/// Gives text widths the fonts' own advances (the regular and bold TrueType files the HUD draws with).
+pub fn set_fonts(regular: &[u8], bold: &[u8]) {
+    let advances = |data: &[u8]| -> Vec<f32> {
+        let Ok(face) = ttf_parser::Face::parse(data, 0) else { return vec![] };
+        let em = face.units_per_em() as f32;
+        (0u32..0x250)
+            .map(|c| char::from_u32(c).and_then(|c| face.glyph_index(c)).and_then(|g| face.glyph_hor_advance(g)).map_or(0.5, |a| a as f32 / em))
+            .collect()
+    };
+    let _ = ADVANCES.set([advances(regular), advances(bold)]);
+}
+
+/// A line's width in ems: the fonts' advances, or half an em a character without them.
+fn line_ems(line: &str, bold: bool) -> f32 {
+    match ADVANCES.get().map(|a| &a[bold as usize]).filter(|a| !a.is_empty()) {
+        Some(a) => line.chars().map(|c| a.get(c as usize).copied().unwrap_or(0.5)).sum(),
+        None => line.chars().count() as f32 * 0.5,
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Widget {
@@ -178,8 +202,9 @@ impl Widget {
             "TextBlock" => {
                 let px = self.font_px();
                 let lines = self.text().lines().count().max(1);
-                let widest = self.text().lines().map(|l| l.chars().count()).max().unwrap_or(0);
-                (widest as f32 * px * 0.5, lines as f32 * px * 1.2)
+                let bold = p["Font"]["TypefaceFontName"].as_str() == Some("Bold");
+                let widest = self.text().lines().map(|l| line_ems(l, bold)).fold(0.0f32, f32::max);
+                (widest * px, lines as f32 * px * 1.2)
             }
             "Spacer" => (f(&p["Size"]["X"], 1.0), f(&p["Size"]["Y"], 1.0)),
             "ProgressBar" => {

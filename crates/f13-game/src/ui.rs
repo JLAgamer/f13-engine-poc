@@ -132,7 +132,7 @@ impl Plugin for UiPlugin {
             .init_resource::<Prompts>()
             .init_resource::<prompts::PromptUi>()
             .add_systems(Startup, load_hud)
-            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, (map_screen, counselor_map_icons).chain(), jason_hud, noise_meter, xp_lines, wiggle_state.pipe(wiggle_widget)), prompts::prompts, widget_anims, fear_widgets, content_alpha, widget_colors, additive_brushes, hide_for_jason).chain().run_if(resource_exists::<Hud>));
+            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, (map_screen, counselor_map_icons).chain(), jason_hud, ability_popup, noise_meter, xp_lines, wiggle_state.pipe(wiggle_widget)), prompts::prompts, widget_anims, fear_widgets, content_alpha, widget_colors, additive_brushes, hide_for_jason).chain().run_if(resource_exists::<Hud>));
     }
 }
 
@@ -274,6 +274,8 @@ pub struct Hud {
     objectives: Option<Widget>,
     car_objective: Option<Widget>,
     police_objective: Option<Widget>,
+    /// His notice as an ability unlocks or rage starts (AbilityAvailable; [`ability_popup`]).
+    ability_popup: Option<Widget>,
     export: PathBuf,
     classes: ClassDb,
     /// Texture name -> PNG (ui/textures.json).
@@ -402,6 +404,10 @@ struct Progress {
 
 fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<AssetServer>, level: Res<crate::Level>) {
     let dir = &export.0;
+    // Text widths from the fonts the HUD draws with.
+    if let (Ok(regular), Ok(bold)) = (std::fs::read(dir.join("ui/fonts/AlteHaasGrotesk_0_Regular.ttf")), std::fs::read(dir.join("ui/fonts/AlteHaasGrotesk_0_Bold.ttf"))) {
+        f13_data::umg::set_fonts(&regular, &bold);
+    }
     let Some(mut hud) = Widget::load(dir, "CounselorHUDWidget") else {
         warn!("ui: no ui/CounselorHUDWidget.json (run f13-export ui): debug HUD only");
         return;
@@ -468,6 +474,7 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         objectives: Widget::load(dir, "ObjectivesWidget"),
         car_objective: Widget::load(dir, "Objective_Car_Widget"),
         police_objective: Widget::load(dir, "Objective_Police_Widget"),
+        ability_popup: Widget::load(dir, "AbilityAvailable"),
         export: dir.clone(),
         classes: ClassDb::load(&dir.join("classes.json")).unwrap_or_default(),
         textures,
@@ -478,7 +485,7 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         names: HashMap::new(),
         map,
         scale: 1.0,
-        anims: ["SCCounselorTimerWidget", "SCBreathWidget", "KillerHUDWidget", "ObjectivesWidget", "KillerAbilityWidget"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
+        anims: ["SCCounselorTimerWidget", "SCBreathWidget", "KillerHUDWidget", "ObjectivesWidget", "KillerAbilityWidget", "AbilityAvailable"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
         ability_icon_colors: {
             let d = std::fs::read_to_string(dir.join("ui/KillerAbilityWidget.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
             ["IconUsableColor", "IconUnusableColor", "IconLockedColor"].map(|k| color(&d["Defaults"][k], [1.0; 4]))
@@ -791,6 +798,8 @@ struct WidgetAnim {
     colors: Vec<(String, [f13_core::curve::RichCurve; 4])>,
     scales: Vec<(String, [f13_core::curve::RichCurve; 2])>,
     offsets: Vec<(String, [f13_core::curve::RichCurve; 4])>,
+    /// A Border's BrushColor curves (red, green, blue, alpha).
+    brush_colors: Vec<(String, [f13_core::curve::RichCurve; 4])>,
 }
 
 /// Loads a widget class's animations' ContentColorAndOpacity alpha tracks, ColorAndOpacity tracks and RenderTransform
@@ -840,7 +849,18 @@ fn load_anims(dir: &std::path::Path, class: &str) -> HashMap<String, WidgetAnim>
                     (t["Widget"].as_str().unwrap_or("").to_string(), [c("LeftCurve"), c("TopCurve"), c("RightCurve"), c("BottomCurve")])
                 })
                 .collect();
-            (name.clone(), WidgetAnim { length: a["Length"].as_f64().unwrap_or(0.0) as f32, tracks, colors, scales, offsets })
+            let brush_colors = a["Tracks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|t| t["Property"] == "BrushColor")
+                .map(|t| {
+                    let ch = &t["Sections"][0]["Channels"];
+                    let c = |k: &str| f13_data::character::ue_rich_curve(&ch[k]);
+                    (t["Widget"].as_str().unwrap_or("").to_string(), [c("RedCurve"), c("GreenCurve"), c("BlueCurve"), c("AlphaCurve")])
+                })
+                .collect();
+            (name.clone(), WidgetAnim { length: a["Length"].as_f64().unwrap_or(0.0) as f32, tracks, colors, scales, offsets, brush_colors })
         })
         .collect()
 }
@@ -869,7 +889,8 @@ fn widget_anims(time: Res<Time>, hud: Res<Hud>, playing: Res<PlayingAnims>, mut 
                 a.set_if_neq(ContentAlpha(curve.eval(x)));
             }
         }
-        for (widget, curves) in &anim.colors {
+        // (A Border's WidgetColor is its BrushColor: see Builder::spawn.)
+        for (widget, curves) in anim.colors.iter().chain(&anim.brush_colors) {
             if let Some(mut c) = hud.names.get(&format!("{owner}.{widget}")).and_then(|&e| colors.get_mut(e).ok()) {
                 c.set_if_neq(WidgetColor(curves.each_ref().map(|k| k.eval(x))));
             }
@@ -980,7 +1001,15 @@ impl Builder<'_, '_, '_> {
                 self.commands.entity(e).insert((ColorBase(mul(color(&p["Brush"]["TintColor"], [1.0; 4]), self.content)), WidgetColor(cao)));
                 self.brush(e, &p["Brush"], mul(cao, self.content));
             }
-            "Border" => self.brush(e, &p["Background"], mul(color(&p["BrushColor"], [1.0; 4]), self.content)),
+            "Border" => {
+                // Its BrushColor tints its brush and can be played (WidgetColor over the brush's tint and the borders'
+                // around it).
+                let bc = color(&p["BrushColor"], [1.0; 4]);
+                self.brush(e, &p["Background"], mul(bc, self.content));
+                if p["BrushColor"].is_object() {
+                    self.commands.entity(e).insert((ColorBase(mul(color(&p["Background"]["TintColor"], [1.0; 4]), self.content)), WidgetColor(bc)));
+                }
+            }
             "TextBlock" => {
                 let font = if p["Font"]["TypefaceFontName"].as_str() == Some("Bold") { self.hud.bold.clone() } else { self.hud.regular.clone() };
                 let justify = match p["Justification"].as_str().unwrap_or("") {
@@ -2002,6 +2031,101 @@ fn jason_hud(
     }
     let rage = if a.rage_active { 1.0 } else { (a.rage_timer / a.tuning.rage_unlock_time.max(1.0)).clamp(0.0, 1.0) };
     bar("RageWidget.ProgressBar_41", rage);
+}
+
+/// AbilityAvailable, his notice as an ability unlocks (KillerHUDWidget's OnJasonAbilityUnlocked; not in Paranoia or
+/// SPChallenges, not ported) or rage starts (its OnRageActive): SetAbility(ability, rage) names it ("<Ability> is
+/// available", "Rage is active") and shows its icon (Get_Icon<X>_Visibility by ActiveAbility, which a rage notice
+/// leaves at its default, Morph, under IconRage by IsRage); PlayShow plays Show and after its end + 3 s PlayClose plays
+/// Hide, then Cleanup removes it, as its Tick does once the match has ended (SCGameState HasMatchEnded 0x1403bc250:
+/// PostMatchOutro, WaitingPostMatch, LeavingMap). The game adds a new widget each time, at ZOrder -1 (under his HUD);
+/// here a new one replaces the last.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn ability_popup(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut hud: ResMut<Hud>,
+    play: Option<Res<crate::jason_player::PlayJason>>,
+    jasons: Query<&crate::senses::Knowledge, With<crate::jason::Jason>>,
+    game: Option<Res<crate::match_flow::GameMatch>>,
+    (assets, mut materials): (Res<AssetServer>, ResMut<Assets<RadialFill>>),
+    mut playing: ResMut<PlayingAnims>,
+    mut state: Local<([bool; 4], bool, Option<(f32, bool, Entity)>)>,
+) {
+    use f13_core::game_mode::MatchState;
+    use f13_core::killer_abilities::Ability;
+    let (Some(root), Some((size, ..)), Some(tree)) = (hud.root, hud.built.clone(), hud.ability_popup.clone()) else { return };
+    if play.is_none() {
+        return;
+    }
+    let Some(k) = jasons.iter().next() else { return };
+    let a = &k.abilities;
+    let now = time.elapsed_secs();
+    let mut show: Option<(Option<Ability>, bool)> = None;
+    for ability in Ability::ALL {
+        let i = ability as usize;
+        if a.is_unlocked(ability) && !state.0[i] {
+            state.0[i] = true;
+            show = Some((Some(ability), false));
+        }
+    }
+    if a.rage_active && !state.1 {
+        show = Some((None, true));
+    }
+    state.1 = a.rage_active;
+    let len = |n: &str| hud.anims.get("AbilityAvailable").and_then(|m| m.get(n)).map_or(0.0, |x| x.length);
+    let (show_len, hide_len) = (len("Show"), len("Hide"));
+    if let Some((ability, rage)) = show {
+        let mut tree = tree;
+        let mut set_text = |name: &str, s: &str| {
+            if let Some(w) = tree.find_mut(name) {
+                w.props["Text"] = json!({ "SourceString": s, "LocalizedString": s });
+            }
+        };
+        let active = ability.unwrap_or(Ability::Morph);
+        if rage {
+            set_text("AbilityName", "Rage");
+            set_text("AbilityText", " is active");
+        } else {
+            set_text("AbilityName", &format!("{active:?}"));
+            set_text("AbilityText", " is available");
+        }
+        for (icon, on) in Ability::ALL.map(|x| (format!("Icon{x:?}"), x == active)).into_iter().chain([("IconRage".to_string(), rage)]) {
+            if let Some(w) = tree.find_mut(&icon) {
+                w.set_visibility(if on { Vis::Visible } else { Vis::Hidden });
+            }
+        }
+        if let Some((_, _, e)) = state.2.take() {
+            commands.entity(e).try_despawn();
+        }
+        let scale = hud.scale;
+        let virt = size / scale;
+        let full = Rect { x: 0.0, y: 0.0, w: virt.x, h: virt.y };
+        let mut names = HashMap::new();
+        let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names };
+        let e = b.spawn(&tree.layout(full), root, full, "AbilityAvailable");
+        b.commands.entity(e).insert(ZIndex(-1));
+        hud.names.extend(names);
+        playing.0.retain(|(o, _, _, _)| o != "AbilityAvailable");
+        playing.play("AbilityAvailable", "Show", now, false);
+        state.2 = Some((now, false, e));
+        info!("ui: ability notice: {}", if rage { "Rage".to_string() } else { format!("{active:?}") });
+    }
+    let ended = game.is_some_and(|g| matches!(g.state.state, MatchState::PostMatchOutro | MatchState::WaitingPostMatch | MatchState::LeavingMap));
+    let close_at = |t0: f32| t0 + show_len + 3.0;
+    match state.2 {
+        Some((t0, false, e)) if now >= close_at(t0) && !ended => {
+            playing.play("AbilityAvailable", "Hide", now, false);
+            state.2 = Some((t0, true, e));
+        }
+        Some((t0, hiding, e)) if ended || (hiding && now >= close_at(t0) + hide_len) => {
+            playing.0.retain(|(o, _, _, _)| o != "AbilityAvailable");
+            commands.entity(e).try_despawn();
+            hud.names.retain(|k, _| !k.starts_with("AbilityAvailable."));
+            state.2 = None;
+        }
+        _ => {}
+    }
 }
 
 /// The breath widget while she hides: both bars at her breath.
