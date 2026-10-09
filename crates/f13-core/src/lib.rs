@@ -28,6 +28,7 @@ pub mod stats;
 pub mod stumble;
 pub mod stun;
 pub mod vehicle;
+pub mod vehicle_px;
 
 /// An animation montage the rules time an action by. `name` keys its root motion in the export's anims.json.
 #[derive(Clone, Debug, Default, PartialEq)]
