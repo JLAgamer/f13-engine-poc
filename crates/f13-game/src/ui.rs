@@ -1741,6 +1741,7 @@ fn jason_hud(
     mut shown: Local<(bool, bool, f32)>,
     (mut morph_map, map_nodes): (Option<ResMut<crate::jason_player::MorphMap>>, Query<(&ComputedNode, &UiGlobalTransform)>),
     mut map_shown: Local<bool>,
+    mut unlocked: Local<[bool; 4]>,
     (grab_info, grab_available, asset_server, mut images): (
         Option<Res<crate::jason::GrabKillInfo>>,
         Option<Res<crate::jason::GrabKillsAvailable>>,
@@ -1907,6 +1908,25 @@ fn jason_hud(
             _ => a.recharge_fraction(ability),
         };
         bar(&format!("KillerAbilityWidget.{n}Bar"), amount.clamp(0.0, 1.0));
+        // OnAbilityUnlocked: the unlock bar hidden (its asset gives Morph's the Stalk material, which would otherwise
+        // stay drawn over Morph), the bar and the bracket shown, the bracket opaque when the amount is full.
+        let i = ability as usize;
+        if a.is_unlocked(ability) && !unlocked[i] {
+            unlocked[i] = true;
+            for (part, v) in [("UnlockBar", Visibility::Hidden), ("Bar", Visibility::Inherited)] {
+                if let Some(mut w) = hud.names.get(&format!("KillerAbilityWidget.{n}{part}")).and_then(|&e| vis.get_mut(e).ok()) {
+                    w.set_if_neq(v);
+                }
+            }
+            let bracket = format!("KillerAbilityWidget.Bracket{n}");
+            if let Some(mut w) = hud.names.get(&bracket).and_then(|&e| vis.get_mut(e).ok()) {
+                w.set_if_neq(Visibility::Inherited);
+            }
+            let alpha = if amount >= 1.0 { 1.0 } else { 0.0 };
+            if let Some(mut w) = hud.names.get(&bracket).and_then(|&e| icon_colors.get_mut(e).ok()) {
+                w.set_if_neq(WidgetColor([0.854993, 0.030713, 0.017642, alpha]));
+            }
+        }
         let ready = a.is_available(ability, &Blockers::default());
         // Get<ability>IconColor (FUN_140424da0): locked, IconLockedColor; unlocked, IconUsableColor while it's
         // available, else IconUnusableColor.
