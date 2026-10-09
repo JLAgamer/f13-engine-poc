@@ -19,9 +19,6 @@ Mechanics: counselor side
       statically linked copy is stripped)
 
 Mechanics: Jason side
-- [ ] Played Jason, bugs to fix:
-      - his pickaxe has no material: M_JasonV2_PickAxe is its own master, with only WeaponBloodMask as a parameter, so
-        its base textures are in the material graph, which the export doesn't read (may fold into Materials, remaining)
 
 Presentation
 - [ ] The main road's ground is disconnected and floating

@@ -812,6 +812,7 @@ static void ResolveParameters(UObject mat, MaterialInfo info)
                 }
             }
             info.Landscape = LandscapeLayers(m);
+            BaseLayerTextures(m, info);
             break;
         }
         foreach (var s in m.GetOrDefault<FStructFallback[]>("ScalarParameterValues", []))
@@ -825,6 +826,35 @@ static void ResolveParameters(UObject mat, MaterialInfo info)
             if (TexPath(s.GetOrDefault<FPackageIndex?>("ParameterValue")) is { } tp) info.Textures.TryAdd(Key(s), tp);
         // Static switches live in the instance's StaticParameters (native data CUE4Parse does not expose by name).
     }
+}
+
+// A layered master's base layer textures (M_JasonV2_PickAxe: MatLayerBlend_Simple's "Base Material" is a material
+// function call, M_JasonV2_PickAxe_Layer, whose TextureSamples hold the pickaxe's own maps; the blood layer goes on
+// top). Cooking strips the function's wiring, so each sample's role is its sampler type (Normal) or its texture's
+// name suffix (_Diffuse, _RMA: R roughness, G metallic, B AO, as the master's own input masks still read). Parameters
+// of the same names win.
+static void BaseLayerTextures(UObject master, MaterialInfo info)
+{
+    var calls = master.GetOrDefault<FPackageIndex[]>("Expressions", []).Select(x => x.Load()).OfType<UObject>()
+        .Where(e => e.ExportType == "MaterialExpressionMaterialFunctionCall").ToDictionary(e => e.Name, StringComparer.OrdinalIgnoreCase);
+    foreach (var blend in calls.Values)
+        foreach (var input in blend.GetOrDefault<FStructFallback[]>("FunctionInputs", []))
+        {
+            var i = input.GetOrDefault<FExpressionInput?>("Input");
+            if (i?.InputName.Text != "Base Material" || !calls.TryGetValue(i.ExpressionName.Text, out var call)) continue;
+            var function = call.GetOrDefault<FPackageIndex?>("MaterialFunction")?.Load();
+            foreach (var e in function?.GetOrDefault<FPackageIndex[]>("FunctionExpressions", []).Select(x => x?.Load()).OfType<UObject>() ?? [])
+            {
+                if (e.ExportType != "MaterialExpressionTextureSample") continue;
+                var tex = e.GetOrDefault<FPackageIndex?>("Texture")?.ResolvedObject?.GetPathName().Split('.')[0].TrimStart('/');
+                if (tex == null) continue;
+                var sampler = e.GetOrDefault<FName>("SamplerType").Text;
+                var role = sampler.EndsWith("Normal") ? "Normal"
+                    : tex.EndsWith("_Diffuse", StringComparison.OrdinalIgnoreCase) ? "Diffuse"
+                    : tex.EndsWith("_RMA", StringComparison.OrdinalIgnoreCase) ? "RMA" : null;
+                if (role != null) info.Textures.TryAdd(role, tex);
+            }
+        }
 }
 
 // A landscape material's layers. Cooking strips most of the graph, but the LandscapeLayerBlend and TextureSample
@@ -896,6 +926,11 @@ static class Mvp
         "/Game/Effects/Textures/PostProcess/Stun2",
         // SenseCounselorMaterial's (PP_Jason_Sense_Counselor_01_MASKED) WispySmoke1A/1B/1C.
         "/Game/Effects/Textures/smoke/T_Wispy_Smoke_Tiled_01",
+        // M_JasonV2_PickAxe's base layer (M_JasonV2_PickAxe_Layer's TextureSamples: not parameters, so the mesh export
+        // doesn't write them).
+        "/Game/Characters/Killers/Jason/J2/Textures/Jason_V2_Pick_Axe_Diffuse",
+        "/Game/Characters/Killers/Jason/J2/Textures/Jason_V2_Pick_Axe_Normal",
+        "/Game/Characters/Killers/Jason/J2/Textures/Jason_V2_Pick_Axe_RMA",
     ];
     // Classes the game spawns by reference from native code rather than from level data.
     // Classes no level places but the game reads (the cars' wheels: SCWheeledVehicleMovementComponent WheelSetups).
