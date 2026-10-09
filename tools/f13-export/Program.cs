@@ -141,6 +141,12 @@ void ExportLevel(string mapPath, params string[] extra)
                 Level = levelName, Name = actor.Name, Class = actor.ExportType,
                 Transform = root != null ? Xf(root.GetAbsoluteTransform()) : null,
             };
+            // Attached to another actor's component (the cinematics' faces and hair on their body's headSocket).
+            if (root?.GetOrDefault<FPackageIndex?>("AttachParent")?.Load<USceneComponent>() is { } parent && parent.Outer?.Name.Text is { } parentActor && parentActor != actor.Name)
+            {
+                info.AttachParent = parentActor;
+                info.AttachSocket = root.GetOrDefault<FName>("AttachSocketName").Text is { } socket && socket != "None" ? socket : null;
+            }
             layout.Actors.Add(info);
             try { classes.Add(actor.Class?.Load()); } catch { }
             if (actor.ExportType is not ("StaticMeshActor" or "BlockingVolume"))
@@ -720,6 +726,41 @@ switch (rest[0])
     case "anims":
         AnimExporter.Write(provider, outDir, Mvp.Montages);
         return 0;
+    case "sequences": // the level intro and outro sequences (sequences/), and the levels they stage
+        ExportLevel(Mvp.IntroLevel);
+        ExportLevel(Mvp.OutroLevel);
+        SequenceExporter.Write(provider, outDir, Mvp.Sequences);
+        // The takes each staged skeletal actor plays (cinematic/<actor>.json and .anim files), on its own mesh's skeleton.
+        {
+            var actors = new Dictionary<string, string>();
+            foreach (var lv in new[] { Mvp.IntroLevel, Mvp.OutroLevel })
+            {
+                var json = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(Path.Combine(outDir, "levels", lv.Split('/')[^1] + ".json")));
+                foreach (var a in json["Actors"]!)
+                    if (a["Components"]?.FirstOrDefault(c => c["Mesh"] != null)?["Mesh"]?.ToString() is { } m)
+                        actors[a["Name"]!.ToString()] = m[..^".glb".Length];
+            }
+            var takes = new Dictionary<string, HashSet<string>>();
+            foreach (var f in Directory.EnumerateFiles(Path.Combine(outDir, "sequences"), "*.json"))
+            {
+                var s = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(f));
+                var objects = s["Bindings"]!.ToDictionary(b => b["Guid"]!.ToString(), b => b["Object"]?.ToString()?.Split('.')[^1]);
+                foreach (var t in s["Tracks"]!.Where(t => t["Type"]?.ToString() == "MovieSceneSkeletalAnimationTrack"))
+                    foreach (var sec in t["Sections"]!)
+                        if (sec["Props"]?["Params"]?["Animation"]?["ObjectPath"]?.ToString() is { } anim
+                            && objects.GetValueOrDefault(t["Binding"]?.ToString() ?? "") is { } actor && actors.ContainsKey(actor))
+                            (takes.TryGetValue(actor, out var set) ? set : takes[actor] = []).Add(anim[..anim.LastIndexOf('.')]);
+            }
+            foreach (var (actor, set) in takes) new CounselorExporter(provider, outDir, Queue).ExportPropAnims(actors[actor], set, "cinematic", actor);
+            // Their audio sections' sounds (sounds/).
+            var sounds = new List<string>();
+            foreach (var f in Directory.EnumerateFiles(Path.Combine(outDir, "sequences"), "*.json"))
+                foreach (var t in Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(f))["Tracks"]!.Where(t => t["Type"]?.ToString() == "MovieSceneAudioTrack"))
+                    foreach (var sec in t["Sections"]!)
+                        if (sec["Props"]?["Sound"]?["ObjectPath"]?.ToString() is { } sound) sounds.Add(sound[..sound.LastIndexOf('.')]);
+            Console.WriteLine($"sequence sounds: {new SoundExporter(provider, outDir, ToFile).Export(sounds)} written");
+        }
+        break;
     case "dds":
         DdsExporter.WriteAll(provider, outDir);
         return 0;
@@ -935,6 +976,16 @@ static class Mvp
     public static readonly string[] Weathers = ["/Game/Maps/CrystalLake_Small/CLsm_RainOff", "/Game/Maps/CrystalLake_Small/CLsm_RainOn"];
     // Alternative cabin/spawn layouts; the game streams in one of these per match.
     public static readonly string[] Layouts = [.. Enumerable.Range(1, 4).Select(i => $"/Game/Maps/CrystalLake_Small/CLsm_Design_SL{i}")];
+    // The match intro and outro: their staging levels and the J2 sequences (SCWorldSettings IntroSequences /
+    // OutroSequences for Jason_SackHead: CLSM_Intro_Master_JTS, CLSM_Outro_JTS); a master's shots bring their
+    // sub-sequences.
+    public const string IntroLevel = "/Game/Maps/CrystalLake_Small/CLsm_IntroCinematic";
+    public const string OutroLevel = "/Game/Maps/CrystalLake_Small/CLsm_OutroCinematic";
+    public static readonly string[] Sequences =
+    [
+        "SummerCamp/Content/Cinematics/NewCinematics/Intro_New_Masters/Intro/CrystalLakeSmall/CLSM_Intro_Master_JTS",
+        "SummerCamp/Content/Cinematics/NewCinematics/Outro_New/CrystalLakeSmall/CLSM_Outro_JTS",
+    ];
     public static readonly string[] Assets =
     [
         "/Game/Characters/Counselors/Athlete/Meshes/Body/Athlete_Body",
@@ -1535,6 +1586,8 @@ class ActorInfo
 {
     public string Level = "", Name = "", Class = "";
     public Xform? Transform;
+    /// The actor its root is attached to, and the socket.
+    public string? AttachParent, AttachSocket;
     public Newtonsoft.Json.Linq.JObject? Props;
     public List<Newtonsoft.Json.Linq.JObject>? Components;
     /// BlockingVolumes: their convex hulls as world-space point sets (cm).

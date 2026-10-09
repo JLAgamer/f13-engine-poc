@@ -724,21 +724,22 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
 
     /// A skeletal prop's sequences (the bear trap's armed / sprung / escaped animations): props/<mesh>.json, sequence
     /// name -> AnimInfo, the .anim files next to it.
-    public void ExportPropAnims(string mesh, IEnumerable<string> sequences)
+    public void ExportPropAnims(string mesh, IEnumerable<string> sequences, string folder = "props", string? name = null)
     {
-        var name = mesh.Split('/')[^1];
-        if (provider.LoadPackageObject(mesh + "." + name) is not USkeletalMesh body || body.Skeleton.Load<USkeleton>() is not { } skeleton)
+        var meshName = mesh.Split('/')[^1];
+        name ??= meshName;
+        if (provider.LoadPackageObject(mesh + "." + meshName) is not USkeletalMesh body || body.Skeleton.Load<USkeleton>() is not { } skeleton)
         {
             Console.WriteLine($"prop {mesh}: no skeletal mesh");
             return;
         }
-        var dir = Path.Combine("props", name);
+        var dir = Path.Combine(folder, name);
         Directory.CreateDirectory(Path.Combine(outDir, dir));
         var index = new SortedDictionary<string, AnimInfo>();
         foreach (var path in sequences)
             foreach (var seq in Sequences(path))
                 index[seq.Name] = WriteSequence(seq, skeleton, dir, true);
-        File.WriteAllText(Path.Combine(outDir, "props", name + ".json"), Newtonsoft.Json.JsonConvert.SerializeObject(index, Newtonsoft.Json.Formatting.Indented));
+        File.WriteAllText(Path.Combine(outDir, folder, name + ".json"), Newtonsoft.Json.JsonConvert.SerializeObject(index, Newtonsoft.Json.Formatting.Indented));
         Console.WriteLine($"prop {name}: {index.Count} animations");
     }
 
