@@ -62,8 +62,9 @@ pub struct Knowledge {
     /// The hiding spot he watched her get into (or Sense showed her in).
     pub hiding_spot: Option<Entity>,
     pub abilities: KillerAbilities,
-    /// Sense is on until this game time.
+    /// Sense is on until this game time; its SenseDuration (s).
     pub sense_until: f32,
+    pub sense_length: f32,
     /// What Sense showed last (logged when it changes).
     sense_shows: Option<Clue>,
     /// Sense shows her outside and not hiding: her meshes' custom depth is on (FUN_1404111f0; sense_view.rs).
@@ -140,6 +141,7 @@ fn setup(
             hiding_spot: None,
             abilities: KillerAbilities::new(a.0.clone(), None),
             sense_until: 0.0,
+            sense_length: 0.0,
             sense_shows: None,
             highlight: false,
             sensed_cabin: None,
@@ -250,6 +252,7 @@ fn perceive(
         if asked.unwrap_or(!k.sees) && !k.sensing(now) && k.abilities.is_available(Ability::Sense, &blockers) {
             k.abilities.consume(Ability::Sense);
             k.sense_until = now + v.sense.duration;
+            k.sense_length = v.sense.duration;
             info!("Jason: Sense ({:.0} s)", v.sense.duration);
         }
         let mut shows = None;

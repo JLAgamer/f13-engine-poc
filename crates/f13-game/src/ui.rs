@@ -218,6 +218,8 @@ pub struct Hud {
     anims: HashMap<String, HashMap<String, WidgetAnim>>,
     /// SCCounselorTimerWidget's TimeToShow (its class's default; SCTimerWidget's constructor leaves it 0).
     time_to_show: i32,
+    /// KillerAbilityWidget's IconUsableColor, IconUnusableColor and IconLockedColor (its defaults).
+    ability_icon_colors: [[f32; 4]; 3],
 }
 
 /// XPDisplayWidget's lines: an XPLineWidget per score shown (AddNewXPLine), MaxAmountOfSlots of them (Construct adds
@@ -392,6 +394,10 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         map,
         scale: 1.0,
         anims: ["SCCounselorTimerWidget", "SCBreathWidget", "KillerHUDWidget"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
+        ability_icon_colors: {
+            let d = std::fs::read_to_string(dir.join("ui/KillerAbilityWidget.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
+            ["IconUsableColor", "IconUnusableColor", "IconLockedColor"].map(|k| color(&d["Defaults"][k], [1.0; 4]))
+        },
         time_to_show: std::fs::read_to_string(dir.join("ui/SCCounselorTimerWidget.json"))
             .ok()
             .and_then(|t| serde_json::from_str::<Value>(&t).ok())
@@ -606,7 +612,7 @@ fn widget_colors(
         }
         if let Some(b) = base {
             // An Image is built with its design colour (and the borders' alpha over it since): only a played one changes.
-            if c.is_added() {
+            if c.is_added() && c.last_changed() == c.added() {
                 continue;
             }
             match nodes.get_mut(e) {
@@ -1214,7 +1220,7 @@ fn jason_hud(
     jasons: Query<(&crate::jason::Jason, Option<&crate::senses::Knowledge>, &Transform)>,
     her: Query<(&Player, &Transform, Has<crate::jason::Held>, Has<Hiding>), Without<crate::jason::Jason>>,
     tuning: Option<Res<crate::jason::KillerTuning>>,
-    mut texts: Query<&mut Text>,
+    (mut texts, mut icon_colors): (Query<&mut Text>, Query<&mut WidgetColor>),
     bars: Query<&Progress>,
     mut vis: Query<&mut Visibility>,
     mut playing: ResMut<PlayingAnims>,
@@ -1371,8 +1377,30 @@ fn jason_hud(
     for ability in Ability::ALL {
         let n = format!("{ability:?}");
         bar(&format!("KillerAbilityWidget.{n}UnlockBar"), a.unlock_fraction(ability));
-        bar(&format!("KillerAbilityWidget.{n}Bar"), if a.is_unlocked(ability) { a.recharge_fraction(ability) } else { 0.0 });
+        // GetCurrentRechargeTimePercent (0x1403ede80): while it runs, Sense's and Shift's bars empty as they go
+        // (1 - ActiveSenseTimer / SenseDuration, 1 - the Shift's elapsed time / ShiftTime) and Stalk's is
+        // StalkActiveTimer / StalkActiveTime; else the recharge, all clamped to 0..1.
+        let amount = match ability {
+            Ability::Sense if k.sensing(now) => (k.sense_until - now) / k.sense_length.max(1e-3),
+            Ability::Shift => match &j.state {
+                crate::jason::JasonState::Shifting { shift } => 1.0 - shift.elapsed / tuning.as_ref().map_or(4.0, |t| t.shift_time).max(1e-3),
+                _ => a.recharge_fraction(ability),
+            },
+            Ability::Stalk => match &j.stalk {
+                Some(s) => s.timer / tuning.as_ref().map_or(20.0, |t| t.stalk_active_time).max(1e-3),
+                None => a.recharge_fraction(ability),
+            },
+            _ => a.recharge_fraction(ability),
+        };
+        bar(&format!("KillerAbilityWidget.{n}Bar"), amount.clamp(0.0, 1.0));
         let ready = a.is_available(ability, &Blockers::default());
+        // Get<ability>IconColor (FUN_140424da0): locked, IconLockedColor; unlocked, IconUsableColor while it's
+        // available, else IconUnusableColor.
+        let [usable, unusable, locked] = hud.ability_icon_colors;
+        let c = if !a.is_unlocked(ability) { locked } else if ready { usable } else { unusable };
+        if let Some(mut w) = hud.names.get(&format!("KillerAbilityWidget.Icon{n}")).and_then(|&e| icon_colors.get_mut(e).ok()) {
+            w.set_if_neq(WidgetColor(c));
+        }
         if let Some(mut v) = hud.names.get(&format!("KillerAbilityWidget.Icon{n}_Glow")).and_then(|&e| vis.get_mut(e).ok()) {
             v.set_if_neq(if ready { Visibility::Inherited } else { Visibility::Hidden });
         }
