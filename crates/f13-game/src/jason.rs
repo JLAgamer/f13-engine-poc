@@ -186,6 +186,10 @@ const DOOR_BURST: &str = "uber_stand_wall_smash_02";
 const DOOR_BURST_MONTAGE: &str = "AM_Jason_uber_stand_wall_smash_02";
 /// AM_normal_stand_door_break_axe's Enter, Loop and Success sections.
 const BREAK_DOOR: [&str; 3] = ["normal_stand_door_break_axe_enter", "normal_stand_door_break_axe_cycle", "normal_stand_door_break_axe_success"];
+/// Its Abort section (5.733-6.733 s): BreakDownLoop (FUN_140363a00) sets it next at a BreakDownLoop driver once he's
+/// let go of the attack (bWantsToBreakDown cleared) and the blow didn't finish it. Played as `section` [`ABORT`].
+const BREAK_ABORT: &str = "normal_stand_door_break_axe_abort";
+const ABORT: usize = 3;
 
 /// Sockets of SCCounselorCharacter::UpdateGrabTransform: Jason_Base's CharacterAttachmentSocket, SCKillerCharacter's
 /// hand socket (constructor), the counselor's neck socket (native FName).
@@ -335,6 +339,10 @@ pub struct KillerTuning {
     pub knife_damage: f32,
     pub trap_count: u32,
     pub trap_placement_m: f32,
+    /// MaxAttackInteractAngle (degrees) and MaxAttackInteractCounselorDistance (m): the attack's break-down checks
+    /// ([`attack_interact`]).
+    pub attack_interact_angle: f32,
+    pub attack_interact_counselor_m: f32,
     /// Shift's max speed (cm/s) and length (s); Stalk's length and idle rate; Morph's delay (s).
     pub shift_speed: f32,
     pub shift_time: f32,
@@ -383,6 +391,8 @@ impl KillerTuning {
             knife_damage: v("ThrowingKnifeDamage", 30.0),
             trap_count: v("InitialTrapCount", 5.0) as u32,
             trap_placement_m: v("TrapPlacementDistance", 75.0) / CM,
+            attack_interact_angle: v("MaxAttackInteractAngle", 45.0),
+            attack_interact_counselor_m: v("MaxAttackInteractCounselorDistance", 200.0) / CM,
             shift_speed: v("ShiftSpeed", 1000.0),
             shift_time: v("ShiftTime", 4.0),
             stalk_active_time: v("StalkActiveTime", 20.0),
@@ -546,6 +556,8 @@ pub struct Jason {
     under_hidden: bool,
     /// The kill he's doing holds her on his GrabSocket (grab and placed kills; not the drowning kill).
     kill_holds: bool,
+    /// The played Jason's best interactable of the doors and walls ([`killer_focus`]).
+    focus: Option<Focus>,
 }
 
 impl Jason {
@@ -564,6 +576,14 @@ impl Jason {
 
     pub fn stalking(&self) -> bool {
         self.stalk.is_some()
+    }
+
+    /// The closed door the played Jason has as his best interactable.
+    pub(crate) fn focus_door(&self) -> Option<Entity> {
+        match self.focus {
+            Some(Focus::Door(d)) => Some(d),
+            _ => None,
+        }
     }
 
     pub fn shifting(&self) -> bool {
@@ -622,6 +642,18 @@ fn break_timing(killer: &KillerCharacter) -> BreakTiming {
         lengths: [loop_at, success_at - loop_at, success_len],
         hits: [in_section(&syncs, 0.0, loop_at, 1.11), in_section(&syncs, loop_at, success_at, 0.96), in_section(&traces, success_at, f32::MAX, 0.2)],
     }
+}
+
+/// The break-down's Abort section, `at` s into it: done (back to hunting) once it has played out, else on.
+fn abort(j: &mut Jason, killer: &KillerCharacter, at: f32) -> bool {
+    let done = at >= killer.length(BREAK_ABORT).unwrap_or(1.0);
+    j.state = match (done, &j.state) {
+        (true, _) => JasonState::Hunting,
+        (false, JasonState::BreakingDoor { door, .. }) => JasonState::BreakingDoor { door: *door, t: at, section: ABORT, hit: false },
+        (false, JasonState::BreakingWall { wall, .. }) => JasonState::BreakingWall { wall: *wall, t: at, section: ABORT, hit: false },
+        (false, s) => s.clone(),
+    };
+    done
 }
 
 /// How a counselor stunned Jason. Times are the stun classes' TotalStunTime base values (the AI doesn't wiggle out
@@ -1095,6 +1127,7 @@ fn spawn_jason(
                 underwater_speed: None,
                 under_hidden: false,
                 kill_holds: true,
+                focus: None,
             },
             Transform { translation: feet, rotation, ..default() },
             Visibility::default(),
@@ -1252,6 +1285,64 @@ fn wall_in_way(walls: &Query<(Entity, &mut crate::doors::Wall, &GlobalTransform)
     })
 }
 
+/// A door or destructible wall the played Jason's interactable manager has as its best interactable.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Focus {
+    Door(Entity),
+    Wall(Entity),
+}
+
+/// The played Jason's best interactable of the doors and walls (what E and his attack act on): the interactable
+/// manager's choice (ILLInteractableManagerComponent, interact.rs `score`) of those in range (DistanceLimit from his
+/// capsule's centre) and within their InteractComponents' facing limits, the doors only while closed (SCDoor's
+/// CanInteractWith 0x140339f10 gives the killer the press on a closed door when he isn't holding her) and the walls
+/// while standing. (interact.rs's occlusion traces aren't run for him.)
+#[allow(clippy::too_many_arguments)]
+fn killer_focus(
+    doors: &Query<(Entity, &mut crate::doors::Door, &GlobalTransform)>,
+    walls: &Query<(Entity, &mut crate::doors::Wall, &GlobalTransform)>,
+    limits: &Query<&crate::interact::InteractLimits>,
+    centre: Vec3,
+    look: Vec3,
+    facing: Vec3,
+    moving: Option<Vec3>,
+    current: Option<Focus>,
+) -> Option<Focus> {
+    let mut best: Option<(f32, Focus)> = None;
+    let mut consider = |owner: Entity, g: &GlobalTransform, component: &str, point: Vec3, reach_cm: f32, f: Focus| {
+        if point.distance(centre) * 100.0 > reach_cm {
+            return;
+        }
+        if limits.get(owner).ok().and_then(|l| l.0.get(component)).is_some_and(|l| !l.facing(g, centre - point, look)) {
+            return;
+        }
+        let score = crate::interact::score(centre, point, reach_cm, look, facing, moving, current == Some(f));
+        if best.is_none_or(|(b, _)| score > b) {
+            best = Some((score, f));
+        }
+    };
+    for (e, d, g) in doors.iter().filter(|(_, d, _)| !d.open && !d.broken) {
+        consider(e, g, "InteractComponent", g.transform_point(d.interact), d.reach, Focus::Door(e));
+    }
+    for (e, w, g) in walls.iter().filter(|(_, w, _)| !w.broken) {
+        consider(e, g, "Interactable", g.transform_point(w.interact), w.reach, Focus::Wall(e));
+    }
+    best.map(|(_, f)| f)
+}
+
+/// SCKillerCharacter's attack-to-interact checks (FUN_1403df5d0 doors, FUN_1403df9b0 walls): his view (flat) within
+/// acos(clamp(`angle_deg` in radians, -1, 1)) of the direction to the interactable (the game takes the arc cosine of
+/// the angle in radians: the doors' 90, which FUN_14040fd00 sets for the call, gives a dot of 0; the walls'
+/// MaxAttackInteractAngle 45 gives 0.667), and no living counselor within MaxAttackInteractCounselorDistance of him
+/// (3D) on his side of it (`her`: where she is and whether she's on his side).
+fn attack_interact(view: Vec2, here: Vec3, point: Vec3, angle_deg: f32, near_m: f32, her: Option<(Vec3, bool)>) -> bool {
+    let to = Vec2::new(point.x - here.x, point.z - here.z).normalize_or_zero();
+    if view.normalize_or_zero().dot(to) < angle_deg.to_radians().clamp(-1.0, 1.0).acos() {
+        return false;
+    }
+    !her.is_some_and(|(at, same_side)| same_side && at.distance(here) <= near_m)
+}
+
 /// A closed door within reach ahead of `wish` (any, when `any_way`): what Jason does about it (burst through it
 /// raged, break it down when it's locked or barricaded, else open it) and its animation.
 fn door_in_way(
@@ -1308,11 +1399,12 @@ pub(crate) fn update_jason(
     (mut barricades, mut walls): (Query<&mut crate::windows::Barricade>, Query<(Entity, &mut crate::doors::Wall, &GlobalTransform)>),
     (mut spots, cabinets, mut placed_kills): (Query<(Entity, &mut crate::hiding::HidingSpot, &GlobalTransform)>, Query<&GlobalTransform, With<crate::props::Cabinet>>, Query<&mut crate::placed_kills::PlacedKill>),
     mut rigs: Query<(&mut Rig, &ChildOf, &Transform), (Without<Jason>, Without<Player>)>,
-    (globals, navmesh, leaves, parents): (
+    (globals, navmesh, leaves, parents, interact_limits): (
         Query<&GlobalTransform>,
         Option<Res<crate::navigation::Navmesh>>,
         Query<(Entity, &ChildOf), With<crate::navigation::NotOnNavmesh>>,
         Query<&ChildOf>,
+        Query<&crate::interact::InteractLimits>,
     ),
 ) {
     let navmesh = navmesh.as_deref().map(|n| &*n.0);
@@ -1543,6 +1635,9 @@ pub(crate) fn update_jason(
                 // The player's Jason (jason_player.rs): what they pressed, else the AI below.
                 if let Some(i) = player_input {
                     let p = i.presses;
+                    let moving = (j.velocity.length_squared() > 0.0).then(|| Vec3::new(j.velocity.x, 0.0, j.velocity.y).normalize_or_zero());
+                    let centre = xf.translation + Vec3::Y * t.capsule.half_height;
+                    j.focus = killer_focus(&doors, &walls, &interact_limits, centre, i.look, xf.rotation * Vec3::Z, moving, j.focus);
                     let blockers = Blockers { underwater: j.underwater, ..Blockers::default() };
                     let ready = |know: &Option<Mut<crate::senses::Knowledge>>, a: Ability| know.as_ref().is_some_and(|k| k.abilities.is_available(a, &blockers));
                     if p.shift && ready(&know, Ability::Shift) {
@@ -1611,6 +1706,29 @@ pub(crate) fn update_jason(
                         commands.entity(je).insert(PlayAction(TRAP_SET.into()));
                         continue;
                     }
+                    // E on a closed door (SCDoor::OnInteract 0x140351150, the killer's press): raged, he bursts
+                    // through it whatever its lock; locked or barricaded, the LockedDoorSound; else he opens it.
+                    if let Some(Focus::Door(de)) = j.focus.filter(|_| p.interact) {
+                        if let Ok((_, d, g)) = doors.get(de) {
+                            let raged = know.as_ref().is_some_and(|k| k.abilities.rage_active);
+                            let barred = barricades.iter().any(|b| b.door == Some(de) && b.enabled);
+                            let (state, anim) = if raged {
+                                info!("Jason: bursting through a door (raged)");
+                                (JasonState::BurstingDoor { door: de, t: 0.0 }, DOOR_BURST)
+                            } else if d.locked || barred {
+                                commands.trigger(crate::audio::ActorSound { actor: de, prop: "LockedDoorSound" });
+                                continue;
+                            } else {
+                                info!("Jason: opening a door");
+                                let anim = if crate::doors::Door::is_inside(g, xf.translation) { DOOR_OPEN_INSIDE } else { DOOR_OPEN_OUTSIDE };
+                                (JasonState::OpeningDoor { door: de, t: 0.0, anim }, anim)
+                            };
+                            j.velocity = Vec2::ZERO;
+                            j.state = state;
+                            commands.entity(je).insert(PlayAction(anim.into()));
+                            continue;
+                        }
+                    }
                     // A fuse box at hand: his Jason_Generator_Destruction move cuts its power.
                     if p.interact && j.cooldown <= 0.0 {
                         let here = xf.translation;
@@ -1652,6 +1770,37 @@ pub(crate) fn update_jason(
                         commands.entity(je).insert(PlayAction(GRAB_STARTUP.into()));
                         continue;
                     }
+                    // CMBT_KLR_Attack (0x1403f89a0): his best interactable an SCInteractComponent with
+                    // bCanAttackToInteract (the doors' and walls'), he breaks it down when he may (FUN_14040fd00 a door:
+                    // closed and intact, the check at 90 degrees; FUN_14040fdd0 a wall: standing, the check at
+                    // MaxAttackInteractAngle): bWantsToBreakDown, BreakDownFrom{Inside,Outside}. Held, the loop goes
+                    // on; let go (0x1403fec50 clears bWantsToBreakDown), it aborts at the next loop.
+                    if p.attack && !j.blocking {
+                        let her = alive.then_some(pxf.translation);
+                        let breaks = match j.focus {
+                            Some(Focus::Door(de)) => doors.get(de).ok().filter(|(_, d, _)| !d.open && !d.broken).is_some_and(|(_, d, g)| {
+                                let side = crate::doors::Door::is_inside(g, xf.translation);
+                                attack_interact(i.forward, xf.translation, g.transform_point(d.interact), 90.0, t.attack_interact_counselor_m, her.map(|h| (h, crate::doors::Door::is_inside(g, h) == side)))
+                            }),
+                            Some(Focus::Wall(we)) => walls.get(we).ok().filter(|(_, w, _)| !w.broken).is_some_and(|(_, w, g)| {
+                                let side = crate::doors::Wall::is_inside(g, xf.translation);
+                                attack_interact(i.forward, xf.translation, g.transform_point(w.interact), t.attack_interact_angle, t.attack_interact_counselor_m, her.map(|h| (h, crate::doors::Wall::is_inside(g, h) == side)))
+                            }),
+                            None => false,
+                        };
+                        let state = match j.focus.filter(|_| breaks) {
+                            Some(Focus::Door(de)) => Some(JasonState::BreakingDoor { door: de, t: 0.0, section: 0, hit: false }),
+                            Some(Focus::Wall(we)) => Some(JasonState::BreakingWall { wall: we, t: 0.0, section: 0, hit: false }),
+                            None => None,
+                        };
+                        if let Some(state) = state {
+                            info!("Jason: breaking it down ({state:?})");
+                            j.velocity = Vec2::ZERO;
+                            j.state = state;
+                            commands.entity(je).insert(PlayAction(BREAK_DOOR[0].into()));
+                            continue;
+                        }
+                    }
                     // CMBT_KLR_Attack (0x1403f89a0 -> 0x1402e5aa0): the NeutralAttack; in combat stance the button's
                     // hold starts counting (the heavy attack after 0.1 s, below).
                     // Not while blocking (0x1402e5aa0).
@@ -1661,22 +1810,6 @@ pub(crate) fn update_jason(
                         j.attack_hold = j.combat.then_some(0.0);
                         commands.entity(je).insert(PlayAction(ATTACK.into()));
                         continue;
-                    }
-                    let raged = know.as_ref().is_some_and(|k| k.abilities.rage_active);
-                    if let Some(we) = wall_in_way(&walls, xf.translation, i.movement) {
-                        info!("Jason: breaking through a wall");
-                        j.velocity = Vec2::ZERO;
-                        j.state = JasonState::BreakingWall { wall: we, t: 0.0, section: 0, hit: false };
-                        commands.entity(je).insert(PlayAction(BREAK_DOOR[0].into()));
-                        continue;
-                    }
-                    if i.movement != Vec2::ZERO {
-                        if let Some((state, anim)) = door_in_way(&doors, &barricades, xf.translation, i.movement, false, raged) {
-                            j.velocity = Vec2::ZERO;
-                            j.state = state;
-                            commands.entity(je).insert(PlayAction(anim.into()));
-                            continue;
-                        }
                     }
                     // In combat stance he walks at MaxCombatSpeed, facing where the player looks.
                     let speed = if j.combat { t.combat_speed } else if i.run && t.can_run { t.run_speed } else { t.walk_speed };
@@ -2157,10 +2290,10 @@ pub(crate) fn update_jason(
                 if at >= killer.length(anim).unwrap_or(1.6) {
                     j.state = JasonState::Hunting;
                     commands.entity(je).remove::<PlayAction>();
-                    // A trap in the doorway when he isn't after her and has none of his near.
+                    // The computer Jason's: a trap in the doorway when he isn't after her and has none of his near.
                     let sees = know.as_ref().is_some_and(|k| k.sees);
                     let here = xf.translation;
-                    if !sees && j.traps > 0 && j.trap_spots.iter().all(|s| s.distance(here) > TRAP_SPACING_M) && killer.info.animations.contains_key(TRAP_SET) {
+                    if player_input.is_none() && !sees && j.traps > 0 && j.trap_spots.iter().all(|s| s.distance(here) > TRAP_SPACING_M) && killer.info.animations.contains_key(TRAP_SET) {
                         info!("Jason: setting a trap in the doorway ({} left)", j.traps);
                         j.state = JasonState::PlacingTrap { t: 0.0 };
                         commands.entity(je).insert(PlayAction(TRAP_SET.into()));
@@ -2210,9 +2343,15 @@ pub(crate) fn update_jason(
                 };
                 let to_door = Vec2::new(g.translation().x - xf.translation.x, g.translation().z - xf.translation.z);
                 walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(to_door), dt, &t, &world);
+                if section == ABORT {
+                    if abort(&mut j, &killer, at + dt) {
+                        commands.entity(je).remove::<PlayAction>();
+                    }
+                    continue;
+                }
                 let barred = barricades.iter().any(|b| b.door == Some(de) && b.enabled);
-                // Unlocked (or unbarred) from inside before it gave way: he stops (the montage's Abort).
-                if section < 2 && !d.broken && !d.locked && !barred {
+                // The computer Jason's: unlocked (or unbarred) from inside before it gave way, he stops.
+                if player_input.is_none() && section < 2 && !d.broken && !d.locked && !barred {
                     info!("Jason: the door's no longer locked; stopped breaking it");
                     j.state = JasonState::Hunting;
                     commands.entity(je).remove::<PlayAction>();
@@ -2246,6 +2385,12 @@ pub(crate) fn update_jason(
                         commands.entity(je).remove::<PlayAction>();
                         continue;
                     }
+                    if player_input.is_some_and(|i| !i.attack_held) {
+                        info!("Jason: let go; stopped breaking the door");
+                        j.state = JasonState::BreakingDoor { door: de, t: 0.0, section: ABORT, hit: false };
+                        commands.entity(je).insert(PlayAction(BREAK_ABORT.into()));
+                        continue;
+                    }
                     // On to (another) Loop.
                     (at, section, hit) = (at - timing.lengths[section], 1, false);
                 }
@@ -2259,6 +2404,12 @@ pub(crate) fn update_jason(
                 };
                 let to_wall = Vec2::new(g.translation().x - xf.translation.x, g.translation().z - xf.translation.z);
                 walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(to_wall), dt, &t, &world);
+                if section == ABORT {
+                    if abort(&mut j, &killer, at + dt) {
+                        commands.entity(je).remove::<PlayAction>();
+                    }
+                    continue;
+                }
                 let timing = break_timing(&killer);
                 let (mut at, mut section, mut hit) = (at + dt, section, hit);
                 if !hit && at >= timing.hits[section] {
@@ -2283,6 +2434,12 @@ pub(crate) fn update_jason(
                     if section == 2 {
                         j.state = JasonState::Hunting;
                         commands.entity(je).remove::<PlayAction>();
+                        continue;
+                    }
+                    if player_input.is_some_and(|i| !i.attack_held) {
+                        info!("Jason: let go; stopped breaking the wall");
+                        j.state = JasonState::BreakingWall { wall: we, t: 0.0, section: ABORT, hit: false };
+                        commands.entity(je).insert(PlayAction(BREAK_ABORT.into()));
                         continue;
                     }
                     (at, section, hit) = (at - timing.lengths[section], 1, false);
@@ -2789,15 +2946,20 @@ fn animate_jason(
         }
         let synced = |n: &str| MOVE.contains(&n);
         rig.drive(&killer.0, &targets, &synced, dt, &mut anim);
-        // His footsteps (Jason_AnimBP's Footstep notifies): his locomotion cycles carry none here, so a step at the
-        // start of each cycle and one halfway.
+        // His footsteps: the Footstep_L / Footstep_R notifies (AnimNotify_Footstep_L/R, to Jason_AnimBP's
+        // GetFootstepSound) of the locomotion cycle that weighs most, as its phase passes them (as hers, character.rs);
+        // none while Shift or Stalk is on (his anim instance's handler FUN_14030df00: bIsShiftActive, bIsStalkActive).
         let (before, after) = (rig.prev_phase, rig.phase);
         rig.prev_phase = after;
-        if rig.action.is_none() && speed > 1.0 {
-            for (at, left) in [(0.0f32, true), (0.5, false)] {
-                let passed = if after >= before { before < at && at <= after } else { at > before || at <= after };
-                if passed {
-                    commands.trigger(crate::audio::Footstep { owner: parent.parent(), left, land: false });
+        if rig.action.is_none() && speed > 1.0 && !j.shifting() && !j.stalking() {
+            let main = rig.weights.iter().filter(|(n, _)| synced(n)).max_by(|a, b| a.1.total_cmp(b.1)).map(|(n, _)| n.clone());
+            if let Some(info) = main.and_then(|n| killer.info.animations.get(&n)) {
+                for w in info.windows.iter().filter(|w| w.name == "Footstep_L" || w.name == "Footstep_R") {
+                    let at = w.start / info.length.max(1e-3);
+                    let passed = if after >= before { before < at && at <= after } else { at > before || at <= after };
+                    if passed {
+                        commands.trigger(crate::audio::Footstep { owner: parent.parent(), left: w.name == "Footstep_L", land: false });
+                    }
                 }
             }
         }
@@ -2818,6 +2980,23 @@ fn speed_state(speed: f32, marks: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attacking_a_door_or_wall_breaks_it_when_he_faces_it_and_she_isnt_by_him() {
+        let at = Vec3::new(0.0, 1.0, 1.0);
+        // Doors: anything up to 90 degrees off (acos(clamp(pi/2)) = 0).
+        assert!(attack_interact(Vec2::new(1.0, 0.01), Vec3::ZERO, at, 90.0, 2.0, None));
+        assert!(!attack_interact(Vec2::new(1.0, -0.01), Vec3::ZERO, at, 90.0, 2.0, None));
+        // Walls (45): a dot of at least acos(0.785) = 0.667, about 48 degrees.
+        let off = |deg: f32| Vec2::new(deg.to_radians().sin(), deg.to_radians().cos());
+        assert!(attack_interact(off(47.0), Vec3::ZERO, at, 45.0, 2.0, None));
+        assert!(!attack_interact(off(49.0), Vec3::ZERO, at, 45.0, 2.0, None));
+        // Her within 2 m on his side: he swings instead; on the other side, or further, he breaks it.
+        let her = Vec3::new(0.5, 0.0, 0.5);
+        assert!(!attack_interact(Vec2::Y, Vec3::ZERO, at, 90.0, 2.0, Some((her, true))));
+        assert!(attack_interact(Vec2::Y, Vec3::ZERO, at, 90.0, 2.0, Some((her, false))));
+        assert!(attack_interact(Vec2::Y, Vec3::ZERO, at, 90.0, 2.0, Some((her * 5.0, true))));
+    }
 
     #[test]
     fn angles_are_measured_from_facing() {

@@ -11,8 +11,9 @@
 //! KLR_KnifeCancel), C combat stance (GLB_Combat_PC), R trap (KLR_PlaceTrap), E interact (GLB_Interact1: a fuse box or
 //! phone box at hand, a placed kill while holding her), 1 Morph (to the morph point nearest 30 m ahead of where he
 //! looks), 2 Sense, 3 Shift, 4 Stalk (KLR_Morph/Sense/Shift/Stalk_PC). Holding her (GrabInput): 1-4 let go are the
-//! right, bottom, left and top grab kills (CMBT_KLR_GrabKillRight/Bottom/Left/Top), a click the bottom one. Doors in
-//! his way open or break as he walks into them. M opens and closes his map (GLB_Map); 1 opens it for a Morph: a click on it
+//! right, bottom, left and top grab kills (CMBT_KLR_GrabKillRight/Bottom/Left/Top), a click the bottom one. The door
+//! he faces: E opens it (raged, bursts through it; locked or barricaded, its locked sound); his attack at it, or at a
+//! destructible wall, breaks it down for as long as it's held (jason.rs `killer_focus`, `attack_interact`). M opens and closes his map (GLB_Map); 1 opens it for a Morph: a click on it
 //! morphs him to the morph point nearest that place (within 30 m), 1 again puts it away. Esc frees the mouse, a click
 //! takes it again.
 //!
@@ -82,7 +83,9 @@ impl Plugin for PlayJasonPlugin {
     fn build(&self, app: &mut App) {
         let on = resource_exists::<PlayJason>;
         if self.demo {
-            app.add_systems(PreUpdate, demo.after(capture).before(bevy::input::InputSystems).run_if(on));
+            app.init_resource::<DemoView>()
+                .add_systems(PreUpdate, demo.after(capture).before(bevy::input::InputSystems).run_if(on))
+                .add_systems(Update, demo_view.after(look).run_if(on));
         }
         if self.active {
             app.insert_resource(PlayJason).init_resource::<JasonControls>();
@@ -239,6 +242,16 @@ fn capture(
     c.sense |= sense;
 }
 
+/// The scripted player's view (yaw, pitch): a `--bot-*` playing her steers through the same player camera after the
+/// demo, so the demo's view goes to his controls directly.
+#[derive(Resource, Default)]
+struct DemoView(f32, f32);
+
+fn demo_view(view: Res<DemoView>, mut controls: ResMut<JasonControls>) {
+    controls.yaw = view.0;
+    controls.pitch = view.1;
+}
+
 /// The scripted player: what a player would press, by distance to her.
 fn demo(
     mut controls: ResMut<JasonControls>,
@@ -250,15 +263,26 @@ fn demo(
     time: Res<Time>,
     (know, mut map, window, mut opened): (Query<&crate::senses::Knowledge>, ResMut<MorphMap>, Single<&bevy::window::Window, With<bevy::window::PrimaryWindow>>, Local<Option<f32>>),
     grab_kills: Res<crate::jason::GrabKillsAvailable>,
+    (mut tried, doors, mut view): (Local<Option<Entity>>, Query<(Entity, &crate::doors::Door, &GlobalTransform)>, ResMut<DemoView>),
 ) {
     let (Some((j, jxf)), Some(h)) = (jason.iter().next(), her.iter().next()) else { return };
     let d = h.translation - jxf.translation;
     let dist = Vec2::new(d.x, d.z).length();
-    // Yaw so that the view's forward (-sin, -cos) points at her.
+    // Shut in (a closed door within 4 m of her): up to its interact point first (the demo walks straight).
+    let flat = |v: Vec3| Vec2::new(v.x, v.z);
+    let shut = doors
+        .iter()
+        .filter(|(_, door, _)| !door.open && !door.broken)
+        .map(|(_, door, g)| g.transform_point(door.interact))
+        .filter(|at| flat(*at - h.translation).length() < 4.0)
+        .min_by(|a, b| flat(*a - h.translation).length().total_cmp(&flat(*b - h.translation).length()));
+    let d = shut.filter(|at| flat(*at - jxf.translation).length() > 1.0).map_or(d, |at| at - jxf.translation);
+    // Yaw so that the view's forward (-sin, -cos) points at her (or her door).
     camera.yaw = (-d.x).atan2(-d.z);
     camera.pitch = -0.15;
+    *view = DemoView(camera.yaw, camera.pitch);
     // Up to her, not into her.
-    if dist > 1.3 {
+    if dist > 1.3 && Vec2::new(d.x, d.z).length() > 0.9 {
         controls.keys.press(KeyCode::KeyW);
     } else {
         controls.keys.release(KeyCode::KeyW);
@@ -287,12 +311,31 @@ fn demo(
         _ => {}
     }
     let (knife, swung, last) = &mut *done;
-    debug!("jason demo: {:?} at {:.1}, {dist:.1} m from her, velocity {:.0}", j.state, jxf.translation, j.velocity);
+    debug!("jason demo: {:?} at {:.1}, {dist:.1} m from her at {:.1} (going for {shut:.1?}), velocity {:.0}", j.state, jxf.translation, h.translation, j.velocity);
     // Holding her: a kill by its key (3: the left slot, else the first that fits).
     if matches!(j.state, crate::jason::JasonState::Holding { t } if t > 1.5) {
         controls.latched.kill = [2, 0, 1, 3].into_iter().find(|&s| grab_kills.0[s]);
     }
+    // Breaking a door down: the attack held until it gives way (or he's done).
+    let breaking = matches!(j.state, crate::jason::JasonState::BreakingDoor { .. } | crate::jason::JasonState::BreakingWall { .. });
+    if !breaking && controls.mouse.pressed(MouseButton::Left) {
+        controls.mouse.release(MouseButton::Left);
+    }
     if !matches!(j.state, crate::jason::JasonState::Hunting) || now - *last < 1.0 {
+        return;
+    }
+    // A closed door in his way: E opens it; still shut after that (locked or barricaded), the attack held breaks it.
+    if let Some(door) = j.focus_door().filter(|d| doors.get(*d).is_ok_and(|(_, door, _)| !door.open && !door.broken)) {
+        *last = now;
+        if *tried == Some(door) {
+            controls.latched.attack = true;
+            controls.mouse.press(MouseButton::Left);
+            info!("jason demo: breaking the door down");
+        } else {
+            *tried = Some(door);
+            controls.latched.interact = true;
+            info!("jason demo: E at a door");
+        }
         return;
     }
     // An intact fuse box at hand: break it (E).

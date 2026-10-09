@@ -22,11 +22,8 @@ Mechanics: Jason side
 - [ ] Played Jason, bugs to fix:
       - his HUD: the abilities' unlock progress looks wrong
       - he holds nothing while throwing a knife (no knife in his hand)
-      - walking into a door opens it and places a trap: the computer Jason's door and trap logic still running for
-        the player
       - his pickaxe has no material: M_JasonV2_PickAxe is its own master, with only WeaponBloodMask as a parameter, so
         its base textures are in the material graph, which the export doesn't read (may fold into Materials, remaining)
-      - his footsteps: some steps play no sound
 
 Presentation
 - [ ] The main road's ground is disconnected and floating

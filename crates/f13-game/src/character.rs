@@ -280,7 +280,7 @@ pub struct Rig {
     pub bones: HashMap<String, Entity>,
     outfit_bound: Vec<Entity>,
     /// Current weight per animation.
-    weights: HashMap<String, f32>,
+    pub(crate) weights: HashMap<String, f32>,
     /// Shared phase (0..1) of the synced locomotion cycles, and free-running time of the idles.
     pub(crate) phase: f32,
     /// The phase last frame (for the footstep notifies it passed).

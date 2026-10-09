@@ -740,6 +740,19 @@ fn has_part(inv: &Inventory, carried: &Query<&Item, With<Carried>>, parts: &[Str
 /// Visibility for SCInteractComponents (the beds' and such: window glass doesn't block it), by each level placement's
 /// and collider's own response to it (f13-export collision lists where the two channels differ).
 #[allow(clippy::too_many_arguments)]
+/// The interactable manager's score of an interactable at `point` (reach in cm) for a character at `centre` looking
+/// along `look`, facing `facing` and moving along `moving` (flat, unit): its weighted view, distance, rotation and
+/// movement terms, plus the stability bonus for the current best one.
+pub(crate) fn score(centre: Vec3, point: Vec3, reach_cm: f32, look: Vec3, facing: Vec3, moving: Option<Vec3>, current: bool) -> f32 {
+    let flat = (point - centre).with_y(0.0);
+    let dir = flat.normalize_or_zero();
+    let score = VIEW_WEIGHT * look.dot(dir)
+        + DISTANCE_WEIGHT * (1.0 - flat.length() * 100.0 / reach_cm.max(1.0))
+        + CHARACTER_ROTATION_WEIGHT * facing.dot(dir)
+        + moving.map_or(0.0, |m| MOVEMENT_DIRECTION_WEIGHT * m.dot(dir));
+    if current { score + BEST_INTERACTABLE_STABILITY_SCORE } else { score }
+}
+
 fn choose_target(
     player: Single<(Entity, &Transform, &Inventory, &Player, Option<&crate::cabinets::CabinetUse>), (Without<Driving>, Without<crate::hiding::Hiding>)>,
     camera: Single<&PlayerCamera>,
@@ -820,15 +833,7 @@ fn choose_target(
                 }
             }
         }
-        let flat = (point - centre).with_y(0.0);
-        let dir = flat.normalize_or_zero();
-        let mut score = VIEW_WEIGHT * look.dot(dir)
-            + DISTANCE_WEIGHT * (1.0 - flat.length() * 100.0 / reach_cm.max(1.0))
-            + CHARACTER_ROTATION_WEIGHT * facing.dot(dir)
-            + moving.map_or(0.0, |m| MOVEMENT_DIRECTION_WEIGHT * m.dot(dir));
-        if current == Some(t) {
-            score += BEST_INTERACTABLE_STABILITY_SCORE;
-        }
+        let score = score(centre, point, reach_cm, look, facing, moving, current == Some(t));
         if best.is_none_or(|(bs, _)| score > bs) {
             best = Some((score, t));
         }

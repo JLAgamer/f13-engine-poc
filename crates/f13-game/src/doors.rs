@@ -45,6 +45,10 @@ pub struct Wall {
     pub section_xf: Transform,
     pub overrides: Option<crate::materials::MaterialOverrides>,
     pub damaged: [[Option<Handle<WorldAsset>>; 3]; 2],
+    /// Its Interactable (bCanAttackToInteract: Jason's attack breaks it down): where it is (wall local space) and
+    /// its DistanceLimit (cm).
+    pub interact: Vec3,
+    pub reach: f32,
 }
 
 impl Wall {
@@ -436,6 +440,8 @@ mod tests {
         let mut commands = Commands::new(&mut queue, &mut world);
         let mesh = || Some(Handle::<WorldAsset>::default());
         let mut w = Wall {
+            interact: Vec3::ZERO,
+            reach: 300.0,
             health: 60.0,
             base_health: 60.0,
             thresholds: [0.8, 0.6, 0.4],

@@ -5,7 +5,7 @@
 //! Footsteps (SCAnimInstance's handler, slot 0x2f0): at each Footstep_L / Footstep_R notify of her locomotion animation,
 //! the surface under her (a mesh's physical material, or the terrain's paint layer that weighs most there) picks the cue
 //! from Base_Counselor_AnimBP's tables (female: Athlete; run when running or sprinting, else walk); a surface without
-//! one takes the default surface's. Not yet: landing sounds, wading (in-water footsteps), Jason's footsteps.
+//! one takes the default surface's. Jason's: his locomotion's notifies (jason.rs), Jason_AnimBP's tables.
 //!
 //! Actors play the cues their class names (`ClassSounds`): doors (OpenDoorSound as one starts to open,
 //! CloseDoorSound as one starts to close, LockedDoorSound pressing a locked one, DoorHitSoundCue per blow,

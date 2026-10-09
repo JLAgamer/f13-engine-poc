@@ -447,6 +447,7 @@ fn spawn_props(
             // Defaults: SCDestructableWall's constructor.
             let f = |name: &str, default: f32| classes.prop(&actor.class, name).as_f64().map_or(default, |v| v as f32);
             let section = info.components.iter().find(|c| c.name == "DestructibleSection");
+            let interact = info.components.iter().find(|c| c.name == "Interactable");
             let damaged = ["Inside", "Outside"].map(|side| ["Light", "Medium", "Heavy"].map(|k| classes.prop(&actor.class, &format!("{k}Destruction{side}MeshFile")).as_str().map(&mut scene)));
             commands.entity(root).insert(crate::doors::Wall {
                 health: f("BaseHealth", 150.0),
@@ -459,6 +460,9 @@ fn spawn_props(
                 section_xf: section.map(local).unwrap_or_default(),
                 overrides: section.and_then(|c| crate::materials::MaterialOverrides::new(&c.material_map)),
                 damaged,
+                interact: interact.map_or(Vec3::ZERO, |c| local(c).translation),
+                // ILLInteractableComponent's constructor: DistanceLimit 200.
+                reach: interact.map_or(200.0, |c| reach(c, 200.0)),
             });
             *counts.entry("walls").or_default() += 1;
             let p = to_transform(&actor.transform);
