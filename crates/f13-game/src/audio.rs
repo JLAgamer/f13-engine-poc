@@ -34,7 +34,7 @@
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
-use bevy::audio::{AudioPlayer, PlaybackMode, PlaybackSettings, SpatialAudioSink, SpatialListener, SpatialScale, Volume};
+use bevy::audio::{AddAudioSource, AudioPlayer, PlaybackMode, PlaybackSettings, SpatialAudioSink, SpatialListener, SpatialScale, Volume};
 use bevy::prelude::*;
 use f13_data::sound::{Attenuation, Cue, Footsteps};
 use std::collections::HashMap;
@@ -42,22 +42,148 @@ use std::path::PathBuf;
 
 use crate::player::Player;
 
-/// Positions are scaled down this much for rodio's spatial sink, so its own inverse-square falloff stays at 1 and only
-/// panning remains (Unreal's attenuation is applied here).
+/// Positions are scaled down this much for rodio's spatial sink, so its own inverse-square falloff stays at 1 (Unreal's
+/// attenuation is applied here). Spatialized voices are panned by [`Panned`] instead once their clip is in; rodio's
+/// own panning (spatial.rs `set_positions`) puts a sound louder in the far ear, by at most 6 dB.
 const SPATIAL_SCALE: f32 = 0.001;
 /// The listener's ear gap (m).
 const EAR_GAP_M: f32 = 0.2;
+
+/// The sounds' own random numbers (cue variations, modulators): sound never draws from the match's [`crate::GameRng`],
+/// so how many sounds play doesn't change what the game rolls.
+#[derive(Resource)]
+pub(crate) struct AudioRng(pub f13_core::spawn::Rng);
+
+/// A spatialized voice's stereo gains, set from where it is around the listener each frame ([`pan`]).
+#[derive(Default)]
+pub(crate) struct PanGains(std::sync::atomic::AtomicU64);
+
+impl PanGains {
+    fn set(&self, l: f32, r: f32) {
+        self.0.store((u64::from(l.to_bits()) << 32) | u64::from(r.to_bits()), std::sync::atomic::Ordering::Relaxed);
+    }
+    fn get(&self) -> (f32, f32) {
+        let v = self.0.load(std::sync::atomic::Ordering::Relaxed);
+        (f32::from_bits((v >> 32) as u32), f32::from_bits(v as u32))
+    }
+}
+
+/// A clip played panned: its own gains (one asset per voice, sharing the clip's bytes).
+#[derive(Asset, TypePath)]
+pub(crate) struct Panned {
+    clip: bevy::audio::AudioSource,
+    gains: std::sync::Arc<PanGains>,
+}
+
+/// [`Panned`]'s samples: the clip's (a stereo clip's channels averaged) out as two channels at its gains.
+pub(crate) struct PanDecoder {
+    inner: <bevy::audio::AudioSource as bevy::audio::Decodable>::Decoder,
+    gains: std::sync::Arc<PanGains>,
+    right: Option<bevy::audio::Sample>,
+}
+
+impl Iterator for PanDecoder {
+    type Item = bevy::audio::Sample;
+    fn next(&mut self) -> Option<Self::Item> {
+        use bevy::audio::Source;
+        if let Some(r) = self.right.take() {
+            return Some(r);
+        }
+        let s = match self.inner.channels().get() {
+            1 => self.inner.next()?,
+            n => {
+                let first = self.inner.next()?;
+                let mut sum = first;
+                for _ in 1..n {
+                    sum += self.inner.next().unwrap_or(first);
+                }
+                sum / n as bevy::audio::Sample
+            }
+        };
+        let (l, r) = self.gains.get();
+        self.right = Some(s * r as bevy::audio::Sample);
+        Some(s * l as bevy::audio::Sample)
+    }
+}
+
+impl bevy::audio::Source for PanDecoder {
+    fn current_span_len(&self) -> Option<usize> {
+        None
+    }
+    fn channels(&self) -> bevy::audio::ChannelCount {
+        bevy::audio::ChannelCount::new(2).unwrap()
+    }
+    fn sample_rate(&self) -> bevy::audio::SampleRate {
+        self.inner.sample_rate()
+    }
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        self.inner.total_duration()
+    }
+}
+
+impl bevy::audio::Decodable for Panned {
+    type Decoder = PanDecoder;
+    fn decoder(&self) -> PanDecoder {
+        PanDecoder { inner: self.clip.decoder(), gains: self.gains.clone(), right: None }
+    }
+}
+
+/// A panned voice's gains.
+#[derive(Component)]
+struct Pan(std::sync::Arc<PanGains>);
+
+/// Spatialized voices (PlaybackSettings::spatial) are played panned: once its clip is in (before the engine starts
+/// it), the voice's player becomes a [`Panned`] one.
+fn to_panned(
+    mut commands: Commands,
+    clips: Res<Assets<bevy::audio::AudioSource>>,
+    mut panned: ResMut<Assets<Panned>>,
+    voices: Query<(Entity, &AudioPlayer, &PlaybackSettings), Without<bevy::audio::AudioSink>>,
+) {
+    for (e, player, settings) in &voices {
+        if !settings.spatial {
+            continue;
+        }
+        let Some(clip) = clips.get(&player.0) else { continue };
+        let gains = std::sync::Arc::new(PanGains::default());
+        gains.set(std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2);
+        let handle = panned.add(Panned { clip: clip.clone(), gains: gains.clone() });
+        commands
+            .entity(e)
+            .remove::<AudioPlayer>()
+            .insert((AudioPlayer::<Panned>(handle), PlaybackSettings { spatial: false, ..*settings }, Pan(gains)));
+    }
+}
+
+/// The game's XAudio2 device (WindowsEngine.ini: AudioDeviceModuleName=XAudio2) pans a 3D sound with X3DAudio
+/// (XAudio2Source GetMonoChannelVolumes 0x1419539c0: X3DAudioCalculate, MATRIX | REVERB, into the 5.1 speakers, then
+/// down to the output). PLACEHOLDER: X3DAudio1_7.dll's own panning matrix isn't read (it's Microsoft's library, not
+/// the game); this pans equal-power by the side the sound is on in the listener's view (centre -3 dB each, as a 5.1
+/// centre channel downmixed), front and back alike.
+fn pan(listener: Query<&GlobalTransform, With<SpatialListener>>, voices: Query<(&Pan, &GlobalTransform)>) {
+    let Some(ear) = listener.iter().next() else { return };
+    let to_listener = ear.affine().inverse();
+    for (p, g) in &voices {
+        let local = to_listener.transform_point3(g.translation());
+        let flat = Vec2::new(local.x, local.z);
+        let side = if flat.length_squared() > 1e-6 { flat.x / flat.length() } else { 0.0 };
+        let angle = (side + 1.0) * std::f32::consts::FRAC_PI_4;
+        p.0.set(angle.cos(), angle.sin());
+    }
+}
 
 pub struct AudioPlugin;
 
 impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, load_sounds)
+        app.insert_resource(AudioRng(f13_core::spawn::Rng::new(0xa0d1_0f13)))
+            .add_systems(Startup, load_sounds)
             .init_resource::<MusicState>()
             .add_systems(
                 Update,
                 (add_listener, modulate, attenuate, actor_sounds, counselor_music, near_music, fades, ambience, voices, start_delayed, update_mixes, apply_mixes).chain(),
             )
+            .add_systems(PostUpdate, (to_panned.before(TransformSystems::Propagate), pan.after(TransformSystems::Propagate)))
             .add_observer(push_mix)
             .add_observer(loop_2d)
             .add_observer(stop_2d)
@@ -71,6 +197,11 @@ impl Plugin for AudioPlugin {
             .add_observer(stop_loop)
             .add_observer(music_stinger)
             .add_observer(dropped);
+    }
+
+    // After the engine's plugins (its asset server).
+    fn finish(&self, app: &mut App) {
+        app.add_audio_source::<Panned>();
     }
 }
 
@@ -156,7 +287,7 @@ fn actor_loop(
     mut commands: Commands,
     assets: Res<AssetServer>,
     sounds: Option<ResMut<Sounds>>,
-    mut rng: ResMut<crate::GameRng>,
+    mut rng: ResMut<AudioRng>,
     actors: Query<&ClassSounds>,
 ) {
     let Some(mut sounds) = sounds else { return };
@@ -263,7 +394,7 @@ fn actor_sound(
     voices: Query<(Entity, &ChildOf), With<VoiceOf>>,
     assets: Res<AssetServer>,
     sounds: Option<ResMut<Sounds>>,
-    mut rng: ResMut<crate::GameRng>,
+    mut rng: ResMut<AudioRng>,
 ) {
     let Ok((s, g)) = actors.get(ev.actor) else { return };
     let Some(cue) = s.0.get(ev.prop) else { return };
@@ -348,7 +479,7 @@ fn actor_sounds(
 }
 
 /// A 2D (unpanned) player of a cue's first voice: the entity and the voice's volume.
-fn spawn_2d(commands: &mut Commands, assets: &AssetServer, sounds: &mut Sounds, rng: &mut crate::GameRng, cue: &str, looping: bool, volume: f32) -> Option<(Entity, f32)> {
+fn spawn_2d(commands: &mut Commands, assets: &AssetServer, sounds: &mut Sounds, rng: &mut AudioRng, cue: &str, looping: bool, volume: f32) -> Option<(Entity, f32)> {
     let c = sounds.cue(cue)?.clone();
     let (voices, _) = c.play(&mut || rng.0.frand());
     let v = voices.into_iter().next()?;
@@ -455,7 +586,7 @@ fn ambience(
     assets: Res<AssetServer>,
     level: Res<crate::Level>,
     sounds: Option<ResMut<Sounds>>,
-    mut rng: ResMut<crate::GameRng>,
+    mut rng: ResMut<AudioRng>,
     listener: Query<&GlobalTransform, With<SpatialListener>>,
     mut playing: Query<(&Ambient, &mut bevy::audio::AudioSink)>,
 ) {
@@ -527,7 +658,7 @@ fn music_stinger(
     assets: Res<AssetServer>,
     sounds: Option<ResMut<Sounds>>,
     counselor: Option<Res<crate::character::CounselorCharacter>>,
-    mut rng: ResMut<crate::GameRng>,
+    mut rng: ResMut<AudioRng>,
 ) {
     let (Some(mut sounds), Some(counselor)) = (sounds, counselor) else { return };
     let music = &counselor.info.music;
@@ -569,7 +700,7 @@ fn counselor_music(
     sounds: Option<ResMut<Sounds>>,
     counselor: Option<Res<crate::character::CounselorCharacter>>,
     (game, escaped): (Option<Res<crate::match_flow::GameMatch>>, Option<Res<crate::vehicle::Escaped>>),
-    mut rng: ResMut<crate::GameRng>,
+    mut rng: ResMut<AudioRng>,
     players: Query<&Player>,
     playing: Query<Entity>,
 ) {
@@ -590,7 +721,7 @@ fn counselor_music(
         }
     }
     // PlayMusic(event), for a MUSICTRACK entry.
-    let play = |state: &mut MusicState, commands: &mut Commands, sounds: &mut Sounds, rng: &mut crate::GameRng, event: &str| {
+    let play = |state: &mut MusicState, commands: &mut Commands, sounds: &mut Sounds, rng: &mut AudioRng, event: &str| {
         let Some(entry) = music["MusicData"].as_array().into_iter().flatten().find(|d| d["EventName"] == event) else { return };
         let Some(cue) = cue_name(&entry["MusicTrack"]) else { return };
         let fade_in = entry["FadeInTime"].as_f64().unwrap_or(0.0) as f32;
@@ -659,7 +790,7 @@ fn near_music(
     mut music: Local<NearMusic>,
     sounds: Option<ResMut<Sounds>>,
     killer: Option<Res<crate::character::KillerCharacter>>,
-    mut rng: ResMut<crate::GameRng>,
+    mut rng: ResMut<AudioRng>,
     jasons: Query<(&crate::jason::Jason, &GlobalTransform)>,
     players: Query<(&Player, &GlobalTransform)>,
     (mut sinks, mut state): (Query<&mut bevy::audio::AudioSink>, ResMut<MusicState>),
@@ -977,7 +1108,7 @@ pub struct Stop2D {
 #[derive(Component)]
 struct Keyed2D(&'static str);
 
-fn loop_2d(ev: On<Loop2D>, mut commands: Commands, assets: Res<AssetServer>, sounds: Option<ResMut<Sounds>>, mut rng: ResMut<crate::GameRng>) {
+fn loop_2d(ev: On<Loop2D>, mut commands: Commands, assets: Res<AssetServer>, sounds: Option<ResMut<Sounds>>, mut rng: ResMut<AudioRng>) {
     let Some(mut sounds) = sounds else { return };
     if let Some((e, volume)) = spawn_2d(&mut commands, &assets, &mut sounds, &mut rng, ev.cue, true, 0.0) {
         let rate = if ev.fade_in > 0.0 { 1.0 / ev.fade_in } else { f32::MAX };
@@ -1115,7 +1246,7 @@ fn play_sound(
     mut commands: Commands,
     assets: Res<AssetServer>,
     sounds: Option<ResMut<Sounds>>,
-    mut rng: ResMut<crate::GameRng>,
+    mut rng: ResMut<AudioRng>,
     listener: Query<&GlobalTransform, With<SpatialListener>>,
 ) {
     let Some(mut sounds) = sounds else { return };
@@ -1173,11 +1304,17 @@ fn start_delayed(mut commands: Commands, time: Res<Time>, mut voices: Query<(Ent
 }
 
 /// Fades placed sounds with the listener's distance.
-fn attenuate(listener: Query<&GlobalTransform, With<SpatialListener>>, mut emitters: Query<(&Emitter, &GlobalTransform, &mut SpatialAudioSink)>) {
+#[allow(clippy::type_complexity)]
+fn attenuate(listener: Query<&GlobalTransform, With<SpatialListener>>, mut emitters: Query<(&Emitter, &GlobalTransform, Option<&mut AudioSink>, Option<&mut SpatialAudioSink>)>) {
+    use bevy::audio::AudioSinkPlayback;
     let Some(ear) = listener_position(&listener) else { return };
-    for (e, g, mut sink) in &mut emitters {
-        let factor = e.attenuation.factor(ear.distance(g.translation()) * 100.0);
-        bevy::audio::AudioSinkPlayback::set_volume(&mut *sink, Volume::Linear(e.volume * factor));
+    for (e, g, sink, spatial) in &mut emitters {
+        let volume = Volume::Linear(e.volume * e.attenuation.factor(ear.distance(g.translation()) * 100.0));
+        if let Some(mut s) = sink {
+            s.set_volume(volume);
+        } else if let Some(mut s) = spatial {
+            s.set_volume(volume);
+        }
     }
 }
 
