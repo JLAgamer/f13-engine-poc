@@ -18,8 +18,6 @@ Mechanics: counselor side
       (reference: PhysX 3.4's published vehicle source, downloaded to F13-decomp/ref with the user's OK; the game's
       statically linked copy is stripped)
 
-Mechanics: Jason side
-
 Presentation
 - [ ] The main road's ground is disconnected and floating
 - [ ] Audio isn't positional (sounds don't come from where their source is)
