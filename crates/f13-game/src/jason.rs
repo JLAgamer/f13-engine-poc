@@ -558,6 +558,9 @@ pub struct Jason {
     kill_holds: bool,
     /// The played Jason's best interactable of the doors and walls ([`killer_focus`]).
     focus: Option<Focus>,
+    /// bIsRunning: his fast walk (KLR_FastWalk: OnStart/Stop/ToggleFastWalk -> SetRunning, vt+0xda0) or the AI's
+    /// run; his footsteps take the run cue for it (Jason_AnimBP's GetFootstepSound).
+    pub running: bool,
 }
 
 impl Jason {
@@ -1160,6 +1163,7 @@ fn spawn_jason(
                 under_hidden: false,
                 kill_holds: true,
                 focus: None,
+                running: false,
             },
             Transform { translation: feet, rotation, ..default() },
             Visibility::default(),
@@ -1845,6 +1849,7 @@ pub(crate) fn update_jason(
                     }
                     // In combat stance he walks at MaxCombatSpeed, facing where the player looks.
                     let speed = if j.combat { t.combat_speed } else if i.run && t.can_run { t.run_speed } else { t.walk_speed };
+                    j.running = speed == t.run_speed;
                     let face = j.combat.then_some(i.forward);
                     walk(&mut j, &mut xf, i.movement, speed, face, dt, &t, &world);
                     continue;
@@ -2070,6 +2075,7 @@ pub(crate) fn update_jason(
                     continue;
                 }
                 let speed = if t.can_run && gdist > t.attack_range_m * 1.5 { t.run_speed } else { t.walk_speed };
+                j.running = speed == t.run_speed;
                 // Up close, square up to her (he only turns toward where he walks otherwise).
                 let face = (sees && dist < t.grab_max_m * 1.5).then_some(flat);
                 walk(&mut j, &mut xf, wish, speed, face, dt, &t, &world);
@@ -2553,6 +2559,7 @@ pub(crate) fn update_jason(
                 }
                 let wish = player_input.filter(|_| entered).map_or(Vec2::ZERO, |i| i.movement);
                 let speed = if j.combat { t.combat_speed } else if player_input.is_some_and(|i| i.run) && t.can_run { t.run_speed } else { t.walk_speed };
+                j.running = speed == t.run_speed;
                 walk(&mut j, &mut xf, wish, speed, None, dt, &t, &world);
                 if at >= counselor_model.as_ref().and_then(|c| c.length(GRABBED_ENTER)).unwrap_or(2.0) {
                     commands.entity(pe).insert(PlayAction(GRABBED_IDLE.into()));

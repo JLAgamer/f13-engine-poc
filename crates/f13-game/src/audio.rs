@@ -1189,17 +1189,15 @@ fn footstep(
     players: Query<(&Player, &GlobalTransform)>,
     (collision, dynamic): (Option<Res<crate::collision::WorldCollision>>, Option<Res<crate::collision::DynamicColliders>>),
     jasons: Query<(&crate::jason::Jason, &GlobalTransform)>,
-    killer: Option<Res<crate::jason::KillerTuning>>,
     water: Option<Res<crate::water::Water>>,
 ) {
     let (Some(sounds), Some(collision), Some(dynamic)) = (sounds, collision, dynamic) else { return };
-    // Hers, or Jason's (his table; running past his walking speed).
+    // Hers, or Jason's (his table; bIsRunning).
     let (tables, g, gait) = if let Ok((p, g)) = players.get(ev.owner) {
         let c = &p.counselor;
         (sounds.footsteps.as_ref(), g, if ev.land { "land" } else if c.running || c.sprinting { "run" } else { "walk" })
     } else if let Ok((j, g)) = jasons.get(ev.owner) {
-        let walk = killer.as_ref().map_or(160.0, |t| t.walk_speed);
-        (sounds.jason_footsteps.as_ref(), g, if j.velocity.length() > walk * 1.2 { "run" } else { "walk" })
+        (sounds.jason_footsteps.as_ref(), g, if j.running { "run" } else { "walk" })
     } else {
         return;
     };
