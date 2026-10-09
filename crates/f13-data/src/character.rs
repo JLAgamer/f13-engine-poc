@@ -351,7 +351,13 @@ pub fn ue_rich_curve(v: &serde_json::Value) -> f13_core::curve::RichCurve {
             arrive_tangent: f(k, "ArriveTangent"),
             leave_tangent: f(k, "LeaveTangent"),
         })
-        .collect();
+        .collect::<Vec<_>>();
+    // No keys: FRichCurve::Eval gives its DefaultValue (MAX_flt when unset).
+    if keys.is_empty() {
+        if let Some(d) = v["DefaultValue"].as_f64().filter(|d| d.abs() < 1e30) {
+            return f13_core::curve::RichCurve { keys: vec![Key { time: 0.0, value: d as f32, interp: Interp::Constant, arrive_tangent: 0.0, leave_tangent: 0.0 }] };
+        }
+    }
     f13_core::curve::RichCurve { keys }
 }
 

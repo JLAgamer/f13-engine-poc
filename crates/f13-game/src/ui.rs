@@ -478,7 +478,7 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         names: HashMap::new(),
         map,
         scale: 1.0,
-        anims: ["SCCounselorTimerWidget", "SCBreathWidget", "KillerHUDWidget", "ObjectivesWidget"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
+        anims: ["SCCounselorTimerWidget", "SCBreathWidget", "KillerHUDWidget", "ObjectivesWidget", "KillerAbilityWidget"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
         ability_icon_colors: {
             let d = std::fs::read_to_string(dir.join("ui/KillerAbilityWidget.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
             ["IconUsableColor", "IconUnusableColor", "IconLockedColor"].map(|k| color(&d["Defaults"][k], [1.0; 4]))
@@ -783,12 +783,14 @@ fn content_alpha(
 }
 
 /// A widget animation (UWidgetAnimation): its length, each Border's content alpha curve, each widget's
-/// ColorAndOpacity curves (red, green, blue, alpha) and its RenderTransform's scale curves (X, Y), by widget name.
+/// ColorAndOpacity curves (red, green, blue, alpha), its RenderTransform's scale curves (X, Y) and its canvas slot's
+/// Offsets curves (left, top, right, bottom), by widget name.
 struct WidgetAnim {
     length: f32,
     tracks: Vec<(String, f13_core::curve::RichCurve)>,
     colors: Vec<(String, [f13_core::curve::RichCurve; 4])>,
     scales: Vec<(String, [f13_core::curve::RichCurve; 2])>,
+    offsets: Vec<(String, [f13_core::curve::RichCurve; 4])>,
 }
 
 /// Loads a widget class's animations' ContentColorAndOpacity alpha tracks, ColorAndOpacity tracks and RenderTransform
@@ -827,7 +829,18 @@ fn load_anims(dir: &std::path::Path, class: &str) -> HashMap<String, WidgetAnim>
                     (t["Widget"].as_str().unwrap_or("").to_string(), [f13_data::character::ue_rich_curve(&ch["Scale"]), f13_data::character::ue_rich_curve(&ch["Scale[1]"])])
                 })
                 .collect();
-            (name.clone(), WidgetAnim { length: a["Length"].as_f64().unwrap_or(0.0) as f32, tracks, colors, scales })
+            let offsets = a["Tracks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|t| t["Property"] == "Offsets")
+                .map(|t| {
+                    let ch = &t["Sections"][0]["Channels"];
+                    let c = |k: &str| f13_data::character::ue_rich_curve(&ch[k]);
+                    (t["Widget"].as_str().unwrap_or("").to_string(), [c("LeftCurve"), c("TopCurve"), c("RightCurve"), c("BottomCurve")])
+                })
+                .collect();
+            (name.clone(), WidgetAnim { length: a["Length"].as_f64().unwrap_or(0.0) as f32, tracks, colors, scales, offsets })
         })
         .collect()
 }
@@ -845,7 +858,7 @@ impl PlayingAnims {
 }
 
 /// Plays the widget animations: each track's Border content alpha at the animation's time (backwards when reversed).
-fn widget_anims(time: Res<Time>, hud: Res<Hud>, playing: Res<PlayingAnims>, mut borders: Query<&mut ContentAlpha>, mut colors: Query<&mut WidgetColor>) {
+fn widget_anims(time: Res<Time>, hud: Res<Hud>, playing: Res<PlayingAnims>, mut borders: Query<&mut ContentAlpha>, mut colors: Query<&mut WidgetColor>, mut nodes: Query<&mut Node>) {
     let now = time.elapsed_secs();
     for (owner, name, start, reverse) in &playing.0 {
         let Some(anim) = hud.anims.get(owner).and_then(|a| a.get(name)) else { continue };
@@ -859,6 +872,15 @@ fn widget_anims(time: Res<Time>, hud: Res<Hud>, playing: Res<PlayingAnims>, mut 
         for (widget, curves) in &anim.colors {
             if let Some(mut c) = hud.names.get(&format!("{owner}.{widget}")).and_then(|&e| colors.get_mut(e).ok()) {
                 c.set_if_neq(WidgetColor(curves.each_ref().map(|k| k.eval(x))));
+            }
+        }
+        // A canvas slot's offsets (point anchors at the canvas's top left: position and size).
+        for (widget, curves) in &anim.offsets {
+            if let Some(mut n) = hud.names.get(&format!("{owner}.{widget}")).and_then(|&e| nodes.get_mut(e).ok()) {
+                let [l, t, w, h] = curves.each_ref().map(|k| Val::Px(k.eval(x) * hud.scale));
+                if n.left != l || n.top != t || n.width != w || n.height != h {
+                    (n.left, n.top, n.width, n.height) = (l, t, w, h);
+                }
             }
         }
     }
@@ -1741,7 +1763,7 @@ fn jason_hud(
     mut shown: Local<(bool, bool, f32)>,
     (mut morph_map, map_nodes): (Option<ResMut<crate::jason_player::MorphMap>>, Query<(&ComputedNode, &UiGlobalTransform)>),
     mut map_shown: Local<bool>,
-    mut unlocked: Local<[bool; 4]>,
+    (mut unlocked, mut ability_state): (Local<[bool; 4]>, Local<[(bool, bool); 4]>),
     (grab_info, grab_available, asset_server, mut images): (
         Option<Res<crate::jason::GrabKillInfo>>,
         Option<Res<crate::jason::GrabKillsAvailable>>,
@@ -1937,6 +1959,45 @@ fn jason_hud(
         }
         if let Some(mut v) = hud.names.get(&format!("KillerAbilityWidget.Icon{n}_Glow")).and_then(|&e| vis.get_mut(e).ok()) {
             v.set_if_neq(if ready { Visibility::Inherited } else { Visibility::Hidden });
+        }
+    }
+    // The widget's native tick (FUN_140434aa0): per ability, IsAbilityActive and IsAbilityAvailable against the
+    // cached bytes; the first change fires its event and ends the tick (one event a frame). Active flips:
+    // OnAbilityActive plays <ability>ActiveAnim looping (NumLoopsToPlay 0), OnAbilityEnded stops it (KeepState: it
+    // keeps its last frame). Available flips: OnAbilityAvailable plays <ability>ReadyToUse, OnAbilityUsed
+    // <ability>FadeOut.
+    for ability in Ability::ALL {
+        let i = ability as usize;
+        let n = format!("{ability:?}");
+        // IsAbilityActive (0x1403f4e00): bIsMorphActive, bIsSenseActive, bIsShiftActive, bIsStalkActive.
+        let active = match ability {
+            Ability::Morph => morph_map.as_ref().is_some_and(|m| m.morph),
+            Ability::Sense => k.sensing(now),
+            Ability::Shift => matches!(j.state, crate::jason::JasonState::Shifting { .. }),
+            Ability::Stalk => j.stalk.is_some(),
+        };
+        let available = a.is_available(ability, &Blockers::default());
+        let (was_available, was_active) = ability_state[i];
+        if active != was_active {
+            let anim = format!("{n}ActiveAnim");
+            if active {
+                playing.play("KillerAbilityWidget", &anim, now, false);
+            } else {
+                playing.0.retain(|(o, x, _, _)| !(o == "KillerAbilityWidget" && *x == anim));
+            }
+            ability_state[i].1 = active;
+            break;
+        }
+        if available != was_available {
+            playing.play("KillerAbilityWidget", &format!("{n}{}", if available { "ReadyToUse" } else { "FadeOut" }), now, false);
+            ability_state[i].0 = available;
+            break;
+        }
+    }
+    // The ActiveAnims loop (2 s each).
+    for (o, x, start, _) in playing.0.iter_mut() {
+        if o == "KillerAbilityWidget" && x.ends_with("ActiveAnim") && now - *start >= 2.0 {
+            *start += 2.0 * ((now - *start) / 2.0).floor();
         }
     }
     let rage = if a.rage_active { 1.0 } else { (a.rage_timer / a.tuning.rage_unlock_time.max(1.0)).clamp(0.0, 1.0) };
