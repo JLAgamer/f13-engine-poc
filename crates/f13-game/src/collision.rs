@@ -197,6 +197,11 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
             // "<package>:PersistentLevel.<actor>.<component>".
             let actor = p.component.split("PersistentLevel.").nth(1).and_then(|s| s.split('.').next()).filter(|a| interactables.contains(a));
             let tris = local(&p.file);
+            // A spline mesh's triangles bent along its spline, as it's drawn.
+            let tris = match &p.spline {
+                Some(s) => crate::spline_meshes::bend_tris(s, &tris),
+                None => tris,
+            };
             if tris.is_empty() {
                 continue;
             }

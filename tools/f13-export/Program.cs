@@ -253,6 +253,7 @@ void ExportLevel(string mapPath, params string[] extra)
                 CullDistance = new[] { smc.GetOrDefault("InstanceEndCullDistance", 0), (int)smc.GetOrDefault("LDMaxDrawDistance", 0f), (int)smc.GetOrDefault("CachedMaxDrawDistance", 0f) }
                     .Where(d => d > 0).DefaultIfEmpty(0).Min(),
             };
+            if (smc.ExportType == "SplineMeshComponent") p.Spline = SplineMeshSpline(smc);
             var world_ = AbsoluteTransform(smc);
             if (smc is F13InstancedMeshComponent ism)
             {
@@ -826,6 +827,33 @@ static void ResolveParameters(UObject mat, MaterialInfo info)
             if (TexPath(s.GetOrDefault<FPackageIndex?>("ParameterValue")) is { } tp) info.Textures.TryAdd(Key(s), tp);
         // Static switches live in the instance's StaticParameters (native data CUE4Parse does not expose by name).
     }
+}
+
+// A SplineMeshComponent's SplineParams (Start/End Pos, Tangent, Scale, Roll, Offset), SplineUpDir, ForwardAxis,
+// SplineBoundaryMin/Max and bSmoothInterpRollScale; unset ones are USplineMeshComponent's defaults (scale 1, up +Z,
+// forward X).
+static Newtonsoft.Json.Linq.JObject SplineMeshSpline(UObject c)
+{
+    static Newtonsoft.Json.Linq.JArray V3(FVector v) => [v.X, v.Y, v.Z];
+    static Newtonsoft.Json.Linq.JArray V2(FVector2D v) => [v.X, v.Y];
+    var s = c.GetOrDefault<FStructFallback?>("SplineParams");
+    var one = new FVector2D(1, 1);
+    var j = new Newtonsoft.Json.Linq.JObject();
+    foreach (var end in new[] { "Start", "End" })
+    {
+        j[end + "Pos"] = V3(s?.GetOrDefault($"{end}Pos", FVector.ZeroVector) ?? FVector.ZeroVector);
+        j[end + "Tangent"] = V3(s?.GetOrDefault($"{end}Tangent", FVector.ZeroVector) ?? FVector.ZeroVector);
+        j[end + "Scale"] = V2(s?.GetOrDefault($"{end}Scale", one) ?? one);
+        j[end + "Roll"] = s?.GetOrDefault($"{end}Roll", 0f) ?? 0f;
+        j[end + "Offset"] = V2(s?.GetOrDefault($"{end}Offset", FVector2D.ZeroVector) ?? FVector2D.ZeroVector);
+    }
+    j["SplineUpDir"] = V3(c.GetOrDefault("SplineUpDir", new FVector(0, 0, 1)));
+    var axis = c.GetOrDefault<FName>("ForwardAxis").Text;
+    j["ForwardAxis"] = axis.EndsWith("Y") ? 1 : axis.EndsWith("Z") ? 2 : 0;
+    j["SplineBoundaryMin"] = c.GetOrDefault("SplineBoundaryMin", 0f);
+    j["SplineBoundaryMax"] = c.GetOrDefault("SplineBoundaryMax", 0f);
+    j["bSmoothInterpRollScale"] = c.GetOrDefault("bSmoothInterpRollScale", false);
+    return j;
 }
 
 // A layered master's base layer textures (M_JasonV2_PickAxe: MatLayerBlend_Simple's "Base Material" is a material
@@ -1408,6 +1436,8 @@ class Placement
     public bool CastShadow = true;
     /// Not drawn past this distance from the camera (cm; 0 = always drawn).
     public int CullDistance;
+    /// A SplineMeshComponent's spline (component space, cm): its mesh is bent along it (SplineMeshSpline).
+    public Newtonsoft.Json.Linq.JObject? Spline;
 }
 class ActorInfo
 {

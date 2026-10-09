@@ -23,6 +23,7 @@ pub mod perception;
 pub mod ragdoll;
 pub mod recast;
 pub mod spawn;
+pub mod spline_mesh;
 pub mod stats;
 pub mod stumble;
 pub mod stun;

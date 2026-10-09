@@ -53,6 +53,7 @@ mod prop_anim;
 mod props;
 mod ragdoll;
 mod senses;
+mod spline_meshes;
 mod ui;
 mod windows;
 mod vehicle;
@@ -491,7 +492,7 @@ fn main() {
         )
         .add_plugins((FreeCameraPlugin, bevy::diagnostic::FrameTimeDiagnosticsPlugin::default()))
         .insert_resource(Level { layouts, grass: args.grass, foliage: args.foliage, aerial: args.aerial, fly: args.fly || args.aerial, camera: args.camera, scenes: vec![] })
-        .add_plugins((materials::MaterialsPlugin { export: args.export.clone() }, mipmaps::MipmapsPlugin, tonemap::TonemapPlugin, bloom::BloomPlugin, screen_effects::ScreenEffectsPlugin, sense_view::SenseViewPlugin, dof::DofPlugin, killer_fade::KillerFadePlugin))
+        .add_plugins((materials::MaterialsPlugin { export: args.export.clone() }, mipmaps::MipmapsPlugin, tonemap::TonemapPlugin, bloom::BloomPlugin, screen_effects::ScreenEffectsPlugin, sense_view::SenseViewPlugin, dof::DofPlugin, killer_fade::KillerFadePlugin, spline_meshes::SplineMeshPlugin))
         .insert_resource(ExportRoot(args.export.clone()))
         .add_plugins(props::PropsPlugin { seed, near_car: args.near_car && !(args.fly || args.aerial) })
         .add_plugins(lighting::LightingPlugin { flashlight: args.flashlight, unlit: args.unlit })
@@ -603,6 +604,9 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
                 }
                 if placed != Placed::default() {
                     e.insert(placed);
+                }
+                if let Some(s) = &p.spline {
+                    e.insert(spline_meshes::Bend(s.clone()));
                 }
                 spawned += 1;
             }

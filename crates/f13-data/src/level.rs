@@ -54,6 +54,55 @@ pub struct Placement {
     /// distance); 0: always drawn.
     #[serde(default)]
     pub cull_distance: f32,
+    /// A SplineMeshComponent's spline: its mesh is bent along it.
+    #[serde(default)]
+    pub spline: Option<SplineMesh>,
+}
+
+/// A SplineMeshComponent's SplineParams and settings (component space, cm; roll in radians).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct SplineMesh {
+    pub start_pos: [f32; 3],
+    pub start_tangent: [f32; 3],
+    pub start_scale: [f32; 2],
+    pub start_roll: f32,
+    pub start_offset: [f32; 2],
+    pub end_pos: [f32; 3],
+    pub end_tangent: [f32; 3],
+    pub end_scale: [f32; 2],
+    pub end_roll: f32,
+    pub end_offset: [f32; 2],
+    pub spline_up_dir: [f32; 3],
+    pub forward_axis: usize,
+    pub spline_boundary_min: f32,
+    pub spline_boundary_max: f32,
+    #[serde(rename = "bSmoothInterpRollScale")]
+    pub smooth_interp_roll_scale: bool,
+}
+
+impl SplineMesh {
+    /// The bend for a mesh whose extent along the forward axis is `mesh_min..mesh_max` (cm): the boundary is
+    /// SplineBoundaryMin/Max when they differ, else the mesh's.
+    pub fn params(&self, mesh_min: f32, mesh_max: f32) -> f13_core::spline_mesh::SplineParams {
+        let boundary = if self.spline_boundary_min < self.spline_boundary_max { (self.spline_boundary_min, self.spline_boundary_max) } else { (mesh_min, mesh_max) };
+        f13_core::spline_mesh::SplineParams {
+            start_pos: self.start_pos,
+            start_tangent: self.start_tangent,
+            start_scale: self.start_scale,
+            start_roll: self.start_roll,
+            start_offset: self.start_offset,
+            end_pos: self.end_pos,
+            end_tangent: self.end_tangent,
+            end_scale: self.end_scale,
+            end_roll: self.end_roll,
+            end_offset: self.end_offset,
+            up: self.spline_up_dir,
+            forward_axis: self.forward_axis,
+            boundary,
+            smooth_interp_roll_scale: self.smooth_interp_roll_scale,
+        }
+    }
 }
 
 fn yes() -> bool {
