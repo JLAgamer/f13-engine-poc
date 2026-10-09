@@ -257,6 +257,9 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         info.Stats["BreathRechargeModifier"] = StatValue(cls, "BreathRechargeModifier", 10f, (5, 1f));
         info.Stats["BreathNoiseMod"] = StatValue(cls, "BreathNoiseMod", 1f, (6, 0.2f));
         info.Music = MusicObject(cls);
+        // Her music object's scary sounds' cooldown curve (SCMusicObject_Counselor ScarySoundCooldownCurve).
+        if (ClassValue<FPackageIndex>(cls, "MusicObjectClass")?.Load<UStruct>() is { } music && CurveValue(music, "ScarySoundCooldownCurve") is { } scary)
+            (info.Curves ??= new())["ScarySoundCooldownCurve"] = scary;
         info.Cameras = DynamicCameras(cls);
         info.CameraShakes = new Newtonsoft.Json.Linq.JObject();
         foreach (var shake in new[] { "SummerCamp/Content/Cameras/CameraShakes/ED_Shake2" })

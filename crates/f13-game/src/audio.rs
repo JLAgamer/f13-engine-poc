@@ -181,7 +181,7 @@ impl Plugin for AudioPlugin {
             .init_resource::<MusicState>()
             .add_systems(
                 Update,
-                (add_listener, modulate, attenuate, actor_sounds, counselor_music, near_music, fades, ambience, voices, start_delayed, update_mixes, apply_mixes).chain(),
+                (add_listener, modulate, attenuate, actor_sounds, counselor_music, near_music, scary_sounds, fades, ambience, voices, start_delayed, update_mixes, apply_mixes).chain(),
             )
             .add_systems(PostUpdate, (to_panned.before(TransformSystems::Propagate), pan.after(TransformSystems::Propagate)))
             .add_observer(push_mix)
@@ -1250,10 +1250,15 @@ fn play_sound(
     listener: Query<&GlobalTransform, With<SpatialListener>>,
 ) {
     let Some(mut sounds) = sounds else { return };
-    let Some(cue) = sounds.cue(&ev.cue).cloned() else { return };
-    trace!("play {} at {:?}", ev.cue, ev.at);
+    spawn_cue(&mut commands, &assets, &mut sounds, &mut rng, listener_position(&listener), &ev.cue, ev.at);
+}
+
+/// Plays a cue (PlaySoundAtLocation at `at`, else 2D): its voices.
+fn spawn_cue(commands: &mut Commands, assets: &AssetServer, sounds: &mut Sounds, rng: &mut AudioRng, ear: Option<Vec3>, name: &str, at: Option<Vec3>) -> Vec<Entity> {
+    let Some(cue) = sounds.cue(name).cloned() else { return Vec::new() };
+    trace!("play {name} at {at:?}");
     let (voices, att) = cue.play(&mut || rng.0.frand());
-    let ear = listener_position(&listener);
+    let mut spawned = Vec::new();
     for v in voices {
         let mut settings = PlaybackSettings {
             mode: if v.looping { PlaybackMode::Loop } else { PlaybackMode::Despawn },
@@ -1262,7 +1267,7 @@ fn play_sound(
             ..PlaybackSettings::DESPAWN
         };
         let source = AudioPlayer::new(assets.load(format!("sounds/{}", v.file)));
-        let e = match (ev.at, att.clone().filter(|a| a.attenuate || a.spatialize)) {
+        let e = match (at, att.clone().filter(|a| a.attenuate || a.spatialize)) {
             (Some(at), Some(att)) => {
                 let factor = ear.map_or(1.0, |e| att.factor(e.distance(at) * 100.0));
                 settings.volume = Volume::Linear(v.volume * factor);
@@ -1278,6 +1283,63 @@ fn play_sound(
         if v.delay > 0.0 {
             commands.entity(e).insert(StartAfter(v.delay));
         }
+        spawned.push(e);
+    }
+    spawned
+}
+
+/// A scary sound's voice (SCMusicComponent_Counselor's ScarySounds component).
+#[derive(Component)]
+struct ScaryVoice;
+
+/// SCMusicComponent_Counselor's scary sounds: its BeginPlay (FUN_14031d130) loops a 0.1 s timer on FUN_1402fcb30,
+/// which, for her when she's the local player (and alive), with her fear at least ScarySoundsFearLevel, no scary sound
+/// playing and its cooldown timer out, plays Indoor_ or Outdoor_ScarySounds_Sounds (IsIndoors) with
+/// SpawnSoundAtLocation at her root offset by a random X and Y each in ScarySoundsHearingRadiusMin..Max (cm), its Z the
+/// root's added to itself (the game's sum: twice her height above the world's zero), then sets the cooldown:
+/// rand(ScarySoundCooldownMin..Max) x ScarySoundCooldownCurve(fear / 100). SCMusicObject_Counselor's constructor
+/// (0x1402f4140): fear level 70, radius -1000..1000, cooldown 10..20 s; MusicCounselor sets the curve and the cues.
+#[allow(clippy::too_many_arguments)]
+fn scary_sounds(
+    mut commands: Commands,
+    time: Res<Time>,
+    assets: Res<AssetServer>,
+    sounds: Option<ResMut<Sounds>>,
+    mut rng: ResMut<AudioRng>,
+    (counselor, play_jason, surroundings): (Option<Res<crate::character::CounselorCharacter>>, Option<Res<crate::jason_player::PlayJason>>, Option<Res<crate::fear_events::Surroundings>>),
+    players: Query<(&Player, &Transform)>,
+    listener: Query<&GlobalTransform, With<SpatialListener>>,
+    playing: Query<(), With<ScaryVoice>>,
+    mut state: Local<(f32, f32)>,
+) {
+    let (Some(mut sounds), Some(counselor)) = (sounds, counselor) else { return };
+    let now = time.elapsed_secs();
+    // The 0.1 s timer.
+    if now < state.0 {
+        return;
+    }
+    state.0 = now + 0.1;
+    let Ok((p, xf)) = players.single() else { return };
+    let music = &counselor.info.music;
+    let v = |k: &str, d: f32| music[k].as_f64().map_or(d, |x| x as f32);
+    if play_jason.is_some() || !p.counselor.alive() || p.fear < v("ScarySoundsFearLevel", 70.0) || !playing.is_empty() || now < state.1 {
+        return;
+    }
+    let (lo, hi) = (v("ScarySoundsHearingRadiusMin", -1000.0), v("ScarySoundsHearingRadiusMax", 1000.0));
+    let (dx, dy) = (rng.0.frand() * (hi - lo) + lo, rng.0.frand() * (hi - lo) + lo);
+    let indoors = surroundings.as_ref().is_some_and(|s| s.indoors(xf.translation));
+    let key = if indoors { "Indoor_ScarySounds_Sounds" } else { "Outdoor_ScarySounds_Sounds" };
+    let Some(cue) = cue_name(&music[key]) else { return };
+    // Her root (the capsule's centre), in Unreal's Z: doubled.
+    let root_z = xf.translation.y + crate::player::CAPSULE_HALF_HEIGHT_M;
+    let at = Vec3::new(xf.translation.x + dx / 100.0, 2.0 * root_z, xf.translation.z + dy / 100.0);
+    debug!("scary sound {cue} at {at:.1} (fear {:.0})", p.fear);
+    for e in spawn_cue(&mut commands, &assets, &mut sounds, &mut rng, listener_position(&listener), &cue, Some(at)) {
+        commands.entity(e).insert(ScaryVoice);
+    }
+    if let Some(curve) = counselor.info.curve("ScarySoundCooldownCurve") {
+        let (cmin, cmax) = (v("ScarySoundCooldownMin", 10.0), v("ScarySoundCooldownMax", 20.0));
+        state.1 = now + (rng.0.frand() * (cmax - cmin) + cmin) * curve.eval(p.fear * 0.01);
     }
 }
 
