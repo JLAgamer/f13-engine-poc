@@ -199,6 +199,8 @@ struct FxStep {
     expect: fn(&Snap) -> bool,
 }
 
+/// The fight bot's swing: how close she steps in before swinging (m); her light swings reach his capsule from about here.
+const SWING_REACH_M: f32 = 1.1;
 const FX_STEPS: &[FxStep] = &[
     FxStep { what: "open from outside", fx: Fx::Door, outside: Some(true), hold: false, sprint: false, walk: None, expect: |s| s.door_open },
     FxStep { what: "close", fx: Fx::Door, outside: Some(true), hold: false, sprint: false, walk: None, expect: |s| !s.door_open },
@@ -947,6 +949,7 @@ fn run_bot(
             keys.release(KeyCode::KeyA);
             keys.release(KeyCode::KeyD);
             keys.release(KeyCode::KeyM);
+            keys.release(KeyCode::KeyW);
             // Carrying the map: open it once (and photograph it).
             let has_map = inv.is_some_and(|i| i.special.iter().any(|&e| carried.get(e).is_ok_and(|it| it.kind == ItemKind::Map)));
             if has_map && !bot.jason_shots.contains(&"map") {
@@ -971,13 +974,34 @@ fn run_bot(
             camera.yaw = (-d.x).atan2(-d.z);
             // At his chest (the camera's eye is about 1.9 m over her feet).
             camera.pitch = (d.y + 1.2 - 1.9).atan2(Vec2::new(d.x, d.z).length()).clamp(-1.0, 0.5);
+            let kind = |e: Entity| carried.get(e).ok().map(|i| i.kind.clone());
+            let armed = matches!(inv.and_then(|i| i.hand).and_then(kind), Some(ItemKind::Weapon(_)));
+            // With a weapon, as a player fights him: he swings from his attack range (2 m), past the weapon's reach,
+            // and lands first (his hit window opens 0.22 s in, hers SWING_LEAD_S), so she blocks in combat stance as
+            // he comes, and once he's swung (his attack delay) steps in and swings back.
+            let opening = matches!(j.state, JasonState::Hunting) && j.recovering();
+            if armed && !busy && !held && dist < 4.0 && !opening {
+                if p.counselor.stance != f13_core::counselor::Stance::Combat {
+                    if keys.pressed(KeyCode::KeyC) {
+                        keys.release(KeyCode::KeyC);
+                    } else {
+                        keys.press(KeyCode::KeyC);
+                    }
+                } else {
+                    mouse.press(MouseButton::Right);
+                }
+            }
             if matches!(j.state, JasonState::Hunting) && !busy {
                 let kind = |e: Entity| carried.get(e).ok().map(|i| i.kind.clone());
                 let hand = inv.and_then(|i| i.hand).and_then(kind);
                 match hand {
-                    Some(ItemKind::Weapon(_)) if dist < 2.6 => {
-                        debug!("bot: swing at {dist:.2} m");
-                        mouse.press(MouseButton::Left);
+                    Some(ItemKind::Weapon(_)) => {
+                        if opening && dist < SWING_REACH_M {
+                            info!("bot: swing at {dist:.2} m");
+                            mouse.press(MouseButton::Left);
+                        } else if opening && dist < 6.0 {
+                            keys.press(KeyCode::KeyW);
+                        }
                     }
                     Some(ItemKind::Gun { .. }) if dist < 10.0 => mouse.press(MouseButton::Left),
                     Some(ItemKind::Trap) if dist < 14.0 && !bot.jason_shots.contains(&"trap") => {

@@ -487,6 +487,11 @@ pub enum JasonState {
 }
 
 impl Jason {
+    /// Between his attacks (the attack delay after a swing or a missed grab).
+    pub fn recovering(&self) -> bool {
+        self.cooldown > 0.0
+    }
+
     /// Whether a stun takes now: not right after one (stun immunity), and in a state a hit can interrupt.
     pub fn stunnable(&self) -> bool {
         self.stun_immune <= 0.0
