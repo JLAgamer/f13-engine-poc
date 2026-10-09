@@ -56,6 +56,10 @@ Moved from Milestone 1 (not tied to gameplay):
 - [ ] Post-processing, remaining: SSAO (FPostProcessAmbientOcclusion*: it darkens indirect light only; settings and
       cvars read, see MODLOG "SSAO (started)"); then compare
       against the game's own screenshots. (Bloom's fast blur: ported, ComputeOutputDesc's half-width X pass)
+- [ ] Bugs:
+  - [ ] Escaping a grab can put her through a cabin's wall
+  - [ ] Context kills don't prompt Jason
+  - [ ] Grabbing her as Jason loops the struggle audio
 
 ## Milestone 3: networking
 Server-authoritative netcode, tested with bots, then an 8-player lobby.
