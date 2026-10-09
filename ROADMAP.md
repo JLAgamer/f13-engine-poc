@@ -23,6 +23,10 @@ The finished Milestone 1 work, with its references to the decomp, is in F13-deco
 Police, 4-seat car, boat, then the others, one at a time. The police and the 4-seat car are in (MODLOG); Crystal Lake
 (small) has no boat or other escape, so those come with more maps (Afterwards).
 
+Bugs:
+- [ ] Grabbing a counselor as Jason still loops the struggle audio (the sound cues' looping and random nodes are
+      ported, audio.rs Reloop; not the fix)
+
 Moved from Milestone 1 (not tied to gameplay):
 - [ ] Match flow, remaining: the level intro and outro sequences. (Badges: their award sites and classes are read,
       see MODLOG; the game shows them in the lobby's SCMatchEndLobbyWidget, so with the lobby in Milestone 3)
