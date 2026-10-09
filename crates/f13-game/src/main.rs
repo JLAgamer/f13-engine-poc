@@ -35,6 +35,7 @@ mod counselor_camera;
 mod screen_effects;
 mod sense_view;
 mod dof;
+mod ssao;
 mod killer_fade;
 mod tonemap;
 mod interaction_camera;
@@ -524,7 +525,7 @@ fn main() {
         )
         .add_plugins((FreeCameraPlugin, bevy::diagnostic::FrameTimeDiagnosticsPlugin::default()))
         .insert_resource(Level { layouts, grass: args.grass, foliage: args.foliage, aerial: args.aerial, fly: args.fly || args.aerial, camera: args.camera, scenes: vec![] })
-        .add_plugins((materials::MaterialsPlugin { export: args.export.clone() }, mipmaps::MipmapsPlugin, tonemap::TonemapPlugin, bloom::BloomPlugin, screen_effects::ScreenEffectsPlugin, sense_view::SenseViewPlugin, dof::DofPlugin, killer_fade::KillerFadePlugin, spline_meshes::SplineMeshPlugin))
+        .add_plugins((materials::MaterialsPlugin { export: args.export.clone() }, mipmaps::MipmapsPlugin, tonemap::TonemapPlugin, bloom::BloomPlugin, screen_effects::ScreenEffectsPlugin, sense_view::SenseViewPlugin, dof::DofPlugin, ssao::SsaoPlugin, killer_fade::KillerFadePlugin, spline_meshes::SplineMeshPlugin))
         .insert_resource(ExportRoot(args.export.clone()))
         .add_plugins(props::PropsPlugin { seed, near_car: args.near_car && !(args.fly || args.aerial) })
         .add_plugins(lighting::LightingPlugin { flashlight: args.flashlight, unlit: args.unlit })
@@ -644,7 +645,7 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
                     e.insert(spline_meshes::Bend(s.clone()));
                 }
                 if let Some(a) = &box_mesh {
-                    e.insert(police::BoxMesh { actor: a.clone(), file: p.file.clone() });
+                    e.insert(police::BoxMesh { actor: a.clone(), file: p.file.clone(), materials: p.material_map.clone() });
                 }
                 spawned += 1;
             }

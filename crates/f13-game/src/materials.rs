@@ -7,7 +7,9 @@
 //!   ([`TerrainMaterial`], shaders/terrain.wgsl);
 //! - props with an RMA map (the `M_Prop_Master` family): roughness/metallic/AO from it ([`PropMaterial`],
 //!   shaders/prop.wgsl);
-//! - the lake (`M_Lake_Ripples_*`): a first-pass water surface ([`WaterMaterial`], shaders/water.wgsl).
+//! - the lake (`M_Lake_Ripples_*`): a first-pass water surface ([`WaterMaterial`], shaders/water.wgsl);
+//! - small one-off masters: the phone box's and CB tower's lights, the cabin name signs ([`MasterMaterial`],
+//!   shaders/masters.wgsl).
 
 use bevy::asset::{embedded_asset, RenderAssetUsages};
 use bevy::gltf::GltfMaterialName;
@@ -25,6 +27,12 @@ pub(crate) type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainExt>
 pub(crate) type WaterMaterial = ExtendedMaterial<StandardMaterial, WaterExt>;
 pub(crate) type PropMaterial = ExtendedMaterial<StandardMaterial, PropExt>;
 pub(crate) type SkinMaterial = ExtendedMaterial<StandardMaterial, SkinMaskExt>;
+pub(crate) type MasterMaterial = ExtendedMaterial<StandardMaterial, MasterExt>;
+
+/// The phone box's light material while it's broken (its mesh's own, SCPhoneJunctionBox BrokenLightMaterial) and
+/// once repaired (RepairedLightMaterial). No mesh uses the second, so the export's materials.json lacks it.
+pub(crate) const PHONE_BOX_BROKEN_LIGHT: &str = "M_Interactive_TelephoneBox_01_Emissive_Red";
+pub(crate) const PHONE_BOX_REPAIRED_LIGHT: &str = "M_Interactive_TelephoneBox_01_Emissive_Blue";
 
 const TERRAIN_LAYERS: usize = 6;
 const WATER_MASTER: &str = "M_Lake_Ripples";
@@ -40,6 +48,8 @@ impl Plugin for MaterialsPlugin {
         embedded_asset!(app, "shaders/water.wgsl");
         embedded_asset!(app, "shaders/prop.wgsl");
         embedded_asset!(app, "shaders/skin.wgsl");
+        embedded_asset!(app, "shaders/skin_prepass.wgsl");
+        embedded_asset!(app, "shaders/masters.wgsl");
         let entries = std::fs::read_to_string(self.export.join("materials.json"))
             .ok()
             .and_then(|t| match serde_json::from_str(&t) {
@@ -54,7 +64,18 @@ impl Plugin for MaterialsPlugin {
                 HashMap::new()
             });
         // Unreal names are case-insensitive (meshes say M_rocks_scattered, the asset is M_Rocks_Scattered).
-        let entries = entries.into_iter().map(|(k, v): (String, MaterialInfo)| (k.to_lowercase(), v)).collect();
+        let mut entries: HashMap<String, MaterialInfo> = entries.into_iter().map(|(k, v): (String, MaterialInfo)| (k.to_lowercase(), v)).collect();
+        // A master with no parameters, built from its compiled shader alone (master_material).
+        entries.entry(PHONE_BOX_REPAIRED_LIGHT.to_lowercase()).or_insert_with(|| MaterialInfo {
+            file: String::new(),
+            blend: "BLEND_Opaque".into(),
+            two_sided: false,
+            master: PHONE_BOX_REPAIRED_LIGHT.into(),
+            scalars: HashMap::from([("Power".into(), 8.0)]),
+            vectors: HashMap::new(),
+            textures: HashMap::new(),
+            landscape: None,
+        });
         app.insert_resource(MaterialIndex { root: self.export.clone(), entries, ..default() })
             .add_plugins((
                 MaterialPlugin::<BlendMaterial>::default(),
@@ -62,6 +83,7 @@ impl Plugin for MaterialsPlugin {
                 MaterialPlugin::<WaterMaterial>::default(),
                 MaterialPlugin::<PropMaterial>::default(),
                 MaterialPlugin::<SkinMaterial>::default(),
+                MaterialPlugin::<MasterMaterial>::default(),
             ))
             .add_systems(Update, (apply_materials, strip_vertex_colors).chain());
     }
@@ -134,6 +156,7 @@ enum Built {
     Terrain(Handle<TerrainMaterial>),
     Water(Handle<WaterMaterial>),
     Prop(Handle<PropMaterial>),
+    Master(Handle<MasterMaterial>),
     /// Not drawn: translucent planes with no textures (rain fixes, bed and exit blockers, light planes), which the
     /// game draws invisible (M_rainFix_invisible's compiled shader outputs zero) or as faint effects.
     Hidden,
@@ -413,6 +436,10 @@ impl MaterialExtension for SkinMaskExt {
     fn fragment_shader() -> ShaderRef {
         "embedded://f13_game/shaders/skin.wgsl".into()
     }
+
+    fn prepass_fragment_shader() -> ShaderRef {
+        "embedded://f13_game/shaders/skin_prepass.wgsl".into()
+    }
 }
 
 impl MaterialIndex {
@@ -456,6 +483,62 @@ impl MaterialIndex {
         }
         Some(ExtendedMaterial { base, extension: SkinMaskExt { mask_a, mask_b } })
     }
+}
+
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
+pub(crate) struct MasterExt {
+    #[uniform(100)]
+    params: MasterParams,
+    #[texture(101)]
+    #[sampler(102)]
+    tex: Handle<Image>,
+}
+
+#[derive(ShaderType, Reflect, Debug, Clone)]
+struct MasterParams {
+    /// Mode, Power, FlickerOffset (shaders/masters.wgsl).
+    mode: Vec4,
+    a: Vec4,
+    b: Vec4,
+}
+
+impl MaterialExtension for MasterExt {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://f13_game/shaders/masters.wgsl".into()
+    }
+}
+
+/// The one-off masters read from their compiled base passes (F13-decomp shaders/<master>, MODLOG "Emissive masters"),
+/// or None for any other material. Their colours are the shaders' constants (linear).
+fn master_material(root: &Path, info: &MaterialInfo, loader: &Loader) -> Option<MasterMaterial> {
+    let mut base = standard_material(root, info, loader);
+    base.perceptual_roughness = 0.5;
+    let flicker = || loader.load("SummerCamp/Content/Art/Textures/Flicker2", Tex::Data);
+    let v = |c: [f32; 3], w: f32| Vec4::new(c[0], c[1], c[2], w);
+    let power = info.scalar("Power", 0.0);
+    // The pulse: c = sin(1.256637 t) * a + b; the phone box's base colour is c (a.w = 1).
+    let pulse = |a: [f32; 3], b: [f32; 3], own_base: bool| MasterParams { mode: Vec4::new(0.0, power, 0.0, 0.0), a: v(a, own_base as u8 as f32), b: v(b, 0.0) };
+    let (params, tex) = match info.master.as_str() {
+        "M_Interactive_TelephoneBox_01_Emissive_Blue" => (pulse([0.0, 0.007812, 0.44], [0.0, 0.007812, 0.44], true), flicker()?),
+        "M_Interactive_TelephoneBox_01_Emissive_Yellow" => (pulse([0.176, 0.102667, 0.0], [0.704, 0.410666, 0.0], true), flicker()?),
+        "M_Camp_CBRadio_Tower_01_Emissive" => {
+            base.base_color = LinearRgba::rgb(0.88, 0.008238, 0.0).into();
+            (pulse([0.264, 0.002471, 0.0], [0.616, 0.005767, 0.0], false), flicker()?)
+        }
+        "M_Interactive_TelephoneBox_01_Emissive_Red" => {
+            base.base_color = Color::BLACK;
+            let mode = Vec4::new(1.0, 0.0, info.scalar("FlickerOffset", 0.0), 0.0);
+            (MasterParams { mode, a: Vec4::ZERO, b: Vec4::ZERO }, flicker()?)
+        }
+        "M_Signs_Cabin_Names_01" => {
+            // Specular 0.1: F0 0.08 x 0.1 = 0.16 reflectance^2.
+            base.reflectance = (0.5f32 * 0.1).sqrt();
+            let rma = loader.load("SummerCamp/Content/Props/Manmade/Signs/Textures/T_Signs_Cabin_Names_01_RMA", Tex::Data)?;
+            (MasterParams { mode: Vec4::new(2.0, 0.0, 0.0, 0.0), a: Vec4::ZERO, b: Vec4::ZERO }, rma)
+        }
+        _ => return None,
+    };
+    Some(ExtendedMaterial { base, extension: MasterExt { params, tex } })
 }
 
 impl MaterialExtension for PropExt {
@@ -534,7 +617,7 @@ fn apply_materials(
         ResMut<Assets<WaterMaterial>>,
         ResMut<Assets<Image>>,
     ),
-    mut props: ResMut<Assets<PropMaterial>>,
+    (mut props, mut masters): (ResMut<Assets<PropMaterial>>, ResMut<Assets<MasterMaterial>>),
     assets: Res<AssetServer>,
 ) {
     let index = &mut *index;
@@ -572,10 +655,17 @@ fn apply_materials(
                 } else if let Some(kind) = blend_kind(&info.master) {
                     // (The POM variant's parallax is not ported: drawn flat.)
                     Built::Blend(blends.add(blend_material(info, kind, &loader, &fallback)))
+                } else if let Some(m) = master_material(&index.root, info, &loader) {
+                    Built::Master(masters.add(m))
                 } else if let Some((rma, params)) = prop_params(info, &loader) {
                     Built::Prop(props.add(ExtendedMaterial { base: standard_material(&index.root, info, &loader), extension: PropExt { params, rma } }))
                 } else {
-                    Built::Standard(standard.add(standard_material(&index.root, info, &loader)))
+                    let mut m = standard_material(&index.root, info, &loader);
+                    if info.master == "M_Lightsources_Ceiling_Bulbs" {
+                        // Its compiled base pass: the textures' colour and normal, roughness 0.5, metallic 0, specular 0.5.
+                        m.perceptual_roughness = 0.5;
+                    }
+                    Built::Standard(standard.add(m))
                 };
                 index.built.insert(key.clone(), b.clone());
                 b
@@ -613,6 +703,9 @@ fn apply_materials(
                 e.remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(h));
             }
             Built::Prop(h) => {
+                e.remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(h));
+            }
+            Built::Master(h) => {
                 e.remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(h));
             }
             Built::Hidden => {

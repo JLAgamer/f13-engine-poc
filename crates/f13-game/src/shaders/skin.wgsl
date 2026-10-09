@@ -9,6 +9,10 @@
     forward_io::{VertexOutput, FragmentOutput},
 }
 
+#ifdef SCREEN_SPACE_AMBIENT_OCCLUSION
+#import bevy_pbr::mesh_view_bindings::screen_space_ambient_occlusion_texture
+#endif
+
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var mask_a: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var mask_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var mask_b: texture_2d<f32>;
@@ -22,6 +26,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     pbr_input.material.base_color.a = saturate(1.0 - a * (1.0 - b));
 #endif
     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
+#ifdef SCREEN_SPACE_AMBIENT_OCCLUSION
+    // The ambient light's occlusion as the engine's ambient pass has it (FPostProcessAmbientPS): the screen-space AO
+    // (ssao.rs) times the material's own, on its diffuse and specular alike.
+    let ao = 1.0 * textureLoad(screen_space_ambient_occlusion_texture, vec2<i32>(in.position.xy), 0i).r;
+    pbr_input.diffuse_occlusion = vec3(ao);
+    pbr_input.specular_occlusion = ao;
+#endif
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);

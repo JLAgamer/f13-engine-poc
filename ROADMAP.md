@@ -27,8 +27,7 @@ Moved from Milestone 1 (not tied to gameplay):
 - [ ] Match flow, remaining: the level intro and outro sequences. (Badges: their award sites and classes are read,
       see MODLOG; the game shows them in the lobby's SCMatchEndLobbyWidget, so with the lobby in Milestone 3)
 - [ ] Materials, remaining: water (first pass only: colour, gloss, panning ripples; no depth fade, foam or
-      reflections), POM parallax, the other emissive masters (signs, the CB tower, the phone box), foliage
-      subsurface, the Chevette's paint mask
+      reflections), POM parallax, foliage subsurface, the Chevette's paint mask
 - [ ] Particle effects (Cascade ParticleSystems): none ported yet. The walls' and doors' hit dust (HitParticle), the
       knife's trail (P_Jason_ThrowingKnife_01), blood, the campfires and fireplaces, the cars' exhaust, rain, the
       broken phone box's smoke
@@ -52,9 +51,7 @@ Moved from Milestone 1 (not tied to gameplay):
 - [ ] Audio, remaining: the audio volumes' reverb (the game's XAudio2 device runs XAudio2's own reverb from each
       volume's ReverbEffect; what's done, and why the stingers, calls and dead bodies' lines aren't listed: MODLOG
       "Scary sounds", "Her voice lines: where and when")
-- [ ] Post-processing, remaining: SSAO (FPostProcessAmbientOcclusion*: it darkens indirect light only; settings and
-      cvars read, see MODLOG "SSAO (started)"); then compare
-      against the game's own screenshots. (Bloom's fast blur: ported, ComputeOutputDesc's half-width X pass)
+- [ ] Post-processing, remaining: compare against the game's own screenshots. (Bloom's fast blur: ported, ComputeOutputDesc's half-width X pass)
 
 ## Milestone 3: networking
 Server-authoritative netcode, tested with bots, then an 8-player lobby.

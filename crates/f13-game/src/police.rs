@@ -40,6 +40,7 @@
 //! obstructed when any overlapping actor is an SCKillerCharacter: Jason's capsule touching the sphere. Jason entering
 //! the active volume is the sphere's begin overlap with his capsule, the same test.
 
+use crate::materials::{MaterialOverrides, PHONE_BOX_BROKEN_LIGHT, PHONE_BOX_REPAIRED_LIGHT};
 use crate::props::EscapeZone;
 use bevy::prelude::*;
 use f13_data::classes::ClassDb;
@@ -81,6 +82,8 @@ pub struct PhoneBox {
 pub struct BoxMesh {
     pub actor: String,
     pub file: String,
+    /// The placement's own material overrides.
+    pub materials: std::collections::HashMap<String, String>,
 }
 
 /// One of a phone box's lights: the broken set or the fixed one.
@@ -112,7 +115,16 @@ fn box_look(
         }
         for (e, m) in meshes.iter().filter(|(_, m)| m.actor == b.actor) {
             let file = if broken { BROKEN_BOX_MESH.to_string() } else { m.file.clone() };
-            commands.entity(e).insert(bevy::world_serialization::WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(file))));
+            // OnRep_IsBroken: the Mesh's LightMaterialIndex slot (1: both meshes' Emissive_Red) gets BrokenLightMaterial
+            // or RepairedLightMaterial.
+            let mut materials = m.materials.clone();
+            let light = if broken { PHONE_BOX_BROKEN_LIGHT } else { PHONE_BOX_REPAIRED_LIGHT };
+            materials.insert(PHONE_BOX_BROKEN_LIGHT.to_string(), light.to_string());
+            let mut ec = commands.entity(e);
+            if let Some(o) = MaterialOverrides::new(&materials) {
+                ec.insert(o);
+            }
+            ec.insert(bevy::world_serialization::WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(file))));
         }
     }
 }

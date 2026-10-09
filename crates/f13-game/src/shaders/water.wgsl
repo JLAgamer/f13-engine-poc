@@ -40,6 +40,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     pbr_input.material.perceptual_roughness = params.surface.x;
     pbr_input.material.metallic = 0.0;
     pbr_input.material.reflectance = vec3(sqrt(0.5 * params.surface.y));
+    // Translucent (M_Lake_Ripples_Translucent): the engine's screen-space AO doesn't reach it.
+    pbr_input.diffuse_occlusion = vec3(1.0);
+    pbr_input.specular_occlusion = 1.0;
 
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);

@@ -274,7 +274,7 @@ const UNLIT_AMBIENT: f32 = 1.2;
 const UNLIT_SUN_LUX: f32 = 2.0;
 
 #[derive(Resource)]
-struct Unlit;
+pub(crate) struct Unlit;
 
 #[derive(Resource)]
 struct FlashlightAtStart(bool);

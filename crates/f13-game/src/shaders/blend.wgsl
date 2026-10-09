@@ -12,6 +12,10 @@
     forward_io::{VertexOutput, FragmentOutput},
 }
 
+#ifdef SCREEN_SPACE_AMBIENT_OCCLUSION
+#import bevy_pbr::mesh_view_bindings::screen_space_ambient_occlusion_texture
+#endif
+
 struct BlendParams {
     // TilingRate A, Detail Tiling A, TilingRate B, Detail Tiling B
     tiling: vec4<f32>,
@@ -55,6 +59,7 @@ fn tinted(c: vec4<f32>, tint: vec3<f32>, desaturation: f32) -> vec3<f32> {
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
+    var material_ao = 1.0;
     let mode = u32(params.blend.z + 0.5);
 
 #ifdef VERTEX_UVS_A
@@ -105,7 +110,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     pbr_input.material.perceptual_roughness = saturate(mix(rough_a, rough_b, t));
     if mode == 0u {
         pbr_input.material.metallic = saturate(mix(ra.g, rb.g, t));
-        pbr_input.diffuse_occlusion = vec3(saturate(mix(ra.b, rb.b, t)));
+        material_ao = saturate(mix(ra.b, rb.b, t));
+        pbr_input.diffuse_occlusion = vec3(material_ao);
     } else {
         pbr_input.material.metallic = 0.0;
     }
@@ -127,6 +133,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     pbr_input.N = normalize(nt.x * tbn[0] + nt.y * tbn[1] + nt.z * tbn[2]);
 #endif
 
+#ifdef SCREEN_SPACE_AMBIENT_OCCLUSION
+    // The ambient light's occlusion as the engine's ambient pass has it (FPostProcessAmbientPS): the screen-space AO
+    // (ssao.rs) times the material's own, on its diffuse and specular alike.
+    let ao = material_ao * textureLoad(screen_space_ambient_occlusion_texture, vec2<i32>(in.position.xy), 0i).r;
+    pbr_input.diffuse_occlusion = vec3(ao);
+    pbr_input.specular_occlusion = ao;
+#endif
     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);
