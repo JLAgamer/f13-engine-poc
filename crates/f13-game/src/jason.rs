@@ -95,7 +95,7 @@ const HEAVY_ATTACK: &str = "combat_stand_2h_attack_heavy";
 const GRAB_STARTUP: &str = "normal_grab_enter_1";
 const PERFORM_GRAB_TEST_S: f32 = 0.3;
 /// The GrabSuccess section; the grab kills open once it's played (FinishGrabCounselor's UpdateGrabState timer).
-const GRAB_ENTER: &str = "normal_grab_Success_2";
+pub const GRAB_ENTER: &str = "normal_grab_Success_2";
 /// The GrabMissed section, and the montage's end counted from the test: its root motion holds him until then
 /// (EnterGrabFinish at 1.279 s hands his input back, but the montage's root motion overrides it).
 const GRAB_MISS: &str = "normal_grab_fail";
@@ -640,6 +640,14 @@ impl Jason {
     /// Holding her in his grab (she can struggle), not killing her.
     pub fn holding(&self) -> bool {
         matches!(self.state, JasonState::Holding { .. })
+    }
+
+    /// How long he's held her (from the grab's enter), while he does.
+    pub fn holding_for(&self) -> Option<f32> {
+        match self.state {
+            JasonState::Holding { t } => Some(t),
+            _ => None,
+        }
     }
 }
 
@@ -1610,6 +1618,8 @@ pub(crate) fn update_jason(
                         commands.trigger(crate::audio::ActorSound { actor: pe, prop: "VO:JasonStun" });
                     }
                     if matches!(j.state, JasonState::Holding { .. }) {
+                        let in_water = water.as_ref().is_some_and(|w| w.surface_at(xf.translation + Vec3::Y * t.capsule.half_height).is_some());
+                        drop_counselor(&mut pxf, &xf, t.capsule.half_height, in_water, &world);
                         release(&mut commands, pe, GRAB_BREAK, counselor_model.as_deref());
                     }
                     j.state = JasonState::Stunned { t: 0.0, stun };
@@ -2650,13 +2660,16 @@ pub(crate) fn update_jason(
                     p.counselor.stamina = (p.counselor.stamina + back).min(ptuning.counselor.stamina_max);
                     info!("Vanessa: struggled free after {at:.1}s (stamina +{back:.0})");
                     commands.trigger(Score(Stun::GrabBreak.score_event().unwrap_or_default()));
+                    let in_water = water.as_ref().is_some_and(|w| w.surface_at(xf.translation + Vec3::Y * t.capsule.half_height).is_some());
+                    drop_counselor(&mut pxf, &xf, t.capsule.half_height, in_water, &world);
                     release(&mut commands, pe, GRAB_BREAK, counselor_model.as_deref());
                     j.state = JasonState::Stunned { t: 0.0, stun: Stun::GrabBreak };
                     commands.entity(je).insert(PlayAction(Stun::GrabBreak.anims().0.into()));
                 } else if let Some(mut pk) = placed_kills
                     .iter_mut()
                     .find(|k| k.in_reach(xf.translation + Vec3::Y * t.capsule.half_height, player_input.map_or(Vec2::new((xf.rotation * Vec3::Z).x, (xf.rotation * Vec3::Z).z), |i| i.forward)))
-                    .filter(|_| config.kill.is_none() && player_input.map_or(at >= HOLD_BEFORE_KILL, |i| i.presses.interact))
+                    // CanGrabKill (0x1403e6f10): bGrabKillsActive, his grab's enter played out.
+                    .filter(|_| config.kill.is_none() && at >= success && player_input.map_or(at >= HOLD_BEFORE_KILL, |i| i.presses.interact))
                 {
                     // A placed kill at hand (the player's E; the AI uses one when it can): he takes its place.
                     let (his, hers, name) = pk.takes();
@@ -2883,6 +2896,47 @@ pub fn grab_struggle(stats: &f13_core::stats::Stats) -> f13_core::stun::WiggleTu
     let mut per = StatModifiedValue::constant(4.5);
     per.modifiers[Stat::Composure as usize] = 60.0;
     f13_core::stun::WiggleTuning { total_time: total.value(stats, true).max(1.0), percent_per_wiggle: per.value(stats, false), depletion_rate: 0.0 }
+}
+
+/// Where she's set down as he lets go out of the water (SCCounselorCharacter::OnDropped 0x1403c1610): her capsule
+/// (DropSweep, Pawn channel, ignoring the two of them) at his centre plus his forward turned by 0, +5, -5, +10 ... up
+/// to 135 degrees about up, times her distance from him (flat); with ground within twice her half height below it.
+/// Past 135 degrees the distance grows by that first distance, up to 2000 cm; then she stays where she is ("NO VALID
+/// DROP SPOT FOUND"). In the water she stays where he held her (UpdateGrabTransform).
+fn drop_counselor(pxf: &mut Transform, jxf: &Transform, his_half_height: f32, in_water: bool, world: &(impl f13_core::collision::TriSource + ?Sized)) {
+    use crate::player::{CAPSULE_HALF_HEIGHT_M as HH, CAPSULE_RADIUS_M as R};
+    if in_water {
+        return;
+    }
+    let centre = jxf.translation + Vec3::Y * his_half_height;
+    let fwd = (jxf.rotation * Vec3::Z).with_y(0.0).normalize_or_zero();
+    let step = Vec2::new(pxf.translation.x - jxf.translation.x, pxf.translation.z - jxf.translation.z).length().max(0.01);
+    let (mut dist, mut angle) = (step, 0.0f32);
+    loop {
+        // FVector::RotateAngleAxis about Unreal's up: a positive Unreal yaw is negative about Bevy's Y.
+        let at = centre + Quat::from_rotation_y(-angle.to_radians()) * fwd * dist;
+        let blocked = f13_core::collision::capsule_blocked(world, at - Vec3::Y * (HH - R), at + Vec3::Y * (HH - R), R);
+        if !blocked && f13_core::collision::segment_hit(world, at, at - Vec3::Y * HH * 2.0, 0.5).is_some() {
+            let to = at - Vec3::Y * HH;
+            info!("Vanessa: set down {:.2} m from where he held her ({:.0} degrees off his forward)", to.distance(pxf.translation), angle);
+            pxf.translation = to;
+            return;
+        }
+        if angle != 0.0 {
+            angle = -angle;
+        }
+        if angle >= 0.0 {
+            angle += 5.0;
+        }
+        if angle > 135.0 {
+            dist += step;
+            angle = 0.0;
+            if dist > 20.0 {
+                warn!("no valid drop spot for her: she stays where he held her");
+                return;
+            }
+        }
+    }
 }
 
 /// Lets the counselor go: she plays `anim` (and can't move until it ends).

@@ -32,6 +32,9 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+mod prompts;
+pub use prompts::{Prompt, PromptSource, Prompts};
+
 /// The HUD's design size.
 const DESIGN: Vec2 = Vec2::new(1920.0, 1080.0);
 
@@ -73,6 +76,8 @@ const ACTION_KEYS: &[(&str, &str)] = &[
     ("MG_InteractSkill1", "RMB"),
     ("MG_InteractSkill2", "LMB"),
     ("GLB_Wiggle", "E"),
+    // The interaction prompts' key.
+    ("GLB_Interact1", "E"),
     ("GLB_Map", "M"),
     // Jason's.
     ("KLR_Grab", "RMB"),
@@ -123,8 +128,10 @@ impl Plugin for UiPlugin {
         app.add_plugins((UiMaterialPlugin::<RadialFill>::default(), UiMaterialPlugin::<Minimap>::default()))
             .init_resource::<PlayingAnims>()
             .init_resource::<MapScreenUi>()
+            .init_resource::<Prompts>()
+            .init_resource::<prompts::PromptUi>()
             .add_systems(Startup, load_hud)
-            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, (map_screen, counselor_map_icons).chain(), jason_hud, noise_meter, xp_lines), widget_anims, fear_widgets, content_alpha, widget_colors, hide_for_jason).chain().run_if(resource_exists::<Hud>));
+            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, (map_screen, counselor_map_icons).chain(), jason_hud, noise_meter, xp_lines), prompts::prompts, widget_anims, fear_widgets, content_alpha, widget_colors, hide_for_jason).chain().run_if(resource_exists::<Hud>));
     }
 }
 
@@ -687,16 +694,17 @@ fn content_alpha(
     }
 }
 
-/// A widget animation (UWidgetAnimation): its length, each Border's content alpha curve and each widget's
-/// ColorAndOpacity curves (red, green, blue, alpha), by widget name.
+/// A widget animation (UWidgetAnimation): its length, each Border's content alpha curve, each widget's
+/// ColorAndOpacity curves (red, green, blue, alpha) and its RenderTransform's scale curves (X, Y), by widget name.
 struct WidgetAnim {
     length: f32,
     tracks: Vec<(String, f13_core::curve::RichCurve)>,
     colors: Vec<(String, [f13_core::curve::RichCurve; 4])>,
+    scales: Vec<(String, [f13_core::curve::RichCurve; 2])>,
 }
 
-/// Loads a widget class's animations' ContentColorAndOpacity alpha tracks and ColorAndOpacity tracks
-/// (ui/<class>.json "Animations").
+/// Loads a widget class's animations' ContentColorAndOpacity alpha tracks, ColorAndOpacity tracks and RenderTransform
+/// scale tracks (ui/<class>.json "Animations").
 fn load_anims(dir: &std::path::Path, class: &str) -> HashMap<String, WidgetAnim> {
     let Some(v) = std::fs::read_to_string(dir.join(format!("ui/{class}.json"))).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { return HashMap::new() };
     let Some(anims) = v["Animations"].as_object() else { return HashMap::new() };
@@ -721,7 +729,17 @@ fn load_anims(dir: &std::path::Path, class: &str) -> HashMap<String, WidgetAnim>
                     (t["Widget"].as_str().unwrap_or("").to_string(), [c("RedCurve"), c("GreenCurve"), c("BlueCurve"), c("AlphaCurve")])
                 })
                 .collect();
-            (name.clone(), WidgetAnim { length: a["Length"].as_f64().unwrap_or(0.0) as f32, tracks, colors })
+            let scales = a["Tracks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|t| t["Property"] == "RenderTransform" && t["Sections"][0]["Channels"]["Scale"].is_object())
+                .map(|t| {
+                    let ch = &t["Sections"][0]["Channels"];
+                    (t["Widget"].as_str().unwrap_or("").to_string(), [f13_data::character::ue_rich_curve(&ch["Scale"]), f13_data::character::ue_rich_curve(&ch["Scale[1]"])])
+                })
+                .collect();
+            (name.clone(), WidgetAnim { length: a["Length"].as_f64().unwrap_or(0.0) as f32, tracks, colors, scales })
         })
         .collect()
 }

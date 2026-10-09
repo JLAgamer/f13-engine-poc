@@ -125,7 +125,7 @@ enum Step {
 }
 
 #[derive(Resource)]
-struct Bot {
+pub(crate) struct Bot {
     /// Where Jason was first seen (his spawn): scenarios placed from it don't depend on how far he got meanwhile.
     jason_spawn: Option<Vec3>,
     goal: Goal,

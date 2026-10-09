@@ -271,7 +271,8 @@ fn demo(
     (know, mut map, window, mut opened): (Query<&crate::senses::Knowledge>, ResMut<MorphMap>, Single<&bevy::window::Window, With<bevy::window::PrimaryWindow>>, Local<Option<f32>>),
     grab_kills: Res<crate::jason::GrabKillsAvailable>,
     (mut tried, doors, mut view): (Local<Option<Entity>>, Query<(Entity, &crate::doors::Door, &GlobalTransform)>, ResMut<DemoView>),
-    mut sense_shot: Local<bool>,
+    (mut sense_shot, mut prompt_shot, bot): (Local<bool>, Local<bool>, Option<Res<crate::bot::Bot>>),
+    placed_kills: Query<&crate::placed_kills::PlacedKill>,
 ) {
     let (Some((j, jxf)), Some(h)) = (jason.iter().next(), her.iter().next()) else { return };
     let d = h.translation - jxf.translation;
@@ -285,6 +286,9 @@ fn demo(
         .filter(|at| flat(*at - h.translation).length() < 4.0)
         .min_by(|a, b| flat(*a - h.translation).length().total_cmp(&flat(*b - h.translation).length()));
     let d = shut.filter(|at| flat(*at - jxf.translation).length() > 1.0).map_or(d, |at| at - jxf.translation);
+    // Holding her: looking at the nearest placed kill within 3 m, if any (its range test wants his view on it).
+    let kill = placed_kills.iter().filter(|k| !k.used).map(|k| k.interact - jxf.translation).filter(|v| flat(*v).length() < 3.0).min_by(|a, b| flat(*a).length().total_cmp(&flat(*b).length()));
+    let d = kill.filter(|_| j.holding()).unwrap_or(d);
     // Yaw so that the view's forward (-sin, -cos) points at her (or her door).
     camera.yaw = (-d.x).atan2(-d.z);
     camera.pitch = -0.15;
@@ -322,8 +326,9 @@ fn demo(
         commands.spawn(bevy::render::view::screenshot::Screenshot::primary_window()).observe(bevy::render::view::screenshot::save_to_disk(path));
     }
     controls.sense |= know.iter().next().is_some_and(|k| !k.sensing(now) && k.abilities.is_available(f13_core::killer_abilities::Ability::Sense, &f13_core::killer_abilities::Blockers::default()));
-    // Morph by his map once it's ready and she's far: open it (1), then a click at its centre 8 s later.
-    let morph_ready = know.iter().next().is_some_and(|k| k.abilities.is_available(f13_core::killer_abilities::Ability::Morph, &f13_core::killer_abilities::Blockers::default()));
+    // Morph by his map once it's ready and she's far: open it (1), then a click at its centre 8 s later. Not with a
+    // counselor bot (it brings her to him).
+    let morph_ready = bot.is_none() && know.iter().next().is_some_and(|k| k.abilities.is_available(f13_core::killer_abilities::Ability::Morph, &f13_core::killer_abilities::Blockers::default()));
     match *opened {
         None if morph_ready && dist > 40.0 && matches!(j.state, crate::jason::JasonState::Hunting) => {
             controls.latched.morph = true;
@@ -345,9 +350,21 @@ fn demo(
     }
     let (knife, swung, last) = &mut *done;
     debug!("jason demo: {:?} at {:.1}, {dist:.1} m from her at {:.1} (going for {shut:.1?}), velocity {:.0}", j.state, jxf.translation, h.translation, j.velocity);
-    // Holding her: a kill by its key (3: the left slot, else the first that fits).
-    if matches!(j.state, crate::jason::JasonState::Holding { t } if t > 1.5) {
-        controls.latched.kill = [2, 0, 1, 3].into_iter().find(|&s| grab_kills.0[s]);
+    // Holding her: a screenshot 3 s in (temp f13-demo-prompt.png: a placed kill's prompt, if one's near), E (a placed
+    // kill in reach), then a kill by its key (3: the left slot, else the first that fits).
+    if let crate::jason::JasonState::Holding { t } = j.state {
+        if t > 3.0 && !*prompt_shot {
+            *prompt_shot = true;
+            let path = std::env::temp_dir().join("f13-demo-prompt.png");
+            info!("jason demo: screenshot {}", path.display());
+            commands.spawn(bevy::render::view::screenshot::Screenshot::primary_window()).observe(bevy::render::view::screenshot::save_to_disk(path));
+        }
+        if t > 3.2 {
+            controls.latched.interact = true;
+        }
+        if t > 4.0 {
+            controls.latched.kill = [2, 0, 1, 3].into_iter().find(|&s| grab_kills.0[s]);
+        }
     }
     // Breaking a door down: the attack held until it gives way (or he's done).
     let breaking = matches!(j.state, crate::jason::JasonState::BreakingDoor { .. } | crate::jason::JasonState::BreakingWall { .. });

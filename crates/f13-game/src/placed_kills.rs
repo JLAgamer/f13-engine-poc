@@ -22,6 +22,12 @@
 //! so its kill spot, camera and Interactable come round to him. Its IgnoredRotationComponents (each Blueprint's
 //! visible mesh: BirdBathSM, the trees, CampFire, Cylinder) get the actor's negated rotation as their relative one.
 //! Not ported: those meshes' own turn (to world yaw 0) as the actor turns.
+//!
+//! Its prompt (ui/prompts.rs) when Jason is played: SCContextKillActor's CanInteractWith (vtable 0x5f0,
+//! FUN_140339dc0): not used up (0x381) and his CanGrabKill (0x1403e6f10: bGrabKillsActive with a counselor held), then
+//! its ContextKillComponent's (FUN_14033a130: enabled, bIsGrabKill wanting the same). Highlighted by the Interactable's
+//! highlight test (its HighlightDistance: 20 to 40 m on these) from his capsule's centre, occluded by what blocks its
+//! channel between his eyes (BaseEyeHeight 64 cm up) and its point; the best when he can use it ([`PlacedKill::in_reach`]).
 
 use bevy::prelude::*;
 use f13_data::classes::ClassDb;
@@ -31,7 +37,9 @@ pub struct PlacedKillsPlugin;
 
 impl Plugin for PlacedKillsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_placed_kills).add_systems(FixedUpdate, orient_toward_killer.before(crate::jason::update_jason));
+        app.add_systems(Startup, spawn_placed_kills)
+            .add_systems(FixedUpdate, orient_toward_killer.before(crate::jason::update_jason))
+            .add_systems(Update, prompts);
     }
 }
 
@@ -92,8 +100,26 @@ pub struct PlacedKill {
     pub pitch_limit: Option<f32>,
     pub only_once: bool,
     pub used: bool,
+    /// Its Interactable's prompt and highlight test.
+    pub prompt: KillPrompt,
     /// Its KillMesh, its KillMeshAnimation, and the transform its Blueprint gives the mesh as the kill starts.
     pub prop: Option<(Entity, &'static str, Option<Transform>)>,
+}
+
+/// A placed kill's Interactable's prompt (InteractionWidgetClass, InteractionIconWidgetClass) and highlight test
+/// (FUN_140240fb0: bCanHighlight, HighlightDistance, HighlightZDistance with bUseSeperateZBounds, YawHighlightLimit with
+/// bUseYawHighlightLimit; ILLInteractableComponent's constructor's 500 cm, 100 cm and 90 degrees unless set), and its
+/// occlusion trace (bCheckForOcclusion, SCInteractComponent's constructor's true; RayTraceChannel).
+#[derive(Debug, Clone)]
+pub struct KillPrompt {
+    pub widget: String,
+    pub icon: Option<String>,
+    pub can_highlight: bool,
+    pub distance_m: f32,
+    pub z_m: Option<f32>,
+    pub yaw: Option<f32>,
+    pub occlusion: bool,
+    pub visibility: bool,
 }
 
 /// The placed kills whose prop plays its own animation as the kill starts: the class, its KillMesh component, its
@@ -144,6 +170,21 @@ pub fn placed_kill(classes: &ClassDb, class: &str, t: &Xform, actor_props: &serd
         pitch_limit: interact.props["bUsePitchLimit"].as_bool().unwrap_or(false).then(|| interact.props["MaxPitchOffset"].as_f64().unwrap_or(DEFAULT_MAX_PITCH) as f32),
         only_once: actor_props["bOnlyUseableOnce"].as_bool().or(info.props["bOnlyUseableOnce"].as_bool()).unwrap_or(false),
         used: false,
+        prompt: {
+            let p = &interact.props;
+            let f = |k: &str, d: f32| p[k].as_f64().map_or(d, |v| v as f32);
+            let class = |k: &str| p[k].as_str().map(|s| s.trim_end_matches("_C").to_string());
+            KillPrompt {
+                widget: class("InteractionWidgetClass").unwrap_or_else(|| "SCInteractionWidget".into()),
+                icon: class("InteractionIconWidgetClass"),
+                can_highlight: p["bCanHighlight"].as_bool().unwrap_or(false),
+                distance_m: f("HighlightDistance", 500.0) / 100.0,
+                z_m: p["bUseSeperateZBounds"].as_bool().unwrap_or(false).then(|| f("HighlightZDistance", 100.0) / 100.0),
+                yaw: p["bUseYawHighlightLimit"].as_bool().unwrap_or(false).then(|| f("YawHighlightLimit", 90.0)),
+                occlusion: p["bCheckForOcclusion"].as_bool().unwrap_or(classes.is_child_of(&interact.kind, "SCInteractComponent")),
+                visibility: p["RayTraceChannel"].as_str() == Some("ECC_Visibility"),
+            }
+        },
         prop,
     };
     k.place(root);
@@ -189,6 +230,22 @@ impl PlacedKill {
         within(d, self.forward) && (view == Vec3::ZERO || within(view, back))
     }
 
+    /// The highlight test's distance and facing parts for a character whose capsule's centre is at `center`.
+    pub fn highlights(&self, center: Vec3) -> bool {
+        let p = &self.prompt;
+        if !p.can_highlight || (self.used && self.only_once) {
+            return false;
+        }
+        let d = center - self.interact;
+        let near = match p.z_m {
+            Some(z) => d.y.abs() <= z && Vec2::new(d.x, d.z).length() <= p.distance_m,
+            None => d.length() <= p.distance_m,
+        };
+        // The direction from it to him (yaw) within the limit of its facing.
+        let off = |a: f32| ((a + 180.0).rem_euclid(360.0) - 180.0).abs();
+        near && p.yaw.is_none_or(|l| off(d.z.atan2(d.x).to_degrees() - self.forward.z.atan2(self.forward.x).to_degrees()) <= l)
+    }
+
     pub fn takes(&self) -> (&'static str, &'static str, &'static str) {
         let (_, his, hers, name) = KINDS[self.kind];
         (his, hers, name)
@@ -214,6 +271,69 @@ fn orient_toward_killer(jasons: Query<(&crate::jason::Jason, &Transform)>, mut k
         }
     }
 }
+
+/// Jason's placed kill prompts when he's played (see the module docs).
+#[allow(clippy::type_complexity)]
+fn prompts(
+    play: Option<Res<crate::jason_player::PlayJason>>,
+    controls: Option<Res<crate::jason_player::JasonControls>>,
+    killer: Option<Res<crate::character::KillerCharacter>>,
+    jasons: Query<(&crate::jason::Jason, &Transform)>,
+    kills: Query<(Entity, &PlacedKill, Option<&Name>)>,
+    mut list: ResMut<crate::ui::Prompts>,
+    (collision, dynamic, no_world_dynamic, no_visibility, actor_tris, (not_visibility, not_world_dynamic)): (
+        Option<Res<crate::collision::WorldCollision>>,
+        Res<crate::collision::DynamicColliders>,
+        Query<(), With<crate::collision::NoWorldDynamic>>,
+        Query<(), With<crate::collision::NoVisibility>>,
+        Option<Res<crate::collision::ActorTris>>,
+        (Option<Res<crate::collision::NotVisibility>>, Option<Res<crate::collision::NotWorldDynamic>>),
+    ),
+) {
+    use crate::ui::{Prompt, PromptSource};
+    let enter = killer.as_ref().and_then(|k| k.length(crate::jason::GRAB_ENTER)).unwrap_or(0.0);
+    // CanGrabKill: holding her, his grab's enter played out (bGrabKillsActive).
+    let holder = jasons.iter().find(|(j, _)| j.holding_for().is_some_and(|t| t >= enter));
+    let (Some(_), Some((_, xf))) = (play, holder) else {
+        list.set(PromptSource::PlacedKill, []);
+        return;
+    };
+    let half = killer.as_ref().map_or(0.88, |k| k.info.capsule_half_height / 100.0);
+    let center = xf.translation + Vec3::Y * half;
+    let eyes = center + Vec3::Y * JASON_EYE_HEIGHT_M;
+    let view = controls.as_ref().map_or(Vec2::ZERO, |c| Vec2::new(-c.yaw.sin(), -c.yaw.cos()));
+    let occluded = |e: Entity, k: &PlacedKill, name: Option<&Name>| {
+        let Some(world) = collision.as_ref().filter(|_| k.prompt.occlusion) else { return false };
+        let passes = |c: Entity| if k.prompt.visibility { no_visibility.contains(c) } else { no_world_dynamic.contains(c) };
+        let (grid, lists) = world.without(&dynamic, |c| passes(c) || c == e);
+        let own = name.and_then(|n| actor_tris.as_ref()?.0.get(n.as_str()));
+        let glass = if k.prompt.visibility { not_visibility.as_ref().map(|g| &g.0) } else { not_world_dynamic.as_ref().map(|g| &g.0) };
+        let level = crate::collision::Excluding(grid, own);
+        f13_core::collision::segment_hit(&(&crate::collision::Excluding(&level, glass), lists.as_slice()), eyes, k.interact, 1.0).is_some()
+    };
+    // The best: the one he'd use (update_jason takes the first in reach).
+    let best = kills.iter().find(|(_, k, _)| k.in_reach(center, view)).map(|(e, _, _)| e);
+    let prompts: Vec<Prompt> = kills
+        .iter()
+        .filter_map(|(e, k, name)| {
+            let highlighted = k.highlights(center) && !occluded(e, k, name);
+            let is_best = best == Some(e);
+            (highlighted || is_best).then(|| Prompt {
+                source: PromptSource::PlacedKill,
+                id: (e, 0),
+                at: k.interact,
+                widget: k.prompt.widget.clone(),
+                icon: k.prompt.icon.clone(),
+                highlighted,
+                best: is_best,
+            })
+        })
+        .collect();
+    list.set(PromptSource::PlacedKill, prompts);
+}
+
+/// APawn's BaseEyeHeight (Jason_Base doesn't set it): his eyes above his capsule's centre.
+const JASON_EYE_HEIGHT_M: f32 = 0.64;
 
 fn spawn_placed_kills(mut commands: Commands, level: Res<crate::Level>, export: Res<crate::ExportRoot>, assets: Res<AssetServer>) {
     let Ok(classes) = ClassDb::load(&export.0.join("classes.json")) else { return };

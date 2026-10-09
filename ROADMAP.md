@@ -58,9 +58,8 @@ Moved from Milestone 1 (not tied to gameplay):
       against the game's own screenshots. (Bloom's fast blur: ported, ComputeOutputDesc's half-width X pass)
 - [ ] The grab's struggle UI (her prompt and progress while she struggles in his grab)
 - [ ] Bugs:
-  - [ ] Escaping a grab can put her through a cabin's wall
-  - [ ] Context kills don't prompt Jason
   - [ ] Grabbing her as Jason loops the struggle audio
+  - [ ] Jason's HUD ability icons show a white/grey fill
 
 ## Milestone 3: networking
 Server-authoritative netcode, tested with bots, then an 8-player lobby.
