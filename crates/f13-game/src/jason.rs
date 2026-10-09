@@ -303,7 +303,7 @@ impl Plugin for JasonPlugin {
             .add_observer(spawn_knife)
             .add_observer(distortion)
             .add_observer(car_slam)
-            .add_systems(Update, (tag_jason_parts, animate_jason, grab_layer, jason_mixes, teleport_mix, jason_door_camera));
+            .add_systems(Update, (tag_jason_parts, animate_jason, grab_layer, jason_mixes, teleport_mix, jason_door_camera, held_knife.after(animate_jason)));
     }
 }
 
@@ -790,11 +790,17 @@ fn knife_velocity(from: Vec3, to: Vec3, speed: f32) -> Vec3 {
     Vec3::new(h.x, v * angle.sin(), h.y)
 }
 
-/// ThrowingKnife_C's dart (its SkeletalMesh component): its scene and its place on the knife. The knife's Blueprint
-/// turns it to pitch 270 and hides it as the ProjectileMovement activates (the throw: the particle trail shows
-/// instead) and shows it when the projectile stops.
+/// ThrowingKnife_C's dart (its SkeletalMesh component): its scene and its place on the knife, thrown and in his hand.
+/// The knife's Blueprint turns it to pitch 270 and hides it as the ProjectileMovement activates (the throw: the
+/// particle trail shows instead) and shows it when the projectile stops; in his hand it's at its own place.
 #[derive(Resource)]
-struct KnifeLook(Handle<WorldAsset>, Transform);
+struct KnifeLook(Handle<WorldAsset>, Transform, Transform);
+
+/// The knife in his hand while he aims (SERVER_SpawnKnife 0x1404051d0: a ThrowingKnifeClass actor, CurrentThrowable,
+/// attached to his Mesh at KnifeAttachSocket, SnapToTargetNotIncludingScale; the constructor's KnifeAttachSocket is
+/// handGrabSocket), until it leaves his hand at the throw or he puts it away.
+#[derive(Component)]
+struct HeldKnife;
 
 fn load_knife_look(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<AssetServer>) {
     use f13_core::camera_spline::quaternion;
@@ -804,8 +810,9 @@ fn load_knife_look(mut commands: Commands, export: Res<crate::ExportRoot>, asset
         return;
     };
     // K2_SetRelativeRotation(FRotator(270, 0, 0)) as it's thrown.
+    let held = crate::to_transform(&local);
     let local = f13_data::level::Xform { r: quaternion(Vec3::new(270.0, 0.0, 0.0)).to_array(), ..local };
-    commands.insert_resource(KnifeLook(assets.load(GltfAssetLabel::Scene(0).from_asset(file)), crate::to_transform(&local)));
+    commands.insert_resource(KnifeLook(assets.load(GltfAssetLabel::Scene(0).from_asset(file)), crate::to_transform(&local), held));
     if let Some(c) = classes.get("Underwater_GrabKill_C").and_then(|c| c.components.iter().find(|c| c.kind == "SCCameraSplineComponent")) {
         commands.insert_resource(DrownKillCamera(crate::to_transform(&c.local.unwrap_or(f13_data::level::Xform::IDENTITY))));
     }
@@ -868,6 +875,31 @@ fn grab_kills_available(
 /// The knife's rotation: its forward (Unreal +X) along its velocity (its ProjectileMovement's bRotationFollowsVelocity).
 fn knife_rotation(vel: Vec3) -> Quat {
     Transform::IDENTITY.looking_to(vel.normalize_or(Vec3::X), Vec3::Y).rotation * Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)
+}
+
+/// His knife in hand: shown on KnifeAttachSocket while he aims, until it's thrown (or put away).
+#[allow(clippy::type_complexity)]
+fn held_knife(
+    mut commands: Commands,
+    look: Option<Res<KnifeLook>>,
+    killer: Option<Res<KillerCharacter>>,
+    jasons: Query<&Jason>,
+    rigs: Query<&Rig, Without<HeldKnife>>,
+    globals: Query<&GlobalTransform>,
+    mut held: Query<(Entity, &mut Transform), With<HeldKnife>>,
+) {
+    let (Some(look), Some(killer)) = (look, killer) else { return };
+    let aiming = jasons.iter().any(|j| matches!(j.state, JasonState::Throwing { thrown: false, .. }));
+    let hand = rigs.iter().find(|r| matches!(r.model, crate::character::Model::Killer)).and_then(|r| r.socket(&killer.info, HAND_GRAB_SOCKET, &globals));
+    match (aiming.then_some(hand).flatten(), held.single_mut()) {
+        (Some(hand), Ok((_, mut xf))) => *xf = hand,
+        (Some(hand), Err(_)) => {
+            let knife = commands.spawn((HeldKnife, hand, Visibility::default())).id();
+            commands.spawn((WorldAssetRoot(look.0.clone()), look.2, ChildOf(knife)));
+        }
+        (None, Ok((e, _))) => commands.entity(e).despawn(),
+        (None, Err(_)) => {}
+    }
 }
 
 fn spawn_knife(ev: On<ThrowKnife>, mut commands: Commands, look: Option<Res<KnifeLook>>) {

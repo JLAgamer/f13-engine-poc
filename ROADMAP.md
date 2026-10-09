@@ -20,7 +20,6 @@ Mechanics: counselor side
 
 Mechanics: Jason side
 - [ ] Played Jason, bugs to fix:
-      - he holds nothing while throwing a knife (no knife in his hand)
       - his pickaxe has no material: M_JasonV2_PickAxe is its own master, with only WeaponBloodMask as a parameter, so
         its base textures are in the material graph, which the export doesn't read (may fold into Materials, remaining)
 

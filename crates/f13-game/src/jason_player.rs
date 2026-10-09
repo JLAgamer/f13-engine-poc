@@ -254,6 +254,7 @@ fn demo_view(view: Res<DemoView>, mut controls: ResMut<JasonControls>) {
 
 /// The scripted player: what a player would press, by distance to her.
 fn demo(
+    mut commands: Commands,
     mut controls: ResMut<JasonControls>,
     jason: Query<(&crate::jason::Jason, &Transform)>,
     her: Query<&Transform, (With<crate::player::Player>, Without<crate::jason::Jason>)>,
@@ -288,8 +289,13 @@ fn demo(
         controls.keys.release(KeyCode::KeyW);
     }
     controls.keys.press(KeyCode::ShiftLeft);
-    // The knife's let go once it's out.
+    // The knife's let go once it's out (a screenshot of it in his hand first: temp f13-demo-knife.png).
     if matches!(j.state, crate::jason::JasonState::Throwing { t, .. } if t > 0.6) {
+        if controls.mouse.pressed(MouseButton::Middle) {
+            let path = std::env::temp_dir().join("f13-demo-knife.png");
+            info!("jason demo: screenshot {}", path.display());
+            commands.spawn(bevy::render::view::screenshot::Screenshot::primary_window()).observe(bevy::render::view::screenshot::save_to_disk(path));
+        }
         controls.mouse.release(MouseButton::Middle);
     }
     // Sense whenever it's ready while she's not close.
