@@ -222,6 +222,9 @@ pub(crate) struct BlendExt {
     rmas_b: Handle<Image>,
     #[texture(110)]
     blend_map: Handle<Image>,
+    /// Master_Blend_01_POM's Height (its Channel picks the component).
+    #[texture(111)]
+    height: Handle<Image>,
 }
 
 #[derive(ShaderType, Reflect, Debug, Clone)]
@@ -237,6 +240,11 @@ struct BlendParams {
     tint: Vec4,
     /// Curtains: the colour where vertex alpha is 0.
     dirt: Vec4,
+    /// Master_Blend_01_POM: Height of Texture, -(1 - ref plane), MinSteps, MaxSteps (0 height: no parallax).
+    pom: Vec4,
+    /// Its Tiling (x), and Channel.
+    pom_tiling: Vec4,
+    channel: Vec4,
 }
 
 impl MaterialExtension for BlendExt {
@@ -838,6 +846,19 @@ fn blend_material(info: &MaterialInfo, kind: BlendKind, loader: &Loader, fb: &Fa
                 tint_b: info.vector("Tint b"),
                 tint: Vec4::new(info.scalar("Desaturation A", 0.0), info.scalar("Desaturation B", 0.0), info.scalar("Specular A", 0.5), spec_b),
                 dirt: info.vector("DirtColor"),
+                // F13_NO_POM: drawn flat (comparisons).
+                pom: if info.master == "Master_Blend_01_POM" && std::env::var_os("F13_NO_POM").is_none() {
+                    Vec4::new(
+                        info.scalar("Height of Texture", 0.04),
+                        -(1.0 - info.scalar("ref plane", 1.0)),
+                        info.scalar("MinSteps", 4.0),
+                        info.scalar("MaxSteps", 40.0),
+                    )
+                } else {
+                    Vec4::ZERO
+                },
+                pom_tiling: Vec4::new(info.scalar("Tiling", 1.0), 0.0, 0.0, 0.0),
+                channel: info.vectors.get("Channel").map_or(Vec4::X, |c| Vec4::from_array(*c)),
             },
             color_a: tex(&["ColorMap A"], Tex::Color, &fb.white),
             color_b: tex(&["ColorMap B"], Tex::Color, &fb.white),
@@ -848,6 +869,7 @@ fn blend_material(info: &MaterialInfo, kind: BlendKind, loader: &Loader, fb: &Fa
             rmas_a: tex(&["RMAS Map A"], Tex::Data, &fb.rmas),
             rmas_b: tex(&["RMAS Map B", "RSSSA Map"], Tex::Data, &fb.rmas),
             blend_map: tex(&["Blend Map"], Tex::Data, &fb.black),
+            height: tex(&["Height"], Tex::Data, &fb.white),
         },
     }
 }

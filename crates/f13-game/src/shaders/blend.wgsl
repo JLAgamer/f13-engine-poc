@@ -5,6 +5,8 @@
 //   c * (1 - a) + a^2 * Tint (a = its alpha), then lerp(c, luminance, Desaturation); Specular A/B parameters.
 // 2 Master_Tint_Blend_Curtains_01: set B only, tinted and desaturated as above, then lerp(DirtColor, c, vertex_alpha).
 // Normals add a detail normal (own tiling, scaled by Detail Strength). Everything else is lerp(A, B, t).
+// Master_Blend_01_POM (params.pom.x > 0): the colour and normal maps at a parallax-occluded UV (UE's
+// ParallaxOcclusionMapping as its compiled base pass runs it: [`pom_uv`]); both RMAS maps at TilingRate A.
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, calculate_tbn_mikktspace, apply_pbr_lighting, main_pass_post_lighting_processing},
@@ -30,6 +32,11 @@ struct BlendParams {
     // Desaturation A, B, Specular A, B
     tint: vec4<f32>,
     dirt: vec4<f32>,
+    // Height of Texture, -(1 - ref plane), MinSteps, MaxSteps
+    pom: vec4<f32>,
+    // Tiling
+    pom_tiling: vec4<f32>,
+    channel: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> params: BlendParams;
@@ -43,6 +50,37 @@ struct BlendParams {
 @group(#{MATERIAL_BIND_GROUP}) @binding(108) var rmas_a: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(109) var rmas_b: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(110) var blend_map: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(111) var height_map: texture_2d<f32>;
+
+// The parallax UV: the view ray in tangent space (Unreal's binormal, here -B: its normal maps are green-down) scaled by
+// Height of Texture over N.V, stepped through the height (Channel of Height, mip 0) in lerp(MaxSteps, MinSteps, |N.V|)
+// steps (floor + 2 at most) from the top; at the first sample above the ray, the secant between it and the last.
+fn pom_uv(uv: vec2<f32>, t: vec3<f32>, b: vec3<f32>, n: vec3<f32>, v: vec3<f32>) -> vec2<f32> {
+    let ndv = dot(n, v);
+    let off = -vec2(dot(t, v), dot(-b, v)) / ndv * params.pom.x;
+    let base = uv * params.pom_tiling.x + off * params.pom.y;
+    let steps = mix(params.pom.w, params.pom.z, min(abs(ndv), 1.0));
+    let count = floor(steps) + 2.0;
+    let step = 1.0 / steps;
+    let dstep = off * step;
+    var cur = vec2(0.0);
+    var ray = 1.0;
+    var prev_ray = 1.0;
+    var prev_h = 1.0;
+    for (var i = 0; f32(i) < count; i++) {
+        let h = dot(params.channel, textureSampleLevel(height_map, tex_sampler, base + cur, 0.0));
+        if ray < h {
+            let d = h - ray;
+            cur -= d / ((prev_ray - prev_h) + d) * dstep;
+            break;
+        }
+        prev_ray = ray;
+        prev_h = h;
+        ray -= step;
+        cur += dstep;
+    }
+    return base + cur;
+}
 
 // Unreal normal maps are two-channel (BC5): z is rebuilt from x and y.
 fn unpack_normal(t: vec4<f32>) -> vec3<f32> {
@@ -73,8 +111,18 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let vertex_alpha = 1.0;
 #endif
 
-    let uv_a = uv * params.tiling.x;
-    let uv_b = uv * params.tiling.z;
+    var uv_a = uv * params.tiling.x;
+    var uv_b = uv * params.tiling.z;
+    var uv_rmas_b = uv_b;
+#ifdef VERTEX_TANGENTS
+    if params.pom.x > 0.0 {
+        let tbn = calculate_tbn_mikktspace(normalize(in.world_normal), in.world_tangent);
+        let p = pom_uv(uv, tbn[0], tbn[1], tbn[2], pbr_input.V);
+        uv_rmas_b = uv_a;
+        uv_a = p;
+        uv_b = p;
+    }
+#endif
     let ca = textureSample(color_a, tex_sampler, uv_a);
     let cb = textureSample(color_b, tex_sampler, uv_b);
     let blend = textureSample(blend_map, tex_sampler, uv * params.blend.x).r;
@@ -91,8 +139,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         t = 1.0;
     }
 
-    let ra = textureSample(rmas_a, tex_sampler, uv_a);
-    let rb = textureSample(rmas_b, tex_sampler, uv_b);
+    let ra = textureSample(rmas_a, tex_sampler, select(uv_a, uv_rmas_b, params.pom.x > 0.0));
+    let rb = textureSample(rmas_b, tex_sampler, uv_rmas_b);
     let rough_a = clamp(ra.r, params.roughness.x, params.roughness.y);
     let rough_b = clamp(rb.r, params.roughness.z, params.roughness.w);
 

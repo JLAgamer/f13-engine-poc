@@ -31,7 +31,7 @@ Moved from Milestone 1 (not tied to gameplay):
 - [ ] Match flow, remaining: the level intro and outro sequences. (Badges: their award sites and classes are read,
       see MODLOG; the game shows them in the lobby's SCMatchEndLobbyWidget, so with the lobby in Milestone 3)
 - [ ] Materials, remaining: water (first pass only: colour, gloss, panning ripples; no depth fade, foam or
-      reflections), POM parallax, foliage subsurface
+      reflections), foliage subsurface
 - [ ] Particle effects (Cascade ParticleSystems): none ported yet. The walls' and doors' hit dust (HitParticle), the
       knife's trail (P_Jason_ThrowingKnife_01), blood, the campfires and fireplaces, the cars' exhaust, rain, the
       broken phone box's smoke
