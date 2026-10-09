@@ -565,9 +565,17 @@ fn play(
     staged: Query<Entity, With<Staged>>,
     windows: Query<&Window>,
     attached: Query<(), With<Attached>>,
+    roots: Query<Entity, (With<Node>, Without<ChildOf>, Without<FadeOverlay>)>,
 ) {
     let Some(mut p) = playing else { return };
-    // No HUD over it (its own systems may show parts of it again: hidden after them, every frame).
+    // No HUD over it (its own systems may show parts of it again, or spawn new roots such as the minimap's: hidden
+    // after them, every frame, and restored at the end).
+    for e in &roots {
+        if !p.hud.iter().any(|(h, _)| *h == e) {
+            let v = visibility.get(e).map_or(Visibility::Inherited, |v| *v);
+            p.hud.push((e, v));
+        }
+    }
     for (e, _) in &p.hud {
         if let Ok(mut v) = visibility.get_mut(*e) {
             v.set_if_neq(Visibility::Hidden);

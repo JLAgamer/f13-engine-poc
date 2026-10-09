@@ -639,7 +639,7 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
                 .clone();
             let xforms = p.instances.iter().flatten().chain(p.transform.iter());
             let overrides = materials::MaterialOverrides::new(&p.material_map);
-            let placed = Placed { cast_shadow: p.cast_shadow, cull_m: p.cull_distance / 100.0 };
+            let placed = Placed { cast_shadow: p.cast_shadow, cull_m: p.cull_distance * VIEW_DISTANCE_SCALE / 100.0 };
             // A phone box's mesh (its broken one swapped in by police.rs).
             let box_mesh = actor_of(&p.component)
                 .filter(|a| p.component.ends_with(".Mesh") && layout.actors.iter().any(|x| x.name == *a && x.level == p.level && classes.is_child_of(&x.class, "SCPhoneJunctionBox")));
@@ -708,6 +708,12 @@ impl Default for Placed {
         Self { cast_shadow: true, cull_m: 0.0 }
     }
 }
+
+/// r.ViewDistanceScale: the engine multiplies every max draw distance and foliage cull distance by it
+/// (FScalabilityCVars::ViewDistanceScale, cached by FUN_1417a1250; SceneVisibility and the HISM proxy's culling).
+/// The game's DefaultScalability.ini sets it per sg.ViewDistanceQuality (0.85, 1, 1.5, 3); its Windows device profile
+/// (DefaultDeviceProfiles.ini) defaults the level to 2.
+const VIEW_DISTANCE_SCALE: f32 = 1.5;
 
 fn apply_placed(mut commands: Commands, added: Query<Entity, Added<Mesh3d>>, parents: Query<&ChildOf>, placed: Query<&Placed>) {
     for e in &added {

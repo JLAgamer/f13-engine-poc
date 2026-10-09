@@ -19,7 +19,7 @@ Decomp audit: done; what's left marked and why is in MODLOG "Decomp audit, where
 
 The finished Milestone 1 work, with its references to the decomp, is in F13-decomp's MODLOG ("Milestone 1, done").
 
-## Milestone 2: more escapes
+## Milestone 2: Visual and Audio polish
 Police, 4-seat car, boat, then the others, one at a time. The police and the 4-seat car are in (MODLOG); Crystal Lake
 (small) has no boat or other escape, so those come with more maps (Afterwards).
 
@@ -29,10 +29,9 @@ Bugs:
 
 Moved from Milestone 1 (not tied to gameplay):
 - [ ] Match flow, remaining: in the intro and outro their particle tracks (with the particles), the title text, the
-      cameras' depth of field and the material/colour tracks (MODLOG "Level intro"). Bugs: background pop-in as the
-      intro's cameras move (likely Unreal scaling cull/LOD distances by the view's FOV; unread), and in the outro
-      Jason's sack mask appears to float at the shack door (its attachment follows the body's bone; the pose or
-      another level actor is unchecked). (Badges: their award sites and classes are read, see MODLOG; the game shows them in the
+      cameras' depth of field and the material/colour tracks (MODLOG "Level intro"). Bug: in the outro Jason's sack mask
+      appears to float at the shack door (its attachment follows the body's bone; the pose or another level actor is
+      unchecked). (Badges: their award sites and classes are read, see MODLOG; the game shows them in the
       lobby's SCMatchEndLobbyWidget, so with the lobby in Milestone 3)
 - [ ] Materials, remaining: foliage subsurface (its transmission is the deferred light pass's, whose code isn't
       in the shipped global shader cache: MODLOG "Foliage subsurface: blocked")
@@ -62,7 +61,7 @@ Moved from Milestone 1 (not tied to gameplay):
       "Scary sounds", "Her voice lines: where and when")
 - [ ] Post-processing, remaining: compare against the game's own screenshots. (Bloom's fast blur: ported, ComputeOutputDesc's half-width X pass)
 
-## Milestone 3: networking
+## Milestone 3: Networking
 Server-authoritative netcode, tested with bots, then an 8-player lobby.
 
 Moved from Milestone 2 (they need more than one counselor):
