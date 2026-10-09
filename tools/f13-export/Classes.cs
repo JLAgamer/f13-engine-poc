@@ -1,3 +1,4 @@
+using CUE4Parse.UE4.Assets.Objects;
 // Blueprint class descriptions: every component a class spawns with (native default subobjects, construction-script
 // nodes, inherited nodes with their per-class overrides), positioned in actor space, plus the class defaults. The
 // game needs these for actors that are spawned at runtime (doors, cabinets, items, vehicles), which a level file
@@ -219,6 +220,8 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
                 var mesh = Load(t.GetOrDefault<FPackageIndex?>("SkeletalMesh")) as USkeletalMesh;
                 if (mesh != null) { queueMesh(mesh); j["Mesh"] = meshFile(mesh); }
                 if (mesh != null && Sockets(mesh) is { Count: > 0 } sockets) j["Sockets"] = sockets;
+                if (mesh != null && RootBody(mesh) is { } body) j["RootBody"] = body;
+                if (mesh != null) j["BonePositions"] = BonePositions(mesh);
                 j["Hidden"] = t.GetOrDefault("bHiddenInGame", false) || !t.GetOrDefault("bVisible", true);
                 return j;
             }
@@ -255,6 +258,46 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
 
     /// The mesh's sockets (its skeleton's, the mesh's own winning) in component space, through their bones'
     /// reference pose: where seats attach (SCVehicleSeatComponent's AttachSocket).
+    /// The mesh's physics asset's root bone body as a box (a vehicle's chassis: its mass properties come from it):
+    /// Center, Rotation (pitch, yaw, roll) and full X, Y, Z in the root bone's space; null without a box there.
+    static JObject? RootBody(USkeletalMesh mesh)
+    {
+        if (mesh.GetOrDefault<FPackageIndex?>("PhysicsAsset")?.Load() is not { } asset) return null;
+        var root = mesh.ReferenceSkeleton.FinalRefBoneInfo.FirstOrDefault().Name.Text;
+        foreach (var b in asset.GetOrDefault<FPackageIndex[]>("SkeletalBodySetups", []).Select(x => x?.Load()).OfType<UObject>())
+        {
+            if (b.GetOrDefault<FName>("BoneName").Text != root) continue;
+            var boxes = b.GetOrDefault<FStructFallback?>("AggGeom")?.GetOrDefault<FStructFallback[]>("BoxElems", []) ?? [];
+            if (boxes.FirstOrDefault() is not { } box) return null;
+            var c = box.GetOrDefault("Center", FVector.ZeroVector);
+            var r = box.GetOrDefault("Rotation", new FRotator(0, 0, 0));
+            return new JObject
+            {
+                ["Center"] = new JArray(c.X, c.Y, c.Z),
+                ["Rotation"] = new JArray(r.Pitch, r.Yaw, r.Roll),
+                ["Size"] = new JArray(box.GetOrDefault("X", 0f), box.GetOrDefault("Y", 0f), box.GetOrDefault("Z", 0f)),
+            };
+        }
+        return null;
+    }
+
+    /// Each bone's reference-pose position in the mesh's component space (cm).
+    static JObject BonePositions(USkeletalMesh mesh)
+    {
+        var info = mesh.ReferenceSkeleton.FinalRefBoneInfo;
+        var pose = mesh.ReferenceSkeleton.FinalRefBonePose;
+        var world = new FTransform[info.Length];
+        var j = new JObject();
+        for (var i = 0; i < info.Length; i++)
+        {
+            var p = info[i].ParentIndex;
+            world[i] = p >= 0 && p < i ? pose[i] * world[p] : pose[i];
+            var t = world[i].Translation;
+            j[info[i].Name.Text] = new JArray(t.X, t.Y, t.Z);
+        }
+        return j;
+    }
+
     static JObject Sockets(USkeletalMesh mesh)
     {
         var skeleton = mesh.Skeleton.Load<USkeleton>();

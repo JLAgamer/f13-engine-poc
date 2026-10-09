@@ -44,6 +44,9 @@ pub struct Placement {
     /// Blocks traces on WorldDynamic (interactables' occlusion).
     #[serde(default = "yes")]
     pub blocks_world_dynamic: bool,
+    /// Blocks the Vehicle channel (a car's body).
+    #[serde(default = "yes")]
+    pub blocks_vehicle: bool,
     /// Blocks traces on Visibility (SCInteractComponents' occlusion: window glass doesn't).
     #[serde(default = "yes")]
     pub blocks_visibility: bool,
@@ -132,6 +135,8 @@ pub struct ActorInfo {
     pub hulls_block_camera: bool,
     #[serde(default = "yes")]
     pub hulls_block_world_dynamic: bool,
+    #[serde(default = "yes")]
+    pub hulls_block_vehicle: bool,
     /// NavMeshBoundsVolumes: the box their brush covers (Unreal cm: min x, y, z, max x, y, z).
     #[serde(default)]
     pub bounds: Option<[f32; 6]>,
@@ -161,6 +166,12 @@ pub struct ComponentInfo {
     /// Skeletal mesh components: the mesh's sockets in component space.
     #[serde(default)]
     pub sockets: std::collections::HashMap<String, Xform>,
+    /// Skeletal mesh components: the physics asset's root body box (Center, Rotation pitch/yaw/roll, Size) and the
+    /// bones' reference positions in component space (cm).
+    #[serde(default)]
+    pub root_body: Option<serde_json::Value>,
+    #[serde(default)]
+    pub bone_positions: std::collections::HashMap<String, [f32; 3]>,
     /// This is the class's root component; `root_relative` is applied on top of the spawn transform.
     #[serde(default)]
     pub root: bool,

@@ -100,6 +100,15 @@ pub struct NotVisibility(pub HashSet<TriKey>);
 #[derive(Resource, Default)]
 pub struct NotWorldDynamic(pub HashSet<TriKey>);
 
+/// The level's triangles that block her but not the Vehicle channel (a car's body passes them: the police
+/// blockers' volumes, some props).
+#[derive(Resource, Default)]
+pub struct NotVehicle(pub HashSet<TriKey>);
+
+/// A dynamic collider that doesn't block the Vehicle channel.
+#[derive(Component)]
+pub struct NoVehicle;
+
 /// An actor's shapes that overlap queries on WorldDynamic find (convex hulls in the actor's space, as placed).
 #[derive(Component, Clone)]
 pub struct QueryShapes(pub Vec<Vec<Tri>>);
@@ -189,6 +198,7 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
     let mut actor_tris = ActorTris::default();
     let mut not_visibility = NotVisibility::default();
     let mut not_world_dynamic = NotWorldDynamic::default();
+    let mut not_vehicle = NotVehicle::default();
     for layout in &level.layouts {
         for p in &layout.placements {
             if !p.blocks_pawn && !p.blocks_camera {
@@ -197,10 +207,11 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
             // "<package>:PersistentLevel.<actor>.<component>".
             let actor = p.component.split("PersistentLevel.").nth(1).and_then(|s| s.split('.').next()).filter(|a| interactables.contains(a));
             let tris = local(&p.file);
-            // A spline mesh's triangles bent along its spline, as it's drawn.
-            let tris = match &p.spline {
-                Some(s) => crate::spline_meshes::bend_tris(s, &tris),
-                None => tris,
+            // A spline mesh's collision bent along its spline: its convex elements re-hulled, else its triangles.
+            let tris = match (&p.spline, shapes_ref.get(&p.file.to_lowercase())) {
+                (Some(s), Some(sh)) if !sh.complex_as_simple => crate::spline_meshes::bend_hulls(s, &sh.hulls, sh.surface, &export.0.join(&p.file)),
+                (Some(s), _) => crate::spline_meshes::bend_tris(s, &tris),
+                (None, _) => tris,
             };
             if tris.is_empty() {
                 continue;
@@ -222,6 +233,9 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
                     if p.blocks_pawn && !p.blocks_world_dynamic {
                         not_world_dynamic.0.insert(tri_key(&t));
                     }
+                    if p.blocks_pawn && !p.blocks_vehicle {
+                        not_vehicle.0.insert(tri_key(&t));
+                    }
                     if p.blocks_pawn {
                         grid.insert(t);
                     }
@@ -236,11 +250,17 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
             // The police's blockers come down when they arrive (police.rs): colliders of their own.
             if crate::police::is_blocker(&a.name) {
                 let tris: Vec<Tri> = a.hulls.iter().flat_map(|h| hull_from_unreal(h)).collect();
-                commands.spawn((Collider(std::sync::Arc::new(tris)), Transform::IDENTITY, Visibility::default(), crate::police::Blocker, Name::new(a.name.clone())));
+                let e = commands.spawn((Collider(std::sync::Arc::new(tris)), Transform::IDENTITY, Visibility::default(), crate::police::Blocker, Name::new(a.name.clone()))).id();
+                if !a.hulls_block_vehicle {
+                    commands.entity(e).insert(NoVehicle);
+                }
                 continue;
             }
             for h in &a.hulls {
                 for t in hull_from_unreal(h) {
+                    if a.hulls_block_pawn && !a.hulls_block_vehicle {
+                        not_vehicle.0.insert(tri_key(&t));
+                    }
                     if a.hulls_block_pawn {
                         grid.insert(t);
                     }
@@ -285,6 +305,7 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
     info!("collision: {} level triangles pass Visibility traces, {} WorldDynamic ones", not_visibility.0.len(), not_world_dynamic.0.len());
     commands.insert_resource(not_visibility);
     commands.insert_resource(not_world_dynamic);
+    commands.insert_resource(not_vehicle);
 }
 
 /// Rebuilds the world-space triangles of moved, shown or hidden colliders.

@@ -13,10 +13,7 @@ Content (asset paths in the player's install):
   - Starting the car and the driver seat need `CarKeys`; the second seat is a front passenger seat
   - Crystal Lake's world settings spawn both the 2-seat and the 4-seat Chevette; f13-rs follows the game
 
-Mechanics: counselor side
-- [ ] Car handling, remaining: suspension, sliding, collisions' impulses
-      (reference: PhysX 3.4's published vehicle source, downloaded to F13-decomp/ref with the user's OK; the game's
-      statically linked copy is stripped)
+Milestone 1 is done: nothing left open.
 
 Decomp audit: done; what's left marked and why is in MODLOG "Decomp audit, where it ends".
 

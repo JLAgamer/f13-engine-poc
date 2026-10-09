@@ -316,6 +316,11 @@ impl<A: TriSource + ?Sized, B: TriSource + ?Sized> TriSource for (&A, &B) {
 /// Where the segment `from..to` first hits a triangle (either side), as a fraction of its length.
 /// The segment is tested in pieces of at most `step` so each region query stays small.
 pub fn segment_hit(world: &(impl TriSource + ?Sized), from: Vec3, to: Vec3, step: f32) -> Option<f32> {
+    segment_hit_normal(world, from, to, step).map(|(t, _)| t)
+}
+
+/// [`segment_hit`], with the hit triangle's normal.
+pub fn segment_hit_normal(world: &(impl TriSource + ?Sized), from: Vec3, to: Vec3, step: f32) -> Option<(f32, Vec3)> {
     let d = to - from;
     let len = d.length();
     if len < 1e-6 {
@@ -325,7 +330,7 @@ pub fn segment_hit(world: &(impl TriSource + ?Sized), from: Vec3, to: Vec3, step
     for i in 0..pieces {
         let (t0, t1) = (i as f32 / pieces as f32, (i + 1) as f32 / pieces as f32);
         let (a, b) = (from + d * t0, from + d * t1);
-        let mut best: Option<f32> = None;
+        let mut best: Option<(f32, Vec3)> = None;
         world.for_each_in(a.min(b), a.max(b), &mut |t| {
             // Möller-Trumbore, both faces.
             let (e1, e2) = (t.b - t.a, t.c - t.a);
@@ -346,8 +351,8 @@ pub fn segment_hit(world: &(impl TriSource + ?Sized), from: Vec3, to: Vec3, step
                 return;
             }
             let at = e2.dot(q) * inv;
-            if (t0..=t1).contains(&at) && best.is_none_or(|b| at < b) {
-                best = Some(at);
+            if (t0..=t1).contains(&at) && best.is_none_or(|b| at < b.0) {
+                best = Some((at, t.n));
             }
         });
         if best.is_some() {

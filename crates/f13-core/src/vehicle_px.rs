@@ -380,8 +380,8 @@ impl Car {
     }
 
     /// One frame: `throttle` -1..1 (the raw throttle: back is reverse, through the brakes first), `steer` -1..1
-    /// (right positive), the handbrake; `ray(start, dir, length)` finds the ground; `contact(point)` the world's
-    /// surface at a point of the body (penetration depth along the normal, and the normal) for the body's contacts.
+    /// (right positive), the handbrake; `ray(start, dir, length)` finds the ground; `contact(from, to)` the world's
+    /// surface a point of the body would move into this step (how far past it, and its normal) for the body's contacts.
     pub fn step(
         &mut self,
         dt: f32,
@@ -389,7 +389,7 @@ impl Car {
         steer: f32,
         handbrake: bool,
         ray: &mut dyn FnMut(Vec3, Vec3, f32) -> RayHit,
-        contact: &mut dyn FnMut(Vec3) -> Option<(f32, Vec3)>,
+        contact: &mut dyn FnMut(Vec3, Vec3) -> Option<(f32, Vec3)>,
     ) {
         if dt <= 0.0 {
             return;
@@ -907,7 +907,7 @@ impl Car {
 
     /// What the scene does after the vehicle update: gravity and the plugin's drag, the vehicle's constraints and the
     /// body's contacts (sequential impulses), then the pose.
-    fn scene_step(&mut self, dt: f32, contact: &mut dyn FnMut(Vec3) -> Option<(f32, Vec3)>) {
+    fn scene_step(&mut self, dt: f32, contact: &mut dyn FnMut(Vec3, Vec3) -> Option<(f32, Vec3)>) {
         let s = &self.setup;
         self.velocity += Vec3::new(0.0, 0.0, -GRAVITY) * dt;
         // UpdateDrag: 0.5 rho v^2 Cd A against the velocity.
@@ -916,14 +916,15 @@ impl Car {
         self.velocity -= self.velocity.normalize_or_zero() * drag * self.inv_mass * dt;
         let inv_i = world_inv_inertia(self.inv_inertia, self.rotation * self.mass_rotation);
         let com = self.com_world();
-        // The body's contacts: the chassis box's corners where they'd be after this step.
+        // The body's contacts: the chassis box's corners moving into the world this step.
         let half = s.box_size * 0.5;
         let mut contacts = Vec::new();
         for c in 0..8 {
             let local = Vec3::new(if c & 1 == 0 { -half.x } else { half.x }, if c & 2 == 0 { -half.y } else { half.y }, if c & 4 == 0 { -half.z } else { half.z });
             let offset = self.rotation * (self.mass_rotation * local);
-            let point = com + offset + (self.velocity + self.angular_velocity.cross(offset)) * dt;
-            if let Some((depth, n)) = contact(point) {
+            let now = com + offset;
+            let next = now + (self.velocity + self.angular_velocity.cross(offset)) * dt;
+            if let Some((depth, n)) = contact(now, next) {
                 contacts.push((offset, n, depth, 0.0f32, [0.0f32; 2]));
             }
         }
@@ -1059,7 +1060,7 @@ pub(crate) mod tests {
             clutch_strength: 10.0,
             front_left_right_split: 0.5,
             ackermann_accuracy: 1.0,
-            steering_curve: vec![(0.0, 1.0), (40.0, 0.7), (120.0, 0.6)],
+            steering_curve: vec![(0.0, 1.0), (20.0, 0.9), (60.0, 0.8), (120.0, 0.7)],
             drag_coefficient: 0.3,
             chassis_width: 180.0,
             chassis_height: 140.0,
@@ -1087,7 +1088,7 @@ pub(crate) mod tests {
         (t >= 0.0 && t <= len).then_some((t, Vec3::Z))
     }
 
-    fn no_contact(_: Vec3) -> Option<(f32, Vec3)> {
+    fn no_contact(_: Vec3, _: Vec3) -> Option<(f32, Vec3)> {
         None
     }
 

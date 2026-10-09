@@ -173,6 +173,9 @@ pub struct Vehicle {
     /// Its handling (f13-core::vehicle: the movement component's engine, gearbox and wheels) and drivetrain state.
     pub setup: f13_core::vehicle::VehicleSetup,
     pub drive: f13_core::vehicle::VehicleState,
+    /// Its PhysX setup (f13-core vehicle_px), and the car simulated from it once it's first driven.
+    pub px: Option<f13_core::vehicle_px::CarSetup>,
+    pub sim: Option<f13_core::vehicle_px::Car>,
 }
 
 impl Vehicle {
@@ -691,6 +694,8 @@ fn spawn_props(
                 steer: 0.0,
                 setup: f13_data::vehicle::setup(&classes, &actor.class),
                 drive: default(),
+                px: f13_data::vehicle::px_setup(&classes, &actor.class),
+                sim: None,
             });
             let p = to_transform(&actor.transform).translation;
             info!("{} at ({:.0}, {:.0}, {:.0})", actor.class, p.x, p.y, p.z);

@@ -48,7 +48,7 @@ static class Collision
     }
 
     /// Profile name -> (query collision enabled, Pawn, Camera and WorldDynamic channel responses).
-    static readonly Dictionary<string, (bool Query, string Pawn, string Camera, string WorldDynamic, string Visibility)> profiles = new(StringComparer.OrdinalIgnoreCase);
+    static readonly Dictionary<string, (bool Query, string Pawn, string Camera, string WorldDynamic, string Visibility, string Vehicle)> profiles = new(StringComparer.OrdinalIgnoreCase);
     /// Components whose Visibility trace response differs from their WorldDynamic one (by profile): checked to see
     /// whether traces on Visibility need their own geometry.
     public static readonly SortedDictionary<string, int> VisibilityDiffers = new();
@@ -73,7 +73,7 @@ static class Collision
                 var m = System.Text.RegularExpressions.Regex.Match(line, "\\(Channel=\"" + channel + "\",Response=(ECR_\\w+)\\)");
                 return m.Success ? m.Groups[1].Value : "ECR_Block";
             }
-            profiles[name] = (enabled.StartsWith("Query"), Response("Pawn"), Response("Camera"), Response("WorldDynamic"), Response("Visibility"));
+            profiles[name] = (enabled.StartsWith("Query"), Response("Pawn"), Response("Camera"), Response("WorldDynamic"), Response("Visibility"), Response("Vehicle"));
         }
     }
 
@@ -104,6 +104,9 @@ static class Collision
         return wd;
     }
 
+    /// Whether a primitive component blocks the Vehicle channel (a car's body: SCDriveableVehicle's ObjectType Vehicle).
+    public static bool BlocksVehicle(UObject component, string defaultProfile = "BlockAll") => Blocks(component, "Vehicle", defaultProfile, false);
+
     /// Whether a primitive component blocks traces on Visibility (SCInteractComponents' RayTraceChannel).
     public static bool BlocksVisibility(UObject component, string defaultProfile = "BlockAll") => Blocks(component, "Visibility", defaultProfile, false);
 
@@ -131,7 +134,7 @@ static class Collision
             return "ECR_Block"; // the engine channels' default response is Block
         }
         if (profiles.TryGetValue(profile, out var p))
-            return p.Query ? channel switch { "Pawn" => p.Pawn, "Camera" => p.Camera, "Visibility" => p.Visibility, _ => p.WorldDynamic } : null;
+            return p.Query ? channel switch { "Pawn" => p.Pawn, "Camera" => p.Camera, "Visibility" => p.Visibility, "Vehicle" => p.Vehicle, _ => p.WorldDynamic } : null;
         if (unknown.Add(profile)) Console.WriteLine($"  collision profile {profile} not in DefaultEngine.ini: treated as blocking");
         return "ECR_Block";
     }

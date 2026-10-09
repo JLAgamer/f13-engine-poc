@@ -1,9 +1,9 @@
 //! Driving a repaired car and escaping through a car escape zone.
 //!
-//! Handling (f13-core::vehicle): the car's movement component's engine (torque curve, MaxRPM), automatic gearbox
-//! (ratios, shift points, latency), idle brake and wheels (radius, steering lock), in a reduced model of the game's
-//! PhysX vehicle (no sliding; grip-capped drive). The car turns like a bicycle on WHEELBASE_CM, follows the ground
-//! under its axles and stops at obstacles.
+//! Handling (f13-core::vehicle_px): PhysX's 4-wheeled drive as the game sets it up from the car's movement component,
+//! its wheels and its physics asset's chassis box; its suspension rays and its body's contacts against the world's
+//! collision (the car's own parts left out). Without that setup in the export, the reduced model (f13-core::vehicle:
+//! the car turns like a bicycle on WHEELBASE_CM, follows the ground under its axles, stops at obstacles).
 //!
 //! Starting is the game's: when a counselor drives, the starter's hold time becomes
 //! `random[MinRestartTime, MaxRestartTime] * RestartTimeMod(stats, inverted)`, held like any interaction (after
@@ -13,9 +13,9 @@
 //! needs the ignition part (keys), which then stays in the car.
 //!
 //! Controls in the driver's seat: hold E to start, W/S throttle and reverse, A/D steer, F get out (when nearly
-//! stopped), H horn (its HornAudioComponent). Not ported: the handbrake; its BrakeAudio is the handbrake's skid
-//! (Chevette_BP's OnHandbrake plays it at 350 cm/s or more, and it fades out over 0.5 s when let go or under 250 cm/s),
-//! so braking with the throttle is silent, as in the game.
+//! stopped), H horn (its HornAudioComponent), Space the handbrake (VHCL_Brake). Not ported: the handbrake's skid
+//! (Chevette_BP's OnHandbrake plays its BrakeAudio at 350 cm/s or more, fading out over 0.5 s when let go or under
+//! 250 cm/s).
 
 use crate::interact::{take_part, Inventory};
 use crate::player::PlayerTuning;
@@ -101,6 +101,8 @@ fn drive(
     vehicle_parts: Query<&VehiclePart>,
     player_parts: Query<(), With<PlayerPart>>,
     jasons: Query<(Entity, &Transform), (With<crate::jason::Jason>, Without<Vehicle>)>,
+    (collision, dynamic, parents): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, Query<&ChildOf>),
+    (no_vehicle, not_vehicle): (Query<(), With<crate::collision::NoVehicle>>, Option<Res<crate::collision::NotVehicle>>),
 ) {
     let dt = time.delta_secs();
     let (ref mut player, ref mut inv, p) = *player;
@@ -150,6 +152,72 @@ fn drive(
         if keys.pressed(KeyCode::KeyA) {
             steer -= 1.0;
         }
+    }
+    if v.px.is_some() {
+        let v = &mut *v;
+        let me = player.vehicle;
+        if v.sim.is_none() {
+            let setup = v.px.clone().unwrap();
+            v.sim = Some(f13_core::vehicle_px::Car::new(setup, to_unreal(xf.translation), ue_quat(xf.rotation)));
+        }
+        // What blocks the Vehicle channel, less the car's own colliders (its body, its parts: anything under it). The
+        // suspension rays too: UE's WheelRaycastPreFilter blocks on the hit shape's response to the query's channel,
+        // the car's own object type (Vehicle); so the police blockers (Vehicle ignored) let cars through.
+        let own = |e: Entity| e == me || no_vehicle.contains(e) || vehicle_parts.get(e).is_ok_and(|p| p.0 == me) || parents.iter_ancestors(e).any(|a| a == me);
+        let (grid, lists) = collision.without(&dynamic, own);
+        let level = crate::collision::Excluding(grid, not_vehicle.as_ref().map(|g| &g.0));
+        let world = (&level, lists.as_slice());
+        let car = v.sim.as_mut().unwrap();
+        // Moved from outside (the host, a bot): the simulated car starts again there, at rest.
+        if xf.translation.distance(to_bevy(car.position)) > 0.5 {
+            *car = f13_core::vehicle_px::Car::new(v.px.clone().unwrap(), to_unreal(xf.translation), ue_quat(xf.rotation));
+        }
+        // The suspension rays (Unreal space in and out).
+        let mut ray = |start: Vec3, dir: Vec3, len: f32| {
+            let (a, b) = (to_bevy(start), to_bevy(start + dir * len));
+            f13_core::collision::segment_hit_normal(&world, a, b, 0.5).map(|(t, n)| {
+                let n = to_unreal(n).normalize_or_zero();
+                (t * len, if n.dot(dir) > 0.0 { -n } else { n })
+            })
+        };
+        // The body's contacts: a corner moving into the world's surface this step.
+        let mut contact = |from: Vec3, to: Vec3| {
+            let d = to - from;
+            if d.length_squared() < 1e-6 {
+                return None;
+            }
+            f13_core::collision::segment_hit_normal(&world, to_bevy(from), to_bevy(to), 0.5).map(|(t, n)| {
+                let n = to_unreal(n).normalize_or_zero();
+                ((1.0 - t) * d.length(), if n.dot(d) > 0.0 { -n } else { n })
+            })
+        };
+        let handbrake = escaped.is_none() && keys.pressed(KeyCode::Space);
+        car.step(dt, throttle, steer, handbrake, &mut ray, &mut contact);
+        // Jason in front of (or behind) the car stops it dead (KillersInFrontOfCar / KillersBehindCar).
+        let speed = car.forward_speed();
+        let (pos, rot) = (to_bevy(car.position), bevy_quat(car.rotation));
+        let blocked = jasons.iter().find(|(_, j)| {
+            let local = rot.inverse() * (j.translation - pos);
+            let ahead = local.x * speed.signum();
+            speed != 0.0 && ahead > 0.0 && ahead < HALF_LENGTH_M + BLOCK_DEPTH_M && local.z.abs() < BLOCK_HALF_WIDTH_M && local.y.abs() < 2.0
+        });
+        if let Some((je, _)) = blocked {
+            if speed.abs() > 50.0 {
+                info!("Jason stopped the car ({:.0} cm/s)", speed);
+                commands.trigger(crate::jason::CarSlam { jason: je, car: pos });
+            }
+            car.velocity = Vec3::ZERO;
+            car.angular_velocity = Vec3::ZERO;
+        }
+        xf.translation = to_bevy(car.position);
+        xf.rotation = bevy_quat(car.rotation);
+        v.speed = car.forward_speed();
+        v.steer = car.steering_input;
+        v.drive.rpm = car.rpm();
+        if v.started {
+            commands.entity(player.vehicle).insert(crate::audio::CueParams([("RPM".to_string(), v.drive.rpm)].into()));
+        }
+        return;
     }
     // The drivetrain: throttle forward or back (against the motion, the brakes).
     let setup = v.setup.clone();
@@ -223,6 +291,23 @@ fn drive(
     xf.translation = pos;
     // Pitch about the car's right axis (Bevy +Z before yaw).
     xf.rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_z(pitch);
+}
+
+fn to_unreal(v: Vec3) -> Vec3 {
+    crate::counselor_camera::to_unreal(v)
+}
+
+fn to_bevy(v: Vec3) -> Vec3 {
+    crate::counselor_camera::to_bevy(v)
+}
+
+/// A rotation in Unreal's space from Bevy's (the export's swap of Y and Z), and back: the same map both ways.
+fn ue_quat(q: Quat) -> Quat {
+    Quat::from_xyzw(-q.x, -q.z, -q.y, q.w)
+}
+
+fn bevy_quat(q: Quat) -> Quat {
+    Quat::from_xyzw(-q.x, -q.z, -q.y, q.w)
 }
 
 /// She sits in the driver's seat: her capsule at its socket (her feet a capsule half-height below), facing the car's

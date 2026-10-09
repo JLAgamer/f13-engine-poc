@@ -176,6 +176,7 @@ void ExportLevel(string mapPath, params string[] extra)
                 var brush = root;
                 var bs = brush?.GetOrDefault<FPackageIndex?>("BrushBodySetup")?.Load() as CUE4Parse.UE4.Objects.PhysicsEngine.UBodySetup;
                 var (pawn, camera, worldDynamic) = brush == null ? (false, false, false) : (Collision.BlocksPawn(brush, "BlockAll"), Collision.BlocksCamera(brush, "BlockAll"), Collision.BlocksWorldDynamic(brush, "BlockAll"));
+                info.HullsBlockVehicle = brush != null && Collision.BlocksVehicle(brush, "BlockAll");
                 if (brush != null && bs?.AggGeom != null && (pawn || camera || worldDynamic))
                 {
                     info.HullsBlockPawn = pawn;
@@ -246,6 +247,7 @@ void ExportLevel(string mapPath, params string[] extra)
                 BlocksPawn = Collision.BlocksPawn(smc),
                 BlocksCamera = Collision.BlocksCamera(smc),
                 BlocksWorldDynamic = Collision.BlocksWorldDynamic(smc),
+                BlocksVehicle = Collision.BlocksVehicle(smc),
                 BlocksVisibility = Collision.BlocksVisibility(smc),
                 CastShadow = smc.GetOrDefault("CastShadow", true),
                 // Foliage instances fade out at InstanceEndCullDistance; other components at their max draw distance
@@ -1431,6 +1433,8 @@ class Placement
     public bool BlocksCamera = true;
     /// Blocks traces on WorldDynamic (interactables' occlusion).
     public bool BlocksWorldDynamic = true;
+    /// Blocks the Vehicle channel (a car's body).
+    public bool BlocksVehicle = true;
     public bool BlocksVisibility = true;
     /// Casts shadows (CastShadow; baked ones included, which f13-game's dynamic sun stands in for).
     public bool CastShadow = true;
@@ -1448,7 +1452,7 @@ class ActorInfo
     /// BlockingVolumes: their convex hulls as world-space point sets (cm).
     public List<float[]>? Hulls;
     /// Whether the hulls block counselors (Pawn) and the camera channel.
-    public bool HullsBlockPawn = true, HullsBlockCamera = true, HullsBlockWorldDynamic = true;
+    public bool HullsBlockPawn = true, HullsBlockCamera = true, HullsBlockWorldDynamic = true, HullsBlockVehicle = true;
     /// NavMeshBoundsVolumes and the minimap volume: the world-space box their brush covers (cm: min x, y, z, max x, y, z).
     public float[]? Bounds;
 }

@@ -1,6 +1,7 @@
 //! Spline meshes (the landscape's roads, the guard rails): each placement's own copy of its mesh bent along its
-//! spline (f13-core spline_mesh, in the component's Unreal space) once its scene is in; their collision triangles
-//! are bent the same way (collision.rs).
+//! spline (f13-core spline_mesh, in the component's Unreal space) once its scene is in. Their collision as
+//! USplineMeshComponent::RecreateCollision makes it: each convex element's points bent, then cooked into a new hull
+//! (collision.rs); a complex-as-simple mesh's triangles bent.
 
 use bevy::camera::primitives::Aabb;
 use bevy::mesh::VertexAttributeValues;
@@ -33,6 +34,23 @@ fn extent<'a>(spline: &SplineMesh, points: impl Iterator<Item = &'a [f32; 3]>) -
 fn bend_point(params: &f13_core::spline_mesh::SplineParams, p: [f32; 3], n: [f32; 3]) -> ([f32; 3], [f32; 3]) {
     let (q, m) = params.deform(to_ue(p, 100.0), to_ue(n, 1.0));
     (to_ue(q, 0.01), to_ue(m, 1.0))
+}
+
+/// A spline mesh's convex collision: each hull's points (Unreal cm, mesh space) bent along the spline, re-hulled
+/// (glTF space). The bend's boundary is the mesh's extent (its render triangles', `glb`), as the component's bounds.
+pub(crate) fn bend_hulls(spline: &SplineMesh, hulls: &[Vec<f32>], surface: u8, glb: &std::path::Path) -> Vec<f13_core::collision::Tri> {
+    let render: Vec<[f32; 3]> = f13_data::collision::glb_triangles(glb).map(|t| t.into_iter().flatten().collect()).unwrap_or_default();
+    let all: Vec<[f32; 3]> = if render.is_empty() { hulls.iter().flat_map(|h| h.chunks_exact(3).map(|p| to_ue([p[0], p[1], p[2]], 0.01))).collect() } else { render };
+    let (lo, hi) = extent(spline, all.iter());
+    let params = spline.params(lo, hi);
+    hulls
+        .iter()
+        .flat_map(|h| {
+            let points: Vec<Vec3> = h.chunks_exact(3).map(|p| Vec3::from_array(to_ue(params.deform([p[0], p[1], p[2]], [0.0, 0.0, 1.0]).0, 0.01))).collect();
+            f13_core::collision::convex_hull(&points)
+        })
+        .map(|t| t.with_surface(surface))
+        .collect()
 }
 
 /// Collision triangles (glTF space, the mesh's own) bent along the spline.
