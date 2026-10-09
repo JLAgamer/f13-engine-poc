@@ -84,6 +84,7 @@ pub struct CounselorTuning {
     pub health: HealthTuning,
     pub stumble: StumbleTuning,
     pub dodge: DodgeTuning,
+    pub combat: crate::combat::CombatTuning,
 }
 
 impl std::fmt::Debug for CounselorTuning {
@@ -354,6 +355,7 @@ pub(crate) mod tests {
             health: Default::default(),
             stumble: Default::default(),
             dodge: Default::default(),
+            combat: Default::default(),
         }
     }
 

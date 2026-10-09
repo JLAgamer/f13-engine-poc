@@ -2639,8 +2639,16 @@ pub(crate) fn update_jason(
                     commands.entity(pe).insert(PlayAction(GRABBED_IDLE.into()));
                 }
                 let input = struggle.input;
-                if struggle.wiggle.tick(dt, input, &grab_struggle(&p.counselor.stats)) {
-                    info!("Vanessa: struggled free after {at:.1}s");
+                // FUN_1403bc910: her progress per wiggle slowed while she's wounded and against a raged Jason.
+                let combat = &ptuning.counselor.combat;
+                let raged = know.as_ref().is_some_and(|k| k.abilities.rage_active);
+                let mut wiggle = grab_struggle(&p.counselor.stats);
+                wiggle.percent_per_wiggle *= combat.wiggle_mod(p.counselor.wounded, raged);
+                if struggle.wiggle.tick(dt, input, &wiggle) {
+                    // FUN_1403a6c10: BreakFreeStaminaBoost back.
+                    let back = combat.break_free_stamina(&p.counselor.stats);
+                    p.counselor.stamina = (p.counselor.stamina + back).min(ptuning.counselor.stamina_max);
+                    info!("Vanessa: struggled free after {at:.1}s (stamina +{back:.0})");
                     commands.trigger(Score(Stun::GrabBreak.score_event().unwrap_or_default()));
                     release(&mut commands, pe, GRAB_BREAK, counselor_model.as_deref());
                     j.state = JasonState::Stunned { t: 0.0, stun: Stun::GrabBreak };

@@ -528,16 +528,16 @@ fn tick_action(
     time: Res<Time>,
     camera: Single<(&PlayerCamera, &GlobalTransform)>,
     mut rng: ResMut<crate::GameRng>,
-    mut player: Query<(Entity, &mut ItemAction, &mut Inventory, &Transform, &Player)>,
+    mut player: Query<(Entity, &mut ItemAction, &mut Inventory, &Transform, &mut Player)>,
     jasons: Query<(Entity, &Transform), (With<Jason>, Without<Player>)>,
-    (mouse, anims): (Res<ButtonInput<MouseButton>>, Res<crate::Anims>),
+    (mouse, anims, tuning): (Res<ButtonInput<MouseButton>>, Res<crate::Anims>, Res<crate::player::PlayerTuning>),
     mut wear: Query<Option<&mut Wear>>,
     items: Query<&Item>,
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
     mut assets: (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>),
     (globals, killer, character, rigs, killer_model): (Query<&GlobalTransform>, Option<Res<crate::jason::KillerTuning>>, Option<Res<CounselorCharacter>>, Query<(&ChildOf, &Rig)>, Option<Res<crate::character::KillerCharacter>>),
 ) {
-    let Ok((pe, mut a, mut inv, xf, p)) = player.single_mut() else { return };
+    let Ok((pe, mut a, mut inv, xf, mut p)) = player.single_mut() else { return };
     a.t += time.delta_secs();
     // SCCharacter's tick: held past 0.1 s in combat stance, the light swing becomes the weapon's ForwardAttack
     // (MULTICAST_Attack(true): the anim instance switches to it at the same fraction of the swing).
@@ -591,11 +591,25 @@ fn tick_action(
                     if let Some((je, jxf)) = hit {
                         let to = jxf.translation - xf.translation;
                         a.done = true;
-                        let stun = rng.0.frand() * 100.0 < stats.stun_chance;
+                        // FUN_1403cbef0: her damage (StrengthAttackMod x the weapon's, x2 heavy), the stun roll against
+                        // the weapon's StunChance, and HitKillerStaminaBoost back (f13-core::combat). His health isn't
+                        // modelled: the damage is logged.
+                        let combat = &tuning.counselor.combat;
+                        let heavy = matches!(a.what, Use::Swing { heavy: true, .. });
+                        let damage = combat.damage(stats.damage, &p.counselor.stats, heavy);
+                        let roll = combat.stun_roll(&p.counselor.stats, rng.0.frand());
+                        let stun = f13_core::combat::CombatTuning::stuns(stats.stun_chance, roll);
+                        let back = combat.hit_stamina(&p.counselor.stats);
+                        p.counselor.stamina = (p.counselor.stamina + back).min(tuning.counselor.stamina_max);
                         // Which of his sides she hit: his right is -X of his facing (+Z).
                         let jfwd = jxf.rotation * Vec3::Z;
                         let left = Vec2::new(-to.x, -to.z).perp_dot(Vec2::new(jfwd.x, jfwd.z)) < 0.0;
-                        info!("hit Jason ({:.0} damage, {:.0}% stun chance: {})", stats.damage, stats.stun_chance, if stun { "stunned" } else { "no stun" });
+                        info!(
+                            "hit Jason ({damage:.1} damage{}, roll {roll} vs stun chance {:.0}: {}; stamina +{back:.0})",
+                            if heavy { ", heavy" } else { "" },
+                            stats.stun_chance,
+                            if stun { "stun" } else { "no stun" }
+                        );
                         commands.entity(je).insert(HitJason { stun: stun.then_some(Stun::Weapon { left }), from: xf.translation });
                         let name = items.get(a.item).map_or("weapon".to_string(), |i| i.name.clone());
                         wear_weapon(&mut commands, &mut wear, &mut inv, a.item, stats.durability, stats.attacking_wear, &name);

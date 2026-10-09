@@ -43,6 +43,12 @@ EXE_CONSTANTS = {
     "stumble_stat_mod_base": (0x1403A145A, bytes.fromhex("c78798190000")),
     "blocking_damage_mod_base": (0x1403A1446, bytes.fromhex("c78728180000")),
     "dodge_stamina_cost_base": (0x1403A13EC, bytes.fromhex("c787d8160000")),
+    # her combat stats' constructor BaseValues (StrengthAttackMod and StunChanceMod have none: the Blueprint sets them)
+    "hit_killer_stamina_boost_base": (0x1403A1414, bytes.fromhex("c78738170000")),
+    "break_free_stamina_boost_base": (0x1403A1428, bytes.fromhex("c78768170000")),
+    "heavy_attack_modifier": (0x1403A0C5C, bytes.fromhex("c78788180000")),
+    "wounded_stun_mod": (0x1403A0C66, bytes.fromhex("c7878c180000")),
+    "rage_grab_stun_mod": (0x1403A0C70, bytes.fromhex("c78790180000")),
     "min_interact_hold_time": (0x1402DC507, bytes.fromhex("c786000e0000")),
     # interact components
     "repair_hold_time": (0x14032E84B, bytes.fromhex("c787b8020000")),
@@ -78,6 +84,57 @@ FEAR_FIELDS = {  # asset property -> json key; properties not set in an asset ar
 STAT_NAMES = ["Strength", "Speed", "Intelligence", "Stamina", "Luck", "Composure", "Stealth"]
 
 
+# The constants as the January 2025 build (the decomp's) has them: used when the install's exe doesn't have an
+# instruction where it's pinned. Builds since (October 2026's) ship the code encrypted on disk (Arxan: the
+# .arxinstmap beside the exe), so no instruction can be read there; constructor defaults rarely change between patches.
+KNOWN_CONSTANTS = {
+    "rage_unlock_time": 900.0,
+    "stalk_active_time": 20.0,
+    "update_fear_delay": 0.05000000074505806,
+    "max_sprint_speed": 450.0,
+    "max_run_speed": 280.0,
+    "max_slow_run_speed": 200.0,
+    "max_combat_speed": 104.0,
+    "max_walk_speed": 104.0,
+    "max_walk_speed_crouched": 80.0,
+    "stamina_max": 100.0,
+    "stamina_idle_modifier": 1.0,
+    "stamina_hiding_modifier": 1.5,
+    "stamina_sprinting_modifier": 2.0,
+    "dodging_speed_mod": 2.0,
+    "stumbling_speed_mod": 0.75,
+    "water_speed_mod": 0.699999988079071,
+    "grabbed_refill_base": 2.5,
+    "grabbed_refill_strength": 15.0,
+    "grabbed_refill_composure": 15.0,
+    "stumble_wounded_chance": 3.0,
+    "stumble_cooldown": 15.0,
+    "stumble_stat_mod_base": 1.0,
+    "blocking_damage_mod_base": 1.0,
+    "dodge_stamina_cost_base": 20.0,
+    "hit_killer_stamina_boost_base": 50.0,
+    "break_free_stamina_boost_base": 50.0,
+    "heavy_attack_modifier": 2.0,
+    "wounded_stun_mod": 0.75,
+    "rage_grab_stun_mod": 0.5,
+    "min_interact_hold_time": 0.20000000298023224,
+    "repair_hold_time": 15.0,
+    "allowable_fails_before_killer_notify": 3.0,
+    "min_restart_time": 5.0,
+    "max_restart_time": 5.0,
+    "restart_time_mod_base": 1.0,
+    "max_pip_width": 30.0,
+    "min_pip_width": 15.0,
+    "max_health": 100.0,
+    "first_aid_health_restored": 100.0,
+    "max_pip_count": 10,
+    "min_pip_count": 5,
+    "post_match_outro_wait_time": 10,
+    "post_match_wait_time": 20,
+    "force_stumble_on_stamina_depletion": True
+}
+
+
 def read_exe_constants(exe):
     data = open(exe, "rb").read()
     pe = struct.unpack_from("<I", data, 0x3C)[0]
@@ -94,21 +151,33 @@ def read_exe_constants(exe):
         raise ValueError(hex(va))
 
     out = {}
+    fallback = []
+
+    def read(name, va, expect, fmt):
+        o = file_off(va)
+        if data[o:o + len(expect)] != expect:
+            if name not in KNOWN_CONSTANTS:
+                sys.exit(f"{name}: unexpected instruction at {va:#x}; this game build is not supported yet")
+            fallback.append(name)
+            return KNOWN_CONSTANTS[name]
+        return struct.unpack_from(fmt, data, o + len(expect))[0]
+
     for name, (va, expect) in EXE_CONSTANTS.items():
-        o = file_off(va)
-        if data[o:o + len(expect)] != expect:
-            sys.exit(f"{name}: unexpected instruction at {va:#x}; this game build is not supported yet")
-        out[name] = struct.unpack_from("<f", data, o + len(expect))[0]
+        out[name] = read(name, va, expect, "<f")
     for name, (va, expect) in EXE_INTS.items():
-        o = file_off(va)
-        if data[o:o + len(expect)] != expect:
-            sys.exit(f"{name}: unexpected instruction at {va:#x}; this game build is not supported yet")
-        out[name] = struct.unpack_from("<i", data, o + len(expect))[0]
+        out[name] = read(name, va, expect, "<i")
     for name, (va, expect) in EXE_FLAGS.items():
         o = file_off(va)
         if data[o:o + len(expect)] != expect:
-            sys.exit(f"{name}: unexpected instruction at {va:#x}; this game build is not supported yet")
+            if name not in KNOWN_CONSTANTS:
+                sys.exit(f"{name}: unexpected instruction at {va:#x}; this game build is not supported yet")
+            fallback.append(name)
+            out[name] = KNOWN_CONSTANTS[name]
+            continue
         out[name] = data[o + len(expect)] != 0
+    if fallback:
+        print(f"warning: {len(fallback)} of the exe's constants aren't readable in this build (its code is encrypted on "
+              f"disk); using the January 2025 build's values for them", file=sys.stderr)
     return out
 
 
@@ -252,6 +321,19 @@ def counselor_section(conv, consts):
         "health": {
             "max_health": consts["max_health"],
             "blocking_damage_mod": smv("BlockingDamageMod", consts["blocking_damage_mod_base"]),
+        },
+        # Her hit on Jason (FUN_1403cbef0): damage = StrengthAttackMod x the weapon's Damage (x HeavyAttackModifier when
+        # heavy); stun when the weapon's StunChance beats RandHelper(101 - StunChanceMod); a hit or stun returns
+        # HitKillerStaminaBoost. Breaking free returns BreakFreeStaminaBoost (FUN_1403a6c10). The grab's wiggle progress
+        # x WoundedStunMod when wounded, x RageGrabStunMod against a raged Jason (FUN_1403bc910).
+        "combat": {
+            "strength_attack_mod": smv("StrengthAttackMod"),
+            "stun_chance_mod": smv("StunChanceMod"),
+            "hit_killer_stamina_boost": smv("HitKillerStaminaBoost", consts["hit_killer_stamina_boost_base"]),
+            "break_free_stamina_boost": smv("BreakFreeStaminaBoost", consts["break_free_stamina_boost_base"]),
+            "heavy_attack_modifier": f("HeavyAttackModifier", consts["heavy_attack_modifier"]),
+            "wounded_stun_mod": f("WoundedStunMod", consts["wounded_stun_mod"]),
+            "rage_grab_stun_mod": f("RageGrabStunMod", consts["rage_grab_stun_mod"]),
         },
         "stumble": {
             "fear_frequency_curve": curve("StumbleFearFrequecy"),  # (sic) the property's name in the game

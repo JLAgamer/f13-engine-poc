@@ -75,6 +75,17 @@ struct FirstAidJson {
 }
 
 #[derive(Deserialize)]
+struct CombatJson {
+    strength_attack_mod: StatJson,
+    stun_chance_mod: StatJson,
+    hit_killer_stamina_boost: StatJson,
+    break_free_stamina_boost: StatJson,
+    heavy_attack_modifier: f32,
+    wounded_stun_mod: f32,
+    rage_grab_stun_mod: f32,
+}
+
+#[derive(Deserialize)]
 struct HealthJson {
     max_health: f32,
     blocking_damage_mod: StatJson,
@@ -127,6 +138,9 @@ struct CounselorJson {
     health: HealthJson,
     stumble: StumbleJson,
     dodge: DodgeJson,
+    /// Her combat stats (tools/extract_tuning.py since October 2026; older files have none: neutral values).
+    #[serde(default)]
+    combat: Option<CombatJson>,
     minigame: MinigameJson,
 }
 
@@ -442,6 +456,21 @@ pub fn parse(text: &str) -> Result<Tuning, LoadError> {
         health: HealthTuning { max_health: c.health.max_health, blocking_damage_mod: smv(c.health.blocking_damage_mod) },
         stumble,
         dodge,
+        combat: match c.combat {
+            Some(k) => f13_core::combat::CombatTuning {
+                strength_attack_mod: smv(k.strength_attack_mod),
+                stun_chance_mod: smv(k.stun_chance_mod),
+                hit_killer_stamina_boost: smv(k.hit_killer_stamina_boost),
+                break_free_stamina_boost: smv(k.break_free_stamina_boost),
+                heavy_attack_modifier: k.heavy_attack_modifier,
+                wounded_stun_mod: k.wounded_stun_mod,
+                rage_grab_stun_mod: k.rage_grab_stun_mod,
+            },
+            None => {
+                eprintln!("tuning.json has no combat stats (re-run tools/extract_tuning.py): her hits use flat values");
+                Default::default()
+            }
+        },
     };
     let characters = f.counselor.characters.into_iter().map(|(k, v)| (k, v.stats)).collect();
     let j = f.killer.jason_base;
