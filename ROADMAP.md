@@ -68,11 +68,14 @@ Server-authoritative netcode, tested with bots, then an 8-player lobby.
 Moved from Milestone 2 (they need more than one counselor):
 - [ ] Fear events near friendlies and corpses (other counselors)
 - [ ] Car passengers, and the car running counselors over
-- [ ] The lobby, the Tommy Jarvis timer and Jason dying (killing him needs Tommy and other counselors;
-      Tommy is in "Afterwards")
+- [ ] The lobby, the Tommy Jarvis timer and Jason dying (killing him needs Tommy and other counselors)
+
+Moved from Afterwards:
+- [ ] Tommy Jarvis
+- [ ] Voice chat
 
 ## Afterwards
-Gradually add content. Nice to have, not needed for the MVP: voice chat, Tommy Jarvis, cutscenes,
+Gradually add content. Nice to have, not needed for the MVP: cutscenes,
 more maps, Jasons and counselors, perks, skins, emotes, a main menu.
 
 Future plans:
