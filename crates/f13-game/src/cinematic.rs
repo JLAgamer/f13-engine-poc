@@ -36,16 +36,19 @@ impl Plugin for CinematicPlugin {
 }
 
 /// The intro: its master sequence and the level it stages, and the event that ends it.
-pub const INTRO: Cinematic = Cinematic { master: "CLSM_Intro_Master_JTS", level: "CLsm_IntroCinematic", end_event: "IntroSequenceCompleted" };
+pub const INTRO: Cinematic = Cinematic { master: "CLSM_Intro_Master_JTS", level: "CLsm_IntroCinematic", end_event: Some("IntroSequenceCompleted") };
+/// The outro (PostMatchOutro, SCWorldSettings FUN_140445ef0: only with the killer alive): it plays to its end.
+pub const OUTRO: Cinematic = Cinematic { master: "CLSM_Outro_JTS", level: "CLsm_OutroCinematic", end_event: None };
 
 #[derive(Clone, Copy)]
 pub struct Cinematic {
     pub master: &'static str,
     pub level: &'static str,
-    pub end_event: &'static str,
+    /// The event that ends it, else its playback range's end.
+    pub end_event: Option<&'static str>,
 }
 
-/// The intro plays as the match starts (not under a bot, nor with --no-intro, nor without its export).
+/// The intro and outro play (not under a bot, nor with --no-intro, nor without their export).
 #[derive(Resource)]
 pub struct IntroEnabled;
 
@@ -97,6 +100,7 @@ struct Binding {
 }
 
 struct Sequence {
+    end: f32,
     bindings: HashMap<String, Binding>,
     tracks: Vec<Track>,
 }
@@ -150,7 +154,7 @@ impl Sequence {
                 Track { binding: t["Binding"].as_str().map(str::to_string), kind, sections }
             })
             .collect();
-        Some(Sequence { bindings, tracks })
+        Some(Sequence { end: v["End"].as_f64().unwrap_or(0.0) as f32, bindings, tracks })
     }
 
     /// The actor (and component, for a component binding) a binding drives.
@@ -311,7 +315,8 @@ struct Attached {
 /// The entity an attachment follows: the parent's bone, or the parent itself.
 fn anchor(parent: Entity, bone: &Option<String>, children: &Query<&Children>, names: &Query<&Name>) -> Option<Entity> {
     match bone {
-        Some(b) => children.iter_descendants(parent).find(|&e| names.get(e).is_ok_and(|n| n.as_str() == b)),
+        // The deepest node of that name: the joint (a glTF scene can also have a wrapper node called "root").
+        Some(b) => children.iter_descendants(parent).filter(|&e| names.get(e).is_ok_and(|n| n.as_str() == b)).last(),
         None => Some(parent),
     }
 }
@@ -338,6 +343,8 @@ struct Playing {
     /// Camera actor -> (field of view at its focal length, that focal length).
     cameras: HashMap<String, (f32, f32)>,
     frames_waited: u32,
+    /// The frame every attachment's bone was first there.
+    found_at: Option<u32>,
     /// The HUD's top-level nodes and their visibility, hidden while it plays.
     hud: Vec<(Entity, Visibility)>,
 }
@@ -474,7 +481,7 @@ fn start(
         hud.push((e, *v));
         *v = Visibility::Hidden;
     }
-    commands.insert_resource(Playing { cinematic: c, sequences, t: 0.0, started: false, base, actors, takes, lengths, cameras, frames_waited: 0, hud });
+    commands.insert_resource(Playing { cinematic: c, sequences, t: 0.0, started: false, base, actors, takes, lengths, cameras, frames_waited: 0, found_at: None, hud });
 }
 
 /// Starts once the staged meshes are in (their attached actors' offsets taken at the bind pose).
@@ -491,32 +498,32 @@ fn ready(
         return;
     }
     p.frames_waited += 1;
-    let mut all = true;
+    // Every attachment's bone there (the scenes spawned)...
     let mut missing = vec![];
-    for (s, mut a, gt) in &mut attached {
-        if a.rel.is_some() {
-            continue;
+    for (s, a, _) in &attached {
+        let parent = staged.iter().find(|(_, s)| s.name == a.parent).map(|(e, _)| e);
+        if parent.and_then(|e| anchor(e, &a.bone, &children, &names)).is_none() {
+            missing.push(format!("{} ({}.{:?})", s.name, a.parent, a.bone));
         }
+    }
+    if missing.is_empty() && p.found_at.is_none() {
+        p.found_at = Some(p.frames_waited);
+    }
+    // ...and their world transforms propagated (a frame or two after they spawn): the offsets from the bind pose.
+    let settled = p.found_at.is_some_and(|f| p.frames_waited >= f + 3);
+    if !settled && p.frames_waited <= 600 {
+        return;
+    }
+    if !missing.is_empty() {
+        warn!("cinematic: attachments without their bone: {}", missing.join(", "));
+    }
+    for (_, mut a, gt) in &mut attached {
         let Some((parent, _)) = staged.iter().find(|(_, s)| s.name == a.parent) else { continue };
-        let bone = anchor(parent, &a.bone, &children, &names);
-        match bone.and_then(|b| globals.get(b).ok()) {
-            Some(bg) => {
-                let rel = bg.affine().inverse() * gt.affine();
-                a.rel = Some(Transform::from_matrix(rel.into()));
-            }
-            None => {
-                all = false;
-                missing.push(format!("{} ({}.{:?})", s.name, a.parent, a.bone));
-            }
+        if let Some(bg) = anchor(parent, &a.bone, &children, &names).and_then(|b| globals.get(b).ok()) {
+            a.rel = Some(Transform::from_matrix((bg.affine().inverse() * gt.affine()).into()));
         }
     }
-    // Give the scenes a few frames to spawn; past a few seconds, start regardless.
-    if (all && p.frames_waited > 5) || p.frames_waited > 600 {
-        if !all {
-            warn!("cinematic: attachments without their bone: {}", missing.join(", "));
-        }
-        p.started = true;
-    }
+    p.started = true;
 }
 
 /// Attached actors follow their parent's bone.
@@ -557,8 +564,15 @@ fn play(
     mut overlay: Query<(Entity, &mut BackgroundColor), With<FadeOverlay>>,
     staged: Query<Entity, With<Staged>>,
     windows: Query<&Window>,
+    attached: Query<(), With<Attached>>,
 ) {
     let Some(mut p) = playing else { return };
+    // No HUD over it (its own systems may show parts of it again: hidden after them, every frame).
+    for (e, _) in &p.hud {
+        if let Ok(mut v) = visibility.get_mut(*e) {
+            v.set_if_neq(Visibility::Hidden);
+        }
+    }
     if !p.started {
         return;
     }
@@ -568,9 +582,9 @@ fn play(
     let t = p.t;
     let mut frame = Frame::default();
     evaluate(&p.sequences, p.cinematic.master, t, &p.base, &p.lengths, &mut frame);
-    // Transforms and visibility.
+    // Transforms (an attached actor's are relative to its parent: it keeps its offset from its bone) and visibility.
     for (actor, xf) in &frame.transforms {
-        if let Some(&e) = p.actors.get(actor) {
+        if let Some(&e) = p.actors.get(actor).filter(|&&e| !attached.contains(e)) {
             if let Ok(mut t) = transforms.get_mut(e) {
                 *t = crate::to_transform(xf);
             }
@@ -657,8 +671,13 @@ fn play(
     for cue in sounds {
         commands.trigger(crate::audio::PlaySound { cue, at: None });
     }
-    if events.iter().any(|e| e == p.cinematic.end_event) {
-        info!("cinematic: {} at {:.2} s", p.cinematic.end_event, t);
+    let end = p.sequences.get(p.cinematic.master).map_or(0.0, |s| s.end);
+    let finished = match p.cinematic.end_event {
+        Some(event) => events.iter().any(|e| e == event),
+        None => t >= end,
+    };
+    if finished {
+        info!("cinematic: {} over at {:.2} s", p.cinematic.master, t);
         for e in &staged {
             commands.entity(e).despawn();
         }

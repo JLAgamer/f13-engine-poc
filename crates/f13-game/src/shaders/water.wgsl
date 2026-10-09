@@ -8,8 +8,9 @@
 //   foam.r(p / 400 + f(0.1, 0.1)) + foam.g(p / 600 + f(0.1, -0.1)), f = time x EdgeFoamTime; with D the scene's depth
 //   behind the water less the water's (cm), lerp(foam x EdgeColor, colour, clamp((D x edgeFade)^edgeContrast_Power, 0,
 //   edgeContrast)); plus Reflection Amount x Reflection Cubemap(reflect(-V, N)) x Reflection CubemapTint, saturated.
-// - Opacity: (a + saturate(D / epacityDepth) (1 - a))^depthContrast, a = saturate(D / 100). PLACEHOLDER: the
-//   cylinder dissolve (CylDis_*, a material parameter collection's cylinder) is taken as 1.
+// - Opacity: (a + saturate(D / epacityDepth) (1 - a))^depthContrast, a = saturate(D / 100), times the cylinder
+//   dissolve: MPC_Cylindrical_dissolve, which nothing sets, keeps its zero defaults, and with them the compiled term
+//   is exactly 1 (|dot(p, orientation)| = 0 >= CylinderScale.z x 25 = 0 selects 1).
 // - metalic, specular, rough as given.
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,

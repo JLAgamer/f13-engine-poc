@@ -255,9 +255,12 @@ fn run_match(
         killer_alive: (!jason.is_empty()).then_some(true),
     };
     let mut entered = g.state.advance(time.delta_secs(), &t.rules, &roster);
-    // The intro's IntroSequenceCompleted: on to the match.
+    // The intro's IntroSequenceCompleted: on to the match; the outro's end: on to the results.
     if g.state.state == MatchState::PreMatchIntro && std::mem::take(&mut intro_done.0) {
         entered.extend(g.state.start(&t.rules));
+    }
+    if g.state.state == MatchState::PostMatchOutro && std::mem::take(&mut intro_done.0) {
+        entered.extend(g.state.end(&t.rules));
     }
     // The host's start and end (host.rs).
     if let Some(mut h) = host {
@@ -290,6 +293,10 @@ fn run_match(
                         g.award_killer(name, scale, &t.events, now);
                     }
                 }
+            }
+            // The outro (cinematic.rs), with Jason alive (he can't die yet: there whenever he's in the match).
+            MatchState::PostMatchOutro if intro.is_some() && !jason.is_empty() => {
+                commands.insert_resource(crate::cinematic::PlayCinematic(crate::cinematic::OUTRO))
             }
             MatchState::PostMatchOutro => {
                 let ended = g.state.end(&t.rules);

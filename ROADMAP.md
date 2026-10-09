@@ -28,10 +28,13 @@ Bugs:
       ported, audio.rs Reloop; not the fix)
 
 Moved from Milestone 1 (not tied to gameplay):
-- [ ] Match flow, remaining: the level intro and outro sequences. (Badges: their award sites and classes are read,
-      see MODLOG; the game shows them in the lobby's SCMatchEndLobbyWidget, so with the lobby in Milestone 3)
-- [ ] Materials, remaining: the lake's rain ripples (its RainOn instances) and the cylinder dissolve (a parameter
-      collection not exported), foliage subsurface (its transmission is the deferred light pass's, whose code isn't
+- [ ] Match flow, remaining: in the intro and outro their particle tracks (with the particles), the title text, the
+      cameras' depth of field and the material/colour tracks (MODLOG "Level intro"). Bugs: background pop-in as the
+      intro's cameras move (likely Unreal scaling cull/LOD distances by the view's FOV; unread), and in the outro
+      Jason's sack mask appears to float at the shack door (its attachment follows the body's bone; the pose or
+      another level actor is unchecked). (Badges: their award sites and classes are read, see MODLOG; the game shows them in the
+      lobby's SCMatchEndLobbyWidget, so with the lobby in Milestone 3)
+- [ ] Materials, remaining: foliage subsurface (its transmission is the deferred light pass's, whose code isn't
       in the shipped global shader cache: MODLOG "Foliage subsurface: blocked")
 - [ ] Particle effects (Cascade ParticleSystems): none ported yet. The walls' and doors' hit dust (HitParticle), the
       knife's trail (P_Jason_ThrowingKnife_01), blood, the campfires and fireplaces, the cars' exhaust, rain, the
@@ -43,7 +46,8 @@ Moved from Milestone 1 (not tied to gameplay):
       skeleton, by AimPitch while bIsAiming), BS_Run_Lean, the rest of the anim Blueprints' graphs (f13-rs plays their
       locomotion and the grab and block layers; their look-at, IK and additive nodes aren't ported). Not in the game:
       turn-in-place takes, limp movement
-- [ ] Lighting, remaining: Enlighten GI, local light shadows, light functions, the sky texture, rain (the colour
+- [ ] Lighting, remaining: Enlighten GI, local light shadows (a real-time budget of the 4 nearest for now, unverified
+      visually and for cost), light functions, the sky texture, rain (the colour
       grading and bloom: Decomp audit's post-processing)
 - [ ] Read the stock pak directly, so users don't need to extract it first (with the host CLI's first-run setup).
       Its footer is known (an encrypted-index flag, magics 'Atae' and 'kcid', version 5, index offset and size,

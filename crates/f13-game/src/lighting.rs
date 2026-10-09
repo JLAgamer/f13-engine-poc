@@ -231,6 +231,15 @@ struct HeightFog {
     directional_exponent: f32,
 }
 
+/// A placed light that casts shadows (its CastShadows, Unreal's default on). Its shadows are the engine's stationary
+/// lights' (precomputed for the static world, dynamic for movers); here real-time shadow maps for the nearest few
+/// whose range reaches the camera ([`SHADOWED_LIGHTS`], [`shadow_budget`]): an approximation of the baked result.
+#[derive(Component)]
+struct ShadowCaster;
+
+/// How many local lights render shadow maps at once. PLACEHOLDER: a budget, not the game's (its are baked).
+const SHADOWED_LIGHTS: usize = 4;
+
 /// A placed light's distance fade: MaxDrawDistance and MaxDistanceFadeRange (m), and its full intensity.
 #[derive(Component)]
 struct DrawDistance {
@@ -286,7 +295,7 @@ impl Plugin for LightingPlugin {
             app.insert_resource(Unlit);
         }
         app.add_systems(Startup, spawn_lights)
-            .add_systems(Update, (setup_cameras, update_fog, fade_lights, add_flashlight, toggle_flashlight, aim_flashlight).chain());
+            .add_systems(Update, (setup_cameras, update_fog, fade_lights, shadow_budget, add_flashlight, toggle_flashlight, aim_flashlight).chain());
     }
 }
 
@@ -353,6 +362,9 @@ fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
                         ))
                         .id()
                 };
+                if l.flag("CastShadows", true) {
+                    commands.entity(e).insert(ShadowCaster);
+                }
                 if let Some(b) = box_light(l) {
                     commands.entity(e).insert((b, if l.visible() { Visibility::Inherited } else { Visibility::Hidden }));
                 }
@@ -478,6 +490,38 @@ fn fade_lights(
         let i = d.lumens * scale(xf, d);
         if l.intensity != i {
             l.intensity = i;
+        }
+    }
+}
+
+/// The nearest shadow-casting lights that are on and reach the camera get shadow maps; the others none.
+#[allow(clippy::type_complexity)]
+fn shadow_budget(
+    cameras: Query<&GlobalTransform, (With<Lit>, With<Camera3d>)>,
+    mut points: Query<(Entity, &mut PointLight, &GlobalTransform, &InheritedVisibility), (With<ShadowCaster>, Without<SpotLight>)>,
+    mut spots: Query<(Entity, &mut SpotLight, &GlobalTransform, &InheritedVisibility), (With<ShadowCaster>, Without<PointLight>)>,
+) {
+    let Some(cam) = cameras.iter().next().map(GlobalTransform::translation) else { return };
+    let mut near: Vec<(f32, Entity)> = points
+        .iter()
+        .filter(|(_, l, _, v)| v.get() && l.intensity > 0.0)
+        .map(|(e, l, g, _)| (g.translation().distance(cam), l.range, e))
+        .chain(spots.iter().filter(|(_, l, _, v)| v.get() && l.intensity > 0.0).map(|(e, l, g, _)| (g.translation().distance(cam), l.range, e)))
+        .filter(|(d, range, _)| d < range)
+        .map(|(d, _, e)| (d, e))
+        .collect();
+    near.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let chosen: Vec<Entity> = near.iter().take(SHADOWED_LIGHTS).map(|(_, e)| *e).collect();
+    for (e, mut l, _, _) in &mut points {
+        let on = chosen.contains(&e);
+        if l.shadow_maps_enabled != on {
+            l.shadow_maps_enabled = on;
+        }
+    }
+    for (e, mut l, _, _) in &mut spots {
+        let on = chosen.contains(&e);
+        if l.shadow_maps_enabled != on {
+            l.shadow_maps_enabled = on;
         }
     }
 }
