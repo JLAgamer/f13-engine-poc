@@ -1140,7 +1140,7 @@ fn map_icons(
     icons: Query<(Entity, &MapIcon, &GlobalTransform)>,
     maps: Query<(&MaterialNode<Minimap>, &ComputedNode)>,
     all_maps: Res<Assets<Minimap>>,
-    mut nodes: Query<(&mut Node, &mut Visibility), With<MapIconNode>>,
+    mut nodes: Query<(&mut UiTransform, &mut Visibility), With<MapIconNode>>,
     mut placed: Local<(Option<Entity>, HashMap<Entity, Entity>)>,
     mut images: Local<HashMap<String, Option<(String, Vec2, [f32; 4])>>>,
 ) {
@@ -1167,18 +1167,20 @@ fn map_icons(
         let d = Vec2::new(delta.dot(r), -delta.dot(f));
         let shown = d.length() <= m.view.w;
         let s = isize * scale;
-        let (left, top) = (Val::Px((0.5 + d.x) * size.x - s.x / 2.0), Val::Px((0.5 + d.y) * size.y - s.y / 2.0));
+        // Placed by its transform, not its layout: layout positions snap to whole pixels while the map under it
+        // scrolls smoothly, which shook the icons.
+        let at = Val2::px((0.5 + d.x) * size.x - s.x / 2.0, (0.5 + d.y) * size.y - s.y / 2.0);
         let vis = if shown { Visibility::Inherited } else { Visibility::Hidden };
         match placed.1.get(&e).and_then(|&n| nodes.get_mut(n).ok()) {
-            Some((mut n, mut v)) => {
-                n.left = left;
-                n.top = top;
+            Some((mut t, mut v)) => {
+                t.translation = at;
                 v.set_if_neq(vis);
             }
             None => {
                 let n = commands
                     .spawn((
-                        Node { position_type: PositionType::Absolute, left, top, width: Val::Px(s.x), height: Val::Px(s.y), ..default() },
+                        Node { position_type: PositionType::Absolute, left: Val::Px(0.0), top: Val::Px(0.0), width: Val::Px(s.x), height: Val::Px(s.y), ..default() },
+                        UiTransform { translation: at, ..default() },
                         ImageNode { color: linear(brush), ..ImageNode::new(assets.load(file)) },
                         vis,
                         MapIconNode,
