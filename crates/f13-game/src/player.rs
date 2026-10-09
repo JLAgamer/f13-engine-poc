@@ -392,7 +392,7 @@ pub(crate) fn move_player(
     tuning: Res<PlayerTuning>,
     camera: Single<&PlayerCamera>,
     mut player: Single<
-        (Entity, &mut Player, &mut Transform, Option<&crate::interact::UsingItem>, Option<&Unsettled>, (Has<crate::jason::Held>, Has<crate::hiding::Hiding>, Has<crate::items::Trapped>, (Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>, Has<crate::interact::BarricadeMove>, Has<crate::interact::MoveToSpot>, Has<crate::cabinets::CabinetUse>)), Has<crate::jason::Staggered>, Has<crate::items::ItemAction>),
+        (Entity, &mut Player, &mut Transform, Option<&crate::interact::UsingItem>, Option<&Unsettled>, (Has<crate::jason::Held>, Has<crate::hiding::Hiding>, Has<crate::items::Trapped>, (Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>, Has<crate::interact::BarricadeMove>, Has<crate::interact::MoveToSpot>, Has<crate::cabinets::CabinetUse>)), Has<crate::jason::Staggered>, Option<&crate::items::ItemAction>),
         Without<Driving>,
     >,
     interaction: Option<Res<crate::interact::Interaction>>,
@@ -414,6 +414,9 @@ pub(crate) fn move_player(
     let forward = Vec2::new(-sin, -cos);
     let right = Vec2::new(cos, -sin);
     let repairing = interaction.as_ref().is_some_and(|i| i.busy());
+    // A swing's montage moves her by its root motion while it plays (RootMotionFromMontagesOnly), her input ignored.
+    let swing_root = item_action.and_then(|a| a.root);
+    let item_action = item_action.is_some();
     let busy = !p.counselor.alive() || using.is_some() || repairing || staggered || item_action || trapped || door_move || window_move || barricade_move || sliding || searching;
     let wish = match autopilot.get(entity) {
         _ if busy => Vec2::ZERO,
@@ -422,7 +425,7 @@ pub(crate) fn move_player(
     };
 
     let (facing, _, _) = xf.rotation.to_euler(EulerRot::YXZ);
-    if let Some((local, _)) = p.root_motion {
+    if let Some(local) = p.root_motion.map(|(l, _)| l).or(swing_root) {
         // The montage moves the counselor (relative to where they face), whatever the input.
         let fwd = Vec2::new(facing.sin(), facing.cos());
         let rt = Vec2::new(-fwd.y, fwd.x);

@@ -75,6 +75,20 @@ const JASON_RADIUS_M: f32 = 0.34;
 const JASON_HEIGHT_M: f32 = 1.76;
 
 const SWING_1H: [&str; 2] = ["f_combat_stand_1h_melee_light_01", "f_combat_stand_1h_melee_heavy_01"];
+/// The weapons' NeutralAttack / ForwardAttack montages (her female ones; every melee weapon class names one of these
+/// two pairs) whose segments are the takes above: their root motion carries her through the swing (anims.json).
+const SWING_MONTAGES: [(&str, &str); 4] = [
+    ("f_combat_stand_2h_melee_light_01", "AM_F_combat_stand_2h_axe_attack_light"),
+    ("f_combat_stand_2h_melee_heavy_01", "AM_F_combat_stand_2h_axe_attack_heavy"),
+    ("f_combat_stand_1h_melee_light_01", "AM_F_combat_stand_1h_attack_light"),
+    ("f_combat_stand_1h_melee_heavy_01", "AM_F_combat_stand_1h_attack_heavy"),
+];
+
+/// A swing take's root motion (local cm/s: x right, y forward), from its montage's segment.
+fn swing_root(anims: &crate::Anims, take: &str) -> Option<Vec2> {
+    let (_, montage) = SWING_MONTAGES.iter().find(|(t, _)| *t == take)?;
+    anims.0.get(&format!("{montage}/{take}")).copied()
+}
 const SWING_2H: [&str; 2] = ["f_combat_stand_2h_melee_light_01", "f_combat_stand_2h_melee_heavy_01"];
 const FLARE_FIRE: &str = "f_normal_stand_flare_shoot";
 const SHOTGUN_FIRE: &str = "combat_stand_rifle_fire_01";
@@ -161,6 +175,8 @@ pub struct ItemAction {
     trace: Option<Transform>,
     /// The attack button's hold in combat stance (SCCharacter +0xf4c / +0xf50, from the press that swung).
     hold: Option<f32>,
+    /// Its montage's root motion moving her while it plays (a swing's: local cm/s, x right, y forward).
+    pub(crate) root: Option<Vec2>,
 }
 
 /// SCCharacter's tick: the attack held this long in combat stance is the heavy attack (DAT_14207a200).
@@ -451,6 +467,7 @@ fn start_action(
         (Without<ItemAction>, Without<crate::interact::UsingItem>, Without<crate::jason::Held>, Without<crate::jason::Staggered>, Without<crate::vehicle::Driving>, Without<Blocking>, Without<Trapped>),
     >,
     items: Query<&Item>,
+    anims: Res<crate::Anims>,
 ) {
     let Some(character) = character else { return };
     let Ok((pe, p, inv, mut xf)) = player.single_mut() else { return };
@@ -462,7 +479,8 @@ fn start_action(
     let mut start = |what: Use, item: Entity, anim: &str, at: f32| {
         // A swing in combat stance: the button's hold counts toward the heavy attack.
         let hold = (combat && matches!(what, Use::Swing { .. })).then_some(0.0);
-        commands.entity(pe).insert((ItemAction { what, item, t: 0.0, len: len(anim), at, done: false, trace: None, hold }, PlayAction(anim.into())));
+        let root = matches!(what, Use::Swing { .. }).then(|| swing_root(&anims, anim)).flatten();
+        commands.entity(pe).insert((ItemAction { what, item, t: 0.0, len: len(anim), at, done: false, trace: None, hold, root }, PlayAction(anim.into())));
     };
     // Face where the camera looks.
     let (sin, cos) = camera.yaw.sin_cos();
@@ -512,7 +530,7 @@ fn tick_action(
     mut rng: ResMut<crate::GameRng>,
     mut player: Query<(Entity, &mut ItemAction, &mut Inventory, &Transform, &Player)>,
     jasons: Query<(Entity, &Transform), (With<Jason>, Without<Player>)>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    (mouse, anims): (Res<ButtonInput<MouseButton>>, Res<crate::Anims>),
     mut wear: Query<Option<&mut Wear>>,
     items: Query<&Item>,
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
@@ -536,6 +554,7 @@ fn tick_action(
                 a.len = len;
                 a.at = window.0;
                 a.what = Use::Swing { stats, window, heavy: true };
+                a.root = swing_root(&anims, anim);
                 info!("swing (heavy)");
                 commands.entity(pe).insert((PlayAction(anim.into()), crate::character::SeekAction(a.t)));
             }
