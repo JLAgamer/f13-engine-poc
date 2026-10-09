@@ -167,9 +167,10 @@ fn perceive(
     players: Query<(&Player, &Transform, Option<&Hiding>), Without<Jason>>,
     surroundings: Option<Res<crate::fear_events::Surroundings>>,
     mut controls: Option<ResMut<crate::jason_player::JasonControls>>,
+    map: Option<Res<crate::jason_player::MorphMap>>,
 ) {
     let Some(v) = values else { return };
-    // Played, he uses Sense when asked (4); the computer Jason when it's ready and she's out of sight.
+    // Played, he uses Sense when asked (2); the computer Jason when it's ready and she's out of sight.
     let asked = controls.as_mut().map(|c| std::mem::take(&mut c.sense));
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
@@ -248,7 +249,16 @@ fn perceive(
             }
         }
 
-        // Sense: used when ready and she's out of sight.
+        // KLR_Sense_PC (FUN_1403e4980): nothing while his grab plays (the grab's input has no Sense) or his map is out;
+        // on, it's cancelled (its unused share refunded); then used if it's available.
+        let asked = asked.map(|a| a && !j.holding() && !map.as_ref().is_some_and(|m| m.open));
+        if asked == Some(true) && k.sensing(now) {
+            let unused = (k.sense_until - now) / k.sense_length.max(1e-3);
+            k.abilities.refund(Ability::Sense, unused);
+            k.sense_until = now;
+            info!("Jason: Sense cancelled");
+        }
+        // Sense: the player's when asked; the computer Jason's when ready and she's out of sight.
         if asked.unwrap_or(!k.sees) && !k.sensing(now) && k.abilities.is_available(Ability::Sense, &blockers) {
             k.abilities.consume(Ability::Sense);
             k.sense_until = now + v.sense.duration;

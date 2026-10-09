@@ -88,8 +88,18 @@ const COMBAT_IDLE: &str = "combat_stand_idle_2h";
 const ATTACK: &str = "combat_stand_2h_attack_light";
 /// The pickaxe's ForwardAttack: his heavy attack (it ends a counselor's block).
 const HEAVY_ATTACK: &str = "combat_stand_2h_attack_heavy";
-const GRAB_STARTUP: &str = "normal_grab_startup";
-const GRAB_ENTER: &str = "normal_grab_enter_1";
+/// Jason_AnimBP's GrabMontage, AM_Jason_Enter_Grab_Montage (PlayGrabAnim 0x14031a110, rate 1): its Default section
+/// (the reach) runs on into GrabMissed unless the grab lands, which takes it to GrabSuccess. Its notifies:
+/// EnterGrabBegin at 0 (his move input ignored), PerformGrabTest at 0.3 s (GrabCounselor: the range and angle test),
+/// EnterGrabFinish 1.279 s into the montage after a miss (the move input back) or 1.469 s into GrabSuccess.
+const GRAB_STARTUP: &str = "normal_grab_enter_1";
+const PERFORM_GRAB_TEST_S: f32 = 0.3;
+/// The GrabSuccess section; the grab kills open once it's played (FinishGrabCounselor's UpdateGrabState timer).
+const GRAB_ENTER: &str = "normal_grab_Success_2";
+const GRAB_SUCCESS_FINISH_S: f32 = 3.2686255 - 1.8000001;
+/// The GrabMissed section, and its EnterGrabFinish counted from the test.
+const GRAB_MISS: &str = "normal_grab_fail";
+const GRAB_MISS_FINISH_S: f32 = 1.2791328 - PERFORM_GRAB_TEST_S;
 /// Jason_Base's ShiftAudioCue (the Shift's rush, on him) and TeleportCueCounselorHears (the static a counselor near his
 /// Morph or Stalk hears: [`distortion`]).
 const SHIFT_CUE: &str = "ShiftTunnelCue";
@@ -125,7 +135,6 @@ const GRAB_IDLE: &str = "normal_grab_idle";
 /// SCKillerCharacter's GrabValue: 1 from FinishGrabCounselor until he drops her): its BranchFilters, in component
 /// space (bMeshSpaceRotationBlend); its layer is the GrabState machine's Idle (GRAB_IDLE).
 const GRAB_LAYER_FILTERS: &[(&str, i32)] = &[("spine_01", 3), ("target_jnt", 0)];
-const GRAB_MISS: &str = "normal_grab_miss";
 /// Jason_AnimBP's CombatUpperBody layer (LayeredBoneBlend_36EE: spine_01 BlendDepth 1, target_jnt 0, BlendWeights
 /// 0.8, mesh-space rotation), chosen over CombatFullBody while he moves (BlendListByBool on bIsMoving, 0.1 s).
 const BLOCK_LAYER_FILTERS: &[(&str, i32)] = &[("spine_01", 1), ("target_jnt", 0)];
@@ -248,7 +257,7 @@ const KNIFE_AIM_SECONDS: f32 = 0.6;
 const HEAVY_HOLD_S: f32 = 0.1;
 const TRAP_SPACING_M: f32 = 10.0;
 /// ThrowingKnife_C's ProjectileGravityScale; SCThrowable's TimeToDestroy (s).
-const KNIFE_GRAVITY: f32 = 9.8 * 8.0;
+pub(crate) const KNIFE_GRAVITY: f32 = 9.8 * 8.0;
 const KNIFE_LIFE: f32 = 5.0;
 /// AM_normal_stand_knife_throw's sections; when the knife leaves (s into the throw section: its ThrowKnife notify).
 const KNIFE_SELECT: &str = "normal_stand_knife_select_01";
@@ -423,7 +432,7 @@ pub enum JasonState {
     BreakingWall { wall: Entity, t: f32, section: usize, hit: bool },
     /// Raged: bursting through a closed door (s into it).
     BurstingDoor { door: Entity, t: f32 },
-    /// Reaching for a grab; it connects (or misses) when the startup ends.
+    /// Reaching for a grab (the grab montage's Default section); it connects or misses at its PerformGrabTest.
     Reaching { t: f32 },
     Missed { t: f32 },
     Holding { t: f32 },
@@ -2163,13 +2172,16 @@ pub(crate) fn update_jason(
                     thrown = true;
                     j.knives -= 1;
                     j.knife_cooldown = t.knife_cooldown;
-                    // From his view point, 120 cm out along the aim: at her chest; the player's knife goes where they look.
+                    // ThrowKnife (0x14040d100): from his camera, 120 cm out along its forward, at ThrowStrength along it;
+                    // the computer Jason's from his eyes, aimed to arc onto her chest.
                     let eyes = xf.translation + Vec3::Y * crate::senses::EYE_M;
-                    let vel = match player_input {
-                        Some(i) => i.look.normalize_or(Vec3::Z) * t.throw_strength,
-                        None => knife_velocity(eyes, pxf.translation + Vec3::Y * 1.2, t.throw_strength),
+                    let (origin, vel) = match player_input {
+                        // (No camera yet: his eyes and his look.)
+                        Some(i) if i.view.1 == Vec3::ZERO => (eyes, i.look.normalize_or(Vec3::Z) * t.throw_strength),
+                        Some(i) => (i.view.0, i.view.1.normalize_or(Vec3::Z) * t.throw_strength),
+                        None => (eyes, knife_velocity(eyes, pxf.translation + Vec3::Y * 1.2, t.throw_strength)),
                     };
-                    let from = eyes + vel.normalize_or_zero() * KNIFE_START_M;
+                    let from = origin + vel.normalize_or_zero() * KNIFE_START_M;
                     commands.trigger(ThrowKnife { from, vel, damage: t.knife_damage });
                 }
                 if at >= end {
@@ -2488,8 +2500,7 @@ pub(crate) fn update_jason(
             JasonState::Reaching { t: at } => {
                 let at = at + dt;
                 walk(&mut j, &mut xf, face_dir.normalize_or_zero(), t.walk_speed, Some(face_dir), dt, &t, &world);
-                let startup = killer.length(GRAB_STARTUP).unwrap_or(0.25);
-                if at < startup {
+                if at < PERFORM_GRAB_TEST_S {
                     j.state = JasonState::Reaching { t: at };
                 } else if alive && !driving && dist <= t.grab_max_m && angle_to(xf.rotation, flat) <= t.grab_angle_deg {
                     // A pocket knife in her pockets breaks the grab at once (and is used up).
@@ -2529,7 +2540,7 @@ pub(crate) fn update_jason(
             JasonState::Missed { t: at } => {
                 let at = at + dt;
                 walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, None, dt, &t, &world);
-                if at >= killer.length(GRAB_MISS).unwrap_or(1.0) {
+                if at >= GRAB_MISS_FINISH_S {
                     j.state = JasonState::Hunting;
                     j.cooldown = t.attack_delay;
                     j.wants_grab = rng.0.frand() < GRAB_ODDS;
@@ -2551,13 +2562,13 @@ pub(crate) fn update_jason(
                     pxf.translation = xf.translation + Vec3::new(yaw.sin(), 0.0, yaw.cos()) * GRAB_HOLD_M;
                     pxf.rotation = Quat::from_rotation_y(yaw + std::f32::consts::PI);
                 }
-                // Past the grab's enter montage: his locomotion with the grab layer over it (grab_layer); he moves at his
-                // normal speeds (GetMaxSpeed has no grab case), the player walking him; the AI stands.
-                let entered = at >= killer.length(GRAB_ENTER).unwrap_or(0.3);
-                if entered {
+                // Past the grab's GrabSuccess section: his locomotion with the grab layer over it (grab_layer); he moves
+                // at his normal speeds (GetMaxSpeed has no grab case) from its EnterGrabFinish, the player walking him;
+                // the AI stands.
+                if at >= killer.length(GRAB_ENTER).unwrap_or(2.2) {
                     commands.entity(je).remove::<PlayAction>();
                 }
-                let wish = player_input.filter(|_| entered).map_or(Vec2::ZERO, |i| i.movement);
+                let wish = player_input.filter(|_| at >= GRAB_SUCCESS_FINISH_S).map_or(Vec2::ZERO, |i| i.movement);
                 let speed = if j.combat { t.combat_speed } else if player_input.is_some_and(|i| i.run) && t.can_run { t.run_speed } else { t.walk_speed };
                 j.running = speed == t.run_speed;
                 walk(&mut j, &mut xf, wish, speed, None, dt, &t, &world);

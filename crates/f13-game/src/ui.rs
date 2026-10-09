@@ -123,7 +123,7 @@ impl Plugin for UiPlugin {
         app.add_plugins((UiMaterialPlugin::<RadialFill>::default(), UiMaterialPlugin::<Minimap>::default()))
             .init_resource::<PlayingAnims>()
             .add_systems(Startup, load_hud)
-            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, jason_hud, noise_meter, xp_lines), widget_anims, content_alpha, widget_colors, hide_for_jason).chain().run_if(resource_exists::<Hud>));
+            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, jason_hud, noise_meter, xp_lines), widget_anims, content_alpha, widget_colors, hide_for_jason).chain().run_if(resource_exists::<Hud>));
     }
 }
 
@@ -314,10 +314,11 @@ impl NoiseWidget {
     }
 }
 
-/// A progress bar's fill.
+/// A progress bar's fill: a box clipping its full-size image to the filled part (SProgressBar's PushClip).
 #[derive(Component)]
 struct Progress {
     fill: Entity,
+    image: Entity,
     kind: String,
     size: Vec2,
 }
@@ -858,10 +859,15 @@ impl Builder<'_, '_, '_> {
             "ProgressBar" => {
                 let s = &p["WidgetStyle"];
                 self.brush(e, &s["BackgroundImage"], [1.0; 4]);
-                let fill = self.commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, Pickable::IGNORE, ChildOf(e))).id();
-                self.brush(fill, &s["FillImage"], color(&p["FillColorAndOpacity"], [1.0; 4]));
+                let fill = self.commands.spawn((Node { position_type: PositionType::Absolute, overflow: Overflow::clip(), ..default() }, Pickable::IGNORE, ChildOf(e))).id();
+                let size = Vec2::new(r.w, r.h) * self.scale;
+                let image = self
+                    .commands
+                    .spawn((Node { position_type: PositionType::Absolute, width: Val::Px(size.x), height: Val::Px(size.y), ..default() }, Pickable::IGNORE, ChildOf(fill)))
+                    .id();
+                self.brush(image, &s["FillImage"], color(&p["FillColorAndOpacity"], [1.0; 4]));
                 let kind = p["BarFillType"].as_str().unwrap_or("LeftToRight").rsplit(':').next().unwrap_or("").to_string();
-                let progress = Progress { fill, kind, size: Vec2::new(r.w, r.h) * self.scale };
+                let progress = Progress { fill, image, kind, size };
                 set_progress(self.commands, fill, &progress, p["Percent"].as_f64().unwrap_or(0.0) as f32);
                 self.commands.entity(e).insert(progress);
             }
@@ -1031,11 +1037,12 @@ impl MapIcon {
 struct MapIconNode;
 
 /// An icon widget's image and size (design units): its first Image, laid out about the icon's point.
-fn icon_image(dir: &std::path::Path, widget: &str) -> Option<(String, Vec2)> {
-    fn find<'a>(l: &'a f13_data::umg::Laid<'a>) -> Option<(String, Vec2)> {
+fn icon_image(dir: &std::path::Path, widget: &str) -> Option<(String, Vec2, [f32; 4])> {
+    fn find<'a>(l: &'a f13_data::umg::Laid<'a>) -> Option<(String, Vec2, [f32; 4])> {
         if l.widget.kind == "Image" {
-            if let Some(file) = l.widget.props["Brush"]["ResourceObject"]["File"].as_str() {
-                return Some((file.to_string(), Vec2::new(l.rect.w, l.rect.h)));
+            let b = &l.widget.props["Brush"];
+            if let Some(file) = b["ResourceObject"]["File"].as_str() {
+                return Some((file.to_string(), Vec2::new(l.rect.w, l.rect.h), color(&b["TintColor"]["SpecifiedColor"], [1.0; 4])));
             }
         }
         l.children.iter().find_map(find)
@@ -1043,6 +1050,82 @@ fn icon_image(dir: &std::path::Path, widget: &str) -> Option<(String, Vec2)> {
     let w = Widget::load(dir, widget)?;
     let laid = w.layout(f13_data::umg::Rect::default());
     find(&laid)
+}
+
+/// His own icon on his map: Jason_Base's MinimapIconComponent's KillerIcon.
+const PLAYER_ARROW: &str = "PlayerArrow_Widget";
+
+/// Jason's map's icons (ILLMinimap::UpdateObjectLocations 0x1402ae080 on SC_KillerMap_Widget, whose map isn't centred
+/// on him or turned): each MapIcon's KillerIcon, and his own (PlayerArrow_Widget), in its IconPanel where its place
+/// falls across the map, at the angle its widget's UpdateMapWidget leaves (SetRenderAngle). They take the map's
+/// opacity (MapFade).
+#[allow(clippy::too_many_arguments)]
+fn killer_map_icons(
+    mut commands: Commands,
+    hud: Res<Hud>,
+    play: Option<Res<crate::jason_player::PlayJason>>,
+    window: Single<&Window, With<PrimaryWindow>>,
+    assets: Res<AssetServer>,
+    icons: Query<(Entity, &MapIcon, &GlobalTransform)>,
+    jasons: Query<(Entity, &GlobalTransform), With<crate::jason::Jason>>,
+    (panels, tints): (Query<&ComputedNode>, Query<&WidgetColor>),
+    mut nodes: Query<(&mut Node, &mut ImageNode, &mut UiTransform), With<MapIconNode>>,
+    mut placed: Local<(Option<Entity>, HashMap<Entity, Entity>)>,
+    mut images: Local<HashMap<String, Option<(String, Vec2, [f32; 4])>>>,
+) {
+    let (Some(_), Some(map)) = (play, &hud.map) else { return };
+    let Some(&panel) = hud.names.get("SC_KillerMap_Widget.IconPanel") else { return };
+    let Ok(computed) = panels.get(panel) else { return };
+    if placed.0 != Some(panel) {
+        *placed = (Some(panel), HashMap::new());
+    }
+    let size = computed.size() * computed.inverse_scale_factor();
+    let scale = (window.size().x / DESIGN.x).min(window.size().y / DESIGN.y);
+    let tint = hud.names.get("KillerHUDWidget.SC_KillerMap_Widget").and_then(|&e| tints.get(e).ok()).map_or([1.0; 4], |c| c.0);
+    let dir = hud.export.clone();
+    let shown = icons.iter().filter_map(|(e, i, g)| Some((e, i.killer.clone()?, g))).chain(jasons.iter().map(|(e, g)| (e, PLAYER_ARROW.to_string(), g)));
+    let mut seen = Vec::new();
+    for (e, widget, g) in shown {
+        let Some((file, isize, brush)) = images.entry(widget.clone()).or_insert_with(|| icon_image(&dir, &widget)).clone() else { continue };
+        let uv = map_uv(map.area, g.translation());
+        let s = isize * scale;
+        let (left, top) = (Val::Px(uv.x * size.x - s.x / 2.0), Val::Px(uv.y * size.y - s.y / 2.0));
+        // Its yaw in Unreal (X north on the map, Y east): clockwise on screen. Each icon widget's UpdateMapWidget may
+        // change it: the cabins', cars', phone's, fuse boxes', camps', traps' and police's set it to (0, 0, 0); only
+        // PlayerArrow_Widget's keeps it.
+        let f = g.rotation() * Vec3::Z;
+        let rotation = if widget == PLAYER_ARROW { Rot2::radians(f.z.atan2(f.x)) } else { Rot2::IDENTITY };
+        let color = linear(mul(brush, tint));
+        seen.push(e);
+        match placed.1.get(&e).and_then(|&n| nodes.get_mut(n).ok()) {
+            Some((mut n, mut img, mut t)) => {
+                n.left = left;
+                n.top = top;
+                img.color = color;
+                t.rotation = rotation;
+            }
+            None => {
+                let n = commands
+                    .spawn((
+                        Node { position_type: PositionType::Absolute, left, top, width: Val::Px(s.x), height: Val::Px(s.y), ..default() },
+                        ImageNode { color, ..ImageNode::new(assets.load(file)) },
+                        UiTransform { rotation, ..default() },
+                        MapIconNode,
+                        Pickable::IGNORE,
+                        ChildOf(panel),
+                    ))
+                    .id();
+                placed.1.insert(e, n);
+            }
+        }
+    }
+    placed.1.retain(|src, n| {
+        let keep = seen.contains(src);
+        if !keep {
+            commands.entity(*n).despawn();
+        }
+        keep
+    });
 }
 
 /// The minimap's icons: each MapIcon's widget where its place falls on the map (the shader's mapping turned
@@ -1059,7 +1142,7 @@ fn map_icons(
     all_maps: Res<Assets<Minimap>>,
     mut nodes: Query<(&mut Node, &mut Visibility), With<MapIconNode>>,
     mut placed: Local<(Option<Entity>, HashMap<Entity, Entity>)>,
-    mut images: Local<HashMap<String, Option<(String, Vec2)>>>,
+    mut images: Local<HashMap<String, Option<(String, Vec2, [f32; 4])>>>,
 ) {
     let Some(map) = &hud.map else { return };
     let Some(&retainer) = hud.names.iter().find(|(k, _)| k.as_str() == MINIMAP_RETAINER).map(|(_, e)| e) else { return };
@@ -1077,7 +1160,7 @@ fn map_icons(
     let dir = hud.export.clone();
     for (e, icon, gxf) in &icons {
         let Some(widget) = (if jason { &icon.killer } else { &icon.counselor }) else { continue };
-        let Some((file, isize)) = images.entry(widget.clone()).or_insert_with(|| icon_image(&dir, widget)).clone() else { continue };
+        let Some((file, isize, brush)) = images.entry(widget.clone()).or_insert_with(|| icon_image(&dir, widget)).clone() else { continue };
         let p = gxf.translation();
         let uv = map_uv(map.area, p);
         let delta = (uv - m.view.truncate().truncate()) / m.view.z;
@@ -1096,7 +1179,7 @@ fn map_icons(
                 let n = commands
                     .spawn((
                         Node { position_type: PositionType::Absolute, left, top, width: Val::Px(s.x), height: Val::Px(s.y), ..default() },
-                        ImageNode::new(assets.load(file)),
+                        ImageNode { color: linear(brush), ..ImageNode::new(assets.load(file)) },
                         vis,
                         MapIconNode,
                         Pickable::IGNORE,
@@ -1117,7 +1200,7 @@ fn map_icons(
     });
 }
 
-/// Sizes a progress bar's fill to `percent` along its fill type.
+/// Sizes a progress bar's fill to `percent` along its fill type; its image stays put, clipped.
 fn set_progress(commands: &mut Commands, fill: Entity, p: &Progress, percent: f32) {
     let t = percent.clamp(0.0, 1.0);
     let (w, h) = (p.size.x, p.size.y);
@@ -1133,6 +1216,10 @@ fn set_progress(commands: &mut Commands, fill: Entity, p: &Progress, percent: f3
         n.top = Val::Px(top);
         n.width = Val::Px(fw);
         n.height = Val::Px(fh);
+    });
+    commands.entity(p.image).entry::<Node>().and_modify(move |mut n| {
+        n.left = Val::Px(-left);
+        n.top = Val::Px(-top);
     });
 }
 

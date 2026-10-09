@@ -111,6 +111,8 @@ pub struct JasonControls {
     pub yaw: f32,
     pub pitch: f32,
     latched: Presses,
+    /// His camera's place and forward (last frame's): the knife's start and direction.
+    pub view: (Vec3, Vec3),
     /// 2: Sense, asked for and not yet used (senses.rs takes it).
     pub sense: bool,
 }
@@ -142,6 +144,8 @@ pub struct JasonInput {
     /// Where he looks: flat (world XZ, unit) and in 3D.
     pub forward: Vec2,
     pub look: Vec3,
+    /// His camera's place and forward (SCThrowable::Use's view point).
+    pub view: (Vec3, Vec3),
     /// The attack and knife buttons held.
     pub attack_held: bool,
     pub knife_held: bool,
@@ -168,6 +172,7 @@ impl JasonControls {
             run: self.keys.pressed(KeyCode::ShiftLeft),
             forward,
             look,
+            view: self.view,
             attack_held: self.mouse.pressed(MouseButton::Left),
             knife_held: self.mouse.pressed(MouseButton::Middle),
             block_held: self.mouse.pressed(MouseButton::Right),
@@ -265,6 +270,7 @@ fn demo(
     (know, mut map, window, mut opened): (Query<&crate::senses::Knowledge>, ResMut<MorphMap>, Single<&bevy::window::Window, With<bevy::window::PrimaryWindow>>, Local<Option<f32>>),
     grab_kills: Res<crate::jason::GrabKillsAvailable>,
     (mut tried, doors, mut view): (Local<Option<Entity>>, Query<(Entity, &crate::doors::Door, &GlobalTransform)>, ResMut<DemoView>),
+    mut sense_shot: Local<bool>,
 ) {
     let (Some((j, jxf)), Some(h)) = (jason.iter().next(), her.iter().next()) else { return };
     let d = h.translation - jxf.translation;
@@ -281,6 +287,13 @@ fn demo(
     // Yaw so that the view's forward (-sin, -cos) points at her (or her door).
     camera.yaw = (-d.x).atan2(-d.z);
     camera.pitch = -0.15;
+    // Aiming a knife: the view at her chest from his camera, over the knife's drop (as a player would aim).
+    if matches!(j.state, crate::jason::JasonState::Throwing { .. }) && controls.view.1 != Vec3::ZERO {
+        let to = h.translation + Vec3::Y * 1.2 - controls.view.0;
+        let flat = Vec2::new(to.x, to.z).length();
+        let t = flat / 120.0;
+        camera.pitch = (to.y + 0.5 * crate::jason::KNIFE_GRAVITY * t * t).atan2(flat);
+    }
     *view = DemoView(camera.yaw, camera.pitch);
     // Up to her, not into her.
     if dist > 1.3 && Vec2::new(d.x, d.z).length() > 0.9 {
@@ -298,9 +311,16 @@ fn demo(
         }
         controls.mouse.release(MouseButton::Middle);
     }
-    // Sense whenever it's ready while she's not close.
-    controls.sense |= dist > 20.0;
+    // Sense whenever it's ready (a press while it's on would cancel it); a screenshot 2 s into
+    // the first (temp f13-demo-sense.png).
     let now = time.elapsed_secs();
+    if !*sense_shot && know.iter().next().is_some_and(|k| k.sensing(now) && now > k.sense_until - k.sense_length + 2.0) {
+        *sense_shot = true;
+        let path = std::env::temp_dir().join("f13-demo-sense.png");
+        info!("jason demo: screenshot {}", path.display());
+        commands.spawn(bevy::render::view::screenshot::Screenshot::primary_window()).observe(bevy::render::view::screenshot::save_to_disk(path));
+    }
+    controls.sense |= know.iter().next().is_some_and(|k| !k.sensing(now) && k.abilities.is_available(f13_core::killer_abilities::Ability::Sense, &f13_core::killer_abilities::Blockers::default()));
     // Morph by his map once it's ready and she's far: open it (1), then a click at its centre 8 s later.
     let morph_ready = know.iter().next().is_some_and(|k| k.abilities.is_available(f13_core::killer_abilities::Ability::Morph, &f13_core::killer_abilities::Blockers::default()));
     match *opened {
@@ -308,6 +328,12 @@ fn demo(
             controls.latched.morph = true;
             *opened = Some(now);
             info!("jason demo: map out for a Morph");
+        }
+        // A screenshot of the map 2 s in (temp f13-demo-map.png).
+        Some(at) if map.morph && (2.0..2.0 + time.delta_secs()).contains(&(now - at)) => {
+            let path = std::env::temp_dir().join("f13-demo-map.png");
+            info!("jason demo: screenshot {}", path.display());
+            commands.spawn(bevy::render::view::screenshot::Screenshot::primary_window()).observe(bevy::render::view::screenshot::save_to_disk(path));
         }
         Some(at) if map.morph && now - at > 8.0 => {
             map.click = Some(Vec2::new(window.width(), window.height()) / 2.0);
@@ -389,10 +415,11 @@ fn look(
     mut controls: ResMut<JasonControls>,
     motion: Res<AccumulatedMouseMotion>,
     cursor: Single<&CursorOptions>,
-    mut camera: Single<(&mut PlayerCamera, &Projection)>,
+    mut camera: Single<(&mut PlayerCamera, &Projection, &GlobalTransform)>,
     windows: Query<&Window>,
 ) {
-    let (ref mut cam, proj) = *camera;
+    let (ref mut cam, proj, g) = *camera;
+    controls.view = (g.translation(), g.forward().as_vec3());
     if cursor.grab_mode == CursorGrabMode::Locked {
         let (yaw, pitch) = mouse_turn(motion.delta, proj, &windows);
         add_control_rotation(cam, yaw, pitch);

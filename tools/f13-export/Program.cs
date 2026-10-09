@@ -1020,6 +1020,9 @@ static class Mvp
         "/Game/UI/HUD/Minimap/SC_PoliceRescue_killer_Widget",
         "/Game/UI/HUD/Minimap/PhoneJunctionBox_Widget",
         "/Game/UI/HUD/Minimap/PowerGridFuseBox_Widget",
+        // Jason's own icon on his map (Jason_Base's MinimapIconComponent KillerIcon), and his traps' (KillerTrap's).
+        "/Game/UI/HUD/Minimap/PlayerArrow_Widget",
+        "/Game/UI/HUD/Minimap/SC_Killer_Trap_Widget",
     ];
     // Sounds f13-game plays besides the footsteps (SoundCues or SoundWaves).
     /// The map's ambient loops (CrystalLake_Sm_Audio's AmbientSounds).
@@ -1334,6 +1337,9 @@ static class Mvp
         $"{JasonAnim}/Grab/normal_grab_enter_1",
         $"{JasonAnim}/Grab/normal_grab_idle",
         $"{JasonAnim}/Grab/normal_grab_miss",
+        // AM_Jason_Enter_Grab_Montage's GrabMissed and GrabSuccess sections (its Default is normal_grab_enter_1).
+        $"{JasonAnim}/Grab/normal_grab_fail",
+        $"{JasonAnim}/Grab/normal_grab_Success_2",
         $"{JasonAnim}/Grab/AM_Jason_normal_grab_break",
         // His block (Jason_AnimBP's BlockMontages) and the reactions to a blocked hit (BlockingHitMontages).
         $"{JasonAnim}/Combat/Block/AM_Jason_Combat_Block",

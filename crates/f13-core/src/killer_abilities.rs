@@ -177,6 +177,12 @@ impl KillerAbilities {
     pub fn consume(&mut self, a: Ability) {
         self.recharge_timer[a.index()] = 0.0;
     }
+
+    /// Sense cancelled early (FUN_1404045f0, SERVER_CancelSense): its charge is the unused share of its duration,
+    /// clamped to 0..1, of its recharge time.
+    pub fn refund(&mut self, a: Ability, unused: f32) {
+        self.recharge_timer[a.index()] = unused.clamp(0.0, 1.0) * self.tuning.recharge_time[a.index()];
+    }
 }
 
 #[cfg(test)]
