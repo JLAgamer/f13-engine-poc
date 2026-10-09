@@ -113,11 +113,14 @@ fn give_items(
         return; // the match hasn't spawned yet
     }
     for class in &give.0 {
-        let Some((e, item)) = items.iter().find(|(e, i)| &i.class == class && inv.hand != Some(*e) && !inv.pockets.contains(e)) else {
+        let Some((e, item)) = items.iter().find(|(e, i)| &i.class == class && inv.hand != Some(*e) && !inv.pockets.contains(e) && !inv.special.contains(e)) else {
             warn!("--give: no {class} in this match");
             continue;
         };
-        if item.large {
+        // As a pickup sorts it (0x1403a4e30): a special item (the map) to SpecialItemInventory, apart from the pockets.
+        if item.special {
+            inv.special.push(e);
+        } else if item.large {
             inv.hand = Some(e);
         } else {
             inv.pockets.push(e);

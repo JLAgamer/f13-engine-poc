@@ -948,7 +948,7 @@ fn run_bot(
             keys.release(KeyCode::KeyD);
             keys.release(KeyCode::KeyM);
             // Carrying the map: open it once (and photograph it).
-            let has_map = inv.is_some_and(|i| i.pockets.iter().any(|&e| carried.get(e).is_ok_and(|it| it.kind == ItemKind::Map)));
+            let has_map = inv.is_some_and(|i| i.special.iter().any(|&e| carried.get(e).is_ok_and(|it| it.kind == ItemKind::Map)));
             if has_map && !bot.jason_shots.contains(&"map") {
                 bot.jason_shots.push("map");
                 keys.press(KeyCode::KeyM);
