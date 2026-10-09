@@ -346,13 +346,28 @@ pub(crate) struct WaterExt {
     params: WaterParams,
     #[texture(101)]
     #[sampler(102)]
-    ripples: Handle<Image>,
+    wave_1: Handle<Image>,
+    #[texture(103)]
+    wave_2: Handle<Image>,
+    #[texture(104)]
+    wave_far: Handle<Image>,
+    #[texture(105)]
+    foam: Handle<Image>,
+    #[texture(106, dimension = "cube")]
+    reflection: Handle<Image>,
 }
 
+/// See shaders/water.wgsl.
 #[derive(ShaderType, Reflect, Debug, Clone)]
 struct WaterParams {
+    near: Vec4,
+    far: Vec4,
+    foam: Vec4,
     color: Vec4,
-    waves: Vec4,
+    fresnel: Vec4,
+    edge: Vec4,
+    cube_tint: Vec4,
+    misc: Vec4,
     surface: Vec4,
 }
 
@@ -362,29 +377,55 @@ impl MaterialExtension for WaterExt {
     }
 }
 
-fn water_material(info: &MaterialInfo, loader: &Loader, fb: &Fallback) -> WaterMaterial {
-    // The far ripple normal map is the one that reads as water from walking height.
-    let ripples = ["WaveTextureFar01", "normal"]
-        .iter()
-        .find_map(|k| info.textures.get(*k).and_then(|p| loader.load(p, Tex::Data)))
-        .unwrap_or_else(|| fb.normal.clone());
-    let color = info.vectors.get("Ocean Water Color").or(info.vectors.get("Color (Reg)")).map_or(Vec4::new(0.02, 0.02, 0.02, 1.0), |v| Vec4::from_array(*v));
+fn water_material(info: &MaterialInfo, loader: &Loader, fb: &Fallback, images: &mut Assets<Image>) -> WaterMaterial {
+    let tex = |k: &str, or: &Handle<Image>| info.textures.get(k).and_then(|p| loader.load(p, Tex::Data)).unwrap_or_else(|| or.clone());
+    let v = |k: &str, or: [f32; 4]| Vec4::from_array(info.vectors.get(k).copied().unwrap_or(or));
+    let s = |k: &str, or: f32| info.scalar(k, or);
+    // The master's defaults (its uniform expressions) where the instance doesn't set one.
+    let params = WaterParams {
+        near: Vec4::new(s("SmallWaveTime", 1.0), (s("WaterScale", 1.0) * s("Small Wave Scale", 512.0)).max(1.0), s("NormalPowerNear", 0.5), s("LargeWaveTime", 1.0)),
+        far: Vec4::new(
+            (s("LArgeWaterScale", 1.0) * s("LArge Wave Scale", 512.0)).max(1.0),
+            s("NormalPowerFAR", 0.3),
+            s("FarCamerablend", 1500.0).max(1e-3),
+            s("FarCamerablendContrast", 3.0),
+        ),
+        foam: Vec4::new(s("EdgeFoamTime", 0.2), s("edgeFade", 50.0), s("edgeContrast_Power", 0.6), s("edgeContrast", 0.6)),
+        color: v("Ocean Water Color", [0.0324, 0.045167, 0.24, 1.0]),
+        fresnel: v("Ocean Water Fresnel Color", [0.1975, 0.209646, 0.395, 1.0]),
+        edge: v("EdgeColor", [1.0, 0.092422, 0.0, 1.0]),
+        cube_tint: v("Reflection CubemapTint", [1.0; 4]),
+        misc: Vec4::new(s("Reflection Amount", 0.0), s("epacityDepth", 1e6).max(1e-5), s("depthContrast", 0.1), 0.0),
+        surface: Vec4::new(s("rough", 0.01), s("specular", 1.0), s("metalic", 0.08), 0.0),
+    };
+    // Without its cubemap, no reflection (a black cube).
+    let reflection = info.textures.get("Reflection Cubemap").and_then(|p| loader.load(p, Tex::Data)).unwrap_or_else(|| images.add(black_cube()));
     ExtendedMaterial {
-        base: StandardMaterial::default(),
+        base: StandardMaterial { alpha_mode: AlphaMode::Blend, ..default() },
         extension: WaterExt {
-            params: WaterParams {
-                color,
-                waves: Vec4::new(
-                    info.scalar("Small Wave Scale", 300.0).max(1.0),
-                    info.scalar("LArge Wave Scale", 1500.0).max(1.0),
-                    info.scalar("SmallWaveTime", 0.3),
-                    info.scalar("LargeWaveTime", 0.03),
-                ),
-                surface: Vec4::new(info.scalar("rough", 0.1), info.scalar("specular", 0.02).max(0.02), info.scalar("NormalPowerNear", 0.6), 0.0),
-            },
-            ripples,
+            params,
+            wave_1: tex("WaveTexture01", &fb.normal),
+            wave_2: tex("WaveTexture02", &fb.normal),
+            wave_far: tex("WaveTextureFar01", &fb.normal),
+            foam: tex("foam", &fb.black),
+            reflection,
         },
     }
+}
+
+fn black_cube() -> Image {
+    let mut image = Image::new_fill(
+        Extent3d { width: 1, height: 1, depth_or_array_layers: 6 },
+        TextureDimension::D2,
+        &[0, 0, 0, 255],
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.texture_view_descriptor = Some(bevy::render::render_resource::TextureViewDescriptor {
+        dimension: Some(bevy::render::render_resource::TextureViewDimension::Cube),
+        ..default()
+    });
+    image
 }
 
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
@@ -686,7 +727,7 @@ fn apply_materials(
                     // The eyes' iris refraction and lower-lid film overlays (not ported; drawn plain they cover the eyes white).
                     Built::Hidden
                 } else if info.master.starts_with(WATER_MASTER) {
-                    Built::Water(waters.add(water_material(info, &loader, &fallback)))
+                    Built::Water(waters.add(water_material(info, &loader, &fallback, &mut images)))
                 } else if let Some(kind) = blend_kind(&info.master) {
                     // (The POM variant's parallax is not ported: drawn flat.)
                     Built::Blend(blends.add(blend_material(info, kind, &loader, &fallback)))
