@@ -22,6 +22,7 @@ mod audio;
 mod bloom;
 mod bot;
 mod cabinets;
+mod car_lights;
 mod character;
 mod collision;
 mod doors;
@@ -447,7 +448,7 @@ fn main() {
             // Playing Jason, the bot playing her doesn't decide when the run ends.
             .add_plugins(match_flow::MatchPlugin { leave: !bot || args.play_jason })
             .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }, collision::CollisionPlugin, audio::AudioPlugin, water::WaterPlugin, power::PowerPlugin { cut: args.cut_power }, kill_camera::KillCameraPlugin, prop_anim::PropAnimPlugin, doors::DebrisPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin, navigation::NavigationPlugin { debug: args.nav_debug }))
-            .add_plugins((police::PolicePlugin, placed_kills::PlacedKillsPlugin, interaction_camera::InteractionCameraPlugin, counselor_camera::CounselorCameraPlugin, cabinets::CabinetsPlugin, weather::WeatherPlugin));
+            .add_plugins((police::PolicePlugin, placed_kills::PlacedKillsPlugin, interaction_camera::InteractionCameraPlugin, counselor_camera::CounselorCameraPlugin, cabinets::CabinetsPlugin, weather::WeatherPlugin, car_lights::CarLightsPlugin));
         // Playing Jason without a --bot-*, she stands idle (time to try him out).
         if args.bot_escape {
             app.add_plugins(bot::BotPlugin(bot::Goal::Escape));

@@ -73,7 +73,7 @@ pub struct PlacedLight {
 }
 
 impl PlacedLight {
-    fn num(&self, name: &str, default: f32) -> f32 {
+    pub(crate) fn num(&self, name: &str, default: f32) -> f32 {
         self.props.get(name).and_then(Value::as_f64).map_or(default, |v| v as f32)
     }
 
@@ -114,7 +114,7 @@ impl PlacedLight {
         self.num("AttenuationRadius", 1000.0)
     }
 
-    fn cone(&self) -> (f32, f32) {
+    pub(crate) fn cone(&self) -> (f32, f32) {
         (self.num("InnerConeAngle", 0.0), self.num("OuterConeAngle", 44.0))
     }
 
@@ -130,7 +130,7 @@ impl PlacedLight {
     }
 
     /// Linear colour: LightColor (sRGB), times the colour temperature when the light uses it.
-    fn color(&self) -> LinearRgba {
+    pub(crate) fn color(&self) -> LinearRgba {
         let c = self.props.get("LightColor");
         let byte = |k: &str| c.and_then(|c| c.get(k)).and_then(Value::as_u64).unwrap_or(255) as u8;
         let mut color = LinearRgba::from(Color::srgb_u8(byte("R"), byte("G"), byte("B")));
@@ -142,7 +142,7 @@ impl PlacedLight {
     }
 
     /// Bevy lumens for a point or spot light (see the module notes).
-    fn lumens(&self) -> f32 {
+    pub(crate) fn lumens(&self) -> f32 {
         let intensity = self.num("Intensity", 5000.0);
         if self.flag("bUseInverseSquaredFalloff", true) {
             return intensity;

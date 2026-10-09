@@ -788,6 +788,13 @@ fn run_bot(
                 info!("bot: driving into the escape zone at ({:.0}, {:.0}, {:.0})", zone.x, zone.y, zone.z);
             }
             keys.press(KeyCode::KeyW);
+            // The started car's lights from behind (car_lights.rs; temp f13-bot-car-lights.png).
+            if bot.timer > 0.3 && !bot.jason_shots.contains(&"car lights") {
+                bot.jason_shots.push("car lights");
+                let path = std::env::temp_dir().join("f13-bot-car-lights.png");
+                info!("bot: screenshot {}", path.display());
+                commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+            }
             if (bot.timer * 2.0) as u32 != ((bot.timer - dt) * 2.0) as u32 {
                 let nearest = zones.iter().filter(|(z, _)| z.car).map(|(z, x)| (x.translation().distance(vxf.translation), z.radius_m)).min_by(|a, b| a.0.total_cmp(&b.0));
                 info!("bot: car at ({:.1}, {:.1}, {:.1}) speed {:.0} cm/s, zone {:?}", vxf.translation.x, vxf.translation.y, vxf.translation.z, v.speed, nearest);

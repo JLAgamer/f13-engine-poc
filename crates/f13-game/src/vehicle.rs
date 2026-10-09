@@ -153,6 +153,8 @@ fn drive(
             steer -= 1.0;
         }
     }
+    v.throttle = throttle;
+    v.handbrake = escaped.is_none() && keys.pressed(KeyCode::Space);
     if v.px.is_some() {
         let v = &mut *v;
         let me = player.vehicle;

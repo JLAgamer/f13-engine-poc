@@ -386,12 +386,18 @@ pub(crate) struct PropExt {
     #[texture(101)]
     #[sampler(102)]
     rma: Handle<Image>,
+    /// The Chevette's lights mask (black for the other props).
+    #[texture(103)]
+    #[sampler(104)]
+    lights: Handle<Image>,
 }
 
 #[derive(ShaderType, Reflect, Debug, Clone)]
 struct PropParams {
     mults: Vec4,
     extra: Vec4,
+    /// The Chevette's Headlights, Tailights, Backup Lights; w: 1 with its lights mask.
+    lights: Vec4,
 }
 
 impl PropExt {
@@ -403,23 +409,44 @@ impl PropExt {
     pub(crate) fn set_glow(&mut self, glow: f32) {
         self.params.extra.y = glow;
     }
+
+    /// The Chevette's exterior (its lights mask).
+    pub(crate) fn has_lights(&self) -> bool {
+        self.params.lights.w > 0.0
+    }
+
+    /// The Chevette's Headlights, Tailights and Backup Lights parameters.
+    pub(crate) fn lights(&self) -> Vec4 {
+        self.params.lights
+    }
+
+    pub(crate) fn set_lights(&mut self, head: f32, tail: f32, backup: f32) {
+        self.params.lights = Vec4::new(head, tail, backup, self.params.lights.w);
+    }
 }
+
+/// M_Vehicle_Chevette_Exterior's lights mask, a texture of the material's own (not a parameter).
+const CHEVETTE_LIGHTS: &str = "SummerCamp/Content/Props/Manmade/Vehicles/T_Vehicle_Chevette_Exterior_Lights";
 
 /// The RMA/RSS map and parameters for prop and foliage masters (channel layouts read from M_Prop_Master's and
 /// M_Leaves_Master's compiled shaders), or None for other materials.
-fn prop_params(info: &MaterialInfo, loader: &Loader) -> Option<(Handle<Image>, PropParams)> {
+fn prop_params(info: &MaterialInfo, loader: &Loader) -> Option<(Handle<Image>, PropParams, Option<Handle<Image>>)> {
     // Same RMA sampling (R roughness, G metallic, B AO, times the mults) in M_Item_Master and the Chevette's exterior.
     if info.master.starts_with("M_Prop_Master") || info.master == "M_Item_Master" || info.master == "M_Vehicle_Chevette_Exterior" {
         let rma = loader.load(info.textures.get("RMA")?, Tex::Data)?;
         let mults = Vec4::new(info.scalar("RoughnessMult", 1.0), info.scalar("MetalnessMult", 1.0), info.scalar("Spec", 0.5), 0.0);
         // M_Prop_Master_Lights glows: emissive = Diffuse.rgb * Diffuse.a * Glow (its compiled base pass).
         let glow = if info.master == "M_Prop_Master_Lights" { info.scalar("Glow", 1.0) } else { 0.0 };
-        return Some((rma, PropParams { mults, extra: Vec4::new(0.0, glow, 0.0, 0.0) }));
+        // The Chevette's exterior: emissive = Diffuse.rgb * (mask.r * Headlights + mask.g * Tailights + mask.b * Backup
+        // Lights) (its compiled base pass).
+        let lights = (info.master == "M_Vehicle_Chevette_Exterior").then(|| loader.load(CHEVETTE_LIGHTS, Tex::Data)).flatten();
+        let l = Vec4::new(info.scalar("Headlights", 0.0), info.scalar("Tailights", 0.0), info.scalar("Backup Lights", 0.0), lights.is_some() as u8 as f32);
+        return Some((rma, PropParams { mults, extra: Vec4::new(0.0, glow, 0.0, 0.0), lights: l }, lights));
     }
     let rss = ["RSS", "RSS Map"].iter().find_map(|k| info.textures.get(*k))?;
     let rss = loader.load(rss, Tex::Data)?;
     let mults = Vec4::new(info.scalar("RoughnessMultiplier", 1.0), 0.0, info.scalar("Specular", 0.5), 1.0);
-    Some((rss, PropParams { mults, extra: Vec4::new(info.scalar("RoughnessMin", 0.0), 0.0, 0.0, 0.0) }))
+    Some((rss, PropParams { mults, extra: Vec4::new(info.scalar("RoughnessMin", 0.0), 0.0, 0.0, 0.0), lights: Vec4::ZERO }, None))
 }
 
 /// The two skin masks (see shaders/skin.wgsl).
@@ -657,8 +684,9 @@ fn apply_materials(
                     Built::Blend(blends.add(blend_material(info, kind, &loader, &fallback)))
                 } else if let Some(m) = master_material(&index.root, info, &loader) {
                     Built::Master(masters.add(m))
-                } else if let Some((rma, params)) = prop_params(info, &loader) {
-                    Built::Prop(props.add(ExtendedMaterial { base: standard_material(&index.root, info, &loader), extension: PropExt { params, rma } }))
+                } else if let Some((rma, params, lights)) = prop_params(info, &loader) {
+                    let lights = lights.unwrap_or_else(|| fallback.black.clone());
+                    Built::Prop(props.add(ExtendedMaterial { base: standard_material(&index.root, info, &loader), extension: PropExt { params, rma, lights } }))
                 } else {
                     let mut m = standard_material(&index.root, info, &loader);
                     if info.master == "M_Lightsources_Ceiling_Bulbs" {

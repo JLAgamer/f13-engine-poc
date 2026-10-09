@@ -167,6 +167,9 @@ pub struct Vehicle {
     /// Where Jason stands to pull the driver out (its DriverGrab context kill, Bevy local).
     pub driver_grab: Option<Transform>,
     pub started: bool,
+    /// The driver's throttle (-1..1) and handbrake (the Blueprint's OnThrottle and OnHandbrake: car_lights.rs).
+    pub throttle: f32,
+    pub handbrake: bool,
     /// Forward speed in cm/s and current steering, -1..1.
     pub speed: f32,
     pub steer: f32,
@@ -693,6 +696,8 @@ fn spawn_props(
                     })
                     .unwrap_or_else(|| Transform::from_translation(seat.map_or(Vec3::ZERO, |c| local(c).translation))),
                 started: false,
+                throttle: 0.0,
+                handbrake: false,
                 speed: 0.0,
                 steer: 0.0,
                 setup: f13_data::vehicle::setup(&classes, &actor.class),
@@ -700,6 +705,15 @@ fn spawn_props(
                 px: f13_data::vehicle::px_setup(&classes, &actor.class),
                 sim: None,
             });
+            // Its lights (the Chevettes' Headlights and TailLights).
+            let spots = crate::car_lights::spot_lights(&info.components);
+            if !spots.is_empty() {
+                commands.entity(root).insert(crate::car_lights::CarLights::new(&classes, &actor.class)).with_children(|c| {
+                    for s in spots {
+                        c.spawn(s);
+                    }
+                });
+            }
             let p = to_transform(&actor.transform).translation;
             info!("{} at ({:.0}, {:.0}, {:.0})", actor.class, p.x, p.y, p.z);
             *counts.entry("vehicles").or_default() += 1;
