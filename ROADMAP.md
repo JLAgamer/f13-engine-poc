@@ -18,10 +18,6 @@ Mechanics: counselor side
       (reference: PhysX 3.4's published vehicle source, downloaded to F13-decomp/ref with the user's OK; the game's
       statically linked copy is stripped)
 
-Presentation
-- [ ] Audio, remaining: the audio volumes' reverb (what's done, and why the stingers, calls and dead bodies' lines
-      aren't here: MODLOG "Scary sounds", "Her voice lines: where and when")
-
 Decomp audit: done; what's left marked and why is in MODLOG "Decomp audit, where it ends".
 
 The finished Milestone 1 work, with its references to the decomp, is in F13-decomp's MODLOG ("Milestone 1, done").
@@ -62,6 +58,9 @@ Moved from Milestone 1 (not tied to gameplay):
 - [ ] Not from the game's code, so marked PLACEHOLDER (MODLOG "Decomp audit, where it ends"): which events say the
       counselor's other lines, X3DAudio's panning matrix,
       the doors' APEX debris, the death and spectating cameras
+- [ ] Audio, remaining: the audio volumes' reverb (the game's XAudio2 device runs XAudio2's own reverb from each
+      volume's ReverbEffect; what's done, and why the stingers, calls and dead bodies' lines aren't listed: MODLOG
+      "Scary sounds", "Her voice lines: where and when")
 - [ ] Post-processing, remaining: SSAO (FPostProcessAmbientOcclusion*: it darkens indirect light only; settings and
       cvars read, see MODLOG "SSAO (started)"); then compare
       against the game's own screenshots. (Bloom's fast blur: ported, ComputeOutputDesc's half-width X pass)
