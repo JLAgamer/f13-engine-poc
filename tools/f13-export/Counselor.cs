@@ -525,10 +525,11 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         foreach (var name in new[] { "SenseFearRadiusCurve", "SenseFearHidingRadiusCurve", "RageSenseDistanceCurve", "TeleportJitterCurve" })
             if (CurveValue(cls, name) is { } keys) info.Curves[name] = keys;
 
-        // His cameras (Jason_Base's ILLDynamicCameraComponents) and Shift's camera shake (OnShiftChange: ED_Shake).
+        // His cameras (Jason_Base's ILLDynamicCameraComponents) and his camera shakes: Shift's (OnShiftChange: ED_Shake),
+        // the grab montage's ILLCameraShakeAnimNotifies (a miss's CineCamShakeMedium, a grab's CineCamShakeHard).
         info.Cameras = DynamicCameras(cls);
         info.CameraShakes = new Newtonsoft.Json.Linq.JObject();
-        foreach (var shake in new[] { "SummerCamp/Content/Cameras/CameraShakes/ED_Shake" })
+        foreach (var shake in new[] { "SummerCamp/Content/Cameras/CameraShakes/ED_Shake", "SummerCamp/Content/Cameras/CameraShakes/CineCamShakeMedium", "SummerCamp/Content/Cameras/CameraShakes/CineCamShakeHard" })
             if (provider.LoadPackageObject<UBlueprintGeneratedClass>(shake + "." + shake.Split('/')[^1] + "_C").ClassDefaultObject.Load() is { } shakeCdo)
                 info.CameraShakes[shake.Split('/')[^1]] = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(shakeCdo))["Properties"] ?? new Newtonsoft.Json.Linq.JObject();
 

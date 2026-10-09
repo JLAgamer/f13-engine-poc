@@ -97,7 +97,8 @@ impl Plugin for PlayJasonPlugin {
                 Update,
                 jason_camera.after(look).after(crate::counselor_camera::counselor_camera).after(crate::hiding::hiding_camera).before(crate::kill_camera::kill_camera).run_if(on),
             )
-            .add_systems(Startup, spawn_hud);
+            .add_systems(Startup, spawn_hud)
+            .add_observer(anim_shake);
     }
 }
 
@@ -426,6 +427,19 @@ fn look(
     }
     controls.yaw = cam.yaw;
     controls.pitch = cam.pitch;
+}
+
+/// An anim notify's camera shake (jason.rs): on his camera when he's played (the notify's locally controlled case).
+fn anim_shake(
+    ev: On<crate::jason::JasonCameraShake>,
+    play: Option<Res<PlayJason>>,
+    killer: Option<Res<crate::character::KillerCharacter>>,
+    rig: Option<ResMut<JasonRig>>,
+    mut rng: ResMut<crate::GameRng>,
+) {
+    let (Some(_), Some(killer), Some(mut rig)) = (play, killer, rig) else { return };
+    let Some(s) = killer.info.camera_shakes.get(ev.shake) else { return };
+    rig.shake = Some(f13_core::dynamic_camera::ShakeInstance::new(f13_data::character::camera_shake(s), ev.scale, &mut || rng.0.frand()));
 }
 
 /// His cameras and what last switched them.

@@ -330,13 +330,31 @@ impl Anims {
         struct Entry {
             length: f32,
             root_motion: [f32; 3],
+            #[serde(default)]
+            segments: Vec<Segment>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct Segment {
+            sequence: String,
+            length: f32,
+            root_motion: [f32; 3],
         }
         let Some(entries) = std::fs::read_to_string(export.join("anims.json")).ok().and_then(|t| serde_json::from_str::<HashMap<String, Entry>>(&t).ok()) else {
             warn!("no anims.json in the export (run tools/f13-export again): dodges and stumbles won't move you");
             return Self::default();
         };
-        // Counselor meshes face +Y in their own space: forward = +Y, right = -X.
-        Self(entries.into_iter().filter(|(_, e)| e.length > 0.0).map(|(k, e)| (k, Vec2::new(-e.root_motion[0], e.root_motion[1]) / e.length)).collect())
+        // Counselor meshes face +Y in their own space: forward = +Y, right = -X. Each segment's take as
+        // "<montage>/<take>" (its first slot's), for montages whose sections move differently (Jason's grab).
+        let v = |r: [f32; 3], len: f32| Vec2::new(-r[0], r[1]) / len;
+        let mut all = HashMap::new();
+        for (k, e) in entries.into_iter().filter(|(_, e)| e.length > 0.0) {
+            for s in e.segments.iter().filter(|s| s.length > 0.0) {
+                all.entry(format!("{k}/{}", s.sequence)).or_insert(v(s.root_motion, s.length));
+            }
+            all.insert(k, v(e.root_motion, e.length));
+        }
+        Self(all)
     }
 }
 

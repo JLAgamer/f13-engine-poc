@@ -96,10 +96,29 @@ const GRAB_STARTUP: &str = "normal_grab_enter_1";
 const PERFORM_GRAB_TEST_S: f32 = 0.3;
 /// The GrabSuccess section; the grab kills open once it's played (FinishGrabCounselor's UpdateGrabState timer).
 const GRAB_ENTER: &str = "normal_grab_Success_2";
-const GRAB_SUCCESS_FINISH_S: f32 = 3.2686255 - 1.8000001;
-/// The GrabMissed section, and its EnterGrabFinish counted from the test.
+/// The GrabMissed section, and the montage's end counted from the test: its root motion holds him until then
+/// (EnterGrabFinish at 1.279 s hands his input back, but the montage's root motion overrides it).
 const GRAB_MISS: &str = "normal_grab_fail";
-const GRAB_MISS_FINISH_S: f32 = 1.2791328 - PERFORM_GRAB_TEST_S;
+const GRAB_MISS_END_S: f32 = 1.8000001 - PERFORM_GRAB_TEST_S;
+const GRAB_MONTAGE: &str = "AM_Jason_Enter_Grab_Montage";
+
+/// The grab montage's ILLCameraShakeAnimNotifies (Notify 0x140232260: ClientPlayCameraShake(CameraShake, Scale) when
+/// he's locally controlled; ShakeRange 0, so no one else): CineCamShakeMedium x1 at 0.347 s (a miss: counted from
+/// the test), CineCamShakeHard x0.6 at 1.834 s (0.034 s into GrabSuccess).
+const GRAB_MISS_SHAKE: (&str, f32, f32) = ("CineCamShakeMedium", 1.0, 0.34681368 - PERFORM_GRAB_TEST_S);
+const GRAB_SUCCESS_SHAKE: (&str, f32, f32) = ("CineCamShakeHard", 0.6, 1.8340796 - 1.8000001);
+
+/// An anim notify's camera shake on Jason's camera (jason_player.rs plays it when he's played).
+#[derive(Event, Clone, Copy, Debug)]
+pub struct JasonCameraShake {
+    pub shake: &'static str,
+    pub scale: f32,
+}
+
+/// A section of his grab montage's root motion (anims.json; cm/s in his frame).
+fn grab_root(anims: &crate::Anims, take: &str) -> Vec2 {
+    anims.0.get(&format!("{GRAB_MONTAGE}/{take}")).copied().unwrap_or(Vec2::ZERO)
+}
 /// Jason_Base's ShiftAudioCue (the Shift's rush, on him) and TeleportCueCounselorHears (the static a counselor near his
 /// Morph or Stalk hears: [`distortion`]).
 const SHIFT_CUE: &str = "ShiftTunnelCue";
@@ -209,6 +228,8 @@ const NECK_GRAB_SOCKET: &str = "NeckGrabSocket";
 const GRAB_HOLD_M: f32 = 0.65;
 /// Seconds Jason holds a grabbed counselor before the kill (a player's choice in the game).
 const HOLD_BEFORE_KILL: f32 = 4.0;
+/// How far the computer Jason carries a held counselor to a placed kill (an AI choice).
+const CARRY_TO_KILL_M: f32 = 4.0;
 /// Where a hold pulled from a car starts (past the grab's enter takes: the car take ends in the hold).
 const HOLD_AFTER_CAR_GRAB: f32 = 2.0;
 /// SCDriveableVehicle constructor: MinUseCarDoorSpeed (cm/s).
@@ -1254,6 +1275,21 @@ fn walk(j: &mut Jason, xf: &mut Transform, wish: Vec2, max_speed: f32, face: Opt
     let mut v = j.velocity.to_array();
     calc_velocity(&mut v, accel, max_speed, dt, &movement);
     j.velocity = Vec2::from_array(v);
+    slide(j, xf, face, dt, t, world);
+}
+
+/// A montage's root motion moving him (the character movement's root motion velocity, his input ignored): `local`
+/// in his own frame (x right, y forward), cm/s, against the world as he walks.
+fn root_move(j: &mut Jason, xf: &mut Transform, local: Vec2, face: Option<Vec2>, dt: f32, t: &KillerTuning, world: &(impl f13_core::collision::TriSource + ?Sized)) {
+    let yaw = yaw_of(xf.rotation);
+    let fwd = Vec2::new(yaw.sin(), yaw.cos());
+    let right = Vec2::new(-fwd.y, fwd.x);
+    j.velocity = fwd * local.y + right * local.x;
+    slide(j, xf, face, dt, t, world);
+}
+
+/// Moves him by his velocity against the world, turning to `face` (else his motion).
+fn slide(j: &mut Jason, xf: &mut Transform, face: Option<Vec2>, dt: f32, t: &KillerTuning, world: &(impl f13_core::collision::TriSource + ?Sized)) {
     let mut pos = xf.translation;
     let r = f13_core::collision::move_capsule(world, &mut pos, &mut j.vel_y, j.grounded, j.velocity * dt / CM, dt, &t.capsule, &WALK);
     j.grounded = r.grounded;
@@ -2499,7 +2535,8 @@ pub(crate) fn update_jason(
             }
             JasonState::Reaching { t: at } => {
                 let at = at + dt;
-                walk(&mut j, &mut xf, face_dir.normalize_or_zero(), t.walk_speed, Some(face_dir), dt, &t, &world);
+                // The Default section's root motion (EnterGrabBegin: his move input ignored), turning to where he faces.
+                root_move(&mut j, &mut xf, grab_root(&anims, GRAB_STARTUP), Some(face_dir), dt, &t, &world);
                 if at < PERFORM_GRAB_TEST_S {
                     j.state = JasonState::Reaching { t: at };
                 } else if alive && !driving && dist <= t.grab_max_m && angle_to(xf.rotation, flat) <= t.grab_angle_deg {
@@ -2539,8 +2576,11 @@ pub(crate) fn update_jason(
             }
             JasonState::Missed { t: at } => {
                 let at = at + dt;
-                walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, None, dt, &t, &world);
-                if at >= GRAB_MISS_FINISH_S {
+                root_move(&mut j, &mut xf, grab_root(&anims, GRAB_MISS), None, dt, &t, &world);
+                if at - dt < GRAB_MISS_SHAKE.2 && at >= GRAB_MISS_SHAKE.2 {
+                    commands.trigger(JasonCameraShake { shake: GRAB_MISS_SHAKE.0, scale: GRAB_MISS_SHAKE.1 });
+                }
+                if at >= GRAB_MISS_END_S {
                     j.state = JasonState::Hunting;
                     j.cooldown = t.attack_delay;
                     j.wants_grab = rng.0.frand() < GRAB_ODDS;
@@ -2565,13 +2605,31 @@ pub(crate) fn update_jason(
                 // Past the grab's GrabSuccess section: his locomotion with the grab layer over it (grab_layer); he moves
                 // at his normal speeds (GetMaxSpeed has no grab case) from its EnterGrabFinish, the player walking him;
                 // the AI stands.
-                if at >= killer.length(GRAB_ENTER).unwrap_or(2.2) {
+                let success = killer.length(GRAB_ENTER).unwrap_or(2.2);
+                if at >= success {
                     commands.entity(je).remove::<PlayAction>();
                 }
-                let wish = player_input.filter(|_| at >= GRAB_SUCCESS_FINISH_S).map_or(Vec2::ZERO, |i| i.movement);
                 let speed = if j.combat { t.combat_speed } else if player_input.is_some_and(|i| i.run) && t.can_run { t.run_speed } else { t.walk_speed };
                 j.running = speed == t.run_speed;
-                walk(&mut j, &mut xf, wish, speed, None, dt, &t, &world);
+                if at - dt < GRAB_SUCCESS_SHAKE.2 && at >= GRAB_SUCCESS_SHAKE.2 {
+                    commands.trigger(JasonCameraShake { shake: GRAB_SUCCESS_SHAKE.0, scale: GRAB_SUCCESS_SHAKE.1 });
+                }
+                // PLACEHOLDER (the AI's: the game's Jason is a player): an unused placed kill within CARRY_TO_KILL_M
+                // that isn't at hand yet, he carries her to.
+                let centre = xf.translation + Vec3::Y * t.capsule.half_height;
+                let facing = Vec2::new((xf.rotation * Vec3::Z).x, (xf.rotation * Vec3::Z).z);
+                let carry_to = (player_input.is_none() && config.kill.is_none())
+                    .then(|| placed_kills.iter().filter(|k| !k.used && k.interact.distance(centre) < CARRY_TO_KILL_M).min_by(|a, b| a.interact.distance(centre).total_cmp(&b.interact.distance(centre))))
+                    .flatten()
+                    .filter(|k| !k.in_reach(centre, facing))
+                    .map(|k| Vec2::new(k.interact.x - xf.translation.x, k.interact.z - xf.translation.z));
+                if at < success {
+                    // The GrabSuccess section's root motion carries him (and her with him) until it's played out.
+                    root_move(&mut j, &mut xf, grab_root(&anims, GRAB_ENTER), None, dt, &t, &world);
+                } else {
+                    let wish = player_input.map_or(carry_to.map_or(Vec2::ZERO, |d| d.normalize_or_zero()), |i| i.movement);
+                    walk(&mut j, &mut xf, wish, speed, carry_to, dt, &t, &world);
+                }
                 if at >= counselor_model.as_ref().and_then(|c| c.length(GRABBED_ENTER)).unwrap_or(2.0) {
                     commands.entity(pe).insert(PlayAction(GRABBED_IDLE.into()));
                 }
@@ -2606,7 +2664,7 @@ pub(crate) fn update_jason(
                     commands.entity(je).insert((PlayAction(his.into()), crate::kill_camera::KillCam::at(&pk.camera_key, pk.camera)));
                     commands.entity(pe).insert(PlayAction(hers.into()));
                     snap_rig(&mut rigs, je);
-                } else if player_input.map_or(at >= HOLD_BEFORE_KILL, |i| {
+                } else if player_input.map_or(at >= HOLD_BEFORE_KILL && (carry_to.is_none() || at >= HOLD_BEFORE_KILL * 2.0), |i| {
                     // A kill key (1-4, its slot) or a click (slot 1), its kill available (FUN_1403ffa80).
                     (i.presses.attack || i.presses.kill.is_some()) && grab_kills.0[i.presses.kill.unwrap_or(1).min(3)]
                 }) {

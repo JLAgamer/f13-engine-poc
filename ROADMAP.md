@@ -48,7 +48,8 @@ Moved from Milestone 1 (not tied to gameplay):
       for a decision on that
 - [ ] Not from the game's code, so marked PLACEHOLDER (MODLOG "Decomp audit, where it ends"): which events say the
       counselor's other lines, X3DAudio's panning matrix,
-      the doors' APEX debris, the death and spectating cameras
+      the doors' APEX debris, the death and spectating cameras, the counselor HUD's FearOpacity (her pockets' and stamina
+      ring's tint during the match: its native writer wasn't found)
 - [ ] Audio, remaining: the audio volumes' reverb (the game's XAudio2 device runs XAudio2's own reverb from each
       volume's ReverbEffect; what's done, and why the stingers, calls and dead bodies' lines aren't listed: MODLOG
       "Scary sounds", "Her voice lines: where and when")

@@ -987,6 +987,8 @@ static class Mvp
         $"{Shared}/Stumble/AM_normal_stand_sprint_stumble_short",
         // Jason's rage door burst carries him through the doorway.
         "/Game/Characters/Killers/Jason/Base/Animation/Abilities/AM_Jason_uber_stand_wall_smash_02",
+        // Jason_AnimBP's GrabMontage: its sections' root motion carries him through the grab.
+        "/Game/Characters/Killers/Jason/Base/Animation/Grab/AM_Jason_Enter_Grab_Montage",
     ];
     public const string Counselor = "/Game/Characters/Counselors/Athlete/Athlete_Counselor";
     // Widgets f13-game draws: the counselor's HUD (with the widgets it nests) and the repair and struggle minigames.

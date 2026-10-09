@@ -123,7 +123,7 @@ impl Plugin for UiPlugin {
         app.add_plugins((UiMaterialPlugin::<RadialFill>::default(), UiMaterialPlugin::<Minimap>::default()))
             .init_resource::<PlayingAnims>()
             .add_systems(Startup, load_hud)
-            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, jason_hud, noise_meter, xp_lines), widget_anims, content_alpha, widget_colors, hide_for_jason).chain().run_if(resource_exists::<Hud>));
+            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, jason_hud, noise_meter, xp_lines), widget_anims, fear_widgets, content_alpha, widget_colors, hide_for_jason).chain().run_if(resource_exists::<Hud>));
     }
 }
 
@@ -749,6 +749,20 @@ fn widget_anims(time: Res<Time>, hud: Res<Hud>, playing: Res<PlayingAnims>, mut 
         }
     }
 }
+
+/// CounselorHUDWidget's UpdateFearOpacity (its tick, once the match is in progress and MatchStart has played: 5 s):
+/// CounselorFearWidgets (the inventory, the stamina ring; designed at alpha 0, kept at 0 through MatchStart) takes
+/// SCHUDWidget's FearOpacity. PLACEHOLDER: what writes FearOpacity natively wasn't found (MODLOG "Played Jason fixes"):
+/// full opacity stands in. (The minimap takes it too unless NervesOfSteel; left as built.)
+fn fear_widgets(hud: Res<Hud>, game: Option<Res<crate::match_flow::GameMatch>>, mut colors: Query<&mut WidgetColor>) {
+    let Some(&e) = hud.names.get("CounselorHUDWidget.CounselorFearWidgets_33") else { return };
+    let Ok(mut c) = colors.get_mut(e) else { return };
+    let started = game.is_some_and(|g| g.state.state == f13_core::game_mode::MatchState::InProgress && g.state.elapsed_in_progress_time >= MATCH_START_S);
+    c.set_if_neq(WidgetColor([1.0, 1.0, 1.0, if started { 1.0 } else { 0.0 }]));
+}
+
+/// CounselorHUDWidget's MatchStart animation's length (s).
+const MATCH_START_S: i32 = 5;
 
 /// XPDisplayWidget's lines fading: each line's Border_0 content by its FadeIn / FadeOut (an empty line stays at its
 /// design alpha, 0).
