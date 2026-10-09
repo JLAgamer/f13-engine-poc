@@ -29,8 +29,8 @@
 //! the sound's parameters (`CueParams` on its actor, as AudioComponent::SetFloatParameter sets them) while it plays.
 //! Actors' cues play at their root (PlaySoundAtLocation). The listener is the camera: APlayerController's own
 //! GetAudioListenerPosition (its view point), as nothing sets an override (SetAudioListenerOverride has no caller in
-//! the code or the packages). PLACEHOLDER: voice lines play 1 m above the character's feet (SCVoiceOverComponent plays
-//! them through an audio component whose attachment isn't read).
+//! the code or the packages). Her voice lines play at her root (SCVoiceOverComponent_Counselor's constructor
+//! 0x1402f4760: its "Audio" component attached to the counselor's RootComponent, her capsule's centre).
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
@@ -421,7 +421,7 @@ fn actor_sound(
             ..PlaybackSettings::DESPAWN
         };
         let source = AudioPlayer::new(assets.load(format!("sounds/{}", v.file)));
-        let mut e = commands.spawn((source, settings, Transform::from_translation(Vec3::Y), ChildOf(ev.actor), VoiceOf(ev.prop), VoiceClass(v.class.clone())));
+        let mut e = commands.spawn((source, settings, Transform::from_translation(Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M), ChildOf(ev.actor), VoiceOf(ev.prop), VoiceClass(v.class.clone())));
         if v.delay > 0.0 {
             e.insert(StartAfter(v.delay));
         }
@@ -520,6 +520,10 @@ fn voices(
     time: Res<Time>,
     mut last: Local<Option<(f32, bool, bool, Option<String>, Option<String>, bool)>>,
     mut choke_at: Local<Option<f32>>,
+    // A line waiting for hers to end (PlayVoiceOver's queue: +0x1d8); ChaseStart said this chase (+0x20d) and its
+    // cooldown's end (+0x200); MatchStartVO said.
+    (mut queued, mut chase_said, mut chase_ready_at, mut match_said): (Local<Option<&'static str>>, Local<bool>, Local<f32>, Local<bool>),
+    (chase, game, play_jason): (Res<crate::counselor_camera::Chase>, Option<Res<crate::match_flow::GameMatch>>, Option<Res<crate::jason_player::PlayJason>>),
     players: Query<(Entity, &Player, Option<&crate::character::PlayAction>, Has<crate::jason::Held>), With<ClassSounds>>,
     saying_now: Query<(&VoiceOf, &ChildOf)>,
     kills: Query<(), With<crate::kill_camera::KillCam>>,
@@ -549,8 +553,28 @@ fn voices(
     } else if now.0 < health && now.5 {
         say("VO:Impact");
     }
+    // MULTICAST_PlayWoundedVO (FUN_1403bf8a0): WoundedScreams, then Wounded queued after it.
     if now.1 && !wounded && now.5 {
-        say("VO:Wounded");
+        say("VO:WoundedScreams");
+        *queued = Some("VO:Wounded");
+    } else if let Some(line) = queued.filter(|_| !saying_now.iter().any(|(_, c)| c.parent() == pe)) {
+        *queued = None;
+        say(line);
+    }
+    // The chase update (FUN_1403db8f0) tells her voice (FUN_140316e40): a chase starting says ChaseStart, once a chase
+    // and not before its timer (ChaseStart's cooldown, 15 s from the constructor 0x1402f4760, set as a chase ends) is out.
+    if chase.chased && !*chase_said && t >= *chase_ready_at {
+        *chase_said = true;
+        say("VO:ChaseStart");
+    } else if !chase.chased && *chase_said {
+        *chase_said = false;
+        *chase_ready_at = t + CHASE_START_VO_COOLDOWN_S;
+    }
+    // SCPlayerController::OnSpawnIntroCompleted: her MatchStartVO (the intro isn't ported: as the match starts), when
+    // she's the local player.
+    if !*match_said && play_jason.is_none() && game.as_ref().is_some_and(|g| g.state.state == crate::match_flow::MatchState::InProgress) {
+        *match_said = true;
+        say("VO:MatchStartVO");
     }
     if now.4.as_deref().is_some_and(|m| m.contains("stumble")) && now.4 != was_montage {
         say("VO:Stumble");
@@ -1287,6 +1311,9 @@ fn spawn_cue(commands: &mut Commands, assets: &AssetServer, sounds: &mut Sounds,
     }
     spawned
 }
+
+/// SCVoiceOverComponent_Counselor's ChaseStart cooldown (+0x208, constructor 0x1402f4760).
+const CHASE_START_VO_COOLDOWN_S: f32 = 15.0;
 
 /// A scary sound's voice (SCMusicComponent_Counselor's ScarySounds component).
 #[derive(Component)]
