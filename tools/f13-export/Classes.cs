@@ -219,7 +219,11 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
             {
                 var mesh = Load(t.GetOrDefault<FPackageIndex?>("SkeletalMesh")) as USkeletalMesh;
                 if (mesh != null) { queueMesh(mesh); j["Mesh"] = meshFile(mesh); }
-                if (mesh != null && Sockets(mesh) is { Count: > 0 } sockets) j["Sockets"] = sockets;
+                if (mesh != null && Sockets(mesh) is { Count: > 0 } sockets)
+                {
+                    j["Sockets"] = sockets;
+                    j["SocketBones"] = SocketBones(mesh);
+                }
                 if (mesh != null && RootBody(mesh) is { } body) j["RootBody"] = body;
                 if (mesh != null) j["BonePositions"] = BonePositions(mesh);
                 j["Hidden"] = t.GetOrDefault("bHiddenInGame", false) || !t.GetOrDefault("bVisible", true);
@@ -313,6 +317,22 @@ class ClassExporter(DefaultFileProvider provider, Action<UObject> queueMesh, Fun
             var xf = new FTransform(s.GetOrDefault<FRotator>("RelativeRotation").Quaternion(), s.GetOrDefault<FVector>("RelativeLocation"), s.GetOrDefault("RelativeScale", FVector.OneVector));
             for (; i >= 0; i = bones[i].ParentIndex) xf = xf * pose[i];
             j[s.GetOrDefault<FName>("SocketName").Text] = Xf(xf);
+        }
+        return j;
+    }
+
+    /// Each socket's bone and its transform relative to that bone (what follows the bone as it animates).
+    static JObject SocketBones(USkeletalMesh mesh)
+    {
+        var skeleton = mesh.Skeleton.Load<USkeleton>();
+        var j = new JObject();
+        var all = (skeleton?.GetOrDefault<FPackageIndex[]>("Sockets", []) ?? []).Concat(mesh.GetOrDefault<FPackageIndex[]>("Sockets", []));
+        foreach (var s in all.Select(s => s.Load()))
+        {
+            if (s == null) continue;
+            var xf = Xf(new FTransform(s.GetOrDefault<FRotator>("RelativeRotation").Quaternion(), s.GetOrDefault<FVector>("RelativeLocation"), s.GetOrDefault("RelativeScale", FVector.OneVector)));
+            xf["Bone"] = s.GetOrDefault<FName>("BoneName").Text;
+            j[s.GetOrDefault<FName>("SocketName").Text] = xf;
         }
         return j;
     }

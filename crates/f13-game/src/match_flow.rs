@@ -215,7 +215,10 @@ fn on_class_score(score: On<ClassScore>, tuning: Option<Res<MatchTuning>>, class
 }
 
 /// Runs the match timer once she's in the world, keeps her record, and scores her escape and the match's end.
+#[allow(clippy::too_many_arguments)]
 fn run_match(
+    mut commands: Commands,
+    (intro, mut intro_done): (Option<Res<crate::cinematic::IntroEnabled>>, ResMut<crate::cinematic::CinematicDone>),
     time: Res<Time>,
     tuning: Option<Res<MatchTuning>>,
     mut game: ResMut<GameMatch>,
@@ -252,6 +255,10 @@ fn run_match(
         killer_alive: (!jason.is_empty()).then_some(true),
     };
     let mut entered = g.state.advance(time.delta_secs(), &t.rules, &roster);
+    // The intro's IntroSequenceCompleted: on to the match.
+    if g.state.state == MatchState::PreMatchIntro && std::mem::take(&mut intro_done.0) {
+        entered.extend(g.state.start(&t.rules));
+    }
     // The host's start and end (host.rs).
     if let Some(mut h) = host {
         if std::mem::take(&mut h.start) {
@@ -264,6 +271,8 @@ fn run_match(
     let mut i = 0;
     while i < entered.len() {
         match entered[i] {
+            // The level intro (cinematic.rs) when there is one to play; else straight on.
+            MatchState::PreMatchIntro if intro.is_some() => commands.insert_resource(crate::cinematic::PlayCinematic(crate::cinematic::INTRO)),
             MatchState::PreMatchIntro => {
                 let started = g.state.start(&t.rules);
                 entered.extend(started);
