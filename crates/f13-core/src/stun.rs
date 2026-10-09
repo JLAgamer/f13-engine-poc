@@ -4,7 +4,7 @@
 //! - Setup: completion, wiggles and elapsed time start at 0; a wiggle is worth PercentPerWiggle / 100; the meter drains
 //!   by DepletionRate per second; the stun lasts TotalStunTime (times the character's modifier).
 //! - Each tick: the wiggles-per-second counter resets every second (at most MaxWigglesPerSecond, 10, count). The wiggle
-//!   axis (A / D) changing sign while not 0 is a wiggle, adding the larger of its worth and MinWiggleDelta (0.01);
+//!   input (GLB_Wiggle: -1 while E is down, else 0) changing sign while not 0 is a wiggle (a press), adding the larger of its worth and MinWiggleDelta (0.01);
 //!   otherwise the meter drains by DepletionRate x dt. Completion is the larger of elapsed / stun time and the meter
 //!   (capped at 1); the meter carries on from the completion. At 1 she's free.
 
@@ -36,7 +36,7 @@ pub struct Wiggle {
 }
 
 impl Wiggle {
-    /// One tick with the wiggle axis (-1 A, +1 D, 0 neither). True once she's free.
+    /// One tick with the wiggle input (-1 while GLB_Wiggle's key is down, else 0). True once she's free.
     pub fn tick(&mut self, dt: f32, input: f32, t: &WiggleTuning) -> bool {
         self.second += dt;
         if 1.0 <= self.second {
@@ -74,12 +74,12 @@ mod tests {
     }
 
     #[test]
-    fn alternating_wiggles_free_her_sooner_and_cap_at_ten_a_second() {
+    fn mashed_wiggles_free_her_sooner_and_cap_at_ten_a_second() {
         let mut w = Wiggle::default();
         let mut t = 0.0;
         let mut i = 0;
-        // 60 ticks a second, alternating every tick: only ten wiggles count each second, 0.05 each.
-        while !w.tick(1.0 / 60.0, if i % 2 == 0 { 1.0 } else { -1.0 }, &TRAP) {
+        // 60 ticks a second, E down every other tick (30 presses a second): only ten count each second, 0.05 each.
+        while !w.tick(1.0 / 60.0, if i % 2 == 0 { 0.0 } else { -1.0 }, &TRAP) {
             t += 1.0 / 60.0;
             i += 1;
         }
@@ -90,11 +90,13 @@ mod tests {
     #[test]
     fn holding_a_key_is_one_wiggle() {
         let mut w = Wiggle::default();
-        // The axis starts at 0 (a positive sign): D first isn't a change, A is.
-        w.tick(0.1, 1.0, &TRAP);
+        // The input starts at 0; a press is the change, holding it no more, letting go neither.
+        w.tick(0.1, 0.0, &TRAP);
         assert_eq!(w.wiggles, 0);
         w.tick(0.1, -1.0, &TRAP);
         w.tick(0.1, -1.0, &TRAP);
+        assert_eq!(w.wiggles, 1);
+        w.tick(0.1, 0.0, &TRAP);
         assert_eq!(w.wiggles, 1);
     }
 

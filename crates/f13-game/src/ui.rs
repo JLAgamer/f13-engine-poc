@@ -125,13 +125,14 @@ impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shaders/radial_fill.wgsl");
         embedded_asset!(app, "shaders/minimap.wgsl");
-        app.add_plugins((UiMaterialPlugin::<RadialFill>::default(), UiMaterialPlugin::<Minimap>::default()))
+        embedded_asset!(app, "shaders/additive.wgsl");
+        app.add_plugins((UiMaterialPlugin::<RadialFill>::default(), UiMaterialPlugin::<Minimap>::default(), UiMaterialPlugin::<Additive>::default()))
             .init_resource::<PlayingAnims>()
             .init_resource::<MapScreenUi>()
             .init_resource::<Prompts>()
             .init_resource::<prompts::PromptUi>()
             .add_systems(Startup, load_hud)
-            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, (map_screen, counselor_map_icons).chain(), jason_hud, noise_meter, xp_lines), prompts::prompts, widget_anims, fear_widgets, content_alpha, widget_colors, hide_for_jason).chain().run_if(resource_exists::<Hud>));
+            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, (map_screen, counselor_map_icons).chain(), jason_hud, noise_meter, xp_lines, wiggle_state.pipe(wiggle_widget)), prompts::prompts, widget_anims, fear_widgets, content_alpha, widget_colors, additive_brushes, hide_for_jason).chain().run_if(resource_exists::<Hud>));
     }
 }
 
@@ -153,6 +154,68 @@ pub struct RadialFill {
 impl UiMaterial for RadialFill {
     fn fragment_shader() -> ShaderRef {
         "embedded://f13_game/shaders/radial_fill.wgsl".into()
+    }
+}
+
+/// A brush on M_UI_JasonHud_01 (Jason's ability and rage bars and frames): a BLEND_Additive UI material, its graph
+/// cooked away; drawn as its texture times the brush's tint and the instance's Brightness, added to what's under it
+/// (`shaders/additive.wgsl`). (Its Smoke and Grime layers, 0 on the ability bars, aren't drawn.)
+#[derive(AsBindGroup, Asset, TypePath, Debug, Clone)]
+pub struct Additive {
+    #[uniform(0)]
+    color: LinearRgba,
+    #[texture(1)]
+    #[sampler(2)]
+    texture: Handle<Image>,
+}
+
+impl UiMaterial for Additive {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://f13_game/shaders/additive.wgsl".into()
+    }
+
+    fn specialize(descriptor: &mut bevy::render::render_resource::RenderPipelineDescriptor, _key: bevy::ui_render::prelude::UiMaterialKey<Self>) {
+        use bevy::render::render_resource::{BlendComponent, BlendFactor, BlendOperation, BlendState};
+        if let Some(Some(target)) = descriptor.fragment.as_mut().and_then(|f| f.targets.get_mut(0)) {
+            target.blend = Some(BlendState {
+                color: BlendComponent { src_factor: BlendFactor::One, dst_factor: BlendFactor::One, operation: BlendOperation::Add },
+                alpha: BlendComponent::OVER,
+            });
+        }
+    }
+}
+
+/// An additive brush to draw: its texture, its colour (tint, played colour) and Brightness.
+#[derive(Component, Clone)]
+struct AdditiveBrush {
+    texture: Handle<Image>,
+    color: [f32; 4],
+    brightness: f32,
+}
+
+/// Gives each new additive brush its material, and keeps a changed one's colour.
+fn additive_brushes(
+    mut commands: Commands,
+    mut materials: ResMut<Assets<Additive>>,
+    brushes: Query<(Entity, Ref<AdditiveBrush>, Option<&MaterialNode<Additive>>)>,
+) {
+    for (e, b, node) in &brushes {
+        if !b.is_changed() && node.is_some() {
+            continue;
+        }
+        let c = b.color;
+        let color = LinearRgba::new(c[0] * b.brightness, c[1] * b.brightness, c[2] * b.brightness, c[3]);
+        match node {
+            Some(n) => {
+                if let Some(mut m) = materials.get_mut(&n.0) {
+                    m.color = color;
+                }
+            }
+            None => {
+                let m = materials.add(Additive { color, texture: b.texture.clone() });
+                commands.entity(e).insert(MaterialNode(m));
+            }
+        }
     }
 }
 
@@ -204,6 +267,8 @@ pub struct Hud {
     killer: Option<Widget>,
     breath: Option<Widget>,
     dial: Option<Widget>,
+    /// SC_WiggleMinigame_Widget, put in the HUD's OverlayWidget.
+    wiggle: Option<Widget>,
     item: Option<Widget>,
     /// Her objectives and map screen (ObjectivesWidget) and the objective rows its FindObjectives adds.
     objectives: Option<Widget>,
@@ -395,6 +460,10 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         killer,
         breath,
         dial,
+        wiggle: Widget::load(dir, "SC_WiggleMinigame_Widget").map(|mut w| {
+            action_keys(&mut w);
+            w
+        }),
         item: Widget::load(dir, "SC_InventoryItem_Widget"),
         objectives: Widget::load(dir, "ObjectivesWidget"),
         car_objective: Widget::load(dir, "Objective_Car_Widget"),
@@ -499,6 +568,20 @@ fn build_hud(
         if let Some(w) = tree.find_mut("GameTimer") {
             w.set_visibility(Vis::Visible);
         }
+    }
+    // OnStartWiggleWidget's: SC_WiggleMinigame_Widget in OverlayWidget (both HUDs), shown while a minigame runs.
+    if let (Some(w), Some(overlay)) = (hud.wiggle.clone(), tree.find_mut("OverlayWidget")) {
+        let mut node = Widget {
+            kind: "SC_WiggleMinigame_Widget_C".into(),
+            name: WIGGLE.into(),
+            class: Some("SC_WiggleMinigame_Widget".into()),
+            props: json!({}),
+            slot_kind: "OverlaySlot".into(),
+            slot: json!({}),
+            children: vec![w],
+        };
+        node.set_visibility(Vis::Hidden);
+        overlay.children.push(node);
     }
     let root = commands.spawn((Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, Pickable::IGNORE)).id();
     let mut names = HashMap::new();
@@ -621,6 +704,7 @@ fn widget_colors(
     colors: Query<(Entity, Ref<WidgetColor>, Option<&ColorBase>)>,
     children: Query<&Children>,
     mut nodes: Query<(Option<&mut ImageNode>, Option<&mut TextColor>, Option<&TintBase>)>,
+    mut additive: Query<&mut AdditiveBrush>,
 ) {
     for (e, c, base) in &colors {
         if !c.is_changed() {
@@ -634,7 +718,11 @@ fn widget_colors(
             match nodes.get_mut(e) {
                 Ok((Some(mut i), _, _)) => i.color = linear(mul(b.0, c.0)),
                 Ok((None, Some(mut t), _)) => t.0 = linear(mul(b.0, c.0)),
-                _ => {}
+                _ => {
+                    if let Ok(mut a) = additive.get_mut(e) {
+                        a.color = mul(b.0, c.0);
+                    }
+                }
             }
             continue;
         }
@@ -959,6 +1047,11 @@ impl Builder<'_, '_, '_> {
             let ring: Handle<Image> = self.assets.load(textures[0].to_string());
             let m = self.materials.add(RadialFill { color: LinearRgba::from(linear(c)), fill: Vec4::new(0.0, 0.0, 1.0, 0.0), ring: ring.clone(), gradient: ring });
             self.commands.entity(e).insert(MaterialNode(m));
+            return;
+        }
+        if res["Parent"].as_str() == Some("M_UI_JasonHud_01") && !textures.is_empty() {
+            let brightness = res["Scalars"]["Brightness"].as_f64().unwrap_or(1.0) as f32;
+            self.commands.entity(e).insert(AdditiveBrush { texture: self.assets.load(textures[0].to_string()), color: c, brightness });
             return;
         }
         if textures.len() == 2 && res["Scalars"]["Alpha"].is_number() {
@@ -1505,6 +1598,56 @@ fn set_progress(commands: &mut Commands, fill: Entity, p: &Progress, percent: f3
         n.left = Val::Px(-left);
         n.top = Val::Px(-top);
     });
+}
+
+/// The wiggle widget's node in the HUD tree.
+const WIGGLE: &str = "WiggleWidgetInstance";
+
+/// The local character's stun minigame (its completion, GetWiggleValue, and StunText), while it runs: hers in his grab
+/// (CounselorGrabStun "Break Free") or a bear trap ("Open Trap"); his stuns' when he's played.
+fn wiggle_state(
+    play: Option<Res<crate::jason_player::PlayJason>>,
+    struggle: Option<Res<crate::jason::Struggle>>,
+    player: Option<Single<(Has<crate::jason::Held>, Option<&crate::items::Trapped>), With<Player>>>,
+    jasons: Query<&crate::jason::Jason>,
+) -> Option<(f32, &'static str)> {
+    if play.is_some() {
+        return jasons.iter().find_map(|j| j.stun_minigame());
+    }
+    let (held, trapped) = player.map_or((false, None), |p| *p);
+    if let Some(c) = trapped.and_then(|t| t.struggle()) {
+        return Some((c, "Open Trap"));
+    }
+    (held && jasons.iter().any(|j| j.holding())).then(|| (struggle.map_or(0.0, |s| s.wiggle.completion), "Break Free"))
+}
+
+/// SC_WiggleMinigame_Widget while a minigame runs (OnStartWiggleWidget / OnStopWiggleWidget): ProgressBar_Left and
+/// ProgressBar_Right at GetWiggleValue (the completion), TextBlock_119 the character's StunText (the stun class's,
+/// BeginStun 0x1402e3fc0), its ActionMapWidget GLB_Wiggle's key.
+fn wiggle_widget(
+    state: In<Option<(f32, &'static str)>>,
+    mut commands: Commands,
+    hud: Res<Hud>,
+    mut vis: Query<&mut Visibility>,
+    bars: Query<&Progress>,
+    mut texts: Query<&mut Text>,
+) {
+    let owner = if hud.names.contains_key(&format!("KillerHUDWidget.{WIGGLE}")) { "KillerHUDWidget" } else { "CounselorHUDWidget" };
+    let Some(&root) = hud.names.get(&format!("{owner}.{WIGGLE}")) else { return };
+    if let Ok(mut v) = vis.get_mut(root) {
+        v.set_if_neq(if state.0.is_some() { Visibility::Inherited } else { Visibility::Hidden });
+    }
+    let Some((completion, text)) = state.0 else { return };
+    for name in ["ProgressBar_Left", "ProgressBar_Right"] {
+        if let Some(p) = hud.names.get(&format!("SC_WiggleMinigame_Widget.{name}")).and_then(|&e| bars.get(e).ok()) {
+            set_progress(&mut commands, p.fill, p, completion);
+        }
+    }
+    if let Some(mut t) = hud.names.get("SC_WiggleMinigame_Widget.TextBlock_119").and_then(|&e| texts.get_mut(e).ok()) {
+        if t.0 != text {
+            t.0 = text.to_string();
+        }
+    }
 }
 
 /// The player became Jason (the host's `jason`): her HUD goes.

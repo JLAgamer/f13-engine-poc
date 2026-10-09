@@ -642,6 +642,14 @@ impl Jason {
         matches!(self.state, JasonState::Holding { .. })
     }
 
+    /// His stun's minigame while it runs: its completion and the stun class's StunText.
+    pub fn stun_minigame(&self) -> Option<(f32, &'static str)> {
+        match self.state {
+            JasonState::Stunned { stun, .. } if self.stun_done.is_none() && stun.minigame().is_some() => Some((self.stun_wiggle.completion, stun.text()?)),
+            _ => None,
+        }
+    }
+
     /// How long he's held her (from the grab's enter), while he does.
     pub fn holding_for(&self) -> Option<f32> {
         match self.state {
@@ -750,6 +758,18 @@ impl Stun {
             Stun::BearTrap => "Trapper",
             Stun::PocketKnife | Stun::GrabBreak => "EscapeJasonGrab",
             Stun::Police => return None,
+        })
+    }
+
+    /// The stun class's StunText (the minigame's prompt): BaseWeaponStun and HeavyShotgunStun "Rise",
+    /// FlareGunLightStun "Brush Off", BearTrapLeftFootStun "Open Trap", PoliceShootJasonStun "Resist".
+    pub fn text(self) -> Option<&'static str> {
+        Some(match self {
+            Stun::Weapon { .. } | Stun::Shotgun => "Rise",
+            Stun::Flare => "Brush Off",
+            Stun::BearTrap => "Open Trap",
+            Stun::Police => "Resist",
+            Stun::Firecracker | Stun::PocketKnife | Stun::GrabBreak => return None,
         })
     }
 
@@ -1080,7 +1100,7 @@ fn distortion(
     }
 }
 
-/// The counselor's wiggle axis (A -1, D +1: GLB_Wiggle) and her grab struggle's minigame (f13-core::stun).
+/// The counselor's wiggle input (GLB_Wiggle: -1 while E is down) and her grab struggle's minigame (f13-core::stun).
 #[derive(Resource, Default)]
 pub struct Struggle {
     pub input: f32,
@@ -1922,7 +1942,27 @@ pub(crate) fn update_jason(
                 let mut goal = car_door.map_or(to, |(door, _)| door.translation);
                 // Going for a hiding spot or a clue (not her, not wandering).
                 let mut following = false;
-                if !sees {
+                // PLACEHOLDER (the AI's choice; the game's Jason is a player): not seeing her, he goes to break a
+                // working phone box (its fuse in) before anything else, as a player would to stop the call.
+                let phone_box = if sees { None } else { phone_boxes.iter().find(|(_, b)| b.breakable()).map(|(e, b)| (e, b.interact, b.reach)) };
+                if let Some((be, at, reach)) = phone_box {
+                    if j.target_spot.is_none() && !j.wander.is_some_and(|w| w.0 == at) {
+                        info!("Jason: going for the phone box ({:.0} m)", at.distance(xf.translation));
+                        j.wander = Some((at, now));
+                    }
+                    goal = at;
+                    following = true;
+                    if stalled || Vec2::new(at.x - xf.translation.x, at.z - xf.translation.z).length() * 100.0 <= reach + 100.0 {
+                        info!("Jason: breaking the phone box (AI)");
+                        j.stall = 0.0;
+                        let to = at - xf.translation;
+                        xf.rotation = Quat::from_rotation_y(to.x.atan2(to.z));
+                        j.state = JasonState::BreakingFuse { t: 0.0, fuse: be, done: false };
+                        j.velocity = Vec2::ZERO;
+                        commands.entity(je).insert((PlayAction(BREAK_FUSE.into()), ActionSounds(BREAK_PHONE_BOX)));
+                        continue;
+                    }
+                } else if !sees {
                     if let Some(s) = know.as_ref().and_then(|k| k.hiding_spot).filter(|s| !j.searched.contains(s)) {
                         if j.target_spot != Some(s) {
                             j.target_side = None;
@@ -2880,10 +2920,10 @@ fn snap_rig(rigs: &mut Query<(&mut Rig, &ChildOf, &Transform), (Without<Jason>, 
     }
 }
 
-/// A/D presses while held are wiggles, at most MaxWigglesPerSecond.
-/// The wiggle axis: A -1, D +1 (both or neither: 0).
+/// The wiggle input (FUN_1402dcfa0): -1 while one of GLB_Wiggle's keys is down (DefaultInput.ini: E), else 0; the
+/// minigame's tick counts its turning non-zero, so each press of E is a wiggle (at most MaxWigglesPerSecond).
 pub(crate) fn read_struggle(keys: Res<ButtonInput<KeyCode>>, mut s: ResMut<Struggle>) {
-    s.input = keys.pressed(KeyCode::KeyD) as i32 as f32 - keys.pressed(KeyCode::KeyA) as i32 as f32;
+    s.input = if keys.pressed(KeyCode::KeyE) { -1.0 } else { 0.0 };
 }
 
 /// CounselorGrabStun_C: the grab is a stun she wiggles out of: TotalStunTime 15 s (lower with Strength 15 and

@@ -20,10 +20,8 @@ Decomp audit: done; what's left marked and why is in MODLOG "Decomp audit, where
 The finished Milestone 1 work, with its references to the decomp, is in F13-decomp's MODLOG ("Milestone 1, done").
 
 ## Milestone 2: more escapes
-Police, 4-seat car, boat, then the others, one at a time.
-- [ ] Police, remaining (the escape itself works in M1's match: see above): the escape's camera spline, the phone box's
-      broken mesh and lights, the computer Jason breaking boxes, the free-spot traces when he's turned back
-      (PoliceStunTrace)
+Police, 4-seat car, boat, then the others, one at a time. The police and the 4-seat car are in (MODLOG); Crystal Lake
+(small) has no boat or other escape, so those come with more maps (Afterwards).
 
 Moved from Milestone 1 (not tied to gameplay):
 - [ ] Match flow, remaining: the level intro and outro sequences. (Badges: their award sites and classes are read,
@@ -32,7 +30,8 @@ Moved from Milestone 1 (not tied to gameplay):
       reflections), POM parallax, the other emissive masters (signs, the CB tower, the phone box), foliage
       subsurface, the Chevette's paint mask
 - [ ] Particle effects (Cascade ParticleSystems): none ported yet. The walls' and doors' hit dust (HitParticle), the
-      knife's trail (P_Jason_ThrowingKnife_01), blood, the campfires and fireplaces, the cars' exhaust, rain
+      knife's trail (P_Jason_ThrowingKnife_01), blood, the campfires and fireplaces, the cars' exhaust, rain, the
+      broken phone box's smoke
 - [ ] Counselor model, remaining: facial animation and hair dynamics (their own anim Blueprints), the eyes' iris and
       lid overlays, outfit choice
 - [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: their root doesn't turn, the body turns about it; how the actor turns with them is unread), foot-marker
@@ -56,10 +55,6 @@ Moved from Milestone 1 (not tied to gameplay):
 - [ ] Post-processing, remaining: SSAO (FPostProcessAmbientOcclusion*: it darkens indirect light only; settings and
       cvars read, see MODLOG "SSAO (started)"); then compare
       against the game's own screenshots. (Bloom's fast blur: ported, ComputeOutputDesc's half-width X pass)
-- [ ] The grab's struggle UI (her prompt and progress while she struggles in his grab)
-- [ ] Bugs:
-  - [ ] Grabbing her as Jason loops the struggle audio
-  - [ ] Jason's HUD ability icons show a white/grey fill
 
 ## Milestone 3: networking
 Server-authoritative netcode, tested with bots, then an 8-player lobby.

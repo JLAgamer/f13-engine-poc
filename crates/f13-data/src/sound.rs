@@ -89,9 +89,13 @@ pub enum Node {
     Attenuation { settings: Option<Attenuation>, child: Option<Box<Node>> },
     /// Random volume and pitch multipliers in these ranges.
     Modulator { volume: (f32, f32), pitch: (f32, f32), child: Option<Box<Node>> },
-    Random { weights: Vec<f32>, children: Vec<Node> },
+    /// USoundNodeRandom: one child by weight; without replacement (bRandomizeWithoutReplacement, its default true) a
+    /// child isn't picked again until all have been. `id` numbers the cue's random nodes (their state, [`RandomState`]).
+    Random { weights: Vec<f32>, children: Vec<Node>, without_replacement: bool, id: usize },
     /// Every child, each at its input volume.
     Mixer { volumes: Vec<f32>, children: Vec<Node> },
+    /// USoundNodeLooping (indefinitely: no export sets LoopCount): its child again as it ends, parsed anew (a random
+    /// node under it picks again).
     Looping { child: Option<Box<Node>> },
     /// USoundNodeDelay: its child starts after a random delay in [DelayMin, DelayMax] s.
     Delay { range: (f32, f32), child: Option<Box<Node>> },
@@ -126,7 +130,7 @@ impl Node {
             "Modulator" => Node::Modulator { volume: (f("VolumeMin", 0.95), f("VolumeMax", 1.05)), pitch: (f("PitchMin", 0.95), f("PitchMax", 1.05)), child: first() },
             "Random" => {
                 let weights = p["Weights"].as_array().map(|w| w.iter().map(|x| x.as_f64().unwrap_or(1.0) as f32).collect()).unwrap_or_default();
-                Node::Random { weights, children }
+                Node::Random { weights, children, without_replacement: p["bRandomizeWithoutReplacement"].as_bool().unwrap_or(true), id: 0 }
             }
             "Mixer" => {
                 let volumes = p["InputVolume"].as_array().map(|w| w.iter().map(|x| x.as_f64().unwrap_or(1.0) as f32).collect()).unwrap_or_default();
@@ -178,6 +182,21 @@ pub struct Voice {
     pub mods: Vec<VoiceMod>,
     /// Its cue's sound class.
     pub class: Option<String>,
+    /// Under a Looping node with a Random node in it: played once, then the cue's looping part is played again (a new
+    /// pick) as it ends, rather than the one wave looped.
+    pub reloop: bool,
+}
+
+/// The cue's random nodes' state (USoundNodeRandom's HasBeenUsed and NumRandomUsed, members of the node: shared by
+/// every play of the cue), by node id.
+pub type RandomState = std::collections::HashMap<usize, RandomUse>;
+
+/// A random node's state: which children have been used, how many, and the last picked.
+#[derive(Clone, Debug, Default)]
+pub struct RandomUse {
+    pub used: Vec<bool>,
+    pub count: usize,
+    pub last: Option<usize>,
 }
 
 /// FModulatorContinuousParams (its constructor: Default 1, inputs 0..1, outputs 0..1, MPM_Normal).
@@ -290,7 +309,10 @@ impl Cue {
             volume: v["Volume"].as_f64().unwrap_or(1.0) as f32,
             pitch: v["Pitch"].as_f64().unwrap_or(1.0) as f32,
             attenuation: v.get("Attenuation").map(Attenuation::from_json),
-            root: Node::from_json(&v["Root"]),
+            root: Node::from_json(&v["Root"]).map(|mut r| {
+                number_random(&mut r, &mut 0);
+                r
+            }),
             sound_class: v["SoundClass"].as_str().map(str::to_string),
         })
     }
@@ -298,10 +320,15 @@ impl Cue {
     /// The voices one play of the cue starts, and its attenuation (an Attenuation node's, else the cue's).
     /// `rand` returns uniform numbers in [0, 1).
     pub fn play(&self, rand: &mut dyn FnMut() -> f32) -> (Vec<Voice>, Option<Attenuation>) {
+        self.play_with(rand, &mut RandomState::new())
+    }
+
+    /// [`Cue::play`] with its random nodes' state kept in `state` (the cue's own, across its plays).
+    pub fn play_with(&self, rand: &mut dyn FnMut() -> f32, state: &mut RandomState) -> (Vec<Voice>, Option<Attenuation>) {
         let mut voices = Vec::new();
         let mut att = None;
         if let Some(root) = &self.root {
-            walk(root, self.volume, self.pitch, false, 0.0, &[], rand, &mut voices, &mut att);
+            walk(root, self.volume, self.pitch, Loop::No, 0.0, &[], &mut Ctx { rand, out: &mut voices, att: &mut att, state });
         }
         for v in &mut voices {
             v.class = self.sound_class.clone();
@@ -310,79 +337,164 @@ impl Cue {
     }
 }
 
+/// Numbers a cue's random nodes depth first.
+fn number_random(n: &mut Node, next: &mut usize) {
+    if let Node::Random { id, .. } = n {
+        *id = *next;
+        *next += 1;
+    }
+    match n {
+        Node::Random { children, .. } | Node::Mixer { children, .. } | Node::CrossFade { children, .. } | Node::Other { children, .. } => {
+            for c in children {
+                number_random(c, next);
+            }
+        }
+        Node::Attenuation { child, .. } | Node::Modulator { child, .. } | Node::Looping { child } | Node::Delay { child, .. } | Node::ModulatorContinuous { child, .. } => {
+            if let Some(c) = child {
+                number_random(c, next);
+            }
+        }
+        Node::Wave { .. } => {}
+    }
+}
+
+fn has_random(n: &Node) -> bool {
+    match n {
+        Node::Random { .. } => true,
+        Node::Mixer { children, .. } | Node::CrossFade { children, .. } | Node::Other { children, .. } => children.iter().any(has_random),
+        Node::Attenuation { child, .. } | Node::Modulator { child, .. } | Node::Looping { child } | Node::Delay { child, .. } | Node::ModulatorContinuous { child, .. } => {
+            child.as_deref().is_some_and(has_random)
+        }
+        Node::Wave { .. } => false,
+    }
+}
+
+/// How the voices under a node repeat: not, the wave looped, or the looping part played anew as it ends.
+#[derive(Clone, Copy, PartialEq)]
+enum Loop {
+    No,
+    Wave,
+    Reparse,
+}
+
+struct Ctx<'a> {
+    rand: &'a mut dyn FnMut() -> f32,
+    out: &'a mut Vec<Voice>,
+    att: &'a mut Option<Attenuation>,
+    state: &'a mut RandomState,
+}
+
+/// USoundNodeRandom::ChooseNodeIndex (UE 4.18): a child by weight, among those not yet used when without replacement;
+/// all used, they're all free again but the one just played (ParseNodes' reset).
+fn choose(weights: &[f32], n: usize, without_replacement: bool, u: &mut RandomUse, rand: &mut dyn FnMut() -> f32) -> usize {
+    let w = |i: usize| weights.get(i).copied().unwrap_or(1.0).max(0.0);
+    if u.used.len() != n {
+        *u = RandomUse { used: vec![false; n], count: 0, last: None };
+    }
+    if without_replacement && u.count >= n {
+        u.used.iter_mut().for_each(|x| *x = false);
+        u.count = 0;
+        if let Some(l) = u.last.filter(|_| n > 1) {
+            u.used[l] = true;
+            u.count = 1;
+        }
+    }
+    let free = |i: usize, used: &[bool]| !without_replacement || !used[i];
+    let total: f32 = (0..n).filter(|&i| free(i, &u.used)).map(w).sum();
+    let mut pick = rand() * total;
+    let mut chosen = (0..n).rev().find(|&i| free(i, &u.used)).unwrap_or(n - 1);
+    for i in (0..n).filter(|&i| free(i, &u.used)) {
+        if pick < w(i) {
+            chosen = i;
+            break;
+        }
+        pick -= w(i);
+    }
+    if without_replacement && !u.used[chosen] {
+        u.used[chosen] = true;
+        u.count += 1;
+    }
+    u.last = Some(chosen);
+    chosen
+}
+
 #[allow(clippy::too_many_arguments)]
-fn walk(n: &Node, volume: f32, pitch: f32, looping: bool, delay: f32, mods: &[VoiceMod], rand: &mut dyn FnMut() -> f32, out: &mut Vec<Voice>, att: &mut Option<Attenuation>) {
+fn walk(n: &Node, volume: f32, pitch: f32, looping: Loop, delay: f32, mods: &[VoiceMod], cx: &mut Ctx) {
     let lerp = |(a, b): (f32, f32), t: f32| a + (b - a) * t;
     match n {
         Node::Attenuation { settings, child } => {
-            if att.is_none() {
-                *att = settings.clone();
+            if cx.att.is_none() {
+                *cx.att = settings.clone();
             }
             if let Some(c) = child {
-                walk(c, volume, pitch, looping, delay, mods, rand, out, att);
+                walk(c, volume, pitch, looping, delay, mods, cx);
             }
         }
         Node::Modulator { volume: v, pitch: p, child } => {
-            let (vm, pm) = (lerp(*v, rand()), lerp(*p, rand()));
+            let (vm, pm) = (lerp(*v, (cx.rand)()), lerp(*p, (cx.rand)()));
             if let Some(c) = child {
-                walk(c, volume * vm, pitch * pm, looping, delay, mods, rand, out, att);
+                walk(c, volume * vm, pitch * pm, looping, delay, mods, cx);
             }
         }
-        Node::Random { weights, children } => {
+        Node::Random { weights, children, without_replacement, id } => {
             if children.is_empty() {
                 return;
             }
-            let w = |i: usize| weights.get(i).copied().unwrap_or(1.0).max(0.0);
-            let total: f32 = (0..children.len()).map(w).sum();
-            let mut pick = rand() * total;
-            let mut chosen = children.len() - 1;
-            for i in 0..children.len() {
-                if pick < w(i) {
-                    chosen = i;
-                    break;
-                }
-                pick -= w(i);
-            }
-            walk(&children[chosen], volume, pitch, looping, delay, mods, rand, out, att);
+            let mut used = cx.state.remove(id).unwrap_or_default();
+            let chosen = choose(weights, children.len(), *without_replacement, &mut used, cx.rand);
+            cx.state.insert(*id, used);
+            walk(&children[chosen], volume, pitch, looping, delay, mods, cx);
         }
         Node::Mixer { volumes, children } => {
             for (i, c) in children.iter().enumerate() {
-                walk(c, volume * volumes.get(i).copied().unwrap_or(1.0), pitch, looping, delay, mods, rand, out, att);
+                walk(c, volume * volumes.get(i).copied().unwrap_or(1.0), pitch, looping, delay, mods, cx);
             }
         }
         Node::Delay { range, child } => {
             // USoundNodeDelay::ParseNodes: DelayMax + (DelayMin - DelayMax) x FRand, at least 0.
-            let d = (range.1 + (range.0 - range.1) * rand()).max(0.0);
+            let d = (range.1 + (range.0 - range.1) * (cx.rand)()).max(0.0);
             if let Some(c) = child {
-                walk(c, volume, pitch, looping, delay + d, mods, rand, out, att);
+                walk(c, volume, pitch, looping, delay + d, mods, cx);
             }
         }
         Node::ModulatorContinuous { volume: v, pitch: p, child } => {
             if let Some(c) = child {
                 let m: Vec<VoiceMod> = mods.iter().cloned().chain([VoiceMod::Volume(v.clone()), VoiceMod::Pitch(p.clone())]).collect();
-                walk(c, volume, pitch, looping, delay, &m, rand, out, att);
+                walk(c, volume, pitch, looping, delay, &m, cx);
             }
         }
         Node::CrossFade { param, bands, children } => {
             for (i, c) in children.iter().enumerate() {
                 let band = bands.get(i).cloned().unwrap_or(CrossFadeBand { fade_in: (0.0, 0.0), fade_out: (0.0, 0.0), volume: 0.0 });
                 let m: Vec<VoiceMod> = mods.iter().cloned().chain([VoiceMod::Band { param: param.clone(), band }]).collect();
-                walk(c, volume, pitch, looping, delay, &m, rand, out, att);
+                walk(c, volume, pitch, looping, delay, &m, cx);
             }
         }
         Node::Looping { child } => {
             if let Some(c) = child {
-                walk(c, volume, pitch, true, delay, mods, rand, out, att);
+                // A random choice under it is made again each time round; a wave alone just loops.
+                let l = if looping == Loop::Reparse || has_random(c) { Loop::Reparse } else { Loop::Wave };
+                walk(c, volume, pitch, l, delay, mods, cx);
             }
         }
         Node::Wave { file, volume: wv, pitch: wp, looping: wl } => {
             if let Some(file) = file {
-                out.push(Voice { file: file.clone(), volume: volume * wv, pitch: pitch * wp, looping: looping || *wl, delay, mods: mods.to_vec(), class: None });
+                let reloop = looping == Loop::Reparse && !*wl;
+                cx.out.push(Voice {
+                    file: file.clone(),
+                    volume: volume * wv,
+                    pitch: pitch * wp,
+                    looping: (looping == Loop::Wave) || *wl,
+                    delay,
+                    mods: mods.to_vec(),
+                    class: None,
+                    reloop,
+                });
             }
         }
         Node::Other { children, .. } => {
             if let Some(c) = children.first() {
-                walk(c, volume, pitch, looping, delay, mods, rand, out, att);
+                walk(c, volume, pitch, looping, delay, mods, cx);
             }
         }
     }
@@ -476,5 +588,46 @@ mod tests {
         assert_eq!(voices[0].file, "waves/b.ogg");
         assert!((voices[0].volume - 1.0).abs() < 1e-6);
         assert!((voices[0].pitch - 0.95).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_looped_random_choice_is_made_again_and_without_replacement() {
+        // AthleticGirlChoke's shape: Looping > Random over three waves.
+        let v: Value = serde_json::json!({"Type": "Looping", "Props": {}, "Children": [
+            {"Type": "Random", "Props": {"Weights": [1.0, 1.0, 1.0]}, "Children": [
+                {"Type": "WavePlayer", "Props": {}, "Wave": "waves/a.ogg", "Children": []},
+                {"Type": "WavePlayer", "Props": {}, "Wave": "waves/b.ogg", "Children": []},
+                {"Type": "WavePlayer", "Props": {}, "Wave": "waves/c.ogg", "Children": []}
+            ]}
+        ]});
+        let mut root = Node::from_json(&v).unwrap();
+        number_random(&mut root, &mut 0);
+        let cue = Cue { volume: 1.0, pitch: 1.0, attenuation: None, root: Some(root), sound_class: None };
+        let mut state = RandomState::new();
+        // Always the first free one: a, b, c, then (all used, c just played) a, b.
+        let picks: Vec<String> = (0..5)
+            .map(|_| {
+                let (voices, _) = cue.play_with(&mut || 0.0, &mut state);
+                assert!(voices[0].reloop && !voices[0].looping);
+                voices[0].file.clone()
+            })
+            .collect();
+        assert_eq!(picks, ["waves/a.ogg", "waves/b.ogg", "waves/c.ogg", "waves/a.ogg", "waves/b.ogg"]);
+        // After a reset the one just played isn't picked first, even by a draw that would land on it.
+        let (voices, _) = cue.play_with(&mut || 0.99, &mut state);
+        assert_eq!(voices[0].file, "waves/c.ogg");
+        // Then the only one left.
+        let (voices, _) = cue.play_with(&mut || 0.99, &mut state);
+        assert_eq!(voices[0].file, "waves/a.ogg");
+    }
+
+    #[test]
+    fn a_looped_wave_loops() {
+        let v: Value = serde_json::json!({"Type": "Looping", "Props": {}, "Children": [
+            {"Type": "WavePlayer", "Props": {}, "Wave": "waves/a.ogg", "Children": []}
+        ]});
+        let cue = Cue { volume: 1.0, pitch: 1.0, attenuation: None, root: Node::from_json(&v), sound_class: None };
+        let (voices, _) = cue.play(&mut || 0.0);
+        assert!(voices[0].looping && !voices[0].reloop);
     }
 }

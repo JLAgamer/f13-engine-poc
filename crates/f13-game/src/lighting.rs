@@ -185,6 +185,7 @@ pub fn placed_components(level: &crate::Level, classes: &ClassDb, keep: impl Fn(
             props.insert("ComponentName".into(), Value::String(c.name.clone()));
             props.insert("ActorIndex".into(), Value::from(index - 1));
             props.insert("ActorClass".into(), Value::String(a.class.clone()));
+            props.insert("ActorName".into(), Value::String(a.name.clone()));
             out.push((c.kind.clone(), world, props));
         }
     }
@@ -309,7 +310,14 @@ fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
     let grids = crate::power::PowerGrids::from_level(&level);
     let mut moon = false;
     let (mut points, mut spots) = (0, 0);
-    for l in lights.iter().filter(|l| (l.visible() || l.is_power_out()) && l.flag("bAffectsWorld", true)) {
+    // A phone box's broken and fixed lights: both sets, shown by its state (police.rs).
+    let box_light = |l: &PlacedLight| {
+        let class = l.props.get("ActorClass").and_then(Value::as_str).unwrap_or("");
+        let broken = l.name().ends_with("_Broken");
+        (classes.is_child_of(class, "SCPhoneJunctionBox") && (broken || l.name().ends_with("_Fixed")))
+            .then(|| crate::police::BoxLight { actor: l.props.get("ActorName").and_then(Value::as_str).unwrap_or("").to_string(), broken })
+    };
+    for l in lights.iter().filter(|l| (l.visible() || l.is_power_out() || box_light(l).is_some()) && l.flag("bAffectsWorld", true)) {
         let grid = l.grid(&grids);
         let at = to_bevy(l.position());
         let dir = to_bevy(l.direction()).normalize_or(Vec3::NEG_Y);
@@ -345,6 +353,9 @@ fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
                         ))
                         .id()
                 };
+                if let Some(b) = box_light(l) {
+                    commands.entity(e).insert((b, if l.visible() { Visibility::Inherited } else { Visibility::Hidden }));
+                }
                 // Power (power.rs): powered lights follow their grid, a fuse box's power-out light waits for a cut.
                 match (grid, l.is_power_out()) {
                     (Some(g), true) => {

@@ -391,7 +391,7 @@ fn check_escape(
     escaped: Option<Res<Escaped>>,
     player: Single<&Driving, With<Player>>,
     vehicles: Query<(&Vehicle, &GlobalTransform)>,
-    zones: Query<(&EscapeZone, &GlobalTransform, &Name)>,
+    zones: Query<(Entity, &EscapeZone, &GlobalTransform, &Name)>,
 ) {
     if escaped.is_some() {
         return;
@@ -400,9 +400,10 @@ fn check_escape(
     if !v.started {
         return;
     }
-    for (zone, zxf, name) in &zones {
+    for (ze, zone, zxf, name) in &zones {
         if zone.car && vxf.translation().distance(zxf.translation()) <= zone.radius_m {
             info!("escaped by car through {name}");
+            commands.trigger(crate::kill_camera::EscapeCamera { zone: ze });
             commands.insert_resource(Escaped { how: format!("by car ({})", v.class.trim_end_matches("_C")) });
             return;
         }

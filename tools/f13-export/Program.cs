@@ -961,6 +961,9 @@ static class Mvp
         "/Game/Characters/Killers/Jason/J2/Textures/Jason_V2_Pick_Axe_Diffuse",
         "/Game/Characters/Killers/Jason/J2/Textures/Jason_V2_Pick_Axe_Normal",
         "/Game/Characters/Killers/Jason/J2/Textures/Jason_V2_Pick_Axe_RMA",
+        // PhoneJunctionBox_BP's OnPhoneBoxDestroyed mesh, and its light material when repaired (RepairedLightMaterial).
+        "/Game/Props/Interactive/S_Interactive_TelephoneBox_01_Broken",
+        "/Game/Props/Interactive/M_Interactive_TelephoneBox_01_Emissive_Blue",
     ];
     // Classes the game spawns by reference from native code rather than from level data.
     // Classes no level places but the game reads (the cars' wheels: SCWheeledVehicleMovementComponent WheelSetups).

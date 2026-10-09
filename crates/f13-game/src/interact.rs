@@ -909,7 +909,8 @@ fn act(
     mouse: Res<ButtonInput<MouseButton>>,
     tuning: Res<PlayerTuning>,
     mut rng: ResMut<crate::GameRng>,
-    mut player: Single<(Entity, &mut Transform, &mut Inventory, &mut Player, Has<MoveToSpot>), (Without<Driving>, Without<crate::hiding::Hiding>, Without<crate::jason::Held>)>,
+    // Held or in a trap, E wiggles (the stun's WiggleInputComponent over hers).
+    mut player: Single<(Entity, &mut Transform, &mut Inventory, &mut Player, Has<MoveToSpot>), (Without<Driving>, Without<crate::hiding::Hiding>, Without<crate::jason::Held>, Without<crate::items::Trapped>)>,
     (items, item_xfs): (Query<&Item>, Query<&GlobalTransform, With<Item>>),
     (mut spots, model): (Query<(&mut crate::hiding::HidingSpot, &GlobalTransform)>, Option<Res<crate::character::CounselorCharacter>>),
     (cabinets, cabinet_xfs): (Query<&Cabinet>, Query<&GlobalTransform, With<Cabinet>>),
@@ -1555,9 +1556,9 @@ fn update_prompt(
     tuning: Res<PlayerTuning>,
     doors: Query<(&Door, &GlobalTransform)>,
     (windows, barricades): (Query<&Window>, Query<&Barricade>),
-    player: Single<(&Inventory, Has<Driving>, &Transform, Option<&UsingItem>, &Player, Has<crate::jason::Held>, Option<&crate::hiding::Hiding>)>,
+    player: Single<(&Inventory, Has<Driving>, &Transform, Option<&UsingItem>, &Player, Option<&crate::hiding::Hiding>)>,
     items: Query<&Item>,
-    (vehicles, phone_boxes, cabinets, jasons): (Query<&Vehicle>, Query<&crate::police::PhoneBox>, Query<&Cabinet>, Query<&crate::jason::Jason>),
+    (vehicles, phone_boxes, cabinets): (Query<&Vehicle>, Query<&crate::police::PhoneBox>, Query<&Cabinet>),
     mut text: Single<&mut Text, With<PromptText>>,
     play: Option<Res<crate::jason_player::PlayJason>>,
 ) {
@@ -1568,7 +1569,7 @@ fn update_prompt(
         }
         return;
     }
-    let (inv, driving, _, using, p, held, hiding) = *player;
+    let (inv, driving, _, using, p, hiding) = *player;
     let name = |e: Entity| items.get(e).map_or("?".to_string(), |i| i.name.clone());
     let mut lines = vec![format!(
         "Hands: {}   Pockets: [{}] ({}/{})",
@@ -1691,9 +1692,6 @@ fn update_prompt(
                 ItemKind::WalkieTalkie => lines.push("Walkie-talkie: talks to other players (no use offline)".into()),
                 _ => {}
             }
-        }
-        if held && jasons.iter().any(|j| j.holding()) {
-            lines.push("GRABBED: mash A / D to break free".into());
         }
     }
     text.0 = lines.join("\n");

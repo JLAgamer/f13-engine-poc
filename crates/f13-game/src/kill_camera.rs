@@ -1,6 +1,12 @@
 //! Kill cameras (f13-core::camera_spline): while Jason kills the counselor, the camera rides the kill's camera spline
 //! (`kill_cameras.json`) in the kill's space, Jason's actor at the kill's start (the paired animations play around it),
 //! with its field of view and handicam shake, then hands back to the follow camera.
+//!
+//! The escape camera (SCEscapeVolume, FUN_1404439f0 from OnOverlap: for the locally controlled character escaping on
+//! foot, and each local passenger of a car escaping): her control rotation takes its EscapeCam's, TakeCameraControl
+//! blends her view to the volume's over CameraLerpTime (SetViewTargetWithBlend, linear: 7 s on Crystal Lake), and
+//! ActivateCamera starts EscapeCam (an SCSplineCamera) riding the volume's EscapeCameraSpline (two points over 8 s on
+//! this map). It holds at the spline's end.
 
 use crate::player::PlayerCamera;
 use bevy::prelude::*;
@@ -17,7 +23,8 @@ impl Plugin for KillCameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<KillCameras>()
             .add_systems(Startup, load)
-            .add_systems(Update, (kill_camera, blend_back).chain().after(crate::counselor_camera::counselor_camera).after(crate::hiding::hiding_camera));
+            .add_observer(start_escape_camera)
+            .add_systems(Update, (kill_camera, blend_back, escape_camera).chain().after(crate::counselor_camera::counselor_camera).after(crate::hiding::hiding_camera));
     }
 }
 
@@ -130,6 +137,61 @@ pub(crate) fn kill_camera(
     // Unreal's FieldOfView is horizontal.
     let aspect = windows.iter().next().map_or(16.0 / 9.0, |w| w.width() / w.height().max(1.0));
     persp.fov = 2.0 * ((fov.to_radians() / 2.0).tan() / aspect).atan();
+}
+
+/// The escape volume `zone`'s escape camera starts (she's escaping through it).
+#[derive(Event, Clone, Copy, Debug)]
+pub struct EscapeCamera {
+    pub zone: Entity,
+}
+
+/// The escape camera running: its spline and frame (world), the blend's length, and its time.
+#[derive(Resource)]
+struct EscapeCam {
+    spline: CameraSpline,
+    origin: Transform,
+    lerp: f32,
+    t: f32,
+    handicam: Handicam,
+}
+
+fn start_escape_camera(ev: On<EscapeCamera>, mut commands: Commands, zones: Query<&crate::props::EscapeZone>, play: Option<Res<crate::jason_player::PlayJason>>) {
+    // Hers only when she's the local player.
+    if play.is_some() {
+        return;
+    }
+    let Some((spline, origin, lerp)) = zones.get(ev.zone).ok().and_then(|z| z.camera.clone().map(|(s, o)| (s, o, z.camera_lerp))) else { return };
+    info!("escape camera: {:.1} s spline, {lerp:.1} s blend", spline.duration());
+    commands.insert_resource(EscapeCam { spline, origin, lerp, t: 0.0, handicam: Handicam::default() });
+}
+
+/// The escape camera's view, blended linearly from her own view (her camera's, as her cameras keep setting it) over
+/// the blend time.
+fn escape_camera(
+    time: Res<Time>,
+    cam: Option<ResMut<EscapeCam>>,
+    mut camera: Single<(&mut Transform, &mut Projection), With<PlayerCamera>>,
+    windows: Query<&Window>,
+) {
+    let Some(mut c) = cam else { return };
+    let (ref mut xf, ref mut proj) = *camera;
+    let Projection::Perspective(persp) = &mut **proj else { return };
+    let dt = time.delta_secs();
+    c.t += dt;
+    let p = c.spline.at(c.t);
+    let shake = c.handicam.tick(dt, HANDICAM_FREQUENCY, 0.0, 0.0, p.shake);
+    let local = Xform { t: p.location.to_array(), r: quaternion(rotator(p.rotation) + shake).to_array(), s: [1.0; 3] }.to_gltf_space();
+    let local = Transform { translation: Vec3::from_array(local.translation), rotation: Quat::from_array(local.rotation), scale: Vec3::ONE };
+    let world = c.origin.mul_transform(local);
+    // ActivateCamera(EscapeCam, null, ...): no focus actor, so no CameraTrace.
+    let (fov, at) = (p.fov, world.translation);
+    let rotation = world.rotation * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
+    let aspect = windows.iter().next().map_or(16.0 / 9.0, |w| w.width() / w.height().max(1.0));
+    let vfov = 2.0 * ((fov.to_radians() / 2.0).tan() / aspect).atan();
+    let s = if c.lerp > 0.0 { (c.t / c.lerp).clamp(0.0, 1.0) } else { 1.0 };
+    xf.translation = xf.translation.lerp(at, s);
+    xf.rotation = xf.rotation.slerp(rotation, s);
+    persp.fov += (vfov - persp.fov) * s;
 }
 
 /// SCSplineCamera's CameraTrace (its tick, 0x140362f40): from the point it looks at, as far ahead as its focus (here

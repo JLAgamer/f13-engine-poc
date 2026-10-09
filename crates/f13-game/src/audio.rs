@@ -181,7 +181,7 @@ impl Plugin for AudioPlugin {
             .init_resource::<MusicState>()
             .add_systems(
                 Update,
-                (add_listener, modulate, attenuate, actor_sounds, counselor_music, near_music, scary_sounds, fades, ambience, voices, start_delayed, update_mixes, apply_mixes).chain(),
+                (add_listener, modulate, attenuate, actor_sounds, counselor_music, near_music, scary_sounds, fades, ambience, voices, start_delayed, reloop, update_mixes, apply_mixes).chain(),
             )
             .add_systems(PostUpdate, (to_panned.before(TransformSystems::Propagate), pan.after(TransformSystems::Propagate)))
             .add_observer(push_mix)
@@ -292,9 +292,8 @@ fn actor_loop(
 ) {
     let Some(mut sounds) = sounds else { return };
     let name = actors.get(ev.actor).ok().and_then(|s| s.0.get(ev.prop).cloned()).unwrap_or_else(|| ev.prop.to_string());
-    let Some(cue) = sounds.cue(&name).cloned() else { return };
     trace!("loop {} on {}", ev.prop, ev.actor);
-    let (voices, att) = cue.play(&mut || rng.0.frand());
+    let Some((voices, att)) = sounds.play(&name, &mut || rng.0.frand()) else { return };
     for v in voices {
         let settings = PlaybackSettings { mode: PlaybackMode::Loop, speed: v.pitch, volume: Volume::Linear(v.volume), ..PlaybackSettings::LOOP };
         let source = AudioPlayer::new(assets.load(format!("sounds/{}", v.file)));
@@ -404,17 +403,16 @@ fn actor_sound(
         return;
     }
     let Some(mut sounds) = sounds else { return };
-    let Some(c) = sounds.cue(cue).cloned() else { return };
+    let Some((played, att)) = sounds.play(cue, &mut || rng.0.frand()) else { return };
     debug!("voice: {} says {}", ev.actor, ev.prop);
     for (e, parent) in &voices {
         if parent.parent() == ev.actor {
             commands.entity(e).despawn();
         }
     }
-    let (played, att) = c.play(&mut || rng.0.frand());
     for v in played {
         let settings = PlaybackSettings {
-            mode: if v.looping { PlaybackMode::Loop } else { PlaybackMode::Despawn },
+            mode: mode(&v),
             speed: v.pitch,
             volume: Volume::Linear(v.volume),
             paused: v.delay > 0.0,
@@ -424,6 +422,9 @@ fn actor_sound(
         let mut e = commands.spawn((source, settings, Transform::from_translation(Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M), ChildOf(ev.actor), VoiceOf(ev.prop), VoiceClass(v.class.clone())));
         if v.delay > 0.0 {
             e.insert(StartAfter(v.delay));
+        }
+        if v.reloop {
+            e.insert(Reloop(cue.clone()));
         }
         if let Some(att) = att.clone().filter(|a| a.attenuate || a.spatialize) {
             e.insert((PlaybackSettings { spatial: att.spatialize, spatial_scale: Some(SpatialScale::new(SPATIAL_SCALE)), ..settings }, Emitter { volume: v.volume, attenuation: att }));
@@ -480,12 +481,15 @@ fn actor_sounds(
 
 /// A 2D (unpanned) player of a cue's first voice: the entity and the voice's volume.
 fn spawn_2d(commands: &mut Commands, assets: &AssetServer, sounds: &mut Sounds, rng: &mut AudioRng, cue: &str, looping: bool, volume: f32) -> Option<(Entity, f32)> {
-    let c = sounds.cue(cue)?.clone();
-    let (voices, _) = c.play(&mut || rng.0.frand());
+    let (voices, _) = sounds.play(cue, &mut || rng.0.frand())?;
     let v = voices.into_iter().next()?;
-    let mode = if looping || v.looping { PlaybackSettings::LOOP } else { PlaybackSettings::DESPAWN };
+    let mode = if looping && !v.reloop { PlaybackSettings::LOOP } else { PlaybackSettings { mode: mode(&v), ..PlaybackSettings::DESPAWN } };
     let settings = PlaybackSettings { volume: Volume::Linear(v.volume * volume), speed: v.pitch, ..mode };
-    Some((commands.spawn((AudioPlayer::new(assets.load(format!("sounds/{}", v.file))), settings, VoiceClass(v.class.clone()))).id(), v.volume))
+    let e = commands.spawn((AudioPlayer::new(assets.load(format!("sounds/{}", v.file))), settings, VoiceClass(v.class.clone()))).id();
+    if v.reloop {
+        commands.entity(e).insert(Reloop(cue.to_string()));
+    }
+    Some((e, v.volume))
 }
 
 /// The line her voice object says as an action starts (its take): swings, windows, the kills.
@@ -824,8 +828,7 @@ fn near_music(
     let Some((jason, jxf)) = jasons.iter().next() else { return };
     let Ok((p, pxf)) = players.single() else { return };
     if music.player.is_none() {
-        let Some(c) = sounds.cue(&cue).cloned() else { return };
-        let (voices, _) = c.play(&mut || rng.0.frand());
+        let Some((voices, _)) = sounds.play(&cue, &mut || rng.0.frand()) else { return };
         let Some(v) = voices.into_iter().next() else { return };
         let e = commands
             .spawn((AudioPlayer::new(assets.load(format!("sounds/{}", v.file))), PlaybackSettings { volume: Volume::Linear(0.0), speed: v.pitch, ..PlaybackSettings::LOOP }, VoiceClass(v.class.clone())))
@@ -871,9 +874,17 @@ pub struct Sounds {
     /// Jason's (Jason_AnimBP's GetFootstepSound).
     jason_footsteps: Option<Footsteps>,
     terrain: Vec<TerrainSurfaces>,
+    /// Each cue's random nodes' state (USoundNodeRandom keeps it on the node: across the cue's plays).
+    random: HashMap<String, f13_data::sound::RandomState>,
 }
 
 impl Sounds {
+    /// One play of the cue `name`: its voices and attenuation.
+    fn play(&mut self, name: &str, rand: &mut dyn FnMut() -> f32) -> Option<(Vec<f13_data::sound::Voice>, Option<f13_data::sound::Attenuation>)> {
+        let c = self.cue(name)?.clone();
+        Some(c.play_with(rand, self.random.entry(name.to_string()).or_default()))
+    }
+
     /// How far (cm) a cue can be heard: its attenuation's inner radius plus falloff (None: not attenuated, or no
     /// such cue). Random nodes don't change it, so one evaluation tells.
     pub fn audible_range(&mut self, cue: &str) -> Option<f32> {
@@ -994,7 +1005,7 @@ fn load_sounds(mut commands: Commands, export: Res<crate::ExportRoot>, level: Re
         .unwrap_or_default();
     commands.insert_resource(AnimSounds(anim));
     commands.insert_resource(SoundMixes::load(&dir));
-    commands.insert_resource(Sounds { dir, cues: HashMap::new(), footsteps, jason_footsteps, terrain: load_terrain(&export.0, &level) });
+    commands.insert_resource(Sounds { dir, cues: HashMap::new(), random: HashMap::new(), footsteps, jason_footsteps, terrain: load_terrain(&export.0, &level) });
 }
 
 /// A voice's sound class (its cue's SoundClassObject): the classes' volume and pitch, and the sound mixes pushed,
@@ -1279,13 +1290,12 @@ fn play_sound(
 
 /// Plays a cue (PlaySoundAtLocation at `at`, else 2D): its voices.
 fn spawn_cue(commands: &mut Commands, assets: &AssetServer, sounds: &mut Sounds, rng: &mut AudioRng, ear: Option<Vec3>, name: &str, at: Option<Vec3>) -> Vec<Entity> {
-    let Some(cue) = sounds.cue(name).cloned() else { return Vec::new() };
     trace!("play {name} at {at:?}");
-    let (voices, att) = cue.play(&mut || rng.0.frand());
+    let Some((voices, att)) = sounds.play(name, &mut || rng.0.frand()) else { return Vec::new() };
     let mut spawned = Vec::new();
     for v in voices {
         let mut settings = PlaybackSettings {
-            mode: if v.looping { PlaybackMode::Loop } else { PlaybackMode::Despawn },
+            mode: mode(&v),
             speed: v.pitch,
             paused: v.delay > 0.0,
             ..PlaybackSettings::DESPAWN
@@ -1306,6 +1316,9 @@ fn spawn_cue(commands: &mut Commands, assets: &AssetServer, sounds: &mut Sounds,
         };
         if v.delay > 0.0 {
             commands.entity(e).insert(StartAfter(v.delay));
+        }
+        if v.reloop {
+            commands.entity(e).insert(Reloop(name.to_string()));
         }
         spawned.push(e);
     }
@@ -1373,6 +1386,43 @@ fn scary_sounds(
 /// A voice waiting out its cue's Delay nodes (spawned paused).
 #[derive(Component)]
 struct StartAfter(f32);
+
+/// How a voice plays: once and kept (its cue's looping part goes round again: [`Reloop`]), looped, or once.
+fn mode(v: &f13_data::sound::Voice) -> PlaybackMode {
+    if v.reloop {
+        PlaybackMode::Once
+    } else if v.looping {
+        PlaybackMode::Loop
+    } else {
+        PlaybackMode::Despawn
+    }
+}
+
+/// A voice under a Looping node with a random choice in it (the cue named): as it ends, USoundNodeLooping parses its
+/// child again, so the next time round is a new pick (Vanessa's struggle takes, the counselor's idle music).
+#[derive(Component)]
+struct Reloop(String);
+
+fn reloop(
+    mut commands: Commands,
+    assets: Res<AssetServer>,
+    sounds: Option<ResMut<Sounds>>,
+    mut rng: ResMut<AudioRng>,
+    voices: Query<(Entity, &Reloop, Option<&AudioSink>, Option<&SpatialAudioSink>), Without<StartAfter>>,
+) {
+    use bevy::audio::AudioSinkPlayback;
+    let Some(mut sounds) = sounds else { return };
+    for (e, r, sink, spatial) in &voices {
+        let ended = sink.map(|s| s.empty()).or(spatial.map(|s| s.empty())).unwrap_or(false);
+        if !ended {
+            continue;
+        }
+        let Some((played, _)) = sounds.play(&r.0, &mut || rng.0.frand()) else { continue };
+        let Some(v) = played.into_iter().find(|v| v.reloop) else { continue };
+        trace!("reloop {} with {}", r.0, v.file);
+        commands.entity(e).remove::<(AudioSink, SpatialAudioSink)>().insert(AudioPlayer::new(assets.load(format!("sounds/{}", v.file))));
+    }
+}
 
 fn start_delayed(mut commands: Commands, time: Res<Time>, mut voices: Query<(Entity, &mut StartAfter, Option<&AudioSink>, Option<&SpatialAudioSink>)>) {
     for (e, mut s, sink, spatial) in &mut voices {

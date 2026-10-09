@@ -200,6 +200,9 @@ pub struct EscapeZone {
     pub exit: Vec<Vec3>,
     /// EscapeDelay, s: from entering to escaping.
     pub delay: f32,
+    /// Its EscapeCameraSpline (SCCameraSplineComponent: its curves and its frame in the world) and CameraLerpTime (s).
+    pub camera: Option<(f13_core::camera_spline::CameraSpline, Transform)>,
+    pub camera_lerp: f32,
 }
 
 pub struct PropsPlugin {
@@ -757,6 +760,13 @@ fn spawn_props(
                     trigger: to_transform(&trigger).translation,
                     exit,
                     delay: a.props["EscapeDelay"].as_f64().map_or(0.0, |d| d as f32),
+                    camera: a
+                        .components
+                        .iter()
+                        .find(|c| c.name == "EscapeCameraSpline")
+                        // At the actor's root (the export gives the native component no transform of its own).
+                        .and_then(|c| Some((f13_data::kill_camera::parse(&c.props["SplineCurves"]), to_transform(&c.world.or(a.transform)?)))),
+                    camera_lerp: a.props["CameraLerpTime"].as_f64().map_or(0.0, |d| d as f32),
                 },
                 Name::new(a.name.clone()),
             ));

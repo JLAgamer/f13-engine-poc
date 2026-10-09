@@ -15,8 +15,8 @@
 //!   that volume. The car's red and blue spot lights turn 8 degrees a frame (its Blueprint's tick).
 //! - **Escaping** (SCEscapeVolume::OnOverlap, on foot): a counselor alive and free (not grabbed, not in a car, not
 //!   hiding) inside the active volume starts escaping: she walks its ExitPath from its point nearest her, by
-//!   herself, and the escape counts (the game mode's CharacterEscaped) after its EscapeDelay (6 s). Its camera
-//!   spline isn't ported.
+//!   herself, and the escape counts (the game mode's CharacterEscaped) after its EscapeDelay (6 s). The view goes to
+//!   the volume's escape camera (kill_camera.rs).
 //! - **The level's blockers**: CrystalLake_Small_Design's Blueprint turns off the collision of the BlockingVolume in
 //!   front of the escape the police came to (its PoliceSpawnedEvent handlers: Police_Blocker_A for PoliceSPawner12,
 //!   Police_Blocker_B for PoliceSPawner2); until then it keeps counselors out.
@@ -29,6 +29,12 @@
 //!   line turns PoliceStunIterationAngle (4 degrees, Jason_Base doesn't override it) about the up axis and he tries
 //!   again, at most ceil(180 / that) times, jumping to the intercept direction once the line is within 0.95 (dot) of
 //!   it. With no free spot he stays where he is (facing the volume) and is shot all the same.
+//!
+//! The box's look (OnRep_IsBroken 0x14038e600, PhoneJunctionBox_BP's OnPhoneBoxDestroyed / OnPhoneBoxRepaired):
+//! broken (its BeginPlay 0x140393360 starts it so, until the fuse goes in; Jason breaking it), its Mesh is
+//! S_Interactive_TelephoneBox_01_Broken and its PointLight_Broken / SpotLight_Broken are on (the _Fixed ones off);
+//! repaired the other way round. Not ported: its light material (LightMaterialIndex: M_Interactive_TelephoneBox_01_
+//! Emissive_Red / _Blue, the emissive masters aren't), the lights' light functions, the smoke (particles).
 //!
 //! IsUnobstructed (0x1404321d0): an overlap of the volume's sphere (Pawn channel, ignoring the volume) that's
 //! obstructed when any overlapping actor is an SCKillerCharacter: Jason's capsule touching the sphere. Jason entering
@@ -43,7 +49,7 @@ pub struct PolicePlugin;
 
 impl Plugin for PolicePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_phones).add_systems(Update, (arrive, turn_back_jason, escape_with_police, turn_lights, report_car).chain());
+        app.add_systems(Startup, spawn_phones).add_systems(Update, (arrive, turn_back_jason, escape_with_police, turn_lights, report_car, box_look).chain());
     }
 }
 
@@ -51,6 +57,8 @@ impl Plugin for PolicePlugin {
 #[derive(Component)]
 pub struct PhoneBox {
     pub class: String,
+    /// Its level actor's name (its mesh's and lights').
+    pub actor: String,
     pub phone: Option<Entity>,
     /// Its fuse is in.
     pub repaired: bool,
@@ -66,6 +74,47 @@ pub struct PhoneBox {
     pub hold_time: f32,
     pub has_pips: bool,
     pub parts: Vec<String>,
+}
+
+/// A phone box's Mesh placement (its scene file).
+#[derive(Component)]
+pub struct BoxMesh {
+    pub actor: String,
+    pub file: String,
+}
+
+/// One of a phone box's lights: the broken set or the fixed one.
+#[derive(Component)]
+pub struct BoxLight {
+    pub actor: String,
+    pub broken: bool,
+}
+
+/// The broken box's mesh (PhoneJunctionBox_BP's OnPhoneBoxDestroyed).
+const BROKEN_BOX_MESH: &str = "SummerCamp/Content/Props/Interactive/S_Interactive_TelephoneBox_01_Broken.glb";
+
+/// Each box broken (no fuse yet, or Jason broke it) or repaired: its mesh and lights (see the module docs).
+fn box_look(
+    mut commands: Commands,
+    assets: Res<AssetServer>,
+    boxes: Query<&PhoneBox>,
+    meshes: Query<(Entity, &BoxMesh)>,
+    mut lights: Query<(&BoxLight, &mut Visibility)>,
+    mut last: Local<std::collections::HashMap<String, bool>>,
+) {
+    for b in &boxes {
+        let broken = !b.repaired || b.broken;
+        if last.insert(b.actor.clone(), broken) == Some(broken) {
+            continue;
+        }
+        for (l, mut v) in lights.iter_mut().filter(|(l, _)| l.actor == b.actor) {
+            v.set_if_neq(if l.broken == broken { Visibility::Inherited } else { Visibility::Hidden });
+        }
+        for (e, m) in meshes.iter().filter(|(_, m)| m.actor == b.actor) {
+            let file = if broken { BROKEN_BOX_MESH.to_string() } else { m.file.clone() };
+            commands.entity(e).insert(bevy::world_serialization::WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(file))));
+        }
+    }
 }
 
 /// Her takes of the fuse repair (AM_normal_stand_repair_phonebox's sections: enter, cycle, exit, fail).
@@ -159,6 +208,7 @@ fn spawn_phones(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
         commands.spawn((
             PhoneBox {
                 class: a.class.clone(),
+                actor: a.name.clone(),
                 phone,
                 repaired: false,
                 broken: false,
@@ -467,4 +517,5 @@ fn escape_with_police(
     let nearest = zone.exit.iter().enumerate().min_by(|a, b| flat(a.1).total_cmp(&flat(b.1))).map_or(0, |(i, _)| i);
     info!("escaping with the police: {d:.1} m from the volume's centre (radius {:.1}), {} exit points, {:.0} s", zone.radius_m, zone.exit.len() - nearest, zone.delay);
     commands.entity(pe).insert(EscapingOnFoot { path: zone.exit[nearest..].to_vec(), left: zone.delay });
+    commands.trigger(crate::kill_camera::EscapeCamera { zone: a.zone });
 }

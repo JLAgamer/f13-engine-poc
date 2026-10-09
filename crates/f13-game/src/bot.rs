@@ -82,6 +82,10 @@ pub enum Goal {
 
 pub struct BotPlugin(pub Goal);
 
+/// The escape bot takes the 4-seat car (`--bot-escape4`).
+#[derive(Resource)]
+pub struct FourSeat;
+
 impl Plugin for BotPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Bot { goal: self.0, ..default() })
@@ -288,11 +292,12 @@ fn run_bot(
         Option<ResMut<crate::match_flow::GameMatch>>,
         Query<&Transform, (With<crate::items::ArmedTrap>, Without<Player>, Without<Vehicle>)>,
     ),
-    (mut exit, play, fuse_boxes, grids): (
+    (mut exit, play, fuse_boxes, grids, four_seat): (
         MessageWriter<AppExit>,
         Option<Res<crate::jason_player::PlayJason>>,
         Query<(Entity, &crate::power::FuseBox, &Transform), (Without<Player>, Without<Vehicle>)>,
         Option<Res<crate::power::PowerGrids>>,
+        Option<Res<FourSeat>>,
     ),
     (collision, dynamic, (mut phone_boxes, mut phones, arrived, police_cars, jason_entities, placed_kills), water, navmesh, moving): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<Res<crate::police::PoliceArrived>>, Query<&Transform, (With<crate::police::PoliceCar>, Without<Player>, Without<Vehicle>)>, Query<Entity, With<crate::jason::Jason>>, Query<(Entity, &crate::placed_kills::PlacedKill)>), Option<Res<crate::water::Water>>, Option<Res<crate::navigation::Navmesh>>, Query<(), (With<Player>, Or<(With<crate::interact::WindowMove>, With<crate::interact::MoveToSpot>)>)>),
 ) {
@@ -560,7 +565,9 @@ fn run_bot(
                 bot.timer = 0.0;
                 return;
             }
-            let Some((e, v, _, _)) = vehicles.iter().find(|(_, v, _, _)| v.class.contains("2Seat")).or_else(|| vehicles.iter().next()) else { return };
+            // The 2-seat car (`--bot-escape4`: the 4-seat).
+            let four = four_seat.is_some();
+            let Some((e, v, _, _)) = vehicles.iter().find(|(_, v, _, _)| v.class.contains("2Seat") != four).or_else(|| vehicles.iter().next()) else { return };
             info!("bot: going for {} (needs {:?})", v.class, v.repairs.iter().map(|r| &r.parts).collect::<Vec<_>>());
             bot.vehicle = Some(e);
             bot.step = Step::Fetch(0);
@@ -950,6 +957,7 @@ fn run_bot(
             keys.release(KeyCode::KeyD);
             keys.release(KeyCode::KeyM);
             keys.release(KeyCode::KeyW);
+            keys.release(KeyCode::KeyE);
             // Carrying the map: open it once (and photograph it).
             let has_map = inv.is_some_and(|i| i.special.iter().any(|&e| carried.get(e).is_ok_and(|it| it.kind == ItemKind::Map)));
             if has_map && !bot.jason_shots.contains(&"map") {
@@ -965,9 +973,18 @@ fn run_bot(
                 keys.release(k);
             }
             if held {
-                // Struggle: alternate A and D.
+                // Struggle: E pressed every other frame (each press is a wiggle); a screenshot of the struggle's widget
+                // (temp f13-bot-struggle.png) once she's into it.
                 bot.second_tap = !bot.second_tap;
-                keys.press(if bot.second_tap { KeyCode::KeyA } else { KeyCode::KeyD });
+                if bot.second_tap {
+                    keys.press(KeyCode::KeyE);
+                }
+                if matches!(j.state, JasonState::Holding { t } if t > 1.0) && !bot.jason_shots.contains(&"struggle") {
+                    bot.jason_shots.push("struggle");
+                    let path = std::env::temp_dir().join("f13-bot-struggle.png");
+                    info!("bot: screenshot {}", path.display());
+                    commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+                }
             }
             // Face him.
             let d = jxf.translation - pxf.translation;
@@ -1168,6 +1185,10 @@ fn run_bot(
                 _ => {
                     if escaped.is_some() {
                         info!("bot: escaped with the police after {:.1}s", bot.total);
+                        // The escape camera, 6 s into its 7 s blend (temp f13-bot-escape.png).
+                        let path = std::env::temp_dir().join("f13-bot-escape.png");
+                        info!("bot: screenshot {}", path.display());
+                        commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
                         bot.step = Step::Done;
                         bot.timer = 0.0;
                         return;
@@ -1293,11 +1314,15 @@ fn run_bot(
                         bot.step = Step::Done;
                     }
                 }
-                // Wiggle free (A / D alternating).
+                // Wiggle free (E pressed every other frame).
                 _ => {
                     if trapped {
                         bot.second_tap = !bot.second_tap;
-                        keys.press(if bot.second_tap { KeyCode::KeyA } else { KeyCode::KeyD });
+                        if bot.second_tap {
+                            keys.press(KeyCode::KeyE);
+                        } else {
+                            keys.release(KeyCode::KeyE);
+                        }
                         if bot.timer > 0.8 && !bot.jason_shots.contains(&"trapshot") {
                             bot.jason_shots.push("trapshot");
                             let path = std::env::temp_dir().join("f13-bot-trap.png");

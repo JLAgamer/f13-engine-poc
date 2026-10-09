@@ -417,6 +417,13 @@ pub struct Trapped {
     out: Option<f32>,
 }
 
+impl Trapped {
+    /// Her stun minigame's completion while she's still in it.
+    pub fn struggle(&self) -> Option<f32> {
+        self.out.is_none().then_some(self.wiggle.completion)
+    }
+}
+
 /// SCTrap: TrapDamage (constructor); the bear trap stun's minigame (TotalStunTime 10; PercentPerWiggle and
 /// DepletionRate from SCStunDamageType's constructor).
 const TRAP_DAMAGE: f32 = 50.0;

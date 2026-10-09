@@ -80,6 +80,7 @@ struct Args {
     seed: Option<u64>,
     near_car: bool,
     bot_escape: bool,
+    bot_escape4: bool,
     bot_heal: bool,
     bot_drop: bool,
     bot_dodge: bool,
@@ -157,6 +158,7 @@ fn parse_args() -> Args {
     let mut seed = None;
     let mut near_car = false;
     let mut bot_escape = false;
+    let mut bot_escape4 = false;
     let mut bot_heal = false;
     let mut bot_drop = false;
     let mut bot_dodge = false;
@@ -213,6 +215,7 @@ fn parse_args() -> Args {
             "--seed" => seed = it.next().and_then(|v| v.parse().ok()),
             "--near-car" => near_car = true,
             "--bot-escape" => bot_escape = true,
+            "--bot-escape4" => (bot_escape, bot_escape4) = (true, true),
             "--bot-heal" => bot_heal = true,
             "--bot-drop" => bot_drop = true,
             "--bot-dodge" => bot_dodge = true,
@@ -296,7 +299,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout, seed, near_car, bot_escape, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, map_open, no_jason, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight, rain }
+    Args { export, layout, seed, near_car, bot_escape, bot_escape4, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, map_open, no_jason, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight, rain }
 }
 
 #[derive(Resource)]
@@ -447,6 +450,9 @@ fn main() {
         // Playing Jason without a --bot-*, she stands idle (time to try him out).
         if args.bot_escape {
             app.add_plugins(bot::BotPlugin(bot::Goal::Escape));
+            if args.bot_escape4 {
+                app.insert_resource(bot::FourSeat);
+            }
         } else if args.bot_car_grab {
             app.add_plugins(bot::BotPlugin(bot::Goal::CarGrab));
         } else if args.bot_power {
@@ -623,6 +629,9 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
             let xforms = p.instances.iter().flatten().chain(p.transform.iter());
             let overrides = materials::MaterialOverrides::new(&p.material_map);
             let placed = Placed { cast_shadow: p.cast_shadow, cull_m: p.cull_distance / 100.0 };
+            // A phone box's mesh (its broken one swapped in by police.rs).
+            let box_mesh = actor_of(&p.component)
+                .filter(|a| p.component.ends_with(".Mesh") && layout.actors.iter().any(|x| x.name == *a && x.level == p.level && classes.is_child_of(&x.class, "SCPhoneJunctionBox")));
             for x in xforms {
                 let mut e = commands.spawn((WorldAssetRoot(scene.clone()), to_transform(x)));
                 if let Some(o) = &overrides {
@@ -633,6 +642,9 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
                 }
                 if let Some(s) = &p.spline {
                     e.insert(spline_meshes::Bend(s.clone()));
+                }
+                if let Some(a) = &box_mesh {
+                    e.insert(police::BoxMesh { actor: a.clone(), file: p.file.clone() });
                 }
                 spawned += 1;
             }
