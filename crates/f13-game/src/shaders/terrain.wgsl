@@ -62,6 +62,10 @@ fn roughness(i: u32, rma: vec4<f32>) -> f32 {
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
+#ifdef VISIBILITY_RANGE_DITHER
+    // Its cull distance's crossfade (main.rs Placed: the placement's VisibilityRange), as Bevy's own shader does.
+    bevy_pbr::pbr_functions::visibility_range_dither(in.position, in.visibility_range_dither);
+#endif
     var pbr_input = pbr_input_from_standard_material(in, is_front);
 
 #ifdef VERTEX_UVS_A
