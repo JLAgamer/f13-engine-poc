@@ -29,6 +29,8 @@ Mechanics: Jason side
       - his footsteps: some steps play no sound
 
 Presentation
+- [ ] The main road's ground is disconnected and floating
+- [ ] Audio isn't positional (sounds don't come from where their source is)
 - [ ] Audio, remaining: the other stingers, scary sounds, the other voice lines (chases, calls, dead bodies), the
       audio volumes' reverb (what's done: MODLOG "Milestone 1, done")
 
