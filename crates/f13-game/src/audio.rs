@@ -543,7 +543,9 @@ fn voices(
         }
     };
     let kill = |a: &Option<String>| a.as_deref().and_then(action_line).is_some_and(|l| l.ends_with("Kill"));
-    let in_kill = kill(&now.3) || kill(&was_action);
+    // PlayVoiceOver says Died only outside a context kill (!bInContextKill, FUN_14031bff0): any kill takes her while
+    // he holds her (grab, placed, drown kills), or by her own kill take.
+    let in_kill = kill(&now.3) || kill(&was_action) || held || was_held || !kills.is_empty();
     let t = time.elapsed_secs();
     if held && !was_held && choke_at.is_none() {
         *choke_at = Some(t + 1.0);
