@@ -761,6 +761,17 @@ switch (rest[0])
             Console.WriteLine($"sequence sounds: {new SoundExporter(provider, outDir, ToFile).Export(sounds)} written");
         }
         break;
+    case "particles": // particles [system...]: Cascade systems (particles/) and their materials; default: every template the exported levels place
+        {
+            var names = rest.Skip(1).ToList();
+            if (names.Count == 0)
+                foreach (var f in Directory.EnumerateFiles(Path.Combine(outDir, "levels"), "*.json"))
+                    foreach (var a in Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(f))["Actors"] ?? new Newtonsoft.Json.Linq.JArray())
+                        foreach (var c in a["Components"] ?? new Newtonsoft.Json.Linq.JArray())
+                            if (c["Props"]?["Template"]?.ToString() is { } t && t.StartsWith("ParticleSystem'")) names.Add(t.Split('\'')[1]);
+            Console.WriteLine($"particles: {ParticleExporter.Write(provider, outDir, names, Queue)} systems written");
+        }
+        break;
     case "dds":
         DdsExporter.WriteAll(provider, outDir);
         return 0;

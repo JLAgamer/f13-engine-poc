@@ -767,9 +767,11 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         var frames = Math.Max(anim.NumFrames, 1);
         var fps = anim.FramesPerSecond > 0 ? anim.FramesPerSecond : 30f;
         var rootMotion = seq.GetOrDefault<bool>("bEnableRootMotion");
-        // Root motion sequences, and in-place cycles authored moving forward (bForceRootLock: the locomotion cycles),
-        // keep the root at its reference pose.
-        var rootLock = !keepRoot && (rootMotion || seq.GetOrDefault<bool>("bForceRootLock"));
+        // Root motion sequences (unless kept: where the game plays them without extracting it), and in-place cycles
+        // authored moving forward (bForceRootLock: the locomotion cycles, locked wherever they play, Sequencer too),
+        // keep the root at its reference pose (UAnimSequence::GetBonePose: (bExtractRootMotion && bEnableRootMotion)
+        // || bForceRootLock resets the root).
+        var rootLock = (rootMotion && !keepRoot) || seq.GetOrDefault<bool>("bForceRootLock");
         var refPose = skeleton.ReferenceSkeleton.FinalRefBonePose;
         var file = Path.Combine(dir, seq.Name + ".anim");
         using var w = new BinaryWriter(File.Create(Path.Combine(outDir, file)));
