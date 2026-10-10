@@ -34,9 +34,9 @@ Moved from Milestone 1 (not tied to gameplay):
 - [ ] Materials, remaining: foliage subsurface (its transmission is the deferred light pass's, whose code isn't
       in the shipped global shader cache: MODLOG "Foliage subsurface: blocked")
 - [ ] Particle effects (Cascade): the level's systems simulate (particles.rs) and the fire masters are ported (the
-      campfire's and fireplace's flames and sparks, the candles, the lamps' flies). Remaining: the other masters
-      (smoke, dust specks, wispy fog, Jason's embers and eye glow: MODLOG "Particle materials"; the lit ones need the
-      translucency lighting volume), particle lights, attractors and
+      campfire's and fireplace's flames, sparks and smoke, the candles, the lamps' flies, dust specks, the low fog).
+      Remaining: Jason's embers and eye glow (M_Savini_Jason_Ashes_01, M_Procedural_Dust_01), the translucency
+      lighting volume the lit ones read (a stand-in now: MODLOG "Particle materials"), particle lights, attractors and
       collision, and the effects spawned by gameplay: the walls' and doors' hit dust (HitParticle), the knife's trail
       (P_Jason_ThrowingKnife_01), blood, the cars' exhaust, rain and its roof drips, the broken phone box's smoke,
       the intro's and outro's particle tracks

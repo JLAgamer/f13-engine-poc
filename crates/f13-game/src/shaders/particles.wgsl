@@ -20,10 +20,10 @@
 
 struct ParticleParams {
     // x: mode (0 stand-in, 1 M_Procedural_Fire_01, 2 M_Procedural_Fire_02, 3 M_MasterParticle_Emissive,
-    // 4 M_Fly_Animated_01, 5 M_MasterParticle_Diffuse_nearFade); y: additive
+    // 4 M_Fly_Animated_01, 5 M_MasterParticle_Diffuse_nearFade, 6 M_Procedural_Smoke_05); y: additive
     mode: vec4<f32>,
     // The master's material uniform buffer as its compiled shader reads it (uniexpr.py's cb1[n]).
-    p: array<vec4<f32>, 12>,
+    p: array<vec4<f32>, 16>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> params: ParticleParams;
@@ -31,6 +31,7 @@ struct ParticleParams {
 @group(#{MATERIAL_BIND_GROUP}) @binding(2) var s: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(3) var t1: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(4) var t2: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(5) var t3: texture_2d<f32>;
 
 struct Vertex {
     @builtin(instance_index) instance_index: u32,
@@ -249,6 +250,54 @@ fn near_fade(in: VertexOutput) -> vec4<f32> {
     return vec4(volume_lit(in, saturate(t.rgb)) + max(p[2].xyz, vec3(0.0)), alpha);
 }
 
+fn turn(uv: vec2<f32>, s: f32, c: f32) -> vec2<f32> {
+    return vec2(c * uv.x - s * uv.y, s * uv.x + c * uv.y);
+}
+
+// M_Procedural_Smoke_05_no-self-shadow (the campfire's smoke; lit translucency, s119, the instance's shader map):
+// t0 DistortionTexture, t1 Texture3, t2 Texture1, t3 Texture2 (their red). Texture3 at a circling, flow-distorted UV,
+// Texture1 and Texture2 pulsing in scale ((cos(..) / 2 + 6) / 7 x their scales) and turning, contrasted in turn by
+// DynamicParameter.x + 0_Texture3Contrast / 0_AlphaContrast / 0_BaseContrast and masked by a distorted sphere; the
+// result clamped to BaseMin..BaseMax x the particle's colour is the diffuse (under the lighting volume) and, x the
+// colour again x Emissive_Multiplier, the emissive; opacity x DynamicParameter.y x colour.a x the depth fades x 3.
+fn smoke_05(in: VertexOutput) -> vec4<f32> {
+    let p = params.p;
+    let dp = in.dynamic;
+    let uv = in.uv;
+    let time = globals.time;
+    let contrast = dp.x + vec3(p[8].z, p[8].y, p[8].x);
+    let a1 = (time * p[8].w + dp.w) * 6.283185;
+    let sc1 = vec2(sin(a1), cos(a1));
+    let t3uv = vec2(p[9].y * (sc1.y * p[9].x + uv.x) + dp.w, p[9].y * (sc1.x * p[9].x + uv.y) + 2.0 * dp.w);
+    let d = dp.z + p[9].z;
+    let flow = textureSample(t0, s, vec2(p[9].w * (uv.x - sc1.y * p[9].x + 1.0) + dp.w, p[9].w * (uv.y - sc1.x * p[9].x + 1.0) + 2.0 * dp.w)).xy;
+    let tex3 = textureSample(t1, s, d * flow + t3uv).x * 0.375;
+    let k = contrast * 2.0 + 1.0;
+    let c3 = saturate(tex3 * k.x - contrast.x) * 2.0;
+    let a = (time * p[10].z * 1.052632 + dp.w * 10.0) * 0.75;
+    let pulse1 = (cos((time * p[10].z + dp.w) * 3.141593) * 0.5 + 6.0) * 0.142857;
+    let scale1 = pulse1 * p[3].xy;
+    let uv1 = uv / scale1 + 0.5 - 0.5 / scale1 - 0.5;
+    let tex1 = textureSample(t2, s, turn(uv1, sin(a), cos(a)) + 0.5).x;
+    let b = (time * p[11].y + dp.w * 10.0) * -0.6;
+    let pulse2 = (cos((time * p[11].y + dp.w) * 3.141593) * 0.5 + 6.0) * 0.142857;
+    let scale2 = pulse2 * p[6].xy;
+    let uv2 = (1.0 - uv) / scale2 + 0.5 - 0.5 / scale2 - 0.5;
+    let tex2 = textureSample(t3, s, turn(uv2, sin(b), cos(b)) + 0.5).x;
+    let shape = tex1 * tex2 * c3;
+    let m = d * flow + uv + d * vec2(-0.3, -0.15) - 0.5;
+    let radius = max(p[11].z - 0.1 * d, 0.00001);
+    let mask = saturate((1.0 - length(m) / radius) * p[12].z);
+    let alpha_c = saturate(mask * shape * k.y - contrast.y);
+    let opacity = alpha_c * p[14].y;
+    let base = clamp(saturate(alpha_c * 0.9 * k.z - contrast.z) * 2.0, p[13].x, p[12].w);
+    let diffuse = base * in.color.rgb;
+    let emissive = max(diffuse * p[13].y * in.color.rgb + p[7].xyz, vec3(0.0));
+    let fades = depth_fades(in, p[13].w, p[14].x);
+    let alpha = saturate(saturate(fades.x * dp.y * in.color.a) * fades.y * opacity * 3.0);
+    return vec4(emissive + volume_lit(in, saturate(diffuse)), alpha);
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let mode = u32(params.mode.x);
@@ -261,6 +310,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         c = emissive_master(in);
     } else if mode == 5u {
         c = near_fade(in);
+    } else if mode == 6u {
+        c = smoke_05(in);
     } else if mode == 4u {
         // Already exposed (apply_pbr_lighting).
         c = fly(in);

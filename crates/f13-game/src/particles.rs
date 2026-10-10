@@ -45,7 +45,7 @@ const ATTRIBUTE_DYNAMIC: MeshVertexAttribute = MeshVertexAttribute::new("Particl
 #[derive(Clone, Copy, ShaderType, Default)]
 struct ParticleParams {
     mode: Vec4,
-    p: [Vec4; 12],
+    p: [Vec4; 16],
 }
 
 /// A particle material: the master's port (`mode`), its uniform buffer as the compiled shader lays it out, and its
@@ -61,6 +61,8 @@ pub struct ParticleMaterial {
     t1: Handle<Image>,
     #[texture(4)]
     t2: Handle<Image>,
+    #[texture(5)]
+    t3: Handle<Image>,
     alpha: AlphaMode,
 }
 
@@ -242,7 +244,7 @@ impl Materials {
             let color = !n.contains("Flow") && !n.contains("Distortion") && !n.contains("Normal");
             e.textures.get(n).or_else(|| master.and_then(|m| m.textures.get(n))).and_then(|p| crate::materials::load_texture(root, assets, p, color))
         };
-        let mut p = [Vec4::ZERO; 12];
+        let mut p = [Vec4::ZERO; 16];
         let (mode, t) = match e.master.as_str() {
             "M_Procedural_Fire_01" => {
                 // uniexpr.py M_Procedural_Fire_01: cb1[1] SelectionColor.rgb (0), [2..9] below.
@@ -256,7 +258,7 @@ impl Materials {
                 p[7] = Vec4::new(s("0_FadeDistance", 5.0), s("0_FadeDistance", 5.0).max(1e-5), s("0_PixelDepthDistance", 0.0), s("0_Opacity_MASTER", 1.0));
                 p[8] = Vec4::new(s("SphereMaskGlobalDistortionLevel", 1.0), s("SphereMask_Radius", 0.5), hard, 1.0 - hard);
                 p[9] = Vec4::new(soft, 1.0 / soft, s("0_Alpha_Contrast_Opacity_MASTER", 6.0), s("RefractionDepthBias", 0.0));
-                (1.0, [tex("FlowMap1"), tex("BaseTexture1"), tex("BaseTexture2")])
+                (1.0, [tex("FlowMap1"), tex("BaseTexture1"), tex("BaseTexture2"), None])
             }
             "M_Procedural_Fire_02" => {
                 // uniexpr.py M_Procedural_Fire_02: cb1[3].x = 0 - 0_AlphaContrast, [4..9] below.
@@ -270,7 +272,7 @@ impl Materials {
                 p[9] = Vec4::new(s("FadeDistance", 3.0).max(1e-5), s("0_PixelDepthDistance", 0.0), s("0_Opacity_Multiplier", 1.0), contrast + 1.0);
                 // t0 the flame (Base_ALPHA_Texture1), t1 the smoke tile its opacity turns (Base_ALPHA_Texture3):
                 // by how the compiled shader samples them (t0's colour and alpha, t1's red).
-                (2.0, [tex("Base_ALPHA_Texture1"), tex("Base_ALPHA_Texture3"), None])
+                (2.0, [tex("Base_ALPHA_Texture1"), tex("Base_ALPHA_Texture3"), None, None])
             }
             "M_MasterParticle_Emissive" => {
                 // uniexpr.py M_MasterParticle_Emissive: cb1[2] the vector parameter (named "None"; "" in the export),
@@ -280,7 +282,7 @@ impl Materials {
                 p[4] = Vec4::new(s("EmissiveLevel", 1.0), s("TimeMultiplier", 1.0), s("Texture3_Scroll_Multiplier", 0.5), s("Texture3_UV_Coord_Multiplier", 1.0));
                 p[5] = Vec4::new(s("TimeMultiplier_2", 0.83), s("Texture3_Scroll_Multiplier_2", -0.4), s("Texture3_UV_Coord_Multiplier_2", 1.0), s("fadeAmount", 0.0));
                 p[6] = Vec4::new(s("fadeAmount", 0.0).max(1e-5), s("Opacity_Power", 2.0), s("RefractionDepthBias", 0.0), 0.0);
-                (3.0, [tex("ParticleTexture"), tex("Texture1"), tex("Texture1_1")])
+                (3.0, [tex("ParticleTexture"), tex("Texture1"), tex("Texture1_1"), None])
             }
             "M_Fly_Animated_01" => {
                 // uniexpr.py M_Fly_Animated_01: cb1[1] (UV_COLUMNS, UV_ROWS), [2] (columns x rows, UV_ROWS), [5]
@@ -292,7 +294,7 @@ impl Materials {
                 p[2] = Vec4::new(cols * rows, rows, rows, rows);
                 p[5] = Vec4::new(speed, s("ScaleByDistance", 700.0), s("MaximumDistanceSize", 0.5), rows);
                 p[6] = Vec4::new(cols, cols * rows, speed, 0.0);
-                (4.0, [tex("Normal1"), tex("Texture1"), None])
+                (4.0, [tex("Normal1"), tex("Texture1"), None, None])
             }
             "M_MasterParticle_Diffuse_nearFade" => {
                 // uniexpr.py M_MasterParticle_Diffuse_nearFade: cb1[2] SelectionColor.rgb + 0, [3] (fadeDistance,
@@ -301,7 +303,30 @@ impl Materials {
                 let amount = s("fadeAmount", 0.0);
                 p[3] = Vec4::new(s("fadeDistance", 200.0), near, 1.0 / near, amount);
                 p[4] = Vec4::new(amount.max(1e-5), s("RefractionDepthBias", 0.0), 0.0, 0.0);
-                (5.0, [tex("ParticleTexture"), None, None])
+                (5.0, [tex("ParticleTexture"), None, None, None])
+            }
+            "M_Procedural_Smoke_05_no-self-shadow" => {
+                // uniexpr.py M_Procedural_Smoke_05_no-self-shadow, its second uniform set (the instance's parameters):
+                // [2] Base_ALPHA_Texture1_Scale.rgb, [3] that x BaseMask_Master_Scale, [5] Texture2_Scale.rgb, [6]
+                // BaseMask_Master_Scale x that, [7] SelectionColor.rgb (0), [8..14] below.
+                let vec = |n: &str, d: [f32; 4]| e.vectors.get(n).or_else(|| master.and_then(|m| m.vectors.get(n))).copied().unwrap_or(d);
+                let (s1, s2) = (vec("Base_ALPHA_Texture1_Scale", [0.95, 0.95, 0.0, 1.0]), vec("Base_ALPHA_Texture2_Scale", [1.0, 1.0, 0.0, 1.0]));
+                let mask = s("BaseMask_Master_Scale", 1.5);
+                let combined = s("1_TexturesCombinedTimeMultiplier", 1.0);
+                let hard = s("SphereMask_Hardness", 0.0);
+                let soft = (1.0 - hard).max(1e-5);
+                p[2] = Vec4::new(s1[0], s1[1], s1[2], 0.0);
+                p[3] = Vec4::new(s1[0] * mask, s1[1] * mask, s1[2] * mask, 0.0);
+                p[5] = Vec4::new(s2[0], s2[1], s2[2], 0.0);
+                p[6] = Vec4::new(s2[0] * mask, s2[1] * mask, s2[2] * mask, 0.0);
+                p[8] = Vec4::new(s("0_BaseContrast", 0.0), s("0_AlphaContrast", 0.0), s("0_Texture3Contrast", 0.0), s("0_ScrollTexture3TimeMultiplier", 0.05));
+                p[9] = Vec4::new(s("ScrollTextureDistanceMultiplier", 0.75), s("Texture3_UV_Coord_Multiplier", 0.75), s("0_DistortionMultiplier", 0.0), s("Distortion_UV_Coord_Multiplier", 1.0));
+                p[10] = Vec4::new(combined, s("0_Texture1TimeMultiplier", 0.5), s("0_Texture1TimeMultiplier", 0.5) * combined, mask);
+                p[11] = Vec4::new(s("0_Texture2TimeMultiplier", 0.61), s("0_Texture2TimeMultiplier", 0.61) * combined, s("SphereMask_Radius", 0.5), hard);
+                p[12] = Vec4::new(1.0 - hard, soft, 1.0 / soft, s("BaseMax", 1.0));
+                p[13] = Vec4::new(s("BaseMin", 0.1), s("Emissive_Multiplier", 0.01), s("FadeDistance", 3.0), s("FadeDistance", 3.0).max(1e-5));
+                p[14] = Vec4::new(s("0_PixelDepthDistance", 0.0), s("0_Opacity_Multiplier", 1.0), s("RefractionDepthBias", 0.0), 0.0);
+                (6.0, [tex("DistortionTexture"), tex("Texture3"), tex("Texture1"), tex("Texture2")])
             }
             // Masters whose graphs aren't ported yet aren't drawn (F13_PARTICLE_STANDINS=1 draws them as their first
             // texture x the particle colour, PLACEHOLDER, to check the simulation).
@@ -311,7 +336,7 @@ impl Materials {
                     names.sort();
                     names.first().and_then(|n| tex(n))
                 });
-                (0.0, [first, None, None])
+                (0.0, [first, None, None, None])
             }
             _ => {
                 info!("particles: {name} ({}): its master isn't ported, not drawn", e.master);
@@ -324,12 +349,13 @@ impl Materials {
             "BLEND_Masked" => AlphaMode::Mask(0.3333),
             _ => AlphaMode::Blend,
         };
-        let [t0, t1, t2] = t;
+        let [t0, t1, t2, t3] = t;
         let t0 = t0?;
         Some(ParticleMaterial {
             params: ParticleParams { mode: Vec4::new(mode, if additive { 1.0 } else { 0.0 }, 0.0, 0.0), p },
             t1: t1.unwrap_or_else(|| t0.clone()),
             t2: t2.unwrap_or_else(|| t0.clone()),
+            t3: t3.unwrap_or_else(|| t0.clone()),
             t0,
             alpha,
         })
