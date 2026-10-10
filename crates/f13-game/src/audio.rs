@@ -904,7 +904,7 @@ impl Sounds {
     }
 
     /// The terrain's surface at (x, z): the paint layer that weighs most there.
-    fn terrain_surface(&self, x: f32, z: f32) -> u8 {
+    pub(crate) fn terrain_surface(&self, x: f32, z: f32) -> u8 {
         self.terrain.iter().find_map(|t| t.at(x, z)).unwrap_or(0)
     }
 }

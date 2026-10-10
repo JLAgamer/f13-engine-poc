@@ -321,6 +321,11 @@ pub fn segment_hit(world: &(impl TriSource + ?Sized), from: Vec3, to: Vec3, step
 
 /// [`segment_hit`], with the hit triangle's normal.
 pub fn segment_hit_normal(world: &(impl TriSource + ?Sized), from: Vec3, to: Vec3, step: f32) -> Option<(f32, Vec3)> {
+    segment_hit_tri(world, from, to, step).map(|(t, n, _)| (t, n))
+}
+
+/// [`segment_hit`], with the hit triangle's normal and surface type ([`Tri::surface`]).
+pub fn segment_hit_tri(world: &(impl TriSource + ?Sized), from: Vec3, to: Vec3, step: f32) -> Option<(f32, Vec3, u8)> {
     let d = to - from;
     let len = d.length();
     if len < 1e-6 {
@@ -330,7 +335,7 @@ pub fn segment_hit_normal(world: &(impl TriSource + ?Sized), from: Vec3, to: Vec
     for i in 0..pieces {
         let (t0, t1) = (i as f32 / pieces as f32, (i + 1) as f32 / pieces as f32);
         let (a, b) = (from + d * t0, from + d * t1);
-        let mut best: Option<(f32, Vec3)> = None;
+        let mut best: Option<(f32, Vec3, u8)> = None;
         world.for_each_in(a.min(b), a.max(b), &mut |t| {
             // Möller-Trumbore, both faces.
             let (e1, e2) = (t.b - t.a, t.c - t.a);
@@ -352,7 +357,7 @@ pub fn segment_hit_normal(world: &(impl TriSource + ?Sized), from: Vec3, to: Vec
             }
             let at = e2.dot(q) * inv;
             if (t0..=t1).contains(&at) && best.is_none_or(|b| at < b.0) {
-                best = Some((at, t.n));
+                best = Some((at, t.n, t.surface));
             }
         });
         if best.is_some() {

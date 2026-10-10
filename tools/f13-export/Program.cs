@@ -467,6 +467,12 @@ void WriteClasses()
         .Select(c => c["Props"]?["KillInfo"]?.ToString()).Where(n => n != null && n.EndsWith("_C") && !classes.Classes.ContainsKey(n)).Distinct().ToList();
     foreach (var k in killInfos) AddClassByName(k!);
     classes.Run();
+    // The weapons' impact effects (ImpactEffectClass, a gun's PelletImpactTemplate: SCImpactEffect Blueprints, their FX,
+    // sounds and decals by surface type).
+    var impacts = classes.Classes.Values.SelectMany(c => new[] { c["Props"]?["ImpactEffectClass"], c["Props"]?["PelletImpactTemplate"] })
+        .Select(t => t?.ToString()).Where(n => n != null && n.EndsWith("_C") && !classes.Classes.ContainsKey(n)).Distinct().ToList();
+    foreach (var k in impacts) AddClassByName(k!);
+    classes.Run();
     var path = Path.Combine(outDir!, "classes.json");
     File.WriteAllText(path, Newtonsoft.Json.JsonConvert.SerializeObject(classes.Classes));
     Console.WriteLine($"{path}: {classes.Classes.Count} classes");
@@ -847,6 +853,10 @@ switch (rest[0])
             var classesJson = Path.Combine(outDir, "classes.json");
             if (rest.Count == 1 && File.Exists(classesJson))
                 foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(classesJson), @"ParticleSystem'([A-Za-z0-9_]+)'"))
+                    names.Add(m.Groups[1].Value);
+            // And their soft references to particle systems (the impact effects' FX by surface).
+            if (rest.Count == 1 && File.Exists(classesJson))
+                foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(classesJson), @"/Game/Effects/ParticleSystems/[^""]*\.([A-Za-z0-9_]+)"""))
                     names.Add(m.Groups[1].Value);
             // PlayerCameraManager_BP's RainParticleSystem (a soft reference: the camera's rain grid, f13-game particles.rs).
             if (rest.Count == 1) names.Add("P_Rain_Environmental_01A_GPU");

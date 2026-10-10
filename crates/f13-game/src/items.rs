@@ -696,6 +696,7 @@ fn tick_action(
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
     mut assets: (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>),
     (globals, killer, character, rigs, killer_model): (Query<&GlobalTransform>, Option<Res<crate::jason::KillerTuning>>, Option<Res<CounselorCharacter>>, Query<(&ChildOf, &Rig)>, Option<Res<crate::character::KillerCharacter>>),
+    sounds: Option<Res<crate::audio::Sounds>>,
 ) {
     let Ok((pe, mut a, mut inv, xf, mut p)) = player.single_mut() else { return };
     a.t += time.delta_secs();
@@ -772,7 +773,9 @@ fn tick_action(
                         );
                         commands.entity(je).insert(HitJason { stun: stun.then_some(Stun::Weapon { left }), from: xf.translation });
                         // Her weapon's ImpactEffect (Counselor_ImpactEffect_Base's JasonFX for a hit on him). PLACEHOLDER: the
-                        // trace's ImpactPoint and ImpactNormal: his chest, facing her.
+                        // trace's ImpactPoint and ImpactNormal: his chest, facing her. And whether a melee hit spawns it at
+                        // all: SCWeapon::SpawnHitEffect (0x1404558e0, the path to the spawn) has no caller in the binary or
+                        // the packages (MODLOG "A gun's pellets and their impacts").
                         let toward = (xf.translation - jxf.translation).with_y(0.0).normalize_or(Vec3::Z);
                         commands.write_message(crate::particles::SpawnParticles::impact("P_Hit_Blood_Jason_Default_01", jxf.translation + Vec3::Y * 1.4 + toward * 0.25, toward));
                         let name = items.get(a.item).map_or("weapon".to_string(), |i| i.name.clone());
@@ -782,7 +785,7 @@ fn tick_action(
                     a.done = true; // missed
                 }
             }
-            Use::Fire { kind: ItemKind::Gun { projectile, pellets, spread_deg, velocity, .. } } => {
+            Use::Fire { kind: ItemKind::Gun { projectile, pellets, spread_deg, velocity, impacts, impact_sounds, .. } } => {
                 a.done = true;
                 // At what the middle of the screen shows: Jason if the camera's ray passes through him, else far out.
                 let (eye, look) = (camera.1.translation(), camera.1.forward().as_vec3());
@@ -801,14 +804,53 @@ fn tick_action(
                         Flare { vel: aim * velocity / 100.0, age: 0.0, hit: false },
                     ));
                     info!("flare fired");
-                } else if let Some((je, jxf)) = jason {
-                    // Pellets: Jason is hit if he's in range and inside the spread.
-                    let center = jxf.translation + Vec3::Y * JASON_HEIGHT_M * 0.5;
-                    let d = center - chest;
-                    let along = d.dot(aim);
-                    let off = (d - aim * along).length();
-                    if along > 0.0 && along <= SHOTGUN_RANGE_M && off <= JASON_RADIUS_M + along * spread_deg.to_radians().tan() {
-                        info!("shotgun hit Jason ({pellets} pellets)");
+                } else {
+                    // SCGun::Fire (0x14044ea80): each pellet tilted off the aim by rand / 32767 x MaxSpreadAngle (about
+                    // aim x up), spun about the aim by rand / 32767 x 360 degrees, traced FireDistance /
+                    // sin(180 - (tilt + 90)) out; a hit on Jason counts toward his stun, a hit on the world spawns
+                    // the gun's PelletImpactTemplate FX for its surface (MULTICAST_SpawnPelletImpact 0x14049bf10 ->
+                    // vt +0x6f0 0x140452b30 -> the impact spawn 0x14035e130). The pellets draw from their own
+                    // stream (the game's rand(); GameRng stays the AI's).
+                    let mut seed = (time.elapsed_secs_f64() * 1e6) as u64 | 1;
+                    let mut r = || {
+                        seed ^= seed << 13;
+                        seed ^= seed >> 7;
+                        seed ^= seed << 17;
+                        (seed % 32768) as f32 / 32767.0
+                    };
+                    let world = collision.with(&dynamic);
+                    let axis = aim.cross(Vec3::Y).normalize_or(Vec3::X);
+                    let mut on_jason = 0;
+                    for _ in 0..pellets {
+                        let tilt = r() * spread_deg;
+                        let spin = r() * 360.0;
+                        let dir = Quat::from_axis_angle(aim, spin.to_radians()) * (Quat::from_axis_angle(axis, tilt.to_radians()) * aim);
+                        let reach = SHOTGUN_RANGE_M / tilt.to_radians().cos().max(1e-3);
+                        let world_hit = f13_core::collision::segment_hit_tri(&world, chest, chest + dir * reach, 2.0).map(|(t, n, s)| (t * reach, n, s));
+                        let jason_hit = jason.and_then(|(_, jxf)| ray_hits_capsule(chest, dir, jxf.translation)).map(|p| p.distance(chest)).filter(|d| *d <= reach);
+                        match (jason_hit, world_hit) {
+                            (Some(dj), w) if w.is_none_or(|w| dj < w.0) => on_jason += 1,
+                            (_, Some((d, n, surface))) => {
+                                let at = chest + dir * d;
+                                let surface = if surface == f13_core::collision::Tri::TERRAIN { sounds.as_ref().map_or(0, |s| s.terrain_surface(at.x, at.z)) } else { surface };
+                                // GetImpactFX: surface types 1..22 their own (none if unset), else DefaultFX.
+                                let fx = if (1..=22).contains(&surface) { impacts.get(2 + surface as usize).cloned().flatten() } else { impacts.first().cloned().flatten() };
+                                if let Some(fx) = fx {
+                                    let n = if n.dot(dir) > 0.0 { -n } else { n };
+                                    commands.write_message(crate::particles::SpawnParticles::impact(&fx, at, n));
+                                }
+                                // GetImpactSound: the surface's (none if unset: "No Sound Cue to Play!"), else DefaultSound (a
+                                // pellet isn't heavy).
+                                let cue = if (1..=22).contains(&surface) { impact_sounds.get(surface as usize).cloned().flatten() } else { impact_sounds.first().cloned().flatten() };
+                                if let Some(cue) = cue {
+                                    commands.trigger(crate::audio::PlaySound { cue, at: Some(at) });
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let (Some((je, _)), true) = (jason, on_jason > 0) {
+                        info!("shotgun hit Jason ({on_jason} of {pellets} pellets)");
                         commands.entity(je).insert(HitJason { stun: Some(Stun::Shotgun), from: xf.translation });
                     } else {
                         info!("shotgun missed");

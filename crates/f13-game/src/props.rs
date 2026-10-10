@@ -33,6 +33,36 @@ pub struct Item {
     pub loaded_idle: Option<String>,
 }
 
+/// SCImpactEffect's FX fields in order (class_layouts.json: DefaultFX 0x48, CounselorFX 0x70, JasonFX 0x98, then
+/// WoodHeavyFX 0xc0 .. WoodDoorFX 0x408 every 0x28: surface types 1..22).
+pub const IMPACT_FX: [&str; 25] = [
+    "DefaultFX",
+    "CounselorFX",
+    "JasonFX",
+    "WoodHeavyFX",
+    "WoodMediumFX",
+    "WoodLightFX",
+    "WoodHollowFX",
+    "SandFX",
+    "GravelFX",
+    "DirtDryFX",
+    "DirtWetFX",
+    "MudFX",
+    "GrassFX",
+    "LeafLitterFX",
+    "WaterDeepFX",
+    "WaterShallowFX",
+    "MetalThickFX",
+    "MetalMediumFX",
+    "MetalLightFX",
+    "MetalHollowFX",
+    "RockFX",
+    "LargeFoliageFX",
+    "SmallFoliageFX",
+    "ClothFX",
+    "WoodDoorFX",
+];
+
 /// What an item does (by its native class).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ItemKind {
@@ -40,7 +70,7 @@ pub enum ItemKind {
     Weapon(WeaponStats),
     /// SCGun: the flare gun (a projectile) or the shotgun (pellets); `melee`: it has attack montages (NeutralAttack:
     /// the shotgun swings as a two-handed weapon in combat stance, loaded or not; the flare gun's are None).
-    Gun { stats: WeaponStats, projectile: bool, pellets: u32, spread_deg: f32, velocity: f32, melee: bool },
+    Gun { stats: WeaponStats, projectile: bool, pellets: u32, spread_deg: f32, velocity: f32, melee: bool, impacts: Vec<Option<String>>, impact_sounds: Vec<Option<String>> },
     /// SCTrap: placed on the ground.
     Trap,
     FirstAid,
@@ -99,6 +129,18 @@ impl ItemKind {
                 spread_deg: p("MaxSpreadAngle").as_f64().unwrap_or(1.0) as f32,
                 velocity: p("ProjectileVelocity").as_f64().unwrap_or(6000.0) as f32,
                 melee: p("NeutralAttack").as_array().is_some_and(|a| a.iter().any(|x| x["AttackMontage"].is_string())),
+                // Its PelletImpactTemplate's FX (an SCImpactEffect): DefaultFX, CounselorFX, JasonFX, then one per
+                // surface type 1..22 (GetImpactFX FUN_140345dc0: 0xc0 + 0x28 (n - 1)).
+                impacts: p("PelletImpactTemplate").as_str().map_or_else(Vec::new, |t| {
+                    IMPACT_FX.iter().map(|f| classes.prop(t, f)["AssetPathName"].as_str().and_then(|a| a.rsplit('.').next()).map(String::from)).collect()
+                }),
+                // And its sounds (GetImpactSound FUN_140347cb0): DefaultSound, then surface types 1..22 (0x4d0 ..).
+                impact_sounds: p("PelletImpactTemplate").as_str().map_or_else(Vec::new, |t| {
+                    std::iter::once("DefaultSound".to_string())
+                        .chain(IMPACT_FX[3..].iter().map(|f| f.replace("FX", "Sound")))
+                        .map(|f| classes.prop(t, &f)["AssetPathName"].as_str().and_then(|a| a.rsplit('.').next()).map(String::from))
+                        .collect()
+                }),
             }
         } else if is("SCWeapon") {
             ItemKind::Weapon(stats())
