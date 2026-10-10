@@ -99,7 +99,7 @@ impl Plugin for CharacterPlugin {
         })
         .add_systems(Update, (assemble, animate).chain())
         .init_resource::<LayerRestore>()
-        .add_systems(PostUpdate, (restore_unanimated, layered_blend, item_hand_layer, aim_offset, item_arm_layer).chain().after(bevy::app::AnimationSystems).before(bevy::transform::TransformSystems::Propagate));
+        .add_systems(PostUpdate, (restore_unanimated, run_lean, layered_blend, item_hand_layer, aim_offset, item_arm_layer).chain().after(bevy::app::AnimationSystems).before(bevy::transform::TransformSystems::Propagate));
     }
 }
 
@@ -136,6 +136,20 @@ const ITEM_POSES: [&str; 12] = [
     "normal_stand_idle_hunter_01",
 ];
 const ITEM_HAND_FILTERS: &[(&str, i32)] = &[("hand_r", 1), ("weapon_attach_r", 1)];
+/// BS_Run_Lean (1D, Direction -120..120, no weight interpolation): its samples by direction (+ right of her facing;
+/// the left leans at +, as the asset has them), local-space additives against frame 0 of M_normal_stand_run_forward
+/// (RefPoseType ABPT_AnimFrame); cooked as full poses, so their deltas are taken here.
+const LEAN_SAMPLES: [(f32, &str); 5] = [
+    (-120.0, "normal_stand_sprint_lean_right"),
+    (-60.0, "normal_stand_run_lean_right"),
+    (0.0, "normal_stand_run_lean_neutral"),
+    (60.0, "normal_stand_run_lean_left"),
+    (120.0, "normal_stand_sprint_lean_left"),
+];
+const LEAN_BASE: &str = "M_normal_stand_run_forward";
+/// SCAnimInstance's MaxLeanSpeed (cm/s) and LeanSmoothSpeed (MODLOG "Running lean").
+const MAX_LEAN_SPEED: f32 = 300.0;
+const LEAN_SMOOTH_SPEED: f32 = 5.0;
 const ITEM_ARM_FILTERS: &[(&str, i32)] = &[("clavicle_R", 3)];
 /// SCCounselorAnimInstance's ItemAlphaCurveName (its constructor 0x1402f3630).
 const ITEM_ALPHA_CURVE: &str = "ItemWeightAlpha";
@@ -233,7 +247,7 @@ impl CharacterModel {
             }
             let clip = build_clip(&data, a.length, &animated);
             nodes.insert(name.clone(), (graph.add_clip(clips.add(clip), 1.0, graph.root), a.length));
-            if LAYER_TAKES.contains(&name.as_str()) || ITEM_POSES.contains(&name.as_str()) {
+            if LAYER_TAKES.contains(&name.as_str()) || ITEM_POSES.contains(&name.as_str()) || name == LEAN_BASE || LEAN_SAMPLES.iter().any(|(_, n)| n == name) {
                 layers.insert(name.clone(), (data, a.length));
             }
         }
@@ -368,6 +382,15 @@ pub struct Rig {
     timed: Option<(&'static str, f32, bool)>,
     /// A ShotgunHold notify state is active (an animation in her pose is inside its window; items.rs).
     pub(crate) shotgun_hold: bool,
+    /// A state machine crossfade in progress: time into it, its length, and the weights it started from (blended to
+    /// the targets by HermiteCubic, as FAnimNode_StateMachine's transitions blend the poses).
+    crossfade: Option<(f32, f32, HashMap<String, f32>)>,
+    /// The running lean (SCAnimInstance's update FUN_140311d00): LeanAlpha, the smoothed world heading (degrees, Bevy
+    /// yaw), LeanDirectionFiltered, and whether the lean's additive is in the pose (her standing locomotion).
+    lean_alpha: f32,
+    lean_heading: f32,
+    lean_dir: f32,
+    lean_on: bool,
     /// The held item's pose on the hand layer, and on the arm layer with its weight (UpperBodyItemAlpha).
     item_hand: Option<String>,
     item_arm: Option<(String, f32)>,
@@ -439,6 +462,11 @@ pub fn spawn_model(commands: &mut Commands, assets: &AssetServer, character: &Ch
         aim_on: false,
         timed: None,
         shotgun_hold: false,
+        crossfade: None,
+        lean_alpha: 0.0,
+        lean_heading: 0.0,
+        lean_dir: 0.0,
+        lean_on: false,
         item_hand: None,
         item_arm: None,
     });
@@ -614,6 +642,8 @@ pub(crate) fn animate(
                 if let Some(n) = next {
                     rig.aim_state = n;
                     rig.aim_t = 0.0;
+                    // Every RangedAiming transition: a 0.2 s HermiteCubic crossfade.
+                    rig.crossfade = Some((0.0, AIM_CROSSFADE_S, rig.weights.clone()));
                 }
                 // AimPitch moves the blend space's samples toward their weights at AIM_WEIGHT_RATE each (the 4.18
                 // InterpolateWeightOfSampleData), normalised.
@@ -632,6 +662,28 @@ pub(crate) fn animate(
             }
         }
         rig.aim_on = gun_branch.is_some() && rig.action.is_none();
+        // The running lean: out of combat stance (bUseStartStopTransitions is never set), LeanAlpha toward
+        // Speed / MaxLeanSpeed and the world heading toward the velocity's (CalculateDirection against a zero rotator:
+        // 0 when still; unwrapped toward the last) by FInterpTo at LeanSmoothSpeed; in combat stance the heading is
+        // her facing and LeanAlpha 0. LeanDirectionFiltered: the heading against her facing, + right.
+        let (yaw, _, _) = xf.rotation.to_euler(EulerRot::YXZ);
+        let facing = yaw.to_degrees();
+        if c.stance != Stance::Combat {
+            rig.lean_alpha = crate::items::finterp_to(rig.lean_alpha, (speed / MAX_LEAN_SPEED).clamp(0.0, 1.0), dt, LEAN_SMOOTH_SPEED);
+            let mut target = if speed > 1e-4 { p.velocity.x.atan2(p.velocity.y).to_degrees() } else { 0.0 };
+            while target - rig.lean_heading > 180.0 {
+                target -= 360.0;
+            }
+            while target - rig.lean_heading < -180.0 {
+                target += 360.0;
+            }
+            rig.lean_heading = wrap180(crate::items::finterp_to(rig.lean_heading, target, dt, LEAN_SMOOTH_SPEED));
+        } else {
+            rig.lean_heading = facing;
+            rig.lean_alpha = 0.0;
+        }
+        rig.lean_dir = wrap180(facing - rig.lean_heading);
+        rig.lean_on = rig.action.is_none() && c.stance == Stance::Standing && !(gun_branch.is_some() && matches!(rig.aim_state, AimState::Enter | AimState::Aiming));
         // The held item's layers: a weapon's idle pose on her hand, a gun's in the aim machine's Idle state (its
         // LoadedIdle while loaded); anything else's on her right arm, by its montage's ItemWeightAlpha in one.
         rig.item_hand = None;
@@ -834,8 +886,33 @@ impl Rig {
             }
             _ => targets,
         };
+        // A state machine crossfade (not under an action): from the weights it started with to the targets.
+        if let Some((t, len, from)) = self.crossfade.as_mut().filter(|_| self.action.is_none()) {
+            *t += dt;
+            let a = (*t / len.max(1e-4)).clamp(0.0, 1.0);
+            let a = a * a * (3.0 - 2.0 * a);
+            let mut names: Vec<String> = from.keys().cloned().collect();
+            names.extend(targets.keys().filter(|k| !from.contains_key(**k)).map(|k| k.to_string()));
+            let done = *t >= *len;
+            let from = from.clone();
+            for name in names {
+                let w = from.get(&name).copied().unwrap_or(0.0) * (1.0 - a) + targets.get(name.as_str()).copied().unwrap_or(0.0) * a;
+                if w <= 1e-4 {
+                    self.weights.remove(&name);
+                } else {
+                    self.weights.insert(name, w);
+                }
+            }
+            if done {
+                self.crossfade = None;
+            }
+        } else {
+            self.crossfade = None;
+        }
         // Ease every weight toward its target (absent = 0), or take them at once after a snap.
-        let rate = if std::mem::take(&mut self.snap) {
+        let rate = if self.crossfade.is_some() {
+            0.0
+        } else if std::mem::take(&mut self.snap) {
             f32::MAX
         } else {
             (if self.action.is_some() { MONTAGE_BLEND_RATE } else { BLEND_RATE }) * dt
@@ -1001,6 +1078,67 @@ fn layered_blend(
         let Some((data, length)) = model.layers.get(l.take) else { continue };
         let t = if l.hold { l.t.min(*length - 1e-4).max(0.0) } else { l.t };
         blend_layer(model, rig, data, *length, t, l.filters, l.mesh_space, l.weight, &mut transforms, &mut written.0);
+    }
+}
+
+/// (-180, 180].
+fn wrap180(a: f32) -> f32 {
+    let a = (a + 180.0).rem_euclid(360.0) - 180.0;
+    if a == -180.0 { 180.0 } else { a }
+}
+
+/// BS_Run_Lean's weights at `dir` (linear between its neighbouring samples).
+fn lean_weights(dir: f32) -> [f32; 5] {
+    let x = dir.clamp(-120.0, 120.0);
+    let mut w = [0.0; 5];
+    for i in 0..4 {
+        let (a, b) = (LEAN_SAMPLES[i].0, LEAN_SAMPLES[i + 1].0);
+        if x <= b || i == 3 {
+            let f = ((x - a) / (b - a)).clamp(0.0, 1.0);
+            w[i] = 1.0 - f;
+            w[i + 1] = f;
+            break;
+        }
+    }
+    w
+}
+
+/// The Locomotion state's ApplyAdditive (BS_Run_Lean at LeanDirectionFiltered over her move blendspace, Alpha
+/// LeanAlpha): each sample's local delta (rotation pose x base^-1, translation pose - base, for the bones retargeted
+/// from the animation), blended by the blend space's weights, applied as FTransform::BlendFromIdentityAndAccumulate.
+fn run_lean(counselor: Option<Res<CounselorCharacter>>, rigs: Query<&Rig>, mut transforms: Query<&mut Transform>, mut restore: ResMut<LayerRestore>) {
+    let Some(model) = counselor.as_deref().map(|c| &c.0) else { return };
+    let Some((base, base_len)) = model.layers.get(LEAN_BASE) else { return };
+    for rig in &rigs {
+        if !rig.lean_on || rig.lean_alpha <= 1e-4 || !matches!(rig.model, Model::Counselor) {
+            continue;
+        }
+        let weights = lean_weights(rig.lean_dir);
+        for b in &model.info.bones {
+            let Some(&e) = rig.bones.get(&b.name) else { continue };
+            let Some((bq, bt)) = sample_take(base, *base_len, &b.name, 0.0) else { continue };
+            let mut q = Vec4::ZERO;
+            let mut t = Vec3::ZERO;
+            for ((_, name), w) in LEAN_SAMPLES.iter().zip(weights) {
+                if w <= 0.0 {
+                    continue;
+                }
+                let Some((data, len)) = model.layers.get(*name) else { continue };
+                let Some((sq, st)) = sample_take(data, *len, &b.name, 0.0) else { continue };
+                let d = (sq * bq.inverse()).normalize();
+                let d = if Vec4::from(d).dot(q) < 0.0 { -d } else { d };
+                q += Vec4::from(d) * w;
+                if b.retarget == "Animation" {
+                    t += st.zip(bt).map_or(Vec3::ZERO, |(st, bt)| st - bt) * w;
+                }
+            }
+            let delta = Quat::from_vec4(q).normalize();
+            let Ok(mut xf) = transforms.get_mut(e) else { continue };
+            let before = *xf;
+            let out = Transform { rotation: (Quat::IDENTITY.slerp(delta, rig.lean_alpha) * xf.rotation).normalize(), translation: xf.translation + t * rig.lean_alpha, ..*xf };
+            *xf = out;
+            restore.0.entry(e).or_insert((before, out)).1 = out;
+        }
     }
 }
 
@@ -1244,6 +1382,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn lean_weights_are_linear_between_samples() {
+        assert_eq!(lean_weights(0.0), [0.0, 0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(lean_weights(30.0), [0.0, 0.0, 0.5, 0.5, 0.0]);
+        assert_eq!(lean_weights(-90.0), [0.5, 0.5, 0.0, 0.0, 0.0]);
+        assert_eq!(lean_weights(200.0), [0.0, 0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(wrap180(190.0), -170.0);
+    }
+
+    #[test]
     fn aim_targets_follow_the_grid() {
         assert_eq!(aim_targets(0.0), [0.0, 1.0, 0.0, 0.0]);
         assert_eq!(aim_targets(-90.0), [1.0, 0.0, 0.0, 0.0]);
@@ -1269,3 +1416,4 @@ mod tests {
         }
     }
 }
+

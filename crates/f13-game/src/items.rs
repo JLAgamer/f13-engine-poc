@@ -124,7 +124,7 @@ impl Plugin for ItemsPlugin {
     fn build(&self, app: &mut App) {
         // The wiggle axis, for her grab struggle (jason.rs) and trap struggle.
         app.init_resource::<crate::jason::Struggle>()
-            .add_systems(PreUpdate, (crate::jason::read_struggle, hold_aim).after(bevy::input::InputSystems))
+            .add_systems(PreUpdate, (crate::jason::read_struggle, hold_aim, circle_run).after(bevy::input::InputSystems))
             .add_systems(PostUpdate, give_items)
             .init_resource::<MapScreen>()
             .add_systems(Update, (hold_in_hand, shotgun_hold, aim, start_action, block, toggle_map).chain())
@@ -137,6 +137,16 @@ impl Plugin for ItemsPlugin {
 /// Testing (--aim): right mouse held, the camera at this pitch (degrees).
 #[derive(Resource)]
 pub struct AimHold(pub f32);
+
+/// Testing (--circle): W held, the camera turning at this rate (degrees per second): she runs a circle.
+#[derive(Resource)]
+pub struct CircleRun(pub f32);
+
+fn circle_run(run: Option<Res<CircleRun>>, time: Res<Time>, mut keys: ResMut<ButtonInput<KeyCode>>, mut camera: Single<&mut PlayerCamera>) {
+    let Some(run) = run else { return };
+    keys.press(KeyCode::KeyW);
+    camera.yaw += run.0.to_radians() * time.delta_secs();
+}
 
 fn hold_aim(hold: Option<Res<AimHold>>, mut mouse: ResMut<ButtonInput<MouseButton>>, mut camera: Single<&mut PlayerCamera>) {
     let Some(hold) = hold else { return };

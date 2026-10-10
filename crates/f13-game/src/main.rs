@@ -5,6 +5,7 @@
 //!       [--pose <animation>@<seconds>]  (hold the counselor (and Jason) in one exported animation, for screenshots)
 //!       [--no-jason] [--jason-delay s] [--bot-jason]  (Jason hunts the counselor unless left out; counselor bots leave him out)
 //!       [--bot-abilities]  (Jason, every ability ready and told where she is, Morphs, Stalks and Shifts to her)
+//!       [--circle DegPerSec]  (hold W, the camera turning: she runs a circle (testing))
 //!       [--aim PitchDeg]  (hold right mouse, the camera at this pitch: aim the gun given (testing))
 //!       [--give Class,Class...] [--bot-fight]  (start with these items (testing); a bot that uses them on Jason)
 //!       [--map-open]  (her objectives and map screen open from the start (testing))
@@ -126,6 +127,7 @@ struct Args {
     host: Option<u16>,
     give: Vec<String>,
     aim: Option<f32>,
+    circle: Option<f32>,
     /// Her map screen open from the start (testing).
     map_open: bool,
     /// Leave Jason out (the counselor-only bots always do).
@@ -195,6 +197,7 @@ fn parse_args() -> Args {
     let mut host = None;
     let mut give = Vec::new();
     let mut aim = None;
+    let mut circle = None;
     let mut map_open = false;
     let mut no_jason = false;
     let mut no_intro = false;
@@ -263,6 +266,7 @@ fn parse_args() -> Args {
             "--play-jason-demo" => (play_jason, play_jason_demo) = (true, true),
             "--host" => host = Some(host.unwrap_or(f13_host_port())),
             "--host-port" => host = it.next().and_then(|v| v.parse().ok()).or(host),
+            "--circle" => circle = it.next().and_then(|v| v.parse().ok()),
             "--aim" => aim = it.next().and_then(|v| v.parse().ok()),
             "--give" => give = it.next().map(|v| v.split(',').map(String::from).collect()).unwrap_or_default(),
             "--map-open" => map_open = true,
@@ -312,7 +316,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout, seed, near_car, bot_escape, bot_escape4, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight, rain }
+    Args { export, layout, seed, near_car, bot_escape, bot_escape4, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight, rain }
 }
 
 #[derive(Resource)]
@@ -508,6 +512,9 @@ fn main() {
         }
         if args.map_open {
             app.insert_resource(items::MapScreen(true));
+        }
+        if let Some(rate) = args.circle {
+            app.insert_resource(items::CircleRun(rate));
         }
         if let Some(pitch) = args.aim {
             app.insert_resource(items::AimHold(pitch));

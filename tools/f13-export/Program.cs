@@ -1391,6 +1391,14 @@ static class Mvp
         "/Game/Characters/Counselors/Base/Shared/Additives/normal_stand_carry_heavy_01",
         "/Game/Characters/Counselors/Base/Shared/Additives/normal_stand_idle_carry_beartrap_add",
         "/Game/Characters/Counselors/Base/Male/Animation/Hunter/normal_stand_idle_hunter_01",
+        // BS_Run_Lean's samples (Shared/Additives/Leans): the running lean's local-space additives.
+        "/Game/Characters/Counselors/Base/Shared/Additives/Leans/normal_stand_run_lean_neutral",
+        "/Game/Characters/Counselors/Base/Shared/Additives/Leans/normal_stand_run_lean_left",
+        "/Game/Characters/Counselors/Base/Shared/Additives/Leans/normal_stand_run_lean_right",
+        "/Game/Characters/Counselors/Base/Shared/Additives/Leans/normal_stand_sprint_lean_left",
+        "/Game/Characters/Counselors/Base/Shared/Additives/Leans/normal_stand_sprint_lean_right",
+        // Their additive base (RefPoseType ABPT_AnimFrame, frame 0).
+        "/Game/Characters/Counselors/Base/Male/Animation/Locomotion/M_normal_stand_run_forward",
         $"{Shared}/Interaction/Trap/AM_normal_stand_trap_place",
         // Doors: her open and close takes, and the shared montages (their OpenCloseDoor driver windows time the leaf).
         "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Doors/f_normal_stand_door_open_inside_forward",
