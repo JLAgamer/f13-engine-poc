@@ -99,7 +99,7 @@ impl Plugin for CharacterPlugin {
         })
         .add_systems(Update, (assemble, animate).chain())
         .init_resource::<LayerRestore>()
-        .add_systems(PostUpdate, (restore_unanimated, run_lean, layered_blend, item_hand_layer, aim_offset, head_look, item_arm_layer).chain().after(bevy::app::AnimationSystems).before(bevy::transform::TransformSystems::Propagate));
+        .add_systems(PostUpdate, (restore_unanimated, run_lean, layered_blend, item_hand_layer, aim_offset, head_look, jason_twists, item_arm_layer).chain().after(bevy::app::AnimationSystems).before(bevy::transform::TransformSystems::Propagate));
     }
 }
 
@@ -1470,6 +1470,11 @@ fn rinterp_to(current: Vec2, target: Vec2, dt: f32, speed: f32) -> Vec2 {
 
 /// FRotator::Quaternion in Unreal's axes, then to the rig's (glTF: (x, z, y), rotation (-x, -z, -y, w)).
 fn rotator_quat(pitch: f32, yaw: f32, roll: f32) -> Quat {
+    gltf_ue(rotator_quat_ue(pitch, yaw, roll))
+}
+
+/// FRotator::Quaternion, Unreal's axes.
+fn rotator_quat_ue(pitch: f32, yaw: f32, roll: f32) -> Quat {
     let (sp, cp) = (pitch.to_radians() * 0.5).sin_cos();
     let (sy, cy) = (yaw.to_radians() * 0.5).sin_cos();
     let (sr, cr) = (roll.to_radians() * 0.5).sin_cos();
@@ -1477,7 +1482,7 @@ fn rotator_quat(pitch: f32, yaw: f32, roll: f32) -> Quat {
     let y = -cr * sp * cy - sr * cp * sy;
     let z = cr * cp * sy - sr * sp * cy;
     let w = cr * cp * cy + sr * sp * sy;
-    Quat::from_xyzw(-x, -z, -y, w)
+    Quat::from_xyzw(x, y, z, w)
 }
 
 /// The look rotator's target (SCCharacter's tick helper FUN_1402ecdf0, locally controlled): `d` the direction from
@@ -1616,6 +1621,62 @@ fn head_look(
     }
 }
 
+/// Jason_AnimBP's BoneDrivenControllers (over his look, under the Cinematic slot): each lowerarm_twist_01 takes half
+/// its hand's local roll against the reference pose (SourceComponent RotationX, Multiplier 0.5, ReplaceComponent on
+/// RotationX). Their source and target bones.
+const JASON_TWISTS: [(&str, &str); 2] = [("hand_l", "lowerarm_twist_01_l"), ("hand_r", "lowerarm_twist_01_r")];
+const JASON_TWIST_MULTIPLIER: f32 = 0.5;
+
+/// FQuat::Rotator (UE 4: the singularities at +-90 pitch), Unreal's axes: (pitch, yaw, roll), degrees.
+fn quat_rotator(q: Quat) -> Vec3 {
+    let (x, y, z, w) = (q.x, q.y, q.z, q.w);
+    let singularity = z * x - w * y;
+    let yaw_y = 2.0 * (w * z + x * y);
+    let yaw_x = 1.0 - 2.0 * (y * y + z * z);
+    let yaw = yaw_y.atan2(yaw_x).to_degrees();
+    if singularity < -0.4999995 {
+        Vec3::new(-90.0, yaw, normalize_axis(-yaw - 2.0 * x.atan2(w).to_degrees()))
+    } else if singularity > 0.4999995 {
+        Vec3::new(90.0, yaw, normalize_axis(yaw - 2.0 * x.atan2(w).to_degrees()))
+    } else {
+        let pitch = (2.0 * singularity).clamp(-1.0, 1.0).asin().to_degrees();
+        let roll = (-2.0 * (w * x + y * z)).atan2(1.0 - 2.0 * (x * x + y * y)).to_degrees();
+        Vec3::new(pitch, yaw, roll)
+    }
+}
+
+/// The rig's (glTF) rotation in Unreal's axes and back (the same swap both ways).
+fn gltf_ue(q: Quat) -> Quat {
+    Quat::from_xyzw(-q.x, -q.z, -q.y, q.w)
+}
+
+/// FAnimNode_BoneDrivenController (EvaluateSkeletalControl 0x140f3ad50, its source value 0x140f47460): the source
+/// bone's local rotation against its reference pose (current x ref^-1), FQuat::Euler's X (roll), times the
+/// Multiplier; ReplaceComponent (mode 1) puts it in the target's local Euler X (FQuat::Euler, then MakeFromEuler).
+#[allow(clippy::type_complexity)]
+fn jason_twists(killer: Option<Res<KillerCharacter>>, rigs: Query<&Rig>, mut transforms: Query<&mut Transform>, mut written: ResMut<LayerRestore>) {
+    let Some(model) = killer.as_deref().map(|k| &k.0) else { return };
+    for rig in &rigs {
+        if !matches!(rig.model, Model::Killer) || rig.action.as_ref().is_some_and(|(a, _)| a.starts_with("cinematic_")) {
+            continue;
+        }
+        for (source, target) in JASON_TWISTS {
+            let Some(reference) = model.info.bones.iter().find(|b| b.name == source).and_then(|b| b.local.as_ref()) else { continue };
+            let reference = Quat::from_array(reference.r).normalize();
+            let (Some(&se), Some(&te)) = (rig.bones.get(source), rig.bones.get(target)) else { continue };
+            let Ok(current) = transforms.get(se).map(|x| gltf_ue(x.rotation)) else { continue };
+            // FQuat::Euler is (roll, pitch, yaw): its X is the rotator's roll.
+            let value = quat_rotator(current * reference.inverse()).z * JASON_TWIST_MULTIPLIER;
+            let Ok(mut xf) = transforms.get_mut(te) else { continue };
+            let before = *xf;
+            let r = quat_rotator(gltf_ue(before.rotation));
+            xf.rotation = gltf_ue(rotator_quat_ue(r.x, r.y, value)).normalize();
+            let out = *xf;
+            written.0.entry(te).or_insert((before, out)).1 = out;
+        }
+    }
+}
+
 /// Position of `speed` along the blendspace's speed marks (0 at marks[0], 1 at marks[1], ...).
 fn speed_state(speed: f32, marks: &[f32]) -> f32 {
     for i in 1..marks.len() {
@@ -1641,6 +1702,11 @@ mod tests {
         assert_eq!(clamp_angle(80.0, -55.0, 55.0), 55.0);
         assert_eq!(clamp_angle(-170.0, 0.0, 25.0), 25.0);
         assert_eq!(clamp_angle(10.0, -25.0, 25.0), 10.0);
+        // FQuat::Rotator undoes FRotator::Quaternion.
+        for (p, y, r) in [(10.0, -40.0, 25.0), (-60.0, 170.0, -90.0), (0.0, 0.0, 120.0)] {
+            let back = quat_rotator(rotator_quat_ue(p, y, r));
+            assert!((back - Vec3::new(p, y, r)).abs().max_element() < 1e-2, "{back:?}");
+        }
         let r = rinterp_to(Vec2::ZERO, Vec2::new(0.0, 170.0), 0.1, 3.0);
         assert!((r.y - 51.0).abs() < 1e-3);
     }
