@@ -37,7 +37,7 @@ Moved from Milestone 1 (not tied to gameplay):
       campfire's and fireplace's flames, sparks and smoke, the candles, the lamps' flies, dust specks, the low fog).
       Remaining: Jason's embers and eye glow (M_Savini_Jason_Ashes_01, M_Procedural_Dust_01), the translucency
       lighting volume the lit ones read (a stand-in now: MODLOG "Particle materials"), particle lights, attractors and
-      collision, and the effects spawned by gameplay: the walls' and doors' hit dust (HitParticle), the knife's trail
+      collision, and the effects spawned by gameplay: the hit dust's chunks (M_door_chunks_01, a mesh emitter), the knife's trail
       (P_Jason_ThrowingKnife_01), blood, the tire dust's cylinder spawn and attractor, the
       intro's and outro's particle tracks
 - [ ] Counselor model, remaining: facial animation and hair dynamics (their own anim Blueprints), the eyes' iris and

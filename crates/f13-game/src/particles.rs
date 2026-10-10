@@ -431,8 +431,10 @@ impl Materials {
                 (11.0, [tex("DistortionTexture"), tex("BaseTexture1"), tex("BaseTexture2"), None])
             }
             // M_Procedural_Tire_Dust_01_Inst's own shader map (static switches: 0_NRM_switch off); the master's other
-            // instances aren't ported.
-            "M_Procedural_Smoke_04_no-self-shadow" if name == "M_Procedural_Tire_Dust_01_Inst" => {
+            // instances aren't ported. M_Procedural_Dust_01_self-shadow's (the walls' hit dust) has the same layout
+            // (uniexpr.py; [14].w 0_BaseContrastLevel); not its static permutations (Jason's eye glow, 0_NRM_switch on).
+            "M_Procedural_Smoke_04_no-self-shadow" | "M_Procedural_Dust_01_self-shadow" if name == "M_Procedural_Tire_Dust_01_Inst" || (e.master == "M_Procedural_Dust_01_self-shadow" && name != "M_Savini_Jason_EyeGlow_01_Inst") => {
+                let dust = e.master == "M_Procedural_Dust_01_self-shadow";
                 // uniexpr.py M_Procedural_Tire_Dust_01_Inst: cb1[1] SelectionColor.rgb (0), [3].x
                 // -BaseTextureContrast, [5].x -0_MasterAlphaContrast, [6..14] below.
                 let (btc, mac, hard) = (s("BaseTextureContrast", 0.3), s("0_MasterAlphaContrast", 0.0), s("SphereMask_Hardness", 0.0));
@@ -447,7 +449,8 @@ impl Materials {
                 p[11] = Vec4::new(s("SPEC", 0.1), s("0_FadeDistance", 25.0), s("0_FadeDistance", 25.0).max(1e-5), s("0_PixelDepthDistance", 0.0));
                 p[12] = Vec4::new(s("0_Opacity_MASTER", 1.0), mac, -mac, s("SphereMaskGlobalDistortionLevel", 1.0));
                 p[13] = Vec4::new(s("SphereMask_Radius", 0.5), hard, 1.0 - hard, soft);
-                p[14] = Vec4::new(1.0 / soft, mac + 1.0, s("0_Alpha_Contrast_Opacity_MASTER", 3.0), s("RefractionDepthBias", 0.0));
+                p[14] = Vec4::new(1.0 / soft, mac + 1.0, s("0_Alpha_Contrast_Opacity_MASTER", 3.0), s("0_BaseContrastLevel", 1.0));
+                p[15] = if dust { Vec4::new(0.0, s("0_BaseContrastLevel", 1.0), 0.0, 0.0) } else { Vec4::new(1.0, 1.0, 0.0, 0.0) };
                 (8.0, [tex("FlowMap1"), tex("BaseTexture1"), None, None])
             }
             "M_Rain_Master" => {

@@ -332,7 +332,9 @@ fn rain_master(in: VertexOutput) -> vec4<f32> {
 // colour x 0_EmissiveMasterLevel. Opacity: the sum / 3 contrasted by DynamicParameter.x, x colour.a, x a sphere mask
 // (the distorted uv x SphereMaskGlobalDistortionLevel; radius SphereMask_Radius - 0.2 x the distortion), x 0.985,
 // contrasted by 0_MasterAlphaContrast, x 0_Alpha_Contrast_Opacity_MASTER, at most 0.9; x the depth fades x colour.a x
-// 0_Opacity_MASTER.
+// 0_Opacity_MASTER. M_Procedural_Dust_01_self-shadow's sprite pass (s004; per-pixel lit: the stand-in here too) is
+// the same graph but its shape isn't x colour.a and the alpha is x 0_BaseContrastLevel: p[15] = (the shape's colour.a
+// weight, the alpha's multiplier).
 fn tire_dust(in: VertexOutput) -> vec4<f32> {
     let p = params.p;
     let dp = in.dynamic;
@@ -359,12 +361,12 @@ fn tire_dust(in: VertexOutput) -> vec4<f32> {
     let diffuse = saturate(base * col.rgb) * (1.0 - saturate(p[11].x));
     let fades = depth_fades(in, p[11].z, p[11].w);
     let opacity = fades.y * saturate(fades.x * col.a) * p[12].x;
-    var shape = saturate(sum * 0.333333 * (dp.x * 2.0 + 1.0) - dp.x) * col.a;
+    var shape = saturate(sum * 0.333333 * (dp.x * 2.0 + 1.0) - dp.x) * mix(1.0, col.a, p[15].x);
     let m = (a2 * p[7].w + b2 * p[7].w - uv) * p[12].w + uv - 0.5;
     let radius = max(d * -0.2 + p[13].x, 0.00001);
     shape = shape * saturate((1.0 - length(m) / radius) * p[14].x) * 0.985;
     shape = clamp(saturate(shape * (p[14].y - p[5].x) + p[5].x) * p[14].z, 0.0, 0.9);
-    return vec4(emissive + volume_lit(in, diffuse), saturate(shape * opacity));
+    return vec4(emissive + volume_lit(in, diffuse), saturate(shape * opacity * p[15].y));
 }
 
 // M_Procedural_Smoke_01B_no-self-shadow (the hood smoke, the fuse boxes' and the phone box's flashes, the shotgun's
