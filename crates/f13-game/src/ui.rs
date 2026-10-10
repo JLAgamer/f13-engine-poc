@@ -909,13 +909,35 @@ fn widget_anims(time: Res<Time>, hud: Res<Hud>, playing: Res<PlayingAnims>, mut 
 
 /// CounselorHUDWidget's UpdateFearOpacity (its tick, once the match is in progress and MatchStart has played: 5 s):
 /// CounselorFearWidgets (the inventory, the stamina ring; designed at alpha 0, kept at 0 through MatchStart) takes
-/// SCHUDWidget's FearOpacity. PLACEHOLDER: what writes FearOpacity natively wasn't found (MODLOG "Played Jason fixes"):
-/// full opacity stands in. (The minimap takes it too unless NervesOfSteel; left as built.)
-fn fear_widgets(hud: Res<Hud>, game: Option<Res<crate::match_flow::GameMatch>>, mut colors: Query<&mut WidgetColor>) {
+/// SCHUDWidget's FearOpacity. Its writer is SCCounselorCharacter's tick (0x1403d8de0 -> 0x140441430: (1, 1, 1, a)):
+/// a FInterpTo at 1 toward 0 while she hides, else HUDOpacityFearCurve(x), x her CosmeticFear (0 dead, escaped, or in
+/// a special move that ends in her death: bDieOnFinish); her death (0x1403c0ac0) sets it to 0. (The minimap takes it
+/// too unless NervesOfSteel; left as built.)
+#[allow(clippy::too_many_arguments)]
+fn fear_widgets(
+    time: Res<Time>,
+    hud: Res<Hud>,
+    game: Option<Res<crate::match_flow::GameMatch>>,
+    counselor: Option<Res<crate::character::CounselorCharacter>>,
+    escaped: Option<Res<crate::vehicle::Escaped>>,
+    players: Query<(&crate::player::Player, Option<&f13_bevy::CounselorFear>)>,
+    mut colors: Query<&mut WidgetColor>,
+    mut alpha: Local<f32>,
+) {
+    if let Some((p, fear)) = players.iter().next() {
+        let alive = p.counselor.alive();
+        let target = if p.hidden {
+            0.0
+        } else {
+            let x = if !alive || escaped.is_some() { 0.0 } else { fear.map_or(0.0, |f| f.0.cosmetic) };
+            counselor.as_ref().and_then(|c| c.0.info.curve("HUDOpacityFearCurve")).map_or(1.0, |c| c.eval(x))
+        };
+        *alpha = if alive { f13_core::fear::finterp_to(*alpha, target, time.delta_secs(), 1.0) } else { 0.0 };
+    }
     let Some(&e) = hud.names.get("CounselorHUDWidget.CounselorFearWidgets_33") else { return };
     let Ok(mut c) = colors.get_mut(e) else { return };
     let started = game.is_some_and(|g| g.state.state == f13_core::game_mode::MatchState::InProgress && g.state.elapsed_in_progress_time >= MATCH_START_S);
-    c.set_if_neq(WidgetColor([1.0, 1.0, 1.0, if started { 1.0 } else { 0.0 }]));
+    c.set_if_neq(WidgetColor([1.0, 1.0, 1.0, if started { *alpha } else { 0.0 }]));
 }
 
 /// CounselorHUDWidget's MatchStart animation's length (s).

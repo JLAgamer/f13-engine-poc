@@ -54,9 +54,10 @@ const EAR_GAP_M: f32 = 0.2;
 #[derive(Resource)]
 pub(crate) struct AudioRng(pub f13_core::spawn::Rng);
 
-/// A spatialized voice's stereo gains, set from where it is around the listener each frame ([`pan`]).
+/// A spatialized voice's stereo gains, set from where it is around the listener each frame ([`pan`]), and its voice
+/// filter's coefficient (audio_volumes.rs; 0: none).
 #[derive(Default)]
-pub(crate) struct PanGains(std::sync::atomic::AtomicU64);
+pub(crate) struct PanGains(std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU32);
 
 impl PanGains {
     fn set(&self, l: f32, r: f32) {
@@ -65,6 +66,13 @@ impl PanGains {
     fn get(&self) -> (f32, f32) {
         let v = self.0.load(std::sync::atomic::Ordering::Relaxed);
         (f32::from_bits((v >> 32) as u32), f32::from_bits(v as u32))
+    }
+    /// The low-pass's Frequency (XAUDIO2_FILTER_PARAMETERS: 0..1), 0 for none.
+    pub(crate) fn set_filter(&self, frequency: f32) {
+        self.1.store(frequency.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
+    fn filter(&self) -> f32 {
+        f32::from_bits(self.1.load(std::sync::atomic::Ordering::Relaxed))
     }
 }
 
@@ -80,6 +88,8 @@ pub(crate) struct PanDecoder {
     inner: <bevy::audio::AudioSource as bevy::audio::Decodable>::Decoder,
     gains: std::sync::Arc<PanGains>,
     right: Option<bevy::audio::Sample>,
+    /// The voice filter's state (low, band).
+    filter: (f32, f32),
 }
 
 impl Iterator for PanDecoder {
@@ -99,6 +109,20 @@ impl Iterator for PanDecoder {
                 }
                 sum / n as bevy::audio::Sample
             }
+        };
+        // The source voice's filter (created with XAUDIO2_VOICE_USEFILTER: FXAudio2SoundSource 0x1419529b9) on the
+        // mono signal before the output matrix: XAudio2's state-variable low-pass at Frequency f, OneOverQ
+        // LowPassFilterResonance (BaseEngine.ini 0.9). PLACEHOLDER: XAudio2's own filter (XAudio2_7.dll, not the game)
+        // isn't read: a Chamberlin state-variable filter, one pass a sample.
+        let f = self.gains.filter();
+        let s = if f > 0.0 {
+            let (low, band) = &mut self.filter;
+            *low += f * *band;
+            let high = s as f32 - *low - LOW_PASS_ONE_OVER_Q * *band;
+            *band += f * high;
+            *low as bevy::audio::Sample
+        } else {
+            s
         };
         let (l, r) = self.gains.get();
         self.right = Some(s * r as bevy::audio::Sample);
@@ -124,13 +148,16 @@ impl bevy::audio::Source for PanDecoder {
 impl bevy::audio::Decodable for Panned {
     type Decoder = PanDecoder;
     fn decoder(&self) -> PanDecoder {
-        PanDecoder { inner: self.clip.decoder(), gains: self.gains.clone(), right: None }
+        PanDecoder { inner: self.clip.decoder(), gains: self.gains.clone(), right: None, filter: (0.0, 0.0) }
     }
 }
 
+/// UAudioSettings LowPassFilterResonance (BaseEngine.ini 0.9): the voice filter's OneOverQ (FUN_1412d7370).
+const LOW_PASS_ONE_OVER_Q: f32 = 0.9;
+
 /// A panned voice's gains.
 #[derive(Component)]
-struct Pan(std::sync::Arc<PanGains>);
+pub(crate) struct Pan(pub(crate) std::sync::Arc<PanGains>);
 
 /// Spatialized voices (PlaybackSettings::spatial) are played panned: once its clip is in (before the engine starts
 /// it), the voice's player becomes a [`Panned`] one.
@@ -1046,6 +1073,8 @@ struct ActiveMix {
 #[derive(Resource, Default)]
 pub struct SoundMixes {
     classes: HashMap<String, (Option<String>, f32, f32)>,
+    /// The classes with bApplyAmbientVolumes (the audio volumes' interior settings apply to their sounds).
+    ambient: std::collections::HashSet<String>,
     mixes: HashMap<String, MixDef>,
     active: Vec<ActiveMix>,
 }
@@ -1059,6 +1088,9 @@ impl SoundMixes {
                 for (k, c) in v.as_object().into_iter().flatten() {
                     let n = |f: &str| c[f].as_f64().unwrap_or(1.0) as f32;
                     s.classes.insert(k.clone(), (c["Parent"].as_str().map(str::to_string), n("Volume"), n("Pitch")));
+                    if c["ApplyAmbientVolumes"].as_bool() == Some(true) {
+                        s.ambient.insert(k.clone());
+                    }
                 }
             }
             None => warn!("no sounds/sound_classes.json (re-export with tools/f13-export sounds): no class volumes or mixes"),
@@ -1085,6 +1117,12 @@ impl SoundMixes {
             Some(o) => fade_in * if def.fade_out > 0.0 { (1.0 - o / def.fade_out).max(0.0) } else { 0.0 },
             None => fade_in,
         }
+    }
+
+    /// Whether a sound of `class` takes the audio volumes' interior settings (its class's bApplyAmbientVolumes: FActiveSound
+    /// 0x1411fc240 sets bApplyInteriorVolumes from it).
+    pub(crate) fn applies_ambient_volumes(&self, class: &str) -> bool {
+        self.ambient.contains(class)
     }
 
     /// Whether `class` is `ancestor` or under it.
@@ -1269,7 +1307,7 @@ fn add_listener(mut commands: Commands, cameras: Query<Entity, (With<Camera3d>, 
 
 /// A placed sound's base volume and how it fades.
 #[derive(Component)]
-struct Emitter {
+pub(crate) struct Emitter {
     volume: f32,
     attenuation: Attenuation,
 }
@@ -1446,11 +1484,17 @@ fn start_delayed(mut commands: Commands, time: Res<Time>, mut voices: Query<(Ent
 
 /// Fades placed sounds with the listener's distance.
 #[allow(clippy::type_complexity)]
-fn attenuate(listener: Query<&GlobalTransform, With<SpatialListener>>, mut emitters: Query<(&Emitter, &GlobalTransform, Option<&mut AudioSink>, Option<&mut SpatialAudioSink>)>) {
+#[allow(clippy::type_complexity)]
+pub(crate) fn attenuate(
+    listener: Query<&GlobalTransform, With<SpatialListener>>,
+    mut emitters: Query<(&Emitter, &GlobalTransform, Option<&crate::audio_volumes::InteriorGain>, Option<&mut AudioSink>, Option<&mut SpatialAudioSink>)>,
+) {
     use bevy::audio::AudioSinkPlayback;
     let Some(ear) = listener_position(&listener) else { return };
-    for (e, g, sink, spatial) in &mut emitters {
-        let volume = Volume::Linear(e.volume * e.attenuation.factor(ear.distance(g.translation()) * 100.0));
+    for (e, g, interior, sink, spatial) in &mut emitters {
+        // x the audio volumes' InteriorVolumeMultiplier (audio_volumes.rs).
+        let interior = interior.map_or(1.0, |i| i.0);
+        let volume = Volume::Linear(e.volume * e.attenuation.factor(ear.distance(g.translation()) * 100.0) * interior);
         if let Some(mut s) = sink {
             s.set_volume(volume);
         } else if let Some(mut s) = spatial {

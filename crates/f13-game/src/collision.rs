@@ -256,6 +256,10 @@ fn build_world(mut commands: Commands, level: Res<crate::Level>, export: Res<cra
                 }
                 continue;
             }
+            // Only the BlockingVolumes' hulls collide (the AudioVolumes' are for audio_volumes.rs).
+            if a.class != "BlockingVolume" {
+                continue;
+            }
             for h in &a.hulls {
                 for t in hull_from_unreal(h) {
                     if a.hulls_block_pawn && !a.hulls_block_vehicle {

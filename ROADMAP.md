@@ -53,18 +53,14 @@ Moved from Milestone 1 (not tied to gameplay):
       hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold
       for a decision on that
 - [ ] Not from the game's code, so marked PLACEHOLDER (MODLOG "Decomp audit, where it ends"): which events say the
-      counselor's other lines, X3DAudio's panning matrix,
-      the doors' APEX debris, the death and spectating cameras, the counselor HUD's FearOpacity (her pockets' and stamina
-      ring's tint during the match: its native writer wasn't found)
-- [ ] Audio, remaining: the audio volumes' AmbientZoneSettings (inside a cabin, the sounds of the classes with
-      bApplyAmbientVolumes outside it at its ExteriorVolume and ExteriorLPF; the volumes' reverb is silent here: MODLOG
-      "Reverb: none on this map")
+      counselor's other lines, X3DAudio's panning matrix and XAudio2's voice filter, the doors' APEX debris
 - [ ] Post-processing, remaining: compare against the game's own screenshots. (Bloom's fast blur: ported, ComputeOutputDesc's half-width X pass)
 
 ## Milestone 3: Networking
 Server-authoritative netcode, tested with bots, then an 8-player lobby.
 
 Moved from Milestone 2 (they need more than one counselor):
+- [ ] The death and spectating cameras (a dead counselor becomes a spectator of the others)
 - [ ] Fear events near friendlies and corpses (other counselors)
 - [ ] Car passengers, and the car running counselors over
 - [ ] The lobby (with the match's badges: their award sites and classes are read (MODLOG); the game shows them in its

@@ -298,6 +298,8 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         // Her music object's scary sounds' cooldown curve (SCMusicObject_Counselor ScarySoundCooldownCurve).
         if (ClassValue<FPackageIndex>(cls, "MusicObjectClass")?.Load<UStruct>() is { } music && CurveValue(music, "ScarySoundCooldownCurve") is { } scary)
             (info.Curves ??= new())["ScarySoundCooldownCurve"] = scary;
+        // The HUD's fear opacity (SCCounselorCharacter's tick 0x1403d8de0: HUDOpacityFearCurve(CosmeticFear)).
+        if (CurveValue(cls, "HUDOpacityFearCurve") is { } hudFear) (info.Curves ??= new())["HUDOpacityFearCurve"] = hudFear;
         info.Cameras = DynamicCameras(cls);
         info.CameraShakes = new Newtonsoft.Json.Linq.JObject();
         foreach (var shake in new[] { "SummerCamp/Content/Cameras/CameraShakes/ED_Shake2" })

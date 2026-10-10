@@ -75,7 +75,7 @@ class SoundExporter(IFileProvider provider, string outDir, Func<string, string> 
     }
 
     /// sounds/sound_classes.json: every SoundClass (Content/Sounds/SoundClasses), its parent and its own Volume and
-    /// Pitch (FSoundClassProperties; 1 unless set).
+    /// Pitch (FSoundClassProperties; 1 unless set), and bApplyAmbientVolumes (the audio volumes' interior settings apply).
     public void WriteSoundClasses()
     {
         var classes = new JObject();
@@ -88,6 +88,7 @@ class SoundExporter(IFileProvider provider, string outDir, Func<string, string> 
                     ["Parent"] = sc.GetOrDefault<FPackageIndex?>("ParentClass")?.Load<UObject>()?.Name,
                     ["Volume"] = p?.GetOrDefault("Volume", 1f) ?? 1f,
                     ["Pitch"] = p?.GetOrDefault("Pitch", 1f) ?? 1f,
+                    ["ApplyAmbientVolumes"] = p?.GetOrDefault("bApplyAmbientVolumes", false) ?? false,
                 };
             }
         File.WriteAllText(Path.Combine(Dir, "sound_classes.json"), classes.ToString(Formatting.Indented));

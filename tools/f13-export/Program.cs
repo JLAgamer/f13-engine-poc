@@ -222,6 +222,19 @@ void ExportLevel(string mapPath, params string[] extra)
                         .ToList();
                 }
             }
+            if (actor.ExportType == "AudioVolume")
+            {
+                // Its brush's convex hulls in world space (FAudioDevice::GetAudioVolumeSettings: the highest-priority
+                // volume that encompasses the point).
+                var bs = root?.GetOrDefault<FPackageIndex?>("BrushBodySetup")?.Load() as CUE4Parse.UE4.Objects.PhysicsEngine.UBodySetup;
+                if (root != null && bs?.AggGeom != null)
+                {
+                    var w = root.GetAbsoluteTransform();
+                    info.Hulls = bs.AggGeom.ConvexElems.Where(c => c.VertexData is { Length: >= 4 })
+                        .Select(c => c.VertexData.SelectMany(v => { var p = w.TransformPosition(c.Transform.TransformPosition(v)); return new[] { p.X, p.Y, p.Z }; }).ToArray())
+                        .ToList();
+                }
+            }
             if (actor.ExportType is "NavMeshBoundsVolume" or "SCMiniMapVolume")
             {
                 var bs = root?.GetOrDefault<FPackageIndex?>("BrushBodySetup")?.Load() as CUE4Parse.UE4.Objects.PhysicsEngine.UBodySetup;
