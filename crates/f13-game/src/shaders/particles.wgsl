@@ -20,7 +20,7 @@
 
 struct ParticleParams {
     // x: mode (0 stand-in, 1 M_Procedural_Fire_01, 2 M_Procedural_Fire_02, 3 M_MasterParticle_Emissive,
-    // 4 M_Fly_Animated_01); y: additive
+    // 4 M_Fly_Animated_01, 5 M_MasterParticle_Diffuse_nearFade); y: additive
     mode: vec4<f32>,
     // The master's material uniform buffer as its compiled shader reads it (uniexpr.py's cb1[n]).
     p: array<vec4<f32>, 12>,
@@ -215,6 +215,40 @@ fn fly(in: VertexOutput) -> vec4<f32> {
     return vec4(apply_pbr_lighting(pbr).rgb, 1.0);
 }
 
+// The translucency lighting volume (TLM_VolumetricNonDirectional: x 0.886228, the SH band 0 of the injected light)
+// on a diffuse colour. PLACEHOLDER: f13-rs has no such volume; Bevy's lighting at the pixel, averaged over facing the
+// camera and away from it, stands in for its non-directional light.
+fn volume_lit(in: VertexOutput, diffuse: vec3<f32>) -> vec3<f32> {
+    var pbr = pbr_types::pbr_input_new();
+    pbr.material.base_color = vec4(diffuse, 1.0);
+    pbr.material.metallic = 0.0;
+    pbr.material.reflectance = vec3(0.0);
+    pbr.material.perceptual_roughness = 1.0;
+    pbr.frag_coord = in.clip;
+    pbr.world_position = vec4(in.world_position, 1.0);
+    pbr.V = calculate_view(pbr.world_position, false);
+    pbr.N = pbr.V;
+    pbr.world_normal = pbr.V;
+    let front = apply_pbr_lighting(pbr).rgb;
+    pbr.N = -pbr.V;
+    pbr.world_normal = -pbr.V;
+    let back = apply_pbr_lighting(pbr).rgb;
+    return (front + back) * 0.5 / view.exposure;
+}
+
+// M_MasterParticle_Diffuse_nearFade (the dust specks, the wispy fog; lit translucency, s090): diffuse =
+// saturate(ParticleTexture x the particle's colour).rgb under the lighting volume; opacity its alpha x
+// (1 - saturate((1 - view depth / fadeDistance) x 1.111111)) x saturate(depth fade / fadeAmount).
+fn near_fade(in: VertexOutput) -> vec4<f32> {
+    let p = params.p;
+    let t = textureSample(t0, s, in.uv) * in.color;
+    let depth = -position_world_to_view(in.world_position).z * 100.0;
+    let near = 1.0 - saturate((1.0 - depth * p[3].z) * 1.111111);
+    let fade = depth_fades(in, p[4].x, 0.0).x;
+    let alpha = saturate(fade * near * t.a);
+    return vec4(volume_lit(in, saturate(t.rgb)) + max(p[2].xyz, vec3(0.0)), alpha);
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let mode = u32(params.mode.x);
@@ -225,6 +259,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         c = fire_02(in);
     } else if mode == 3u {
         c = emissive_master(in);
+    } else if mode == 5u {
+        c = near_fade(in);
     } else if mode == 4u {
         // Already exposed (apply_pbr_lighting).
         c = fly(in);

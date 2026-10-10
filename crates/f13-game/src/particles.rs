@@ -294,6 +294,15 @@ impl Materials {
                 p[6] = Vec4::new(cols, cols * rows, speed, 0.0);
                 (4.0, [tex("Normal1"), tex("Texture1"), None])
             }
+            "M_MasterParticle_Diffuse_nearFade" => {
+                // uniexpr.py M_MasterParticle_Diffuse_nearFade: cb1[2] SelectionColor.rgb + 0, [3] (fadeDistance,
+                // max(1e-5, fadeDistance), 1 / that, fadeAmount), [4] (max(fadeAmount, 1e-5), RefractionDepthBias).
+                let near = s("fadeDistance", 200.0).max(1e-5);
+                let amount = s("fadeAmount", 0.0);
+                p[3] = Vec4::new(s("fadeDistance", 200.0), near, 1.0 / near, amount);
+                p[4] = Vec4::new(amount.max(1e-5), s("RefractionDepthBias", 0.0), 0.0, 0.0);
+                (5.0, [tex("ParticleTexture"), None, None])
+            }
             // Masters whose graphs aren't ported yet aren't drawn (F13_PARTICLE_STANDINS=1 draws them as their first
             // texture x the particle colour, PLACEHOLDER, to check the simulation).
             _ if std::env::var("F13_PARTICLE_STANDINS").is_ok() => {
