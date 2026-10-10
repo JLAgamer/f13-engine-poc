@@ -119,6 +119,25 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         /// The hair's anim Blueprint (the Hair component's AnimClass, an SCHairAnimInstance): its AnimDynamics node's
         /// settings, and its TargetFramerate / MaxAlpha when the Blueprint overrides them.
         public Newtonsoft.Json.Linq.JObject? HairDynamics;
+        /// Every outfit Blueprint for this counselor (ClothingData/*_Outfit, its Counselor this class), in SortIndex
+        /// order: the default outfit's part is the first's with each slot's first option.
+        public List<Outfit>? Outfits;
+    }
+
+    public class Outfit
+    {
+        /// The class (e.g. Athlete_Swimwear_Outfit) and its OutfitName.
+        public string Class = "", Name = "", File = "";
+        /// Its SkinAlphaMask (the body's skin clip under it), if any.
+        public string? SkinMask;
+        /// Each ClothingSlot: the mesh's own material at SlotIndex, and its MaterialOptions' material instances.
+        public List<OutfitSlot> Slots = new();
+    }
+
+    public class OutfitSlot
+    {
+        public string Own = "";
+        public List<string> Options = new();
     }
 
     /// A physics asset body: its bone's capsules ("Sphyl": Radius, Length between the sphere centres, along the
@@ -203,6 +222,7 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         var mask = outfit.GetOrDefault<FSoftObjectPath>("SkinAlphaMask").AssetPathName.Text;
         if (!string.IsNullOrEmpty(mask) && mask != "None")
             info.SkinMasks.Add(Texture(provider.LoadPackageObject<UTexture>(mask)));
+        info.Outfits = Outfits(cls, queue);
 
         // The face hangs off the head (its body part component has no socket in the Blueprint; the skeleton's
         // headSocket is the head bone with no offset), the hair off the face.
@@ -770,6 +790,44 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
                 foreach (var n in scs.GetOrDefault<FPackageIndex[]>("RootNodes", [])) Walk(n);
         }
         return result.Count > 0 ? result : null;
+    }
+
+    /// The counselor's outfits (see Info.Outfits).
+    List<Outfit>? Outfits(UStruct counselorClass, Action<UObject> queue)
+    {
+        var result = new List<(int, Outfit)>();
+        foreach (var f in provider.Files.Keys.Where(k => k.StartsWith("SummerCamp/Content/Blueprints/ClothingData/") && k.EndsWith("_Outfit.uasset")).Order())
+        {
+            var path = f[..^".uasset".Length];
+            var name = path.Split('/')[^1];
+            if (provider.LoadPackageObject(path + "." + name + "_C") is not UBlueprintGeneratedClass bp || bp.ClassDefaultObject.Load() is not { } cdo) continue;
+            var counselor = cdo.GetOrDefault<FSoftObjectPath>("Counselor").AssetPathName.Text;
+            if (!counselor.EndsWith("." + counselorClass.Name)) continue;
+            var meshPath = cdo.GetOrDefault<FSoftObjectPath>("ClothingMesh").AssetPathName.Text;
+            if (string.IsNullOrEmpty(meshPath) || meshPath == "None") continue;
+            var mesh = provider.LoadPackageObject<USkeletalMesh>(meshPath);
+            queue(mesh);
+            var o = new Outfit { Class = name, Name = cdo.GetOrDefault<CUE4Parse.UE4.Objects.Core.i18N.FText>("OutfitName")?.Text ?? name, File = MeshFile(mesh) };
+            var mask = cdo.GetOrDefault<FSoftObjectPath>("SkinAlphaMask").AssetPathName.Text;
+            if (!string.IsNullOrEmpty(mask) && mask != "None") o.SkinMask = Texture(provider.LoadPackageObject<UTexture>(mask));
+            foreach (var slot in cdo.GetOrDefault<FStructFallback[]>("ClothingSlots", []))
+            {
+                var index = slot.GetOrDefault<int>("SlotIndex");
+                if (index >= mesh.SkeletalMaterials.Length || mesh.SkeletalMaterials[index].MaterialInterface?.Load() is not UMaterialInterface own) continue;
+                var s = new OutfitSlot { Own = own.Name };
+                foreach (var option in slot.GetOrDefault<FPackageIndex[]>("MaterialOptions", []))
+                {
+                    var mi = option.Load<UBlueprintGeneratedClass>()?.ClassDefaultObject.Load()?.GetOrDefault<FSoftObjectPath>("MaterialInstance").AssetPathName.Text;
+                    if (string.IsNullOrEmpty(mi) || mi == "None") continue;
+                    var material = provider.LoadPackageObject<UMaterialInterface>(mi);
+                    queue(material);
+                    s.Options.Add(material.Name);
+                }
+                o.Slots.Add(s);
+            }
+            result.Add((cdo.GetOrDefault<int>("SortIndex"), o));
+        }
+        return result.Count > 0 ? result.OrderBy(r => r.Item1).Select(r => r.Item2).ToList() : null;
     }
 
     /// A Blueprint class's defaults (its CDO's own properties), object references flattened to their names.

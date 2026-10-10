@@ -156,6 +156,8 @@ struct Args {
     screenshot: Option<PathBuf>,
     screenshot_after: f32,
     pose: Option<(String, f32)>,
+    /// The counselor's outfit (`--outfit <class or name>[:option,...]`).
+    outfit: Option<String>,
     /// --fly start: eye position and a point to look at (Bevy space, metres).
     camera: Option<(Vec3, Vec3)>,
     /// --round-time: the match's length (s) instead of the game's.
@@ -224,6 +226,7 @@ fn parse_args() -> Args {
     let mut screenshot = None;
     let mut screenshot_after = 0.0;
     let mut pose = None;
+    let mut outfit = None;
     let mut camera = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -299,6 +302,7 @@ fn parse_args() -> Args {
             "--no-foliage" => foliage = false,
             "--unlit" => unlit = true,
             "--screenshot" => screenshot = it.next().map(PathBuf::from),
+            "--outfit" => outfit = it.next(),
             "--pose" => {
                 let v = it.next().unwrap_or_default();
                 let (name, at) = v.split_once('@').unwrap_or((v.as_str(), "0"));
@@ -321,7 +325,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout, seed, near_car, bot_escape, bot_escape4, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, camera, round_time, flashlight, rain }
+    Args { export, layout, seed, near_car, bot_escape, bot_escape4, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, camera, round_time, flashlight, rain }
 }
 
 #[derive(Resource)]
@@ -472,7 +476,7 @@ fn main() {
             .add_plugins(fear_events::FearEventsPlugin { locked: args.fear })
             // Playing Jason, the bot playing her doesn't decide when the run ends.
             .add_plugins(match_flow::MatchPlugin { leave: !bot || args.play_jason })
-            .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone() }, collision::CollisionPlugin, audio::AudioPlugin, water::WaterPlugin, power::PowerPlugin { cut: args.cut_power }, kill_camera::KillCameraPlugin, prop_anim::PropAnimPlugin, doors::DebrisPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin, navigation::NavigationPlugin { debug: args.nav_debug }))
+            .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone(), outfit: args.outfit.clone() }, collision::CollisionPlugin, audio::AudioPlugin, water::WaterPlugin, power::PowerPlugin { cut: args.cut_power }, kill_camera::KillCameraPlugin, prop_anim::PropAnimPlugin, doors::DebrisPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin, navigation::NavigationPlugin { debug: args.nav_debug }))
             .add_plugins((police::PolicePlugin, placed_kills::PlacedKillsPlugin, interaction_camera::InteractionCameraPlugin, counselor_camera::CounselorCameraPlugin, cabinets::CabinetsPlugin, weather::WeatherPlugin, car_lights::CarLightsPlugin, cinematic::CinematicPlugin, hair::HairPlugin));
         // Playing Jason without a --bot-*, she stands idle (time to try him out).
         if args.bot_escape {

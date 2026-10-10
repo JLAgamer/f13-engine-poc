@@ -60,6 +60,65 @@ pub struct CharacterInfo {
     /// overrides SCHairAnimInstance's.
     #[serde(default)]
     pub hair_dynamics: Option<serde_json::Value>,
+    /// Every outfit for this counselor, the default first (the part "Outfit" is it, each slot at its first option).
+    #[serde(default, deserialize_with = "crate::level::null_as_empty")]
+    pub outfits: Vec<Outfit>,
+}
+
+/// An outfit Blueprint (ClothingData/<counselor>/*_Outfit): its clothing mesh, skin mask and slots.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct Outfit {
+    pub class: String,
+    pub name: String,
+    pub file: String,
+    #[serde(default)]
+    pub skin_mask: Option<String>,
+    #[serde(default)]
+    pub slots: Vec<OutfitSlot>,
+}
+
+/// A ClothingSlot: the mesh's own material at its SlotIndex and the material instances its MaterialOptions give.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct OutfitSlot {
+    pub own: String,
+    #[serde(default)]
+    pub options: Vec<String>,
+}
+
+impl CharacterInfo {
+    /// Dresses the counselor in another outfit: `spec` its class or name (case-insensitive, a part of it will do),
+    /// then optionally `:` and each slot's option index (comma-separated; missing ones are the first). The part
+    /// "Outfit" takes its mesh and slot materials, the second skin mask its SkinAlphaMask.
+    pub fn choose_outfit(&mut self, spec: &str) -> Result<String, String> {
+        let (name, options) = spec.split_once(':').unwrap_or((spec, ""));
+        let lower = name.to_lowercase();
+        let outfit = self
+            .outfits
+            .iter()
+            .find(|o| o.class.to_lowercase() == lower || o.name.to_lowercase() == lower)
+            .or_else(|| self.outfits.iter().find(|o| o.class.to_lowercase().contains(&lower) || o.name.to_lowercase().contains(&lower)))
+            .ok_or_else(|| format!("no outfit {name:?} (have {})", self.outfits.iter().map(|o| o.name.as_str()).collect::<Vec<_>>().join(", ")))?
+            .clone();
+        let picks: Vec<usize> = options.split(',').filter(|s| !s.is_empty()).map(|s| s.trim().parse().map_err(|_| format!("bad option index {s:?}"))).collect::<Result<_, _>>()?;
+        let mut map = HashMap::new();
+        for (i, slot) in outfit.slots.iter().enumerate() {
+            let pick = picks.get(i).copied().unwrap_or(0);
+            let Some(material) = slot.options.get(pick).or(slot.options.first()) else { continue };
+            if *material != slot.own {
+                map.insert(slot.own.clone(), material.clone());
+            }
+        }
+        let part = self.parts.iter_mut().find(|p| p.name == "Outfit").ok_or("no outfit part")?;
+        part.file = outfit.file.clone();
+        part.material_map = map;
+        self.skin_masks.truncate(1);
+        if let Some(mask) = &outfit.skin_mask {
+            self.skin_masks.push(mask.clone());
+        }
+        Ok(outfit.name)
+    }
 }
 
 /// A UCameraShake CDO's oscillation. UCameraShake's defaults: duration 1, blend in and out 0.1; an FOscillator's
@@ -511,5 +570,24 @@ mod tests {
         b.truncate(b.len() - 1);
         assert!(AnimData::parse(&b).is_none());
         assert!(AnimData::parse(b"F13B").is_none());
+    }
+
+    #[test]
+    fn choose_outfit_swaps_the_part() {
+        let mut info: CharacterInfo = serde_json::from_str(
+            r#"{"Name":"A","Body":"b.glb","MeshTransform":{"T":[0,0,0],"R":[0,0,0,1],"S":[1,1,1]},"CapsuleHalfHeight":88,"Parts":[{"Name":"Outfit","File":"default.glb","Attach":"MasterPose"}],"SkinMasks":["face","default_mask"],
+            "Bones":[],"Animations":{},"Outfits":[
+              {"Class":"A_Default_Outfit","Name":"Default","File":"default.glb","Slots":[{"Own":"M","Options":["M","M2"]}]},
+              {"Class":"A_Swimwear_Outfit","Name":"Swimwear","File":"swim.glb","SkinMask":"swim_mask","Slots":[{"Own":"S","Options":["S1","S2"]}]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(info.choose_outfit("swim:1").unwrap(), "Swimwear");
+        assert_eq!(info.parts[0].file, "swim.glb");
+        assert_eq!(info.parts[0].material_map.get("S").map(String::as_str), Some("S2"));
+        assert_eq!(info.skin_masks, ["face", "swim_mask"]);
+        assert_eq!(info.choose_outfit("Default").unwrap(), "Default");
+        assert!(info.parts[0].material_map.is_empty());
+        assert_eq!(info.skin_masks, ["face"]);
+        assert!(info.choose_outfit("nope").is_err());
     }
 }

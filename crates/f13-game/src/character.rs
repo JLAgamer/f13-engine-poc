@@ -74,6 +74,9 @@ pub struct CharacterPlugin {
     pub export: std::path::PathBuf,
     /// Testing: hold the counselor in one animation at a time (seconds) instead of driving it from her state.
     pub pose: Option<(String, f32)>,
+    /// The counselor's outfit (`--outfit <class or name>[:option,...]`, CharacterInfo::choose_outfit); None: her
+    /// default outfit.
+    pub outfit: Option<String>,
 }
 
 #[derive(Resource)]
@@ -86,11 +89,18 @@ const KILLER: &str = "Jason_SackHead";
 impl Plugin for CharacterPlugin {
     fn build(&self, app: &mut App) {
         let export = self.export.clone();
+        let outfit = self.outfit.clone();
         if let Some((name, at)) = self.pose.clone() {
             app.insert_resource(ForcedPose(name, at));
         }
         app.add_systems(PreStartup, move |mut commands: Commands, mut clips: ResMut<Assets<AnimationClip>>, mut graphs: ResMut<Assets<AnimationGraph>>| {
-            if let Some(c) = CharacterModel::load(&export.join("counselors").join(format!("{COUNSELOR}.json")), &export, &mut clips, &mut graphs) {
+            if let Some(mut c) = CharacterModel::load(&export.join("counselors").join(format!("{COUNSELOR}.json")), &export, &mut clips, &mut graphs) {
+                if let Some(spec) = &outfit {
+                    match c.info.choose_outfit(spec) {
+                        Ok(name) => info!("counselor outfit: {name}"),
+                        Err(e) => warn!("--outfit {spec}: {e}"),
+                    }
+                }
                 commands.insert_resource(CounselorCharacter(c));
             }
             if let Some(c) = CharacterModel::load(&export.join("killers").join(format!("{KILLER}.json")), &export, &mut clips, &mut graphs) {
