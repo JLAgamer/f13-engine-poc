@@ -418,7 +418,7 @@ fn main() {
         });
     }
     app.insert_resource(GameRng(f13_core::spawn::Rng::new(seed ^ 0x5eed_f13)));
-    app.insert_resource(weather::Weather { rain });
+    app.insert_resource(weather::Weather { rain }).init_resource::<weather::RainMpc>().add_systems(Update, weather::rain_mpc);
     if !(args.fly || args.aerial) {
         let path = args.tuning.clone().unwrap_or_else(f13_data::default_path);
         let tuning = f13_data::load(&path).unwrap_or_else(|e| {

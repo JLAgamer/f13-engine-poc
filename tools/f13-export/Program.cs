@@ -799,6 +799,8 @@ switch (rest[0])
             if (rest.Count == 1 && File.Exists(classesJson))
                 foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(classesJson), @"ParticleSystem'([A-Za-z0-9_]+)'"))
                     names.Add(m.Groups[1].Value);
+            // PlayerCameraManager_BP's RainParticleSystem (a soft reference: the camera's rain grid, f13-game particles.rs).
+            if (rest.Count == 1) names.Add("P_Rain_Environmental_01A_GPU");
             Console.WriteLine($"particles: {ParticleExporter.Write(provider, outDir, names, Queue)} systems written");
         }
         break;

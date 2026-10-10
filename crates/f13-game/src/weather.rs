@@ -22,7 +22,7 @@ pub struct WeatherPlugin;
 
 impl Plugin for WeatherPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RainMpc>().add_systems(Update, (rain_mpc, start_storm, storm).chain());
+        app.add_systems(Update, (start_storm, storm).chain());
     }
 }
 
@@ -34,8 +34,8 @@ pub struct RainMpc {
     pub lightning: f32,
 }
 
-/// OnRep_IsRaining: Rain_MPC's Rain follows the weather.
-fn rain_mpc(weather: Option<Res<Weather>>, mut mpc: ResMut<RainMpc>) {
+/// OnRep_IsRaining: Rain_MPC's Rain follows the weather (registered with [`Weather`], in every mode).
+pub(crate) fn rain_mpc(weather: Option<Res<Weather>>, mut mpc: ResMut<RainMpc>) {
     let Some(w) = weather else { return };
     let rain = if w.rain { 1.0 } else { 0.0 };
     if mpc.rain != rain {

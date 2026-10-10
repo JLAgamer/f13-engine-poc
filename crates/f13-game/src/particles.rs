@@ -41,7 +41,7 @@ impl Plugin for ParticlesPlugin {
             .add_message::<ParticleActivation>()
             .add_message::<SpawnParticles>()
             .add_systems(Startup, spawn_level_particles)
-            .add_systems(PostUpdate, (rain_drips, rain_mpc_materials, spawn_requested, activate, follow_and_finish, simulate, draw).chain().after(bevy::transform::TransformSystems::Propagate));
+            .add_systems(PostUpdate, (rain_drips, rain_grid, rain_mpc_materials, spawn_requested, activate, follow_and_finish, simulate, draw).chain().after(bevy::transform::TransformSystems::Propagate));
     }
 }
 
@@ -172,6 +172,10 @@ pub struct ParticleSystemInstance {
     follow: Option<(Entity, Transform)>,
     /// Despawned once its emitters are done.
     auto_destroy: bool,
+    /// SetVisibility(false): simulated, not drawn (the rain grid's occluded cells).
+    hidden: bool,
+    /// The transform it was last ticked at: local-space emitters (bUseLocalSpace) carry their particles with it.
+    ticked_at: Option<(Vec3, Quat)>,
 }
 
 fn rand(state: &mut u64) -> f32 {
@@ -459,7 +463,7 @@ impl ParticleAssets {
         if emitters.is_empty() {
             return None;
         }
-        let mut inst = ParticleSystemInstance { emitters, location, rotation, scale, max_draw, rng: self.seed, active, actor: actor.to_string(), parent: None, follow: None, auto_destroy: false };
+        let mut inst = ParticleSystemInstance { emitters, location, rotation, scale, max_draw, rng: self.seed, active, actor: actor.to_string(), parent: None, follow: None, auto_destroy: false, hidden: false, ticked_at: None };
         // WarmupTime: ticked in 0.032 s steps (UParticleSystemComponent's default warmup step).
         let warmup = warmup.unwrap_or(system.warmup);
         let mut t = 0.0;
@@ -602,10 +606,147 @@ fn rain_drips(weather: Option<Res<crate::weather::Weather>>, mut systems: Query<
     }
 }
 
+/// The falling rain: SCPlayerCameraManager's RainGrid (PlayerCameraManager_BP's RainZOffset 1000, RainRayTraceTickDelay
+/// 0.125, RainOcclusionHeight 100, RainGridSize 7, RainParticleSize 300, RainParticleSystem
+/// P_Rain_Environmental_01A_GPU; RainResetDistance 500 from the ctor; MODLOG "Rain").
+const RAIN_Z_OFFSET: f32 = 1000.0;
+const RAIN_RESET_DISTANCE: f32 = 500.0;
+const RAIN_TRACE_DELAY: f32 = 0.125;
+const RAIN_OCCLUSION_HEIGHT: f32 = 100.0;
+const RAIN_GRID_SIZE: i32 = 7;
+const RAIN_PARTICLE_SIZE: f32 = 300.0;
+const RAIN_SYSTEM: &str = "P_Rain_Environmental_01A_GPU";
+
+/// One of the rain grid's systems: its offset from the camera (Unreal cm), its next trace time (game seconds) and
+/// whether the last trace found it occluded.
+#[derive(Component)]
+struct RainCell {
+    offset: Vec3,
+    next_trace: f32,
+    occluded: bool,
+    /// Deactivated by a reset, activated (reset) on the next tick.
+    reactivate: bool,
+}
+
+/// The camera location the grid was last moved for (0x1afc, zero at first).
+#[derive(Default)]
+struct RainGridState {
+    on: bool,
+    last: Vec3,
+}
+
+/// OnRainUpdatedInWorldSettings (0x1403fb480) and the tick's grid update (FUN_140410ba0). On: GridSize^2 systems,
+/// cell (i, j) at ((0.5 - N/2 + i) x size, (0.5 - N/2 + j) x size, RainZOffset) from the camera, each first traced at
+/// once (its next trace time -RainRayTraceTickDelay). Off (FUN_1403e9fb0): the grid destroyed. Each tick, only once
+/// the camera has moved half a cell (RainParticleSize x 0.5) in the plane since the last update: every cell due a
+/// trace (delay <= 1e-4, or its time passed) moves to camera + offset; moved more than RainResetDistance, it's
+/// Deactivated and Activate(true)d on the next tick (a timer for the next tick); its next trace is (1 + rand) x the
+/// delay away; then a trace on the Camera channel from its inner corner (the offset's x and y each moved half a cell
+/// towards the camera) down to 100 cm under the camera: a hit more than RainOcclusionHeight from the camera's height
+/// occludes it, a nearer hit occludes it if a second trace from 1 cm above the hit to the camera hits too. A cell
+/// whose occlusion changes SetVisibility(!occluded).
+#[allow(clippy::too_many_arguments)]
+fn rain_grid(
+    mut commands: Commands,
+    weather: Option<Res<crate::weather::Weather>>,
+    pa: Option<ResMut<ParticleAssets>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ParticleMaterial>>,
+    assets: Res<AssetServer>,
+    camera: Query<&GlobalTransform, (With<Camera3d>, With<crate::lighting::Lit>)>,
+    mut cells: Query<(Entity, &mut RainCell, &mut ParticleSystemInstance)>,
+    world: Option<Res<crate::collision::WorldCollision>>,
+    dynamic: Option<Res<crate::collision::DynamicColliders>>,
+    blockers: Query<(), With<crate::collision::CameraBlocker>>,
+    time: Res<Time>,
+    mut state: Local<RainGridState>,
+) {
+    let (Some(w), Some(mut pa)) = (weather, pa) else { return };
+    if w.rain != state.on {
+        state.on = w.rain;
+        if w.rain {
+            let n = RAIN_GRID_SIZE.max(1);
+            let first = (0.5 - n as f32 * 0.5) * RAIN_PARTICLE_SIZE;
+            for i in 0..n {
+                for j in 0..n {
+                    let offset = Vec3::new(first + i as f32 * RAIN_PARTICLE_SIZE, first + j as f32 * RAIN_PARTICLE_SIZE, RAIN_Z_OFFSET);
+                    let xf = (offset, Quat::IDENTITY, Vec3::ONE);
+                    let Some(inst) = pa.instance(&mut commands, &mut meshes, &mut materials, &assets, RAIN_SYSTEM, xf, true, "RainGrid", 0.0, None) else { return };
+                    commands.spawn((inst, RainCell { offset, next_trace: -RAIN_TRACE_DELAY, occluded: false, reactivate: false }, Name::new(format!("rain {i},{j}"))));
+                }
+            }
+        } else {
+            for (e, _, s) in &cells {
+                for em in &s.emitters {
+                    commands.entity(em.entity).despawn();
+                }
+                commands.entity(e).despawn();
+            }
+        }
+        return;
+    }
+    if !state.on {
+        return;
+    }
+    for (_, mut c, mut s) in &mut cells {
+        if std::mem::take(&mut c.reactivate) {
+            reset(&mut s);
+            s.active = true;
+        }
+    }
+    let Some(cam) = camera.iter().next() else { return };
+    let cam = to_unreal(&cam.compute_transform()).0;
+    let moved = (state.last.truncate() - cam.truncate()).length();
+    let half = RAIN_PARTICLE_SIZE * 0.5;
+    if moved < half {
+        return;
+    }
+    let now = time.elapsed_secs();
+    let lists: Vec<&f13_core::collision::TriList> = dynamic.iter().flat_map(|d| d.iter()).filter(|(e, _)| blockers.contains(*e)).map(|(_, l)| l).collect();
+    let hit = |from: Vec3, to: Vec3| -> Option<Vec3> {
+        let world = world.as_deref()?;
+        let f = f13_core::collision::segment_hit(&(&*world.camera_grid, lists.as_slice()), to_bevy(from), to_bevy(to), 4.0)?;
+        Some(from + (to - from) * f)
+    };
+    for (_, mut c, mut s) in &mut cells {
+        if RAIN_TRACE_DELAY > 1e-4 && c.next_trace > now {
+            continue;
+        }
+        let mut at = cam + c.offset;
+        s.location = at;
+        for em in &s.emitters {
+            commands.entity(em.entity).insert(Transform::from_translation(to_bevy(at)));
+        }
+        if moved > RAIN_RESET_DISTANCE {
+            s.active = false;
+            c.reactivate = true;
+        }
+        let was = c.occluded;
+        if 1e-4 < RAIN_TRACE_DELAY {
+            c.next_trace = (rand(&mut pa.seed) + 1.0) * RAIN_TRACE_DELAY + now;
+        }
+        c.occluded = false;
+        for k in 0..2 {
+            if c.offset[k].abs() > 1e-4 {
+                at[k] += if c.offset[k] >= 0.0 { -half } else { half };
+            }
+        }
+        let end = at - Vec3::Z * (RAIN_Z_OFFSET + 100.0);
+        if let Some(h) = hit(at, end) {
+            c.occluded = (h.z - cam.z).abs() > RAIN_OCCLUSION_HEIGHT || hit(h + Vec3::Z, cam).is_some();
+        }
+        if c.occluded != was {
+            s.hidden = c.occluded;
+        }
+    }
+    state.last = cam;
+}
+
 /// Rain_MPC's Rain into the rain materials (M_Rain_Master's opacity).
 fn rain_mpc_materials(mpc: Option<Res<crate::weather::RainMpc>>, mut materials: ResMut<Assets<ParticleMaterial>>) {
-    let Some(mpc) = mpc.filter(|m| m.is_changed()) else { return };
-    let rain: Vec<_> = materials.iter().filter(|(_, m)| m.params.mode.x == 7.0).map(|(id, _)| id).collect();
+    // Each rain material as it's made too (they come after the weather's first write).
+    let Some(mpc) = mpc else { return };
+    let rain: Vec<_> = materials.iter().filter(|(_, m)| m.params.mode.x == 7.0 && m.params.p[15].x != mpc.rain).map(|(id, _)| id).collect();
     for id in rain {
         if let Some(mut m) = materials.get_mut(id) {
             m.params.p[15].x = mpc.rain;
@@ -618,17 +759,21 @@ fn activate(mut messages: MessageReader<ParticleActivation>, mut systems: Query<
     for m in messages.read() {
         for mut s in systems.iter_mut().filter(|s| s.actor == m.actor) {
             if m.active {
-                // Activate(true): from the start.
-                for e in &mut s.emitters {
-                    e.particles.clear();
-                    e.seconds = 0.0;
-                    e.spawn_fraction = 0.0;
-                    e.loops_done = 0;
-                    e.bursts_fired.iter_mut().for_each(|b| *b = false);
-                }
+                reset(&mut s);
             }
             s.active = m.active;
         }
+    }
+}
+
+/// Activate(true)'s ResetParticles: every emitter from the start.
+fn reset(s: &mut ParticleSystemInstance) {
+    for e in &mut s.emitters {
+        e.particles.clear();
+        e.seconds = 0.0;
+        e.spawn_fraction = 0.0;
+        e.loops_done = 0;
+        e.bursts_fired.iter_mut().for_each(|b| *b = false);
     }
 }
 
@@ -645,6 +790,18 @@ fn simulate(time: Res<Time<Real>>, virtual_time: Res<Time<Virtual>>, mut systems
 
 fn tick(s: &mut ParticleSystemInstance, dt: f32) {
     let (location, rotation, scale, active) = (s.location, s.rotation, s.scale, s.active);
+    // Local-space emitters: their particles move with the component.
+    if let Some((was_at, was_rot)) = s.ticked_at.filter(|&(l, r)| l != location || r != rotation) {
+        let turn = rotation * was_rot.inverse();
+        for e in s.emitters.iter_mut().filter(|e| e.def.local_space) {
+            for p in &mut e.particles {
+                p.location = location + turn * (p.location - was_at);
+                p.velocity = turn * p.velocity;
+                p.base_velocity = turn * p.base_velocity;
+            }
+        }
+    }
+    s.ticked_at = Some((location, rotation));
     let mut rng = s.rng;
     for e in &mut s.emitters {
         tick_emitter(e, dt, location, rotation, scale, active, &mut rng);
@@ -857,7 +1014,7 @@ fn draw(
     let (cam_right, cam_up, cam_fwd) = (cam.right().as_vec3(), cam.up().as_vec3(), cam.forward().as_vec3());
     for s in &systems {
         let origin = to_bevy(s.location);
-        let near = s.max_draw <= 0.0 || origin.distance(cam_pos) <= s.max_draw;
+        let near = !s.hidden && (s.max_draw <= 0.0 || origin.distance(cam_pos) <= s.max_draw);
         for e in &s.emitters {
             let shown = near && !e.particles.is_empty();
             if let Ok(mut v) = vis.get_mut(e.entity) {
