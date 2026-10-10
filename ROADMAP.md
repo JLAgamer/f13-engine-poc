@@ -39,9 +39,9 @@ Moved from Milestone 1 (not tied to gameplay):
       Remaining: the translucency
       lighting volume the lit ones read (a stand-in now: MODLOG "Particle materials"), particle lights, attractors and
       collision, mesh emitters' camera facing, axis lock and velocity alignment, the thrown knife's ribbon trail
-      (TracerTrail, M_Jason_ThrowingKnife_Trail_02) and its dart's colour (throwing_Dart_VFX_mesh's exported UVs sit in
-      -1..1 and wrap into the weapon atlas's red: CUE4Parse's decode, unchecked), blood, the tire dust's cylinder spawn
-      and attractor
+      (TracerTrail, M_Jason_ThrowingKnife_Trail_02), blood, the tire dust's cylinder spawn and attractor
+- [ ] Jason's darts (the held, thrown and stuck ones: M_Jason_V6_Weapons_inst, MiscMaster_jason_m) draw solid red
+      though their UVs sit on the atlas's white spikes; cause not found
 - [ ] Counselor model, remaining: the eye look against a capture of the game (it rolls the eyes 90 degrees from their bind: MODLOG
       "The eyes' look"), the face's brow and jaw additives and the body montages' face curves that weight them
       (MODLOG "The counselor's face"), hair dynamics (its anim
