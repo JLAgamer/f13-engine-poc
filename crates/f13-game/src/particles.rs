@@ -409,6 +409,27 @@ impl Materials {
                 p[23] = Vec4::new(s("0_Opacity_Multiplier", 3.0), s("RefractionDepthBias", 0.0), 0.0, 0.0);
                 (10.0, [tex("DistortionTexture"), tex("Base_ALPHA_Texture1"), tex("Base_ALPHA_Texture2"), tex("Base_ALPHA_Texture3")])
             }
+            "M_Enviroment_Fog_02" => {
+                // uniexpr.py M_Enviroment_Fog_02 (FoldedMath 0 add, 1 sub, 2 mul, 3 div): [1] SelectionColor.rgb (0),
+                // [3].x -0_BaseContrast, [5].x -0_AlphaContrast, [6] (SM_U_Offset + dms / 30, SM_V_Offset + dms /
+                // 20), [7..18] below (dms 0_Distotrion_Multiplier_SphereMask).
+                let (bc, ac, dms, r, hard) = (s("0_BaseContrast", 0.0), s("0_AlphaContrast", 0.0), s("0_Distotrion_Multiplier_SphereMask", 0.0), s("SphereMask_Radius", 0.5), s("SphereMask_Hardness", 0.0));
+                let inner = (r - dms / 8.0).clamp(0.0, 0.7).max(1e-5);
+                p[3] = Vec4::splat(-bc);
+                p[5] = Vec4::splat(-ac);
+                p[6] = Vec4::new(s("SM_U_Offset", 0.5) + dms / 30.0, s("SM_V_Offset", 0.5) + dms / 20.0, 0.0, 0.0);
+                p[7] = Vec4::new(s("z_Master_Time", 0.013), s("Base_UV_Scale", 0.5), s("z_Distortion_Time", 0.013), s("Distortion_UV_Scale", 0.5));
+                p[8] = Vec4::new(s("z_DistortionSphereMaskPower", 1.0), s("0_Distotrion_Multiplier_Base", 0.0), s("DistortionMax", 5.0), s("DistortionMin", 0.0));
+                p[9] = Vec4::new(s("z_Base2_Time_Multiplier", 2.0), s("EmissiveMultiplier", 0.3), bc, -bc);
+                p[10] = Vec4::new(s("Base_Add_Subtract", 0.0), s("BaseMultiplier", 1.0), bc + 1.0, ac);
+                p[11] = Vec4::new(-ac, s("0_AlphaBaseMax", 1.0), s("0_AlphaBaseMin", 0.0), ac + 1.0);
+                p[12] = Vec4::new(s("0_Opacity_MASTER", 1.0), s("0_Opacity_Max", 1.0), dms, dms);
+                p[15] = Vec4::new(r - dms / 8.0, (r - dms / 8.0).clamp(0.0, 0.7), inner, 1.0 / inner);
+                p[16] = Vec4::new(hard, 1.0 - hard, (1.0 - hard).max(1e-5), 1.0 / (1.0 - hard).max(1e-5));
+                p[17] = Vec4::new(r.max(1e-5), 1.0 / r.max(1e-5), s("SphereMask_Fade_Power", 0.5), s("0_FadeDistance", 512.0));
+                p[18] = Vec4::new(s("0_FadeDistance", 512.0).max(1e-5), s("0_PixelDepthDistance", 768.0), s("Fade Exponent", 1.0), s("RefractionDepthBias", 0.0));
+                (11.0, [tex("DistortionTexture"), tex("BaseTexture1"), tex("BaseTexture2"), None])
+            }
             // M_Procedural_Tire_Dust_01_Inst's own shader map (static switches: 0_NRM_switch off); the master's other
             // instances aren't ported.
             "M_Procedural_Smoke_04_no-self-shadow" if name == "M_Procedural_Tire_Dust_01_Inst" => {

@@ -22,7 +22,7 @@ struct ParticleParams {
     // x: mode (0 stand-in, 1 M_Procedural_Fire_01, 2 M_Procedural_Fire_02, 3 M_MasterParticle_Emissive,
     // 4 M_Fly_Animated_01, 5 M_MasterParticle_Diffuse_nearFade, 6 M_Procedural_Smoke_05, 7 M_Rain_Master,
     // 8 M_Procedural_Tire_Dust_01_Inst, 9 M_Procedural_Smoke_01B_no-self-shadow, 10 its
-    // _separate-transparency_off sibling); y: additive
+    // _separate-transparency_off sibling, 11 M_Enviroment_Fog_02); y: additive
     mode: vec4<f32>,
     // The master's material uniform buffer as its compiled shader reads it (uniexpr.py's cb1[n]).
     p: array<vec4<f32>, 32>,
@@ -469,6 +469,48 @@ fn smoke_01b_sto(in: VertexOutput) -> vec4<f32> {
     return vec4(emissive + volume_lit(in, saturate(base * col.rgb)), saturate(fade * opacity));
 }
 
+// M_Enviroment_Fog_02 (the phone box's and fuse box's smoke, the fuse box's explosion; lit translucency, the master's
+// shader map, sprite pass s003): t0 DistortionTexture (xy x 2 - 1), t1 BaseTexture1, t2 BaseTexture2. uv x
+// Base_UV_Scale x dp.z + dp.y, turned by dp.x x z_Master_Time x time (Texture1) and by that x
+// z_Base2_Time_Multiplier (Texture2); the distortion on the mirrored uv x Distortion_UV_Scale, turned by time x
+// z_Distortion_Time + dp.x, ^ z_DistortionSphereMaskPower, x dp.w x 0_Distotrion_Multiplier_Base clamped
+// DistortionMin..Max, offsets both. Their product's luminance x colour x EmissiveMultiplier is the emissive;
+// (luminance x colour.r + Base_Add_Subtract) x BaseMultiplier through 0_BaseContrast is the (grey) diffuse under the
+// lighting volume. Opacity: the product's red clamped 0_AlphaBaseMin..Max through 0_AlphaContrast x
+// 0_Opacity_MASTER, at most 0_Opacity_Max, x (two sphere masks: the distorted one about SM_U/V_Offset + the
+// distortion / 30 and / 20, radius SphereMask_Radius - it / 8; the plain one, radius SphereMask_Radius) ^
+// SphereMask_Fade_Power, x the depth fade x colour.a x min((pixel depth / 0_PixelDepthDistance) ^ Fade Exponent, 1).
+fn fog_02(in: VertexOutput) -> vec4<f32> {
+    let p = params.p;
+    let dp = in.dynamic;
+    let uv = in.uv;
+    let col = in.color;
+    let time = globals.time;
+    let a = dp.x * p[7].x * time;
+    let uva = uv * p[7].y * dp.z + dp.y - 0.5;
+    let b = time * p[7].z + dp.x;
+    let uvb = (1.0 - uv) * p[7].w * dp.z + dp.y - 0.5;
+    let d = pow(max(textureSample(t0, s, turn(uvb, sin(b), cos(b)) + 0.5).xy * 2.0 - 1.0, vec2(0.0)), vec2(p[8].x));
+    let off = clamp(dp.w * p[8].y * d, vec2(p[8].w), vec2(p[8].z));
+    let c1 = textureSample(t1, s, turn(uva, sin(a), cos(a)) + 0.5 + off).rgb;
+    let c = a * p[9].x;
+    let c2 = textureSample(t2, s, off + turn(uva, sin(c), cos(c)) + 0.5).rgb;
+    let prod = c1 * c2;
+    let lum = dot(prod, vec3(0.3, 0.59, 0.11));
+    let emissive = max(lum * col.rgb * p[9].y + p[1].xyz, vec3(0.0));
+    let base = saturate((lum * col.r + p[10].x) * p[10].y * (p[10].z - p[3].x) + p[3].x);
+    var alpha = saturate(clamp(prod.r, p[11].z, p[11].y) * (p[11].w - p[5].x) + p[5].x);
+    alpha = clamp(alpha * p[12].x, 0.0, p[12].y);
+    let m1 = saturate((1.0 - length(d * (dp.w * p[12].z) + uv - p[6].xy) * p[15].w) * p[16].w);
+    let m2 = saturate((1.0 - length(uv - 0.5) * p[17].y) * p[16].w);
+    alpha = alpha * pow(m1 * m2, p[17].z);
+    let own = -position_world_to_view(in.world_position).z * 100.0;
+    let f = depth_fades(in, p[18].x, 0.0);
+    let pixel = select(min(pow(max(own / p[18].y, 0.0), p[18].z), 1.0), 1.0, p[18].y <= 0.0);
+    let fade = saturate(f.x * col.a) * pixel;
+    return vec4(emissive + volume_lit(in, vec3(base)), saturate(fade * alpha));
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let mode = u32(params.mode.x);
@@ -491,6 +533,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         c = smoke_01b(in);
     } else if mode == 10u {
         c = smoke_01b_sto(in);
+    } else if mode == 11u {
+        c = fog_02(in);
     } else if mode == 4u {
         // Already exposed (apply_pbr_lighting).
         c = fly(in);
