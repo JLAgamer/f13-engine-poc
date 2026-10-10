@@ -41,6 +41,7 @@ impl Plugin for ParticlesPlugin {
             .add_message::<ParticleActivation>()
             .add_message::<SpawnParticles>()
             .add_systems(Startup, spawn_level_particles)
+            .add_systems(Update, test_particles)
             .add_systems(PostUpdate, (rain_drips, rain_grid, rain_mpc_materials, spawn_requested, activate, follow_and_finish, simulate, draw).chain().after(bevy::transform::TransformSystems::Propagate));
     }
 }
@@ -525,8 +526,8 @@ impl Materials {
                 (12.0, [tex("ScrollTexture1"), tex("EmissiveTexture1"), tex("BaseTextureMask1"), None])
             }
             // M_Blood_Burst_01's shader map (M_Blood_Spray_10's own is the same, diffed; M_Blood_Bursts_03_Inst has none).
-            // M_Blood_Squirt_01's own permutation differs (a UV offset by DynamicParameter.y) and isn't ported.
-            "M_Blood_Burst_01" if name != "M_Blood_Squirt_01" => {
+            // M_Blood_Squirt_01 has its own permutation (s003 diffed): the same shading, its UV distorted (mode 14).
+            "M_Blood_Burst_01" => {
                 // uniexpr.py M_Blood_Burst_01: [1] (FLIPBOOK_COLUMNS, ROWS), [2] (COLUMNS x ROWS, ROWS), [4].x
                 // -EmissiveHighlightContrast, [6] BloodColor.rgb, [7] SelectionColor.rgb (0), [8..12] below.
                 let vec = |n: &str, d: [f32; 4]| e.vectors.get(n).or_else(|| master.and_then(|m| m.vectors.get(n))).copied().unwrap_or(d);
@@ -541,7 +542,18 @@ impl Materials {
                 p[10] = Vec4::new(ehc, -ehc, ehc + 1.0, s("EmmissiveMultiplier", 0.1));
                 p[11] = Vec4::new(s("MET", 0.0), s("SPEC", 0.01), s("ROUGH", 0.05), s("FadeDistance", 3.0));
                 p[12] = Vec4::new(s("FadeDistance", 3.0).max(1e-5), s("0_PixelDepthDistance", 0.0), s("0_Opacity_MASTER", 2.0), s("RefractionDepthBias", 0.0));
-                (13.0, [tex("DIFF"), None, None, None])
+                if name == "M_Blood_Squirt_01" {
+                    // Its sprite pass: o = DynamicParameter.y + 0_DistortionMultiplier off the flipbook's UV; two
+                    // DistortionTexture samples circling (radius 0.75) at RealTime x 0_MasterScrollMultiplier x each
+                    // scroll x 2 pi, at their UV multipliers (the second mirrored), each ^ DistortionTexturePower,
+                    // summed x o and clamped to DistortionMin..Max, added to the UV.
+                    p[13] = Vec4::new(s("0_DistortionMultiplier", 0.0), s("0_MasterScrollMultiplier", 1.0), s("Distortion1_Scroll_Multiplier", 0.05), s("Distortion1_UV_Coord_Multiplier", 0.5));
+                    p[14] = Vec4::new(s("DistortionTexturePower", 5.0), s("Distortion2_Scroll_Multiplier", 0.08), s("Distortion2_UV_Coord_Multiplier", 0.4), s("DistortionMax", 1.0));
+                    p[15] = Vec4::new(s("DistortionMin", 0.0), 0.0, 0.0, 0.0);
+                    (14.0, [tex("DIFF"), tex("DistortionTexture"), None, None])
+                } else {
+                    (13.0, [tex("DIFF"), None, None, None])
+                }
             }
             "M_Rain_Master" => {
                 // uniexpr.py M_Rain_Master: cb1[2] EmissiveColor.rgb, [3] SelectionColor.rgb (0), [5] BaseColor.rgb,
@@ -723,6 +735,22 @@ impl SpawnParticles {
     pub fn at(system: &str, transform: Transform) -> Self {
         SpawnParticles { system: system.to_string(), transform, follow: None, actor: String::new(), active: true }
     }
+}
+
+/// Testing (--particles): this system, spawned 1.5 m in front of the counselor's chest every 0.3 s, facing her.
+#[derive(Resource)]
+pub struct TestParticles(pub String);
+
+fn test_particles(test: Option<Res<TestParticles>>, time: Res<Time>, player: Query<&Transform, With<crate::player::Player>>, mut out: MessageWriter<SpawnParticles>, mut next: Local<f32>) {
+    let Some(test) = test else { return };
+    let Ok(xf) = player.single() else { return };
+    if time.elapsed_secs() < *next {
+        return;
+    }
+    *next = time.elapsed_secs() + 0.3;
+    debug!("test particles: {}", test.0);
+    let fwd = xf.forward().as_vec3();
+    out.write(SpawnParticles::impact(&test.0, xf.translation + Vec3::Y * 1.2 + fwd * 1.5, -fwd));
 }
 
 /// Bevy space (m, Y up) to Unreal's (cm, Z up): the inverse of the export's glTF conversion.

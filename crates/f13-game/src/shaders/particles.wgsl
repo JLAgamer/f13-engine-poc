@@ -567,14 +567,39 @@ fn ashes(in: VertexOutput) -> vec4<f32> {
 // pixel depth fade, x 0_Opacity_MASTER, saturated.
 fn blood(in: VertexOutput) -> vec4<f32> {
     let p = params.p;
-    let dp = in.dynamic;
     let uv = in.uv;
-    let col = in.color;
-    let time = globals.time;
-    var phase = fract((time * p[8].w) * p[9].x);
-    phase = fract(phase + p[9].y * (dp.w - phase));
+    var phase = fract((globals.time * p[8].w) * p[9].x);
+    phase = fract(phase + p[9].y * (in.dynamic.w - phase));
     let cell = floor(phase * p[2].xy) / p[1].xy;
-    let fuv = mix(uv, uv / p[1].xy + cell, p[9].z);
+    return blood_at(in, mix(uv, uv / p[1].xy + cell, p[9].z));
+}
+
+// M_Blood_Squirt_01's permutation: the flipbook UV offset by o = DynamicParameter.y + 0_DistortionMultiplier, plus
+// two circling DistortionTexture samples ^ DistortionTexturePower, summed x o, clamped to DistortionMin..Max.
+fn blood_squirt(in: VertexOutput) -> vec4<f32> {
+    let p = params.p;
+    let uv = in.uv;
+    let o = in.dynamic.y + p[13].x;
+    var phase = fract((globals.time * p[8].w) * p[9].x);
+    phase = fract(phase + p[9].y * (in.dynamic.w - phase));
+    let cell = floor(phase * p[2].xy) / p[1].xy;
+    var fuv = mix(uv, (uv - o) / p[1].xy + cell, p[9].z);
+    let t = globals.time * p[13].y;
+    let a1 = t * p[13].z * 6.283185;
+    let uv1 = vec2(cos(a1) * 0.75 + uv.x, sin(a1) * 0.75 + uv.y) * p[13].w;
+    let n1 = pow(max(textureSample(t1, s, uv1).xy, vec2(0.0)), vec2(p[14].x));
+    let a2 = t * p[14].y * 6.283185;
+    let uv2 = vec2(1.0 - (uv.x - cos(a2) * 0.75) * p[14].z, 1.0 - (uv.y - sin(a2) * 0.75) * p[14].z);
+    let n2 = pow(max(textureSample(t1, s, uv2).xy, vec2(0.0)), vec2(p[14].x));
+    fuv += clamp((n1 + n2) * o, vec2(p[15].x), vec2(p[14].w));
+    return blood_at(in, fuv);
+}
+
+// The blood masters' shading at the (flipbook, distorted) UV.
+fn blood_at(in: VertexOutput, fuv: vec2<f32>) -> vec4<f32> {
+    let p = params.p;
+    let dp = in.dynamic;
+    let col = in.color;
     let mask = textureSample(t0, s, fuv).r;
     let tint = col.rgb * p[6].xyz * saturate(mask * (p[10].z - p[4].x) + p[4].x);
     let emissive = max(tint * p[10].w + p[7].xyz, vec3(0.0));
@@ -614,6 +639,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         c = ashes(in);
     } else if mode == 13u {
         c = blood(in);
+    } else if mode == 14u {
+        c = blood_squirt(in);
     } else if mode == 4u {
         // Already exposed (apply_pbr_lighting).
         c = fly(in);
