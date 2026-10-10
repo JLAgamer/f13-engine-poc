@@ -17,8 +17,10 @@
 //!   the shots' time mapping, activate (from the start, when it isn't active) or deactivate the bound Emitter actor's
 //!   systems (particles.rs ParticleActivation). PLACEHOLDER: from UE 4.18's particle track template (engine source,
 //!   not the game's code); Trigger isn't used by these sequences.
-//! Not played: the material parameter, Fear and colour tracks, the cameras' depth of field, the TextRenderActor's
-//! title.
+//! - the TextRenderActor's text (its TextRenderComponent, [`title_text`]) and its component material track's
+//!   Transparency (Text_Cinematics: masked at (distance field x 180 - 90) x Transparency >= 0.3333).
+//! - an actor attached to another's root takes its transform track as its offset from it.
+//! Not played: the Fear and colour tracks, the cameras' depth of field.
 
 use crate::lighting::{LightKind, PlacedLight};
 use bevy::prelude::*;
@@ -34,7 +36,7 @@ pub struct CinematicPlugin;
 impl Plugin for CinematicPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CinematicDone>()
-            .add_systems(Update, (start, ready, attach).chain())
+            .add_systems(Update, (start, ready, attach, title_text).chain())
             .add_systems(PostUpdate, play.before(bevy::transform::TransformSystems::Propagate));
     }
 }
@@ -89,6 +91,7 @@ enum Kind {
     Audio,
     Event,
     Particle,
+    ComponentMaterial,
     Other,
 }
 
@@ -138,6 +141,7 @@ impl Sequence {
                     "MovieSceneAudioTrack" => Kind::Audio,
                     "MovieSceneEventTrack" => Kind::Event,
                     "MovieSceneParticleTrack" => Kind::Particle,
+                    "MovieSceneComponentMaterialTrack" => Kind::ComponentMaterial,
                     _ => Kind::Other,
                 };
                 let sections = t["Sections"]
@@ -229,6 +233,17 @@ fn evaluate(seqs: &HashMap<String, Sequence>, name: &str, t: f32, base: &HashMap
                 let v = keys.iter().take_while(|k| k["Time"].as_f64().unwrap_or(0.0) as f32 <= t).last().or(keys.first()).and_then(|k| k["Value"].as_i64());
                 let v = v.or(s.props["BoolCurve"]["DefaultValue"].as_i64()).unwrap_or(0);
                 out.hidden.insert(actor, v != 0);
+            }
+            Kind::ComponentMaterial => {
+                // Its scalar parameters, by name (a curve without keys and the float max default leaves the material's).
+                let (Some((actor, component)), Some(s)) = (target, section_at(&track.sections, t, true)) else { continue };
+                for c in s.props["ScalarParameterNamesAndCurves"].as_array().into_iter().flatten() {
+                    let Some(name) = c["ParameterName"].as_str() else { continue };
+                    let curve = &c["ParameterCurve"];
+                    if curve["Keys"].as_array().is_some_and(|k| !k.is_empty()) {
+                        out.floats.insert((actor.clone(), component.clone(), name.to_string()), channel(curve, t, 0.0));
+                    }
+                }
             }
             Kind::Float(prop) => {
                 let (Some((actor, component)), Some(s)) = (target, section_at(&track.sections, t, true)) else { continue };
@@ -480,6 +495,34 @@ fn start(
                 e.insert(StagedLight(l));
             }
         }
+        if class == "TextRenderActor" {
+            if let Some(c) = comps.iter().find(|c| c["Type"] == "TextRenderComponent") {
+                let p = &c["Props"];
+                let font: Option<Value> = p["Font"]
+                    .as_str()
+                    .and_then(|f| f.split('\'').nth(1))
+                    .and_then(|f| std::fs::read_to_string(root.join("fonts").join(format!("{f}.json"))).ok())
+                    .and_then(|t| serde_json::from_str(&t).ok());
+                if let Some(font) = font {
+                    let page = font["Pages"][0].as_str().unwrap_or("").to_string();
+                    let image = assets.load_with_settings(format!("{page}.png"), |s: &mut bevy::image::ImageLoaderSettings| s.is_srgb = false);
+                    let col = &p["TextRenderColor"];
+                    let byte = |k: &str, d: f64| col[k].as_f64().unwrap_or(d) as f32 / 255.0;
+                    e.insert(PendingTitle {
+                        text: p["Text"]["SourceString"].as_str().unwrap_or("").to_string(),
+                        font,
+                        image,
+                        // FColor vertex colour, read as unorm (no sRGB decode).
+                        color: LinearRgba::new(byte("R", 255.0), byte("G", 255.0), byte("B", 255.0), 1.0),
+                        center: match p["HorizontalAlignment"].as_str() {
+                            Some("EHTA_Center") => 1,
+                            Some("EHTA_Right") => 2,
+                            _ => 0,
+                        },
+                    });
+                }
+            }
+        }
         if class == "CineCameraActor" {
             if let Some(c) = comps.iter().find(|c| c["Type"] == "CineCameraComponent") {
                 let p = &c["Props"];
@@ -568,6 +611,137 @@ fn ready(
     p.started = true;
 }
 
+/// A TextRenderActor's text waiting for its font's page.
+#[derive(Component)]
+struct PendingTitle {
+    text: String,
+    font: Value,
+    image: Handle<Image>,
+    color: LinearRgba,
+    /// HorizontalAlignment: 0 left, 1 center, 2 right.
+    center: u8,
+}
+
+/// A staged text's material (its Transparency sets the mask's cutoff).
+#[derive(Component)]
+struct TitleText(Handle<StandardMaterial>);
+
+/// The quads of UTextRenderComponent's string mesh (FTextRenderSceneProxy, FUN_1413a6bd0; its line size
+/// FUN_1413a9990, the vertical offset FUN_1413a9440), in the actor's space (Bevy, m). The proxy's scale is XScale x
+/// WorldSize x InvDefaultSize: the component's own (1, and the CDO's WorldSize and 1 / it: the constructor
+/// 0x1413a1900 takes both from the default font's max char height), so a glyph is its atlas size in cm. Lines split at
+/// "<br>" and newlines; each starts at -width / 2 (center) or -width (right); a glyph spans (x, y + VerticalOffset) to
+/// + (USize, VSize), then x moves on by USize and, before another non-space character, (Kerning +
+/// HorizSpacingAdjust); a line is its tallest (VSize + VertSpacingAdjust + VerticalOffset), else the font's max height.
+/// UE places a vertex at (0, -x, -y), raised by the text's height for EVRTA_TextBottom (the default: FUN_1413a9440's
+/// 2). PLACEHOLDER: the font's CharRemap (IsRemapped) isn't exported; the characters are taken by their code.
+fn title_mesh(text: &str, font: &Value, size: Vec2, center: u8) -> Mesh {
+    let chars: Vec<[f32; 6]> = font["Characters"]
+        .as_array()
+        .map(|a| a.iter().map(|c| std::array::from_fn(|i| c[i].as_f64().unwrap_or(0.0) as f32)).collect())
+        .unwrap_or_default();
+    let kerning = font["Kerning"].as_f64().unwrap_or(0.0) as f32;
+    let max_height = chars.iter().map(|c| c[3]).fold(0.0, f32::max);
+    let glyph = |ch: char| chars.get(ch as usize).filter(|c| c[4] == 0.0);
+    let lines: Vec<Vec<char>> = text.split("<br>").flat_map(|l| l.split('\n')).map(|l| l.chars().collect()).collect();
+    let advance = |line: &[char], i: usize, c: &[f32; 6]| c[2] + if line.get(i + 1).is_some_and(|n| !n.is_whitespace()) { kerning } else { 0.0 };
+    let total: f32 = lines.iter().map(|l| l.iter().filter_map(|&c| glyph(c)).map(|c| c[3] + c[5]).fold(0.0, f32::max)).map(|h| if h > 0.0 { h } else { max_height }).sum();
+    let (mut positions, mut uvs, mut normals, mut indices) = (vec![], vec![], vec![], vec![]);
+    let mut y = 0.0;
+    for line in &lines {
+        let mut x = 0.0f32;
+        let mut width = 0.0f32;
+        for (i, &ch) in line.iter().enumerate() {
+            if let Some(c) = glyph(ch) {
+                width = width.max(x + c[2]);
+                x += advance(line, i, c);
+            }
+        }
+        let start = match center {
+            1 => -width * 0.5,
+            2 => -width,
+            _ => 0.0,
+        };
+        let mut x = 0.0f32;
+        let mut height = 0.0f32;
+        for (i, &ch) in line.iter().enumerate() {
+            let Some(c) = glyph(ch) else { continue };
+            let (left, top) = (x + start, y + c[5]);
+            let (right, bottom) = (left + c[2], top + c[3]);
+            let (u0, v0, u1, v1) = (c[0] / size.x, c[1] / size.y, (c[0] + c[2]) / size.x, (c[1] + c[3]) / size.y);
+            let base = positions.len() as u32;
+            // UE (0, -x, total - y) cm to Bevy (x, z, y) m.
+            for (px, py, u, v) in [(left, top, u0, v0), (right, top, u1, v0), (left, bottom, u0, v1), (right, bottom, u1, v1)] {
+                positions.push([0.0, (total - py) * 0.01, -px * 0.01]);
+                uvs.push([u, v]);
+                normals.push([1.0, 0.0, 0.0]);
+            }
+            indices.extend_from_slice(&[base, base + 2, base + 1, base + 1, base + 2, base + 3]);
+            height = height.max(c[3] + c[5]);
+            x += advance(line, i, c);
+        }
+        y += if height > 0.0 { height } else { max_height };
+    }
+    Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_indices(bevy::mesh::Indices::U32(indices))
+}
+
+/// Text_Cinematics' mask: (distance field x 180 - 90) x Transparency - 0.3333 >= 0, as a cutoff on the field.
+fn title_cutoff(transparency: f32) -> f32 {
+    if transparency > 0.0 {
+        0.5 + 0.3333 / (180.0 * transparency)
+    } else {
+        2.0
+    }
+}
+
+/// Builds a staged text once its font page is in: its glyphs' quads, and Text_Cinematics (masked, unlit, two-sided:
+/// its emissive the component's colour, its mask the page's distance field) at the material's Transparency 1.
+fn title_text(
+    mut commands: Commands,
+    pending: Query<(Entity, &PendingTitle)>,
+    mut images: ResMut<Assets<Image>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for (e, t) in &pending {
+        let Some(src) = images.get(&t.image) else { continue };
+        let (w, h) = (src.width(), src.height());
+        // The field in alpha (the page is grey).
+        let mut data = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let v = src.get_color_at(x, y).map(|c| c.to_linear().red).unwrap_or(0.0);
+                data.extend_from_slice(&[255, 255, 255, (v.clamp(0.0, 1.0) * 255.0).round() as u8]);
+            }
+        }
+        let field = images.add(Image::new(
+            bevy::render::render_resource::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            bevy::render::render_resource::TextureDimension::D2,
+            data,
+            bevy::render::render_resource::TextureFormat::Rgba8Unorm,
+            bevy::asset::RenderAssetUsages::RENDER_WORLD,
+        ));
+        let mesh = meshes.add(title_mesh(&t.text, &t.font, Vec2::new(w as f32, h as f32), t.center));
+        let material = materials.add(StandardMaterial {
+            base_color: Color::BLACK,
+            base_color_texture: Some(field),
+            emissive: t.color,
+            emissive_exposure_weight: 1.0,
+            reflectance: 0.0,
+            perceptual_roughness: 1.0,
+            alpha_mode: AlphaMode::Mask(title_cutoff(1.0)),
+            double_sided: true,
+            cull_mode: None,
+            ..default()
+        });
+        commands.entity(e).remove::<PendingTitle>().insert((Mesh3d(mesh), MeshMaterial3d(material.clone()), TitleText(material)));
+    }
+}
+
 /// Attached actors follow their parent's bone.
 fn attach(
     playing: Option<Res<Playing>>,
@@ -606,8 +780,8 @@ fn play(
     mut overlay: Query<(Entity, &mut BackgroundColor), With<FadeOverlay>>,
     staged: Query<Entity, With<Staged>>,
     windows: Query<&Window>,
-    attached: Query<(), With<Attached>>,
     roots: Query<Entity, (With<Node>, Without<ChildOf>, Without<FadeOverlay>)>,
+    (mut attached, titles, mut title_materials): (Query<&mut Attached>, Query<&TitleText>, ResMut<Assets<StandardMaterial>>),
 ) {
     let Some(mut p) = playing else { return };
     // No HUD over it (its own systems may show parts of it again, or spawn new roots such as the minimap's: hidden
@@ -634,10 +808,29 @@ fn play(
     evaluate(&p.sequences, p.cinematic.master, t, &p.base, &p.lengths, &mut frame);
     // Transforms (an attached actor's are relative to its parent: it keeps its offset from its bone) and visibility.
     for (actor, xf) in &frame.transforms {
-        if let Some(&e) = p.actors.get(actor).filter(|&&e| !attached.contains(e)) {
-            if let Ok(mut t) = transforms.get_mut(e) {
-                *t = crate::to_transform(xf);
+        let Some(&e) = p.actors.get(actor) else { continue };
+        match attached.get_mut(e) {
+            // One on its parent's root: the track is its offset from it.
+            Ok(mut a) => {
+                if a.bone.is_none() {
+                    a.rel = Some(crate::to_transform(xf));
+                }
             }
+            Err(_) => {
+                if let Ok(mut t) = transforms.get_mut(e) {
+                    *t = crate::to_transform(xf);
+                }
+            }
+        }
+    }
+    // The texts' Transparency.
+    for ((actor, _component, prop), v) in &frame.floats {
+        if prop != "Transparency" {
+            continue;
+        }
+        let Some(m) = p.actors.get(actor).and_then(|&e| titles.get(e).ok()) else { continue };
+        if let Some(mut mat) = title_materials.get_mut(&m.0) {
+            mat.alpha_mode = AlphaMode::Mask(title_cutoff(*v));
         }
     }
     for (actor, hidden) in &frame.hidden {

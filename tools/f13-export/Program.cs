@@ -785,6 +785,28 @@ switch (rest[0])
                         if (sec["Props"]?["Sound"]?["ObjectPath"]?.ToString() is { } sound) sounds.Add(sound[..sound.LastIndexOf('.')]);
             Console.WriteLine($"sequence sounds: {new SoundExporter(provider, outDir, ToFile).Export(sounds)} written");
         }
+        // The staged TextRenderComponents' fonts (fonts/<name>.json: UFont's Characters (StartU, StartV, USize, VSize,
+        // TextureIndex, VerticalOffset), Kerning and its atlas pages, queued as textures).
+        foreach (var lv in new[] { Mvp.IntroLevel, Mvp.OutroLevel })
+            foreach (var a in Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(Path.Combine(outDir, "levels", lv.Split('/')[^1] + ".json")))["Actors"]!)
+                foreach (var c in a["Components"] ?? new Newtonsoft.Json.Linq.JArray())
+                {
+                    if (c["Type"]?.ToString() != "TextRenderComponent" || c["Props"]?["Font"]?.ToString() is not { } fontRef) continue;
+                    var name = fontRef.Split('\'')[1];
+                    var file = provider.Files.Keys.FirstOrDefault(k => k.EndsWith("/" + name + ".uasset", StringComparison.OrdinalIgnoreCase));
+                    var font = file == null ? null : provider.LoadPackage(file).GetExports().FirstOrDefault(e => e.ExportType == "Font");
+                    if (font == null) { Console.WriteLine($"font {name}: not found"); continue; }
+                    var props = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(font))["Properties"]!;
+                    var pages = new Newtonsoft.Json.Linq.JArray();
+                    foreach (var t in font.GetOrDefault<FPackageIndex[]>("Textures", []))
+                        if (t.Load() is UTexture2D tex) { Queue(tex); pages.Add(tex.Owner!.Name + "/" + tex.Name); }
+                    var chars = new Newtonsoft.Json.Linq.JArray(props["Characters"]!.Select(ch => new Newtonsoft.Json.Linq.JArray(
+                        (int)ch["StartU"]!, (int)ch["StartV"]!, (int)ch["USize"]!, (int)ch["VSize"]!, (int)ch["TextureIndex"]!, (int)ch["VerticalOffset"]!)));
+                    var outJson = new Newtonsoft.Json.Linq.JObject { ["Pages"] = pages, ["Kerning"] = props["Kerning"] ?? 0, ["IsRemapped"] = props["IsRemapped"] ?? 0, ["Characters"] = chars };
+                    Directory.CreateDirectory(Path.Combine(outDir, "fonts"));
+                    File.WriteAllText(Path.Combine(outDir, "fonts", name + ".json"), outJson.ToString());
+                    Console.WriteLine($"font {name}: {chars.Count} characters, {pages.Count} pages");
+                }
         break;
     case "particles": // particles [system...]: Cascade systems (particles/) and their materials; default: every template the exported levels place and the classes name
         {
