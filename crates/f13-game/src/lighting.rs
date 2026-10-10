@@ -350,20 +350,24 @@ fn light_cookies(
         if entry.1.is_none() {
             let Some(src) = images.get(&entry.0) else { continue };
             let (w, h) = (src.width(), src.height());
-            let mut data = Vec::with_capacity((w * h) as usize);
+            let mut data = Vec::with_capacity((w * h * 4) as usize);
             for y in 0..h {
                 for x in 0..w {
                     let (u, v) = ((x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32);
                     let (su, sv) = (((1.0 - v) * w as f32) as u32, (u * h as f32) as u32);
                     let c = src.get_color_at(su.min(w - 1), sv.min(h - 1)).map(|c| c.to_linear()).unwrap_or(LinearRgba::BLACK);
-                    data.push((((c.red + c.green + c.blue) * 0.3333).clamp(0.0, 1.0) * 255.0).round() as u8);
+                    // The function in red (the light reads .r); alpha 0: Bevy also hands a spot light's texture to
+                    // the clustered decals, whose base colour pass composites it over every StandardMaterial in the
+                    // light's box (an opaque R8 read as (r, 0, 0, 1) turned her clothes red); at alpha 0 it changes
+                    // nothing there.
+                    data.extend([(((c.red + c.green + c.blue) * 0.3333).clamp(0.0, 1.0) * 255.0).round() as u8, 0, 0, 0]);
                 }
             }
             let baked = Image::new(
                 bevy::render::render_resource::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
                 bevy::render::render_resource::TextureDimension::D2,
                 data,
-                bevy::render::render_resource::TextureFormat::R8Unorm,
+                bevy::render::render_resource::TextureFormat::Rgba8Unorm,
                 bevy::asset::RenderAssetUsages::RENDER_WORLD,
             );
             entry.1 = Some(images.add(baked));
