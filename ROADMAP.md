@@ -46,8 +46,7 @@ Moved from Milestone 1 (not tied to gameplay):
       "The eyes' look")
       (MODLOG "The counselor's face"), hair dynamics (its anim
       Blueprint), the eyes' iris and lid overlays, outfit choice
-- [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: their root doesn't turn, the body turns about it; how the actor turns with them is unread), foot-marker
-      sync (now normalised time),
+- [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: their root doesn't turn, the body turns about it; how the actor turns with them is unread), 
       the rest of the anim Blueprints' graphs (f13-rs
       plays their locomotion, the grab and block layers and the gun branch; their look-at and IK nodes aren't
       ported). Not in the game:

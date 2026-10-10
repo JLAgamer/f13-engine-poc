@@ -287,6 +287,9 @@ pub struct AnimInfo {
     /// The montage's BlendIn time, when it sets one.
     #[serde(default)]
     pub blend_in: Option<f32>,
+    /// The sequence's AuthoredSyncMarkers (LeftPlant / RightPlant on the cycles), by time (start = end).
+    #[serde(default, deserialize_with = "crate::level::null_as_empty")]
+    pub sync_markers: Vec<Window>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

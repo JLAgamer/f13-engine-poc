@@ -382,6 +382,8 @@ pub struct Rig {
     timed: Option<(&'static str, f32, bool)>,
     /// A ShotgunHold notify state is active (an animation in her pose is inside its window; items.rs).
     pub(crate) shotgun_hold: bool,
+    /// Each synced cycle's time (s): the sync group's leader's, and its followers' by marker.
+    sync_t: HashMap<String, f32>,
     /// A state machine crossfade in progress: time into it, its length, and the weights it started from (blended to
     /// the targets by HermiteCubic, as FAnimNode_StateMachine's transitions blend the poses).
     crossfade: Option<(f32, f32, HashMap<String, f32>)>,
@@ -463,6 +465,7 @@ pub fn spawn_model(commands: &mut Commands, assets: &AssetServer, character: &Ch
         timed: None,
         shotgun_hold: false,
         crossfade: None,
+        sync_t: HashMap::new(),
         lean_alpha: 0.0,
         lean_heading: 0.0,
         lean_dir: 0.0,
@@ -932,16 +935,26 @@ impl Rig {
             }
         }
 
-        // Locomotion cycles share one normalised phase, advanced by their weighted cycle length.
-        let (mut wsum, mut lsum) = (0.0, 0.0);
-        for (n, w) in &self.weights {
-            if let (true, Some((_, len))) = (synced(n), model.clips.get(n)) {
-                wsum += w;
-                lsum += w * len;
+        // The locomotion cycles' sync group (marker-based, as Unreal's): the highest-weighted cycle leads, advancing by
+        // dt; a follower with sync markers takes the leader's place between the same two markers (its previous one
+        // and the next), at the same fraction; without markers (on either), the leader's normalised time.
+        let leader = self.weights.iter().filter(|(n, w)| synced(n) && **w > 1e-4).max_by(|a, b| a.1.total_cmp(b.1)).map(|(n, _)| n.clone());
+        let markers = |n: &str| model.info.animations.get(n).map_or(&[][..], |a| a.sync_markers.as_slice());
+        match &leader {
+            Some(lead) => {
+                let len = model.clips.get(lead).map_or(1.0, |c| c.1).max(1e-3);
+                let t = (self.sync_t.get(lead).copied().unwrap_or(self.phase * len) + dt).rem_euclid(len);
+                self.sync_t.insert(lead.clone(), t);
+                self.phase = t / len;
+                let at = marker_position(markers(lead), t, len);
+                let followers: Vec<String> = self.weights.iter().filter(|(n, w)| synced(n) && **w > 1e-4 && *n != lead).map(|(n, _)| n.clone()).collect();
+                for name in followers {
+                    let flen = model.clips.get(&name).map_or(1.0, |c| c.1).max(1e-3);
+                    let ft = at.as_ref().and_then(|(prev, next, f)| follow_markers(markers(&name), prev, next, *f, flen)).unwrap_or(self.phase * flen);
+                    self.sync_t.insert(name, ft);
+                }
             }
-        }
-        if wsum > 0.0 && lsum > 0.0 {
-            self.phase = (self.phase + dt * wsum / lsum).fract();
+            None => self.sync_t.clear(),
         }
         self.idle_time += dt;
 
@@ -960,13 +973,44 @@ impl Rig {
             } else if let Some((_, t, looping)) = self.timed.filter(|(n, _, _)| n == name) {
                 if looping { t % len.max(1e-3) } else { t.min(len) }
             } else if synced(name) {
-                self.phase * len
+                self.sync_t.get(name).copied().unwrap_or(self.phase * len)
             } else {
                 self.idle_time % len.max(1e-3)
             };
             anim.play(node).set_speed(0.0).set_weight(w).set_seek_time(at);
         }
     }
+}
+
+/// Where `t` falls among a cycle's sync markers: the previous marker's name, the next one's, and the fraction of the way
+/// between them (looping).
+fn marker_position(markers: &[f13_data::character::Window], t: f32, len: f32) -> Option<(String, String, f32)> {
+    if markers.is_empty() {
+        return None;
+    }
+    let i = markers.iter().rposition(|m| m.start <= t).unwrap_or(markers.len() - 1);
+    let prev = &markers[i];
+    let next = &markers[(i + 1) % markers.len()];
+    let pt = if prev.start <= t { prev.start } else { prev.start - len };
+    let mut nt = next.start;
+    while nt <= pt {
+        nt += len;
+    }
+    let f = ((t - pt) / (nt - pt).max(1e-4)).clamp(0.0, 1.0);
+    Some((prev.name.clone(), next.name.clone(), f))
+}
+
+/// A follower's time at that marker position: between its own marker named `prev` and the next, named `next`.
+fn follow_markers(markers: &[f13_data::character::Window], prev: &str, next: &str, f: f32, len: f32) -> Option<f32> {
+    let n = markers.len();
+    (0..n).find(|&i| markers[i].name == prev && markers[(i + 1) % n].name == next).map(|i| {
+        let a = markers[i].start;
+        let mut b = markers[(i + 1) % n].start;
+        while b <= a {
+            b += len;
+        }
+        (a + f * (b - a)).rem_euclid(len)
+    })
 }
 
 /// An upper-body layer over a character's pose (AnimNode_LayeredBoneBlend, one layer): `take` ([`LAYER_TAKES`],
@@ -1380,6 +1424,24 @@ fn speed_state(speed: f32, marks: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn followers_take_the_leaders_marker_phase() {
+        let m = |v: &[(&str, f32)]| v.iter().map(|(n, t)| f13_data::character::Window { name: n.to_string(), start: *t, end: *t }).collect::<Vec<_>>();
+        let walk = m(&[("LeftPlant", 0.1), ("RightPlant", 0.7)]);
+        let run = m(&[("LeftPlant", 0.15), ("RightPlant", 0.6)]);
+        // Halfway from the walk's LeftPlant to its RightPlant: halfway on the run.
+        let (p, n, f) = marker_position(&walk, 0.4, 1.3).unwrap();
+        assert_eq!((p.as_str(), n.as_str()), ("LeftPlant", "RightPlant"));
+        assert!((f - 0.5).abs() < 1e-5);
+        assert!((follow_markers(&run, &p, &n, f, 0.8).unwrap() - 0.375).abs() < 1e-5);
+        // Past the last marker: from RightPlant around to LeftPlant.
+        let (p, n, f) = marker_position(&walk, 1.0, 1.3).unwrap();
+        assert_eq!((p.as_str(), n.as_str()), ("RightPlant", "LeftPlant"));
+        assert!((f - 0.3 / 0.7).abs() < 1e-4);
+        let t = follow_markers(&run, &p, &n, f, 0.8).unwrap();
+        assert!((t - (0.6 + 0.35 * 0.3 / 0.7)).abs() < 1e-4);
+    }
 
     #[test]
     fn lean_weights_are_linear_between_samples() {

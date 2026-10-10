@@ -59,6 +59,8 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         public List<Window>? Sections;
         /// The montage's BlendIn time, when it sets one.
         public float? BlendIn;
+        /// The sequence's AuthoredSyncMarkers (marker-based sync groups: LeftPlant / RightPlant on the cycles), seconds.
+        public List<Window>? SyncMarkers;
     }
 
     /// A RichCurve key: Interp "linear", "constant" or "cubic".
@@ -860,6 +862,9 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             foreach (var q in rot) { w.Write(q.X); w.Write(q.Y); w.Write(q.Z); w.Write(q.W); }
             if (translate) foreach (var p in pos) { w.Write(p.X); w.Write(p.Y); w.Write(p.Z); }
         }
-        return new AnimInfo { File = file.Replace('\\', '/'), Length = (frames - 1) / fps, Fps = fps, Frames = frames, RootMotion = rootMotion, KeepRoot = keepRoot };
+        var markers = seq.GetOrDefault<FStructFallback[]>("AuthoredSyncMarkers", [])
+            .Select(m => new Window { Name = m.GetOrDefault<FName>("MarkerName").Text, Start = m.GetOrDefault<float>("Time"), End = m.GetOrDefault<float>("Time") })
+            .OrderBy(m => m.Start).ToList();
+        return new AnimInfo { File = file.Replace('\\', '/'), Length = (frames - 1) / fps, Fps = fps, Frames = frames, RootMotion = rootMotion, KeepRoot = keepRoot, SyncMarkers = markers.Count > 0 ? markers : null };
     }
 }
