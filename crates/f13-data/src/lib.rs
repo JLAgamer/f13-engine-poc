@@ -5,6 +5,7 @@ pub mod classes;
 pub mod collision;
 pub mod kill_camera;
 pub mod level;
+pub mod particles;
 pub mod sound;
 pub mod umg;
 pub mod vehicle;

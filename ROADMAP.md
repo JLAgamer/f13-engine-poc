@@ -33,9 +33,12 @@ Moved from Milestone 1 (not tied to gameplay):
       lobby's SCMatchEndLobbyWidget, so with the lobby in Milestone 3)
 - [ ] Materials, remaining: foliage subsurface (its transmission is the deferred light pass's, whose code isn't
       in the shipped global shader cache: MODLOG "Foliage subsurface: blocked")
-- [ ] Particle effects (Cascade ParticleSystems): none ported yet. The walls' and doors' hit dust (HitParticle), the
-      knife's trail (P_Jason_ThrowingKnife_01), blood, the campfires and fireplaces, the cars' exhaust, rain, the
-      broken phone box's smoke
+- [ ] Particle effects (Cascade): the level's systems simulate (particles.rs) and the fire masters are ported (the
+      campfire's and fireplace's flames, the candles). Remaining: the other masters (sparks, smoke, dust specks,
+      wispy fog, flies, Jason's embers and eye glow: MODLOG "Particle materials"), particle lights, attractors and
+      collision, and the effects spawned by gameplay: the walls' and doors' hit dust (HitParticle), the knife's trail
+      (P_Jason_ThrowingKnife_01), blood, the cars' exhaust, rain and its roof drips, the broken phone box's smoke,
+      the intro's and outro's particle tracks
 - [ ] Counselor model, remaining: facial animation and hair dynamics (their own anim Blueprints), the eyes' iris and
       lid overlays, outfit choice
 - [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: their root doesn't turn, the body turns about it; how the actor turns with them is unread), foot-marker

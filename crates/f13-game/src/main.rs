@@ -50,6 +50,7 @@ mod navigation;
 mod perf;
 mod mipmaps;
 mod player;
+mod particles;
 mod placed_kills;
 mod police;
 mod power;
@@ -535,7 +536,7 @@ fn main() {
         )
         .add_plugins((FreeCameraPlugin, bevy::diagnostic::FrameTimeDiagnosticsPlugin::default()))
         .insert_resource(Level { layouts, grass: args.grass, foliage: args.foliage, aerial: args.aerial, fly: args.fly || args.aerial, camera: args.camera, scenes: vec![] })
-        .add_plugins((materials::MaterialsPlugin { export: args.export.clone() }, mipmaps::MipmapsPlugin, tonemap::TonemapPlugin, bloom::BloomPlugin, screen_effects::ScreenEffectsPlugin, sense_view::SenseViewPlugin, dof::DofPlugin, ssao::SsaoPlugin, killer_fade::KillerFadePlugin, spline_meshes::SplineMeshPlugin))
+        .add_plugins((materials::MaterialsPlugin { export: args.export.clone() }, mipmaps::MipmapsPlugin, tonemap::TonemapPlugin, bloom::BloomPlugin, screen_effects::ScreenEffectsPlugin, sense_view::SenseViewPlugin, dof::DofPlugin, ssao::SsaoPlugin, killer_fade::KillerFadePlugin, spline_meshes::SplineMeshPlugin, particles::ParticlesPlugin))
         .insert_resource(ExportRoot(args.export.clone()))
         .add_plugins(props::PropsPlugin { seed, near_car: args.near_car && !(args.fly || args.aerial) })
         .add_plugins(lighting::LightingPlugin { flashlight: args.flashlight, unlit: args.unlit })
@@ -713,7 +714,7 @@ impl Default for Placed {
 /// (FScalabilityCVars::ViewDistanceScale, cached by FUN_1417a1250; SceneVisibility and the HISM proxy's culling).
 /// The game's DefaultScalability.ini sets it per sg.ViewDistanceQuality (0.85, 1, 1.5, 3); its Windows device profile
 /// (DefaultDeviceProfiles.ini) defaults the level to 2.
-const VIEW_DISTANCE_SCALE: f32 = 1.5;
+pub(crate) const VIEW_DISTANCE_SCALE: f32 = 1.5;
 
 fn apply_placed(mut commands: Commands, added: Query<Entity, Added<Mesh3d>>, parents: Query<&ChildOf>, placed: Query<&Placed>) {
     for e in &added {

@@ -650,16 +650,37 @@ impl Loader<'_> {
                 (png, kind == Tex::Color)
             }
         };
+        // The texture's AddressX/Y (texture_address.json: those that don't wrap).
+        let [u, v] = texture_address(self.root, path);
         Some(self.assets.load_builder().with_settings(move |s: &mut ImageLoaderSettings| {
             s.is_srgb = srgb;
             s.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-                address_mode_u: bevy::image::ImageAddressMode::Repeat,
-                address_mode_v: bevy::image::ImageAddressMode::Repeat,
+                address_mode_u: u,
+                address_mode_v: v,
                 anisotropy_clamp: 8,
                 ..ImageSamplerDescriptor::linear()
             });
         }).load(file))
     }
+}
+
+/// A texture's address modes (UTexture2D AddressX/Y; f13-export's texture_address.json lists those not TA_Wrap).
+fn texture_address(root: &Path, path: &str) -> [bevy::image::ImageAddressMode; 2] {
+    use bevy::image::ImageAddressMode as A;
+    static INDEX: std::sync::OnceLock<HashMap<String, [String; 2]>> = std::sync::OnceLock::new();
+    let index = INDEX.get_or_init(|| std::fs::read_to_string(root.join("texture_address.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default());
+    let mode = |m: &str| match m {
+        "TA_Clamp" => A::ClampToEdge,
+        "TA_Mirror" => A::MirrorRepeat,
+        _ => A::Repeat,
+    };
+    index.get(path).map_or([A::Repeat; 2], |[x, y]| [mode(x), mode(y)])
+}
+
+/// An exported texture (export-relative path without extension) as the materials load it (see [`Loader::load`]):
+/// `color` for colour data (sRGB when it comes as a PNG).
+pub(crate) fn load_texture(root: &Path, assets: &AssetServer, path: &str, color: bool) -> Option<Handle<Image>> {
+    Loader { root, assets }.load(path, if color { Tex::Color } else { Tex::Data })
 }
 
 /// Whether an exported DDS holds sRGB data (its DX10 header's DXGI format), or None if there is no readable DDS.

@@ -249,7 +249,7 @@ struct DrawDistance {
 }
 
 #[derive(Component)]
-struct Lit;
+pub(crate) struct Lit;
 
 /// The counselor's flashlight values (her character export's Values).
 #[derive(Resource, Clone, Copy)]

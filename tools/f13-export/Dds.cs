@@ -13,6 +13,8 @@ static class DdsExporter
         if (!Directory.Exists(dir)) return (0, 0);
         int written = 0, skipped = 0;
         var formats = new Dictionary<string, int>();
+        // Textures that don't wrap (AddressX/Y TA_Clamp or TA_Mirror): texture_address.json, path -> [X, Y].
+        var address = new SortedDictionary<string, string[]>();
         // PNGs, and the float textures' Radiance .hdr (no alpha: the .dds keeps it).
         foreach (var png in Directory.EnumerateFiles(dir, "*.png", SearchOption.AllDirectories).Concat(Directory.EnumerateFiles(dir, "*.hdr", SearchOption.AllDirectories)))
         {
@@ -34,11 +36,16 @@ static class DdsExporter
                 continue;
             }
             if (tex == null) { skipped++; continue; }
+            var props = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(tex))["Properties"];
+            var ax = props?["AddressX"]?.ToString() ?? "TA_Wrap";
+            var ay = props?["AddressY"]?.ToString() ?? "TA_Wrap";
+            if (ax != "TA_Wrap" || ay != "TA_Wrap") address[rel] = [ax, ay];
             var key = tex.Format.ToString();
             formats[key] = formats.GetValueOrDefault(key) + 1;
             if (Write(tex, Path.ChangeExtension(png, ".dds"))) written++;
             else skipped++;
         }
+        File.WriteAllText(Path.Combine(root, "texture_address.json"), Newtonsoft.Json.JsonConvert.SerializeObject(address, Newtonsoft.Json.Formatting.Indented));
         Console.WriteLine($"dds: {written} written, {skipped} skipped; formats {string.Join(", ", formats.OrderByDescending(f => f.Value).Select(f => $"{f.Key} {f.Value}"))}");
         return (written, skipped);
     }
