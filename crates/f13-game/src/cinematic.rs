@@ -42,7 +42,7 @@ pub struct CinematicPlugin;
 impl Plugin for CinematicPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CinematicDone>()
-            .add_systems(Update, (start, ready, attach, title_text).chain())
+            .add_systems(Update, (start, ready, attach, emitters_follow, title_text).chain())
             .add_systems(PostUpdate, (play, face_morphs).chain().before(bevy::transform::TransformSystems::Propagate));
     }
 }
@@ -796,6 +796,19 @@ fn title_text(
             ..default()
         });
         commands.entity(e).remove::<PendingTitle>().insert((Mesh3d(mesh), MeshMaterial3d(material.clone()), TitleText(material)));
+    }
+}
+
+/// The cinematic level's particle systems ride on their staged actors (the Emitters attached to Jason's sockets: the
+/// Savini embers and eye glows, the splashes); with the actors gone at the end they stop and go.
+fn emitters_follow(playing: Option<Res<Playing>>, mut systems: Query<&mut crate::particles::ParticleSystemInstance>) {
+    let Some(p) = playing else { return };
+    for mut s in &mut systems {
+        if s.follow.is_none() && s.level == p.cinematic.level {
+            if let Some(&e) = p.actors.get(&s.actor) {
+                s.follow = Some((e, Transform::IDENTITY));
+            }
+        }
     }
 }
 

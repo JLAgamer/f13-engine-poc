@@ -167,12 +167,13 @@ pub struct ParticleSystemInstance {
     rng: u64,
     /// Spawning (bAutoActivate, or since its Activate).
     active: bool,
-    /// The level actor it's on.
-    actor: String,
+    /// The level actor it's on, and that actor's level.
+    pub(crate) actor: String,
+    pub(crate) level: String,
     /// The component it's attached to on that actor (the cabins' roof drips hang under "Rain").
     parent: Option<String>,
     /// The entity it follows and its offset from it (Bevy space).
-    follow: Option<(Entity, Transform)>,
+    pub(crate) follow: Option<(Entity, Transform)>,
     /// Despawned once its emitters are done.
     auto_destroy: bool,
     /// SetVisibility(false): simulated, not drawn (the rain grid's occluded cells).
@@ -432,8 +433,10 @@ impl Materials {
             }
             // M_Procedural_Tire_Dust_01_Inst's own shader map (static switches: 0_NRM_switch off); the master's other
             // instances aren't ported. M_Procedural_Dust_01_self-shadow's (the walls' hit dust) has the same layout
-            // (uniexpr.py; [14].w 0_BaseContrastLevel); not its static permutations (Jason's eye glow, 0_NRM_switch on).
-            "M_Procedural_Smoke_04_no-self-shadow" | "M_Procedural_Dust_01_self-shadow" if name == "M_Procedural_Tire_Dust_01_Inst" || (e.master == "M_Procedural_Dust_01_self-shadow" && name != "M_Savini_Jason_EyeGlow_01_Inst") => {
+            // (uniexpr.py; [14].w 0_BaseContrastLevel); M_Savini_Jason_EyeGlow_01_Inst's own permutation (its sprite
+            // pass samples NormalTexture1, for the lighting only) the same graph with its layout one slot on
+            // (NRM_Intensity at [9].w): filled by name, so the same arm.
+            "M_Procedural_Smoke_04_no-self-shadow" | "M_Procedural_Dust_01_self-shadow" if name == "M_Procedural_Tire_Dust_01_Inst" || e.master == "M_Procedural_Dust_01_self-shadow" => {
                 let dust = e.master == "M_Procedural_Dust_01_self-shadow";
                 // uniexpr.py M_Procedural_Tire_Dust_01_Inst: cb1[1] SelectionColor.rgb (0), [3].x
                 // -BaseTextureContrast, [5].x -0_MasterAlphaContrast, [6..14] below.
@@ -452,6 +455,33 @@ impl Materials {
                 p[14] = Vec4::new(1.0 / soft, mac + 1.0, s("0_Alpha_Contrast_Opacity_MASTER", 3.0), s("0_BaseContrastLevel", 1.0));
                 p[15] = if dust { Vec4::new(0.0, s("0_BaseContrastLevel", 1.0), 0.0, 0.0) } else { Vec4::new(1.0, 1.0, 0.0, 0.0) };
                 (8.0, [tex("FlowMap1"), tex("BaseTexture1"), None, None])
+            }
+            "M_Savini_Jason_Ashes_01" => {
+                // uniexpr.py M_Savini_Jason_Ashes_01 (its instances use the master's shader map; M_Savini_Smoke_01_Inst
+                // has its own, its sprite pass the same): the layout as the shader reads it, [0..20].
+                let vec = |n: &str, d: [f32; 4]| e.vectors.get(n).or_else(|| master.and_then(|m| m.vectors.get(n))).copied().unwrap_or(d);
+                let (ec, bc) = (vec("EmissiveColor", [1.0; 4]), vec("BaseColor", [0.0, 0.0, 0.0, 1.0]));
+                let scroll = s("ScrollSpeed_Texture1", 0.1);
+                let (radius, hard, el) = (s("SphereMaskRadius", 0.5), s("SphereMaskHardness", 0.0), s("EmissiveLevel", 10.0));
+                let (r, soft) = (radius.max(1e-5), (1.0 - hard).max(1e-5));
+                p[2] = Vec4::new(s("TexCoordRand1_Xspeed", 1.0) * scroll, s("TexCoordRand1_Yspeed", 1.0) * scroll, 0.0, 0.0);
+                p[4] = Vec4::new(s("TexCoordRand2_Xspeed", 1.0) * scroll, s("TexCoordRand2_Yspeed", 1.0) * scroll, 0.0, 0.0);
+                p[6] = Vec4::new(ec[0], ec[1], ec[2], 0.0);
+                p[7] = Vec4::new(ec[0] * el, ec[1] * el, ec[2] * el, 0.0);
+                p[10] = Vec4::new(bc[0], bc[1], bc[2], 0.0);
+                p[11] = Vec4::new(s("ScrollTexture1a_RotationAngle", 0.0), 0.0, 0.0, scroll);
+                p[12] = Vec4::new(s("TexCoordRand1_U", 1.0), s("UV_MasterScaleMultiplier", 1.0), s("TexCoordRand1_V", 1.0), s("NRM1_Multiplier", 1.0));
+                p[13] = Vec4::new(s("ScrollTexture1b_RotationAngle", 0.0), 0.0, 0.0, s("TexCoordRand2_U", -1.0));
+                p[14] = Vec4::new(s("TexCoordRand2_V", -1.0), s("NRM2_Multiplier", 1.0), s("NRM_Intensity", 1.0), s("ScrollSpeed_Emissive1", 0.3));
+                p[15] = Vec4::new(s("ScrollSpeed_Emissive1", 0.3), s("UV_EmissiveScaleMultiplier", 1.0), s("z_U_Emissive_OFFSET", 0.0), s("z_V_Emissive_OFFSET", 0.0));
+                p[16] = Vec4::new(s("EmissiveTexture1_RotationAngle", 0.0), el, s("Texture1a_Multiplier", 1.0), s("Texture1b_Multiplier", 1.0));
+                p[17] = Vec4::new(s("Texture1_Add_Multiply_Lerp", 1.0), s("BaseTextureMask_UV_Scale", 1.0), s("EmissiveLevelScrollTexture", 0.0), s("0_Alpha_Contrast_Opacity_MASTER", 10.0));
+                p[18] = Vec4::new(radius, r, 1.0 / r, hard);
+                p[19] = Vec4::new(1.0 - hard, soft, 1.0 / soft, s("BaseTextureMask1_Distortion", 2.0));
+                p[20] = Vec4::new(s("0_ALPHA_Opacity_MASTER", 1.0), s("FadeDistance", 32.0), s("FadeDistance", 32.0).max(1e-5), s("0_PixelDepthDistance", 0.0));
+                // EmissiveTexture1 second: the Smoke and Distortion instances name Engine/EngineMaterials/DefaultDiffuse, which
+                // the export doesn't carry; they draw it x EmissiveLevel 0.
+                (12.0, [tex("ScrollTexture1"), tex("EmissiveTexture1"), tex("BaseTextureMask1"), None])
             }
             "M_Rain_Master" => {
                 // uniexpr.py M_Rain_Master: cb1[2] EmissiveColor.rgb, [3] SelectionColor.rgb (0), [5] BaseColor.rgb,
@@ -561,7 +591,7 @@ impl ParticleAssets {
         if emitters.is_empty() {
             return None;
         }
-        let mut inst = ParticleSystemInstance { emitters, location, rotation, scale, max_draw, rng: self.seed, active, actor: actor.to_string(), parent: None, follow: None, auto_destroy: false, hidden: false, ticked_at: None };
+        let mut inst = ParticleSystemInstance { emitters, location, rotation, scale, max_draw, rng: self.seed, active, actor: actor.to_string(), level: String::new(), parent: None, follow: None, auto_destroy: false, hidden: false, ticked_at: None };
         // WarmupTime: ticked in 0.032 s steps (UParticleSystemComponent's default warmup step).
         let warmup = warmup.unwrap_or(system.warmup);
         let mut t = 0.0;
@@ -655,6 +685,7 @@ fn spawn_level_particles(
             let warmup = p["WarmupTime"].as_f64().map(|w| w as f32);
             let Some(mut inst) = pa.instance(&mut commands, &mut meshes, &mut materials, &assets, name, xf, active, &a.name, max_draw, warmup) else { continue };
             inst.parent = c.parent.clone();
+            inst.level = a.level.clone();
             commands.spawn((inst, Name::new(format!("particles {name}"))));
             n += 1;
         }

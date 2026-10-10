@@ -22,7 +22,7 @@ struct ParticleParams {
     // x: mode (0 stand-in, 1 M_Procedural_Fire_01, 2 M_Procedural_Fire_02, 3 M_MasterParticle_Emissive,
     // 4 M_Fly_Animated_01, 5 M_MasterParticle_Diffuse_nearFade, 6 M_Procedural_Smoke_05, 7 M_Rain_Master,
     // 8 M_Procedural_Tire_Dust_01_Inst, 9 M_Procedural_Smoke_01B_no-self-shadow, 10 its
-    // _separate-transparency_off sibling, 11 M_Enviroment_Fog_02); y: additive
+    // _separate-transparency_off sibling, 11 M_Enviroment_Fog_02, 12 M_Savini_Jason_Ashes_01); y: additive
     mode: vec4<f32>,
     // The master's material uniform buffer as its compiled shader reads it (uniexpr.py's cb1[n]).
     p: array<vec4<f32>, 32>,
@@ -513,6 +513,48 @@ fn fog_02(in: VertexOutput) -> vec4<f32> {
     return vec4(emissive + volume_lit(in, vec3(base)), saturate(fade * alpha));
 }
 
+// M_Savini_Jason_Ashes_01 (Jason's embers, their smoke and distortion sprites in the intro; lit translucency, the
+// master's shader map, sprite pass s003): t0 ScrollTexture1, t1 EmissiveTexture1, t2 BaseTextureMask1 (Normal1 only
+// feeds the lighting normal). ScrollTexture1 twice: uv x (TexCoordRand1_U, _V) x UV_MasterScaleMultiplier + dp.w +
+// time x dp.z x the TexCoordRand1 speeds x ScrollSpeed_Texture1, turned by (dp.w + ScrollTexture1a_RotationAngle)
+// turns about that same value (and its b twin with TexCoordRand2); a x Texture1a_Multiplier and b x
+// Texture1b_Multiplier, their sum lerped toward their product by Texture1_Add_Multiply_Lerp, x the mask (uv scaled by
+// dp.y x BaseTextureMask_UV_Scale about the centre) x colour.a. Emissive: (that x EmissiveColor x
+// EmissiveLevelScrollTexture + EmissiveTexture1 (uv x UV_EmissiveScaleMultiplier + dp.w + the offsets + time x
+// ScrollSpeed_Emissive1, turned by dp.w + EmissiveTexture1_RotationAngle) x EmissiveColor x EmissiveLevel) x colour;
+// diffuse colour x BaseColor. Opacity: saturate(red x 0.45 x (2 dp.x + 1) - dp.x) x 0_Alpha_Contrast_Opacity_MASTER
+// x colour.a x the sphere mask x saturate(mask.r x BaseTextureMask1_Distortion) x mask.r x 0_ALPHA_Opacity_MASTER,
+// then the depth fade and the pixel depth fade.
+fn ashes(in: VertexOutput) -> vec4<f32> {
+    let p = params.p;
+    let dp = in.dynamic;
+    let uv = in.uv;
+    let col = in.color;
+    let time = globals.time;
+    let tau = 6.283185;
+    let a1 = dp.w + p[11].x;
+    let u1 = time * (dp.z * p[2].xy) + uv * vec2(p[12].x, p[12].z) * p[12].y + dp.w - a1;
+    let uva = turn(u1, sin(a1 * tau), cos(a1 * tau)) + a1;
+    let a2 = dp.w + p[13].x;
+    let u2 = time * (dp.z * p[4].xy) + uv * vec2(p[13].w, p[14].x) * p[12].y + dp.w - a2;
+    let uvb = turn(u2, sin(a2 * tau), cos(a2 * tau)) + a2;
+    let ae = (dp.w + p[16].x) * tau;
+    let ue = uv * p[15].y + dp.w + p[15].zw + time * p[15].x - 0.5;
+    let em = textureSample(t1, s, turn(ue, sin(ae), cos(ae)) + 0.5).rgb;
+    let ta = textureSample(t0, s, uva).rgb * p[16].z;
+    let tb = textureSample(t0, s, uvb).rgb * p[16].w;
+    let sc = dp.y * p[17].y;
+    let m = textureSample(t2, s, uv * sc - (sc - 1.0) * 0.5).rgb * col.a;
+    let t = mix(ta + tb, ta * tb, p[17].x) * m;
+    let emissive = max((t * p[6].xyz * p[17].z + em * p[7].xyz) * col.rgb + p[8].xyz, vec3(0.0));
+    let diffuse = saturate(col.rgb * p[10].xyz);
+    var alpha = saturate(t.r * 0.45 * (dp.x * 2.0 + 1.0) - dp.x) * p[17].w * col.a;
+    let sphere = saturate((1.0 - length(uv - 0.5) * p[18].z) * p[19].z);
+    alpha = alpha * sphere * saturate(m.r * p[19].w) * m.r * p[20].x;
+    let f = depth_fades(in, p[20].z, p[20].w);
+    return vec4(emissive + volume_lit(in, diffuse), saturate(f.x * alpha) * f.y);
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let mode = u32(params.mode.x);
@@ -537,6 +579,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         c = smoke_01b_sto(in);
     } else if mode == 11u {
         c = fog_02(in);
+    } else if mode == 12u {
+        c = ashes(in);
     } else if mode == 4u {
         // Already exposed (apply_pbr_lighting).
         c = fly(in);

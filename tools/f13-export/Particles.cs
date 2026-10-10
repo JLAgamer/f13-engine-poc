@@ -32,7 +32,11 @@ static class ParticleExporter
                 var o = JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(e));
                 list.Add(new JObject { ["Type"] = e.ExportType, ["Name"] = e.Name, ["Props"] = o["Properties"] ?? new JObject() });
                 // Each emitter LOD's required module names its material.
-                if (e.ExportType == "ParticleModuleRequired" && e.GetOrDefault<FPackageIndex?>("Material")?.Load() is { } m) queue(m);
+                if (e.ExportType == "ParticleModuleRequired" && e.GetOrDefault<FPackageIndex?>("Material")?.Load() is { } m)
+                {
+                    queue(m);
+                    QueueTextures(m, queue);
+                }
                 if (e.ExportType == "ParticleModuleTypeDataMesh" && e.GetOrDefault<FPackageIndex?>("Mesh")?.Load() is { } mesh) queue(mesh);
             }
             var json = new JObject { ["Name"] = name, ["Package"] = pkg, ["Exports"] = list };
@@ -40,5 +44,21 @@ static class ParticleExporter
             n++;
         }
         return n;
+    }
+
+    /// The textures a material draws with, its instances' parameters and its master's texture parameter defaults up the
+    /// Parent chain (the material export only writes those it maps to its own slots).
+    static void QueueTextures(UObject material, Action<UObject> queue)
+    {
+        for (var o = material; o != null; o = o.GetOrDefault<FPackageIndex?>("Parent")?.Load())
+        {
+            foreach (var s in o.GetOrDefault<CUE4Parse.UE4.Assets.Objects.FStructFallback[]>("TextureParameterValues", []))
+                if (s.GetOrDefault<FPackageIndex?>("ParameterValue")?.Load() is CUE4Parse.UE4.Assets.Exports.Texture.UTexture t) queue(t);
+            if (o.Owner is { } pkg)
+                foreach (var e in pkg.GetExports())
+                    if ((e.ExportType.StartsWith("MaterialExpressionTextureSampleParameter") || e.ExportType == "MaterialExpressionTextureObjectParameter")
+                        && e.GetOrDefault<FPackageIndex?>("Texture")?.Load() is CUE4Parse.UE4.Assets.Exports.Texture.UTexture t)
+                        queue(t);
+        }
     }
 }
