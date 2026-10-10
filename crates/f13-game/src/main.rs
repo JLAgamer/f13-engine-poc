@@ -640,7 +640,10 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
                 .clone();
             let xforms = p.instances.iter().flatten().chain(p.transform.iter());
             let overrides = materials::MaterialOverrides::new(&p.material_map);
-            let placed = Placed { cast_shadow: p.cast_shadow, cull_m: p.cull_distance * VIEW_DISTANCE_SCALE / 100.0 };
+            // The sky sphere casts no shadow: its surface (9 km out) is past the moon's dynamic shadow distance (150 m),
+            // which leaves it out of the engine's cascades; Bevy's would take it in.
+            let sky = p.file.ends_with("SM_SkySphere.glb");
+            let placed = Placed { cast_shadow: p.cast_shadow && !sky, cull_m: p.cull_distance * VIEW_DISTANCE_SCALE / 100.0 };
             // A phone box's mesh (its broken one swapped in by police.rs).
             let box_mesh = actor_of(&p.component)
                 .filter(|a| p.component.ends_with(".Mesh") && layout.actors.iter().any(|x| x.name == *a && x.level == p.level && classes.is_child_of(&x.class, "SCPhoneJunctionBox")));

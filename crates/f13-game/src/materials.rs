@@ -568,6 +568,10 @@ pub(crate) struct MasterExt {
     #[texture(101)]
     #[sampler(102)]
     tex: Handle<Image>,
+    #[texture(103)]
+    tex2: Handle<Image>,
+    #[texture(104)]
+    tex3: Handle<Image>,
 }
 
 #[derive(ShaderType, Reflect, Debug, Clone)]
@@ -594,6 +598,7 @@ fn master_material(root: &Path, info: &MaterialInfo, loader: &Loader) -> Option<
     let power = info.scalar("Power", 0.0);
     // The pulse: c = sin(1.256637 t) * a + b; the phone box's base colour is c (a.w = 1).
     let pulse = |a: [f32; 3], b: [f32; 3], own_base: bool| MasterParams { mode: Vec4::new(0.0, power, 0.0, 0.0), a: v(a, own_base as u8 as f32), b: v(b, 0.0) };
+    let mut extra: Option<(Handle<Image>, Handle<Image>)> = None;
     let (params, tex) = match info.master.as_str() {
         "M_Interactive_TelephoneBox_01_Emissive_Blue" => (pulse([0.0, 0.007812, 0.44], [0.0, 0.007812, 0.44], true), flicker()?),
         "M_Interactive_TelephoneBox_01_Emissive_Yellow" => (pulse([0.176, 0.102667, 0.0], [0.704, 0.410666, 0.0], true), flicker()?),
@@ -612,9 +617,27 @@ fn master_material(root: &Path, info: &MaterialInfo, loader: &Loader) -> Option<
             let rma = loader.load("SummerCamp/Content/Props/Manmade/Signs/Textures/T_Signs_Cabin_Names_01_RMA", Tex::Data)?;
             (MasterParams { mode: Vec4::new(2.0, 0.0, 0.0, 0.0), a: Vec4::ZERO, b: Vec4::ZERO }, rma)
         }
+        "M_Sky" => {
+            // uniexpr.py M_Sky: ColorTint, ColorTint2, Overall, Desaturation, Overall2, StarBrightness; its Texture,
+            // AlphaMask and the fixed T_Stars.
+            base.unlit = true;
+            let tex = |n: &str| info.textures.get(n).and_then(|p| loader.load(p, Tex::Color));
+            let (t, mask) = (tex("Texture")?, info.textures.get("AlphaMask").and_then(|p| loader.load(p, Tex::Data))?);
+            let stars = loader.load("SummerCamp/Content/SkyDome/_OldSky/Textures/T_Stars", Tex::Color)?;
+            let c = |n: &str| info.vectors.get(n).copied().unwrap_or([1.0; 4]);
+            let (c1, c2) = (c("ColorTint"), c("ColorTint2"));
+            extra = Some((mask, stars));
+            let params = MasterParams {
+                mode: Vec4::new(3.0, info.scalar("Desaturation", 0.8), info.scalar("StarBrightness", 1.0), 0.0),
+                a: Vec4::new(c1[0], c1[1], c1[2], info.scalar("Overall", 0.01)),
+                b: Vec4::new(c2[0], c2[1], c2[2], info.scalar("Overall2", 0.08)),
+            };
+            (params, t)
+        }
         _ => return None,
     };
-    Some(ExtendedMaterial { base, extension: MasterExt { params, tex } })
+    let (tex2, tex3) = extra.unwrap_or_else(|| (tex.clone(), tex.clone()));
+    Some(ExtendedMaterial { base, extension: MasterExt { params, tex, tex2, tex3 } })
 }
 
 impl MaterialExtension for PropExt {

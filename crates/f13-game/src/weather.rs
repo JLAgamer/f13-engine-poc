@@ -11,8 +11,8 @@
 //!   thunder (ThunderAudio) once as the curve rises past LightningSoundThreshold; on the last timing 60 s more are
 //!   drawn. At the curve's end the light goes back to its base.
 //!
-//! Not ported: the sky's response to Rain_MPC's LightiningIntensity (its material graph is stripped in the cook), the
-//! rain itself (particles) and wet materials.
+//! Not ported: what writes Rain_MPC's LightiningIntensity (the sky's material brightens by exp(x 8) with it:
+//! shaders/masters.wgsl), the rain itself (particles) and wet materials.
 
 use bevy::prelude::*;
 

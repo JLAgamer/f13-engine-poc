@@ -5,11 +5,15 @@
 // Mode 1, the phone box's red flicker: emissive = saturate(Flicker2.g * 5 - 2) * (1, 0.028928, 0), Flicker2 sampled at
 //   uv * (0.001, 0.1) + (FlickerOffset, 1) + t * (0.1, 0.01); base colour black.
 // Mode 2, the cabin name signs: roughness = RMA.g, specular 0.1 (the StandardMaterial's reflectance).
+// Mode 3, the sky sphere (M_Sky, unlit; its G-buffer pass s005): s = Texture x Overall desaturated by Desaturation
+//   (towards its luminance (0.3, 0.59, 0.11)) x ColorTint; lerp(s, Texture x Overall2 x ColorTint2, AlphaMask); + the
+//   stars (T_Stars at uv x 12) x StarBrightness x (1 - AlphaMask); x exp(Rain_MPC LightiningIntensity x 8), that
+//   intensity 0 here (nothing writes it: weather.rs).
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
     forward_io::{VertexOutput, FragmentOutput},
-    mesh_view_bindings::globals,
+    mesh_view_bindings::{globals, view},
 }
 
 #ifdef SCREEN_SPACE_AMBIENT_OCCLUSION
@@ -26,6 +30,8 @@ struct MasterParams {
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> params: MasterParams;
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var tex: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var tex_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(103) var tex2: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(104) var tex3: texture_2d<f32>;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
@@ -53,6 +59,20 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     }
     if mode == 2u {
         pbr_input.material.perceptual_roughness = saturate(textureSample(tex, tex_sampler, in.uv).g);
+    }
+    if mode == 3u {
+        // a: ColorTint.rgb, Overall; b: ColorTint2.rgb, Overall2; mode.y Desaturation, mode.z StarBrightness.
+        let t = textureSample(tex, tex_sampler, in.uv).rgb;
+        let s1 = t * params.a.w;
+        let l = dot(s1, vec3(0.3, 0.59, 0.11));
+        let s = (params.mode.y * (l - s1) + s1) * params.a.rgb;
+        let mask = textureSample(tex2, tex_sampler, in.uv).rgb;
+        var c = mask * (t * params.b.w * params.b.rgb - s) + s;
+        c = c + (1.0 - mask) * textureSample(tex3, tex_sampler, in.uv * 12.0).rgb * params.mode.z;
+        var out: FragmentOutput;
+        out.color = vec4(max(c, vec3(0.0)) * view.exposure, 1.0);
+        out.color = main_pass_post_lighting_processing(pbr_input, out.color);
+        return out;
     }
 #endif
     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);

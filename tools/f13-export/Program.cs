@@ -60,6 +60,20 @@ var provider = new DefaultFileProvider(new DirectoryInfo(Path.Combine(game, "Sum
 provider.Initialize();
 provider.Mount();
 Console.WriteLine($"{provider.Files.Count} files");
+// The engine content the game ships loose (Engine/Content): the sky sphere's mesh. Mounted on first use.
+DefaultFileProvider? engineProvider = null;
+UStaticMesh? EngineMesh(string path)
+{
+    if (engineProvider == null)
+    {
+        engineProvider = new DefaultFileProvider(new DirectoryInfo(Path.Combine(game, "Engine")), SearchOption.AllDirectories,
+            new VersionContainer(EGame.GAME_UE4_18), StringComparer.OrdinalIgnoreCase);
+        engineProvider.Initialize();
+        engineProvider.Mount();
+    }
+    try { return engineProvider.LoadPackage(path).GetExports().OfType<UStaticMesh>().FirstOrDefault(); }
+    catch (Exception e) { Console.WriteLine($"engine mesh {path}: {e.Message}"); return null; }
+}
 Collision.LoadProfiles(game);
 // The animations' PlaySound notifies (anim_sounds.json); returns their cues for the sound export.
 List<string> WriteAnimSounds()
@@ -228,8 +242,11 @@ void ExportLevel(string mapPath, params string[] extra)
         {
             if (e is not UStaticMeshComponent smc) continue;
             var mesh = smc.GetOrDefault<FPackageIndex?>("StaticMesh")?.Load<UStaticMesh>();
-            // The engine's sky sphere isn't in the game's paks: keep its material's parameters (the sky's colour).
-            if (mesh == null && smc.GetOrDefault<FPackageIndex?>("StaticMesh") is { IsNull: false } meshRef && meshRef.Name == "SM_SkySphere"
+            // The engine's sky sphere: from the loose engine content.
+            if (mesh == null && smc.GetOrDefault<FPackageIndex?>("StaticMesh") is { IsNull: false } engineRef && engineRef.Name == "SM_SkySphere")
+                mesh = EngineMesh("Engine/Content/EngineSky/SM_SkySphere");
+            // The engine's sky sphere (Engine/Content, loose): its material's parameters too (the sky's colour without it).
+            if (smc.GetOrDefault<FPackageIndex?>("StaticMesh") is { IsNull: false } meshRef && meshRef.Name == "SM_SkySphere"
                 && smc.GetOrDefault<FPackageIndex[]>("OverrideMaterials", []).FirstOrDefault(m => m is { IsNull: false })?.Load<UMaterialInstanceConstant>() is { } sky)
             {
                 var j = new Newtonsoft.Json.Linq.JObject { ["Material"] = sky.Name };
@@ -237,6 +254,10 @@ void ExportLevel(string mapPath, params string[] extra)
                 foreach (var v in sky.VectorParameterValues)
                     if (v.ParameterValue is { } c) j[v.Name] = new Newtonsoft.Json.Linq.JArray(c.R, c.G, c.B);
                 layout.Sky = j;
+                // The master's fixed texture samples too (M_Sky's stars, T_Stars, aren't a parameter).
+                if (sky.GetOrDefault<FPackageIndex?>("Parent")?.Load<UObject>() is { } master)
+                    foreach (var x in master.Owner!.GetExports().Where(x => x.ExportType.StartsWith("MaterialExpressionTextureSample")))
+                        if (x.GetOrDefault<FPackageIndex?>("Texture")?.Load<UObject>() is UTexture t) Queue(t);
             }
             if (mesh == null) continue;
             Queue(mesh);

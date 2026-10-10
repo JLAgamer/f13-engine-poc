@@ -35,7 +35,6 @@
 //! - local lights' shadows (only the moon and the flashlight cast them);
 //! - light functions (the flashlight's cookie);
 //! - the colour grading LUT, ColorContrast and bloom;
-//! - the sky's texture (clouds, stars): the sky is its material's ColorTint × Overall;
 //! - rain (CLsm_RainOn);
 //! - the power's flicker curves (power.rs turns lights off and on).
 
@@ -440,8 +439,8 @@ fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
         warn!("lighting: no ambient cubemap in the export (re-export the map)");
     }
 
-    // The sky: the sky sphere's material, ColorTint × Overall (its texture's clouds and stars aren't drawn), seen
-    // through the exposure.
+    // Behind the sky sphere (the engine's SM_SkySphere with M_Sky_CrystalLake: materials.rs), and where its export is
+    // missing: its material's ColorTint × Overall, seen through the exposure.
     if let Some(sky) = level.layouts.iter().map(|l| &l.sky).find(|s| s.is_object()) {
         let overall = sky["Overall"].as_f64().unwrap_or(1.0) as f32;
         let tint = |i: usize| sky["ColorTint"][i].as_f64().unwrap_or(1.0) as f32 * overall * Exposure { ev100: 0.0 }.exposure();
