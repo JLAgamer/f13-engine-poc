@@ -41,8 +41,8 @@ Moved from Milestone 1 (not tied to gameplay):
       collision, and the effects spawned by gameplay: the hit dust's chunks (M_door_chunks_01, a mesh emitter), the knife's trail
       (P_Jason_ThrowingKnife_01), blood, the tire dust's cylinder spawn and attractor
 - [ ] Counselor model, remaining: the eye look against a capture of the game (it rolls the eyes 90 degrees from their bind: MODLOG
-      "The eyes' look"), the face skeleton's base pose and brow and
-      jaw additives, the body montages' face curves (MODLOG "The counselor's face"), hair dynamics (its anim
+      "The eyes' look"), the face's brow and jaw additives and the body montages' face curves that weight them
+      (MODLOG "The counselor's face"), hair dynamics (its anim
       Blueprint), the eyes' iris and lid overlays, outfit choice
 - [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: their root doesn't turn, the body turns about it; how the actor turns with them is unread), foot-marker
       sync (now normalised time), aim offsets (Base_Counselor_AnimBP's AimOffsets, the Hunter's poses on the shared

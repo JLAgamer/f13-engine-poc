@@ -620,9 +620,17 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
     /// Her face's SCFaceAnimInstance (the face part's AnimClass, Face_AnimBP_<counselor>): its blink, eye-look and
     /// fear-face values as "Face.<name>" (Blueprint overrides, else the constructor's, 0x1402f3840), its morph target and
     /// eye bone names, and its EmotionCurve's three channels (Face.EmotionCurve.X / Y / Z).
-    static void FaceAnim(UObject face, SortedDictionary<string, float> values, Info info)
+    void FaceAnim(UObject face, SortedDictionary<string, float> values, Info info)
     {
         var cls = Inherited<FPackageIndex>(face, "AnimClass")?.Load<UStruct>();
+        // Its base pose: the graph's cached SequencePlayer (looping, rate 1; Face_AnimBP's PrepFace_417, each child's own
+        // Counselor_Face_<counselor>_Anim), on the face's skeleton: faces/<counselor>.json, its name as Face.BasePose.
+        if (ClassValue<FStructFallback>(cls, "AnimGraphNode_SequencePlayer_DAB881C7491C1A63B21EA08DC6E2AAA0")?.GetOrDefault<FPackageIndex?>("Sequence")?.Load() is UAnimSequence seq
+            && Inherited<FPackageIndex>(face, "SkeletalMesh")?.Load() is USkeletalMesh mesh && mesh.Owner is { } pkg)
+        {
+            ExportPropAnims(pkg.Name, [seq.Owner!.Name], "faces", info.Name);
+            (info.Names ??= new())["Face.BasePose"] = seq.Name;
+        }
         foreach (var (name, fallback) in new[] { ("FearFaceMin", 0.75f), ("ShockFaceMin", 0.35f), ("FearToNeutralInterpSpeed", 5f),
                      ("LookDistance", 2500f), ("MaxEyeLookYawOffset", 30f), ("MaxEyeLookPitchOffset", 25f), ("EyeMovementSpeed", 1f),
                      ("MinLookUpdateFrequency", 5f), ("MaxLookUpdateFrequency", 10f), ("MinEyelidWeight", 0f), ("MaxEyelidWeight", 1f),

@@ -20,8 +20,12 @@
 //!   ModifyBone replaces the eye bones' component-space rotation with them (alpha EyeMovementOverride:
 //!   !bInContextKill; 1 here). Computed in Unreal space (to_unreal; the export's quaternion map (-x, -z, -y, w)).
 //!
-//! Not ported yet: the face skeleton's base pose, brow and jaw additives, the body montages' face curves
-//! (MontageFaceNames, the jaw and brow alphas, the blink override), bAnimationOverride's look at target_jnt.
+//! - the base pose: the graph's cached SequencePlayer (Face_AnimBP_<counselor>'s Counselor_Face_<counselor>_Anim,
+//!   looping at rate 1; the export's faces/<counselor>.json, named by Face.BasePose) on the face's bones, under the
+//!   eyes' ModifyBones; dead or alive (the dead branch is the cached pose).
+//!
+//! Not ported yet: the brow and jaw additives and the body montages' face curves that weight them (MontageFaceNames,
+//! the jaw and brow alphas, the blink override), bAnimationOverride's look at target_jnt.
 
 use bevy::mesh::morph::MorphWeights;
 use bevy::prelude::*;
@@ -49,6 +53,8 @@ struct FaceAnim {
     fear: f32,
     shock: f32,
     look: Look,
+    /// The base pose's play time (its sequence player's accumulator).
+    pose_time: f32,
 }
 
 /// The eyes' look state (SCFaceAnimInstance +0x4c8..0x554).
@@ -91,10 +97,12 @@ struct FaceTuning {
     max_look_time: f32,
     left_eye: String,
     right_eye: String,
+    /// The base pose and its length (s).
+    base: Option<(f13_data::character::AnimData, f32)>,
 }
 
 impl FaceTuning {
-    fn new(info: &f13_data::character::CharacterInfo) -> Self {
+    fn new(info: &f13_data::character::CharacterInfo, root: &std::path::Path) -> Self {
         let v = |k: &str, d: f32| info.values.get(&format!("Face.{k}")).copied().unwrap_or(d);
         let n = |k: &str, d: &str| info.names.get(&format!("Face.{k}")).cloned().unwrap_or_else(|| d.to_string());
         let curve = |k: &str| info.curve(&format!("Face.EmotionCurve.{k}"));
@@ -123,6 +131,11 @@ impl FaceTuning {
             max_look_time: v("MaxLookTime", 1.5),
             left_eye: n("LeftEyeBoneName", "L_Eye"),
             right_eye: n("RightEyeBoneName", "R_Eye"),
+            base: info.names.get("Face.BasePose").and_then(|seq| {
+                let index: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("faces").join(format!("{}.json", info.name))).ok()?).ok()?;
+                let file = index[seq]["File"].as_str()?;
+                Some((f13_data::character::AnimData::load(&root.join(file)).ok()?, index[seq]["Length"].as_f64()? as f32))
+            }),
         }
     }
 }
@@ -181,6 +194,7 @@ fn frand(state: &mut u64) -> f32 {
 fn face(
     mut commands: Commands,
     time: Res<Time>,
+    root: Res<crate::ExportRoot>,
     character: Option<Res<CounselorCharacter>>,
     rigs: Query<(&ChildOf, &Rig)>,
     players: Query<(&Player, Option<&f13_bevy::CounselorFear>)>,
@@ -199,14 +213,14 @@ fn face(
     if *rng == 0 {
         *rng = 0x9e37_79b9_7f4a_7c15;
     }
-    let t = tuning.get_or_insert_with(|| FaceTuning::new(info));
+    let t = tuning.get_or_insert_with(|| FaceTuning::new(info, &root.0));
     let dt = time.delta_secs();
     for (parent, rig) in &rigs {
         let Ok((p, fear)) = players.get(parent.parent()) else { continue };
         let Some(face_entity) = rig.part(face_index) else { continue };
         let Ok(mut f) = faces.get_mut(face_entity) else {
             let timer = frand(rng) * (t.blink_max - t.blink_min) + t.blink_min;
-            commands.entity(face_entity).try_insert(FaceAnim { blink_timer: timer, blink: false, eyelid: 0.0, eyelid_target: 1.0, fear: 0.0, shock: 0.0, look: Look::default() });
+            commands.entity(face_entity).try_insert(FaceAnim { blink_timer: timer, blink: false, eyelid: 0.0, eyelid_target: 1.0, fear: 0.0, shock: 0.0, look: Look::default(), pose_time: 0.0 });
             continue;
         };
         let alive = p.counselor.alive();
@@ -226,6 +240,25 @@ fn face(
             f.fear = if fear_alpha <= t.fear_min { finterp_to(f.fear, 0.0, dt, t.to_neutral) } else { fear_alpha.min(cy.eval(at)) };
             set.push((&t.fear_morph, f.fear));
             set.push((&t.shock_morph, f.shock));
+        }
+        // The base pose, looping.
+        if let Some((data, length)) = &t.base {
+            f.pose_time = if *length > 0.0 { (f.pose_time + dt) % length } else { 0.0 };
+            let frames = data.frames.max(1);
+            let x = if *length > 0.0 { f.pose_time / length * (frames - 1) as f32 } else { 0.0 };
+            let (i, a) = (x.floor() as usize, x.fract());
+            let j = (i + 1).min(frames - 1);
+            for bone in children.iter_descendants(face_entity) {
+                let Ok(name) = names.get(bone) else { continue };
+                let Some(track) = data.tracks.iter().find(|t| t.bone == name.as_str()) else { continue };
+                let Ok((mut xf, _)) = bones.get_mut(bone) else { continue };
+                if let (Some(q0), Some(q1)) = (track.rotation.get(i), track.rotation.get(j)) {
+                    xf.rotation = Quat::from_array(*q0).normalize().slerp(Quat::from_array(*q1).normalize(), a);
+                }
+                if let Some((t0, t1)) = track.translation.as_ref().and_then(|t| Some((t.get(i)?, t.get(j)?))) {
+                    xf.translation = Vec3::from_array(*t0).lerp(Vec3::from_array(*t1), a);
+                }
+            }
         }
         // The eyes' look (alive only).
         let find = |name: &str| children.iter_descendants(face_entity).find(|&d| names.get(d).is_ok_and(|n| n.as_str() == name));
