@@ -20,7 +20,9 @@
 //! - the TextRenderActor's text (its TextRenderComponent, [`title_text`]) and its component material track's
 //!   Transparency (Text_Cinematics: masked at (distance field x 180 - 90) x Transparency >= 0.3333).
 //! - an actor attached to another's root takes its transform track as its offset from it.
-//! Not played: the Fear and colour tracks, the cameras' depth of field.
+//! - lights' Temperature (float) and LightColor (colour: its linear curves, as UE sets an FColor property from them,
+//!   ToFColor(sRGB)).
+//! Not played: the Fear track, the cameras' depth of field.
 
 use crate::lighting::{LightKind, PlacedLight};
 use bevy::prelude::*;
@@ -92,6 +94,7 @@ enum Kind {
     Event,
     Particle,
     ComponentMaterial,
+    Color(String),
     Other,
 }
 
@@ -142,6 +145,7 @@ impl Sequence {
                     "MovieSceneEventTrack" => Kind::Event,
                     "MovieSceneParticleTrack" => Kind::Particle,
                     "MovieSceneComponentMaterialTrack" => Kind::ComponentMaterial,
+                    "MovieSceneColorTrack" => Kind::Color(t["Props"]["PropertyName"].as_str().unwrap_or("").to_string()),
                     _ => Kind::Other,
                 };
                 let sections = t["Sections"]
@@ -206,6 +210,7 @@ struct Frame {
     hidden: HashMap<String, bool>,
     anims: HashMap<String, (String, f32)>,
     floats: HashMap<(String, Option<String>, String), f32>,
+    colors: HashMap<(String, Option<String>, String), [f32; 4]>,
     camera: Option<String>,
     fade: Option<f32>,
 }
@@ -244,6 +249,11 @@ fn evaluate(seqs: &HashMap<String, Sequence>, name: &str, t: f32, base: &HashMap
                         out.floats.insert((actor.clone(), component.clone(), name.to_string()), channel(curve, t, 0.0));
                     }
                 }
+            }
+            Kind::Color(prop) => {
+                let (Some((actor, component)), Some(s)) = (target, section_at(&track.sections, t, true)) else { continue };
+                let c = |k: &str| channel(&s.props[k], t, 1.0);
+                out.colors.insert((actor, component, prop.clone()), [c("RedCurve"), c("GreenCurve"), c("BlueCurve"), c("AlphaCurve")]);
             }
             Kind::Float(prop) => {
                 let (Some((actor, component)), Some(s)) = (target, section_at(&track.sections, t, true)) else { continue };
@@ -859,21 +869,35 @@ fn play(
             }
         }
     }
-    // Lights' intensity (their placed Intensity's units).
+    // Lights: Intensity (their placed units), Temperature and LightColor, over their placed values.
+    let mut light_props: HashMap<&String, Vec<(&str, Value)>> = HashMap::new();
     for ((actor, _component, prop), v) in &frame.floats {
-        if prop != "Intensity" {
-            continue;
+        if matches!(prop.as_str(), "Intensity" | "Temperature") {
+            light_props.entry(actor).or_default().push((prop.as_str(), Value::from(*v as f64)));
         }
+    }
+    for ((actor, _component, prop), c) in &frame.colors {
+        if prop == "LightColor" {
+            let s = Color::LinearRgba(LinearRgba::new(c[0], c[1], c[2], c[3])).to_srgba();
+            let byte = |v: f32| Value::from((v.clamp(0.0, 1.0) * 255.0).round() as u64);
+            light_props.entry(actor).or_default().push(("LightColor", serde_json::json!({ "R": byte(s.red), "G": byte(s.green), "B": byte(s.blue), "A": byte(s.alpha) })));
+        }
+    }
+    for (actor, props) in light_props {
         let Some(&e) = p.actors.get(actor) else { continue };
         let Ok((l, spot, point)) = lights.get_mut(e) else { continue };
         let mut placed = l.0.clone();
-        placed.props.insert("Intensity".into(), Value::from(*v as f64));
-        let lumens = placed.lumens();
+        for (k, v) in props {
+            placed.props.insert(k.into(), v);
+        }
+        let (lumens, color): (f32, Color) = (placed.lumens(), placed.color().into());
         if let Some(mut s) = spot {
             s.intensity = lumens;
+            s.color = color;
         }
         if let Some(mut pl) = point {
             pl.intensity = lumens;
+            pl.color = color;
         }
     }
     // The camera: the cut's CineCameraActor, its field of view by its focal length.
