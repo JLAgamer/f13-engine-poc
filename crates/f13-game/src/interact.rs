@@ -1680,7 +1680,7 @@ fn update_prompt(
         use crate::props::ItemKind;
         match inv.hand.and_then(|e| items.get(e).ok()).map(|i| &i.kind) {
             Some(ItemKind::Weapon(_)) => lines.push("[LMB] Swing   [W + LMB] Heavy swing".into()),
-            Some(ItemKind::Gun { .. }) => lines.push("[LMB] Fire (aim with the camera)".into()),
+            Some(ItemKind::Gun { .. }) => lines.push("[RMB] Aim  [LMB] Fire (while aiming)".into()),
             Some(ItemKind::Trap) => lines.push("[LMB] Place the bear trap".into()),
             _ => {}
         }

@@ -1034,7 +1034,11 @@ fn run_bot(
                             keys.press(KeyCode::KeyW);
                         }
                     }
-                    Some(ItemKind::Gun { .. }) if dist < 10.0 => mouse.press(MouseButton::Left),
+                    // A gun fires only while aimed: aim (right) and fire (left).
+                    Some(ItemKind::Gun { .. }) if dist < 10.0 => {
+                        mouse.press(MouseButton::Right);
+                        mouse.press(MouseButton::Left);
+                    }
                     Some(ItemKind::Trap) if dist < 14.0 && !bot.jason_shots.contains(&"trap") => {
                         bot.jason_shots.push("trap");
                         mouse.press(MouseButton::Left);

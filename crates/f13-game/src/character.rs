@@ -98,7 +98,7 @@ impl Plugin for CharacterPlugin {
             }
         })
         .add_systems(Update, (assemble, animate).chain())
-        .add_systems(PostUpdate, layered_blend.after(bevy::app::AnimationSystems).before(bevy::transform::TransformSystems::Propagate));
+        .add_systems(PostUpdate, (layered_blend, aim_offset).chain().after(bevy::app::AnimationSystems).before(bevy::transform::TransformSystems::Propagate));
     }
 }
 
@@ -117,7 +117,45 @@ pub struct CharacterModel {
 /// GrabState machine's Idle (its Struggle state needs the counselor's bIsStruggling, which nothing sets: its only
 /// setter, SCCharacter::SetStruggling, is called by no code or Blueprint); her block idle's CombatUpperBody track;
 /// his (Jason_AnimBP's CombatUpperBody).
-const LAYER_TAKES: [&str; 3] = ["normal_grab_idle", BLOCK_IDLE, crate::jason::BLOCK];
+const LAYER_TAKES: [&str; 8] = ["normal_grab_idle", BLOCK_IDLE, crate::jason::BLOCK, AIM_EXIT, AIM_POSES[0], AIM_POSES[1], AIM_POSES[2], AIM_POSES[3]];
+
+/// Base_Counselor_AnimBP's gun branch (Standing stance only: BlendListByEnum on CurrentStance, then bHasWeapon, then
+/// bHasGun): the RangedAiming machine under the AimOffsets aim offset, all under the DefaultFullBody slot. States:
+/// Idle (her locomotion) -> StartAiming (bIsAiming) -> Enter (two-handed: hunter_Aiming_idle_To_Aim) or Aiming;
+/// Enter -> Aiming by its remaining time; Aiming (by GunType: the flare gun's m_normal_stand_flare_aim_idle, the
+/// shotgun's combat_stand_idle_hunter_01) -> DoneAiming (!bIsAiming) -> Exit (two-handed: hunter_Aiming_To_Idle over
+/// her locomotion from spine_01, BlendDepth 0, local blend) or Idle; Exit -> Idle by its remaining time. Every
+/// crossfade is 0.2 s (HermiteCubic); the port eases the weights at BLEND_RATE.
+const AIM_ENTER: &str = "hunter_Aiming_idle_To_Aim";
+const AIM_EXIT: &str = "hunter_Aiming_To_Idle";
+const AIM_IDLE_FLARE: &str = "m_normal_stand_flare_aim_idle";
+const AIM_IDLE_SHOTGUN: &str = "combat_stand_idle_hunter_01";
+const AIM_EXIT_FILTERS: &[(&str, i32)] = &[("spine_01", 0)];
+const AIM_CROSSFADE_S: f32 = 0.2;
+/// AimOffsets (AAT_RotationOffsetMeshSpace poses against Aim_C_C) at yaw 0 (the node's X is 0): Aim_B_C, Aim_C_C,
+/// Aim_U_L, Aim_U_R.
+const AIM_POSES: [&str; 4] = ["Aim_B_C", "Aim_C_C", "Aim_U_L", "Aim_U_R"];
+/// The grid's yaw-0 column by pitch (-90, -45, 0, 45, 90): each point's sample weights.
+const AIM_GRID: [[f32; 4]; 5] = [[1.0, 0.0, 0.0, 0.0], [0.5, 0.5, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.5, 0.25, 0.25], [0.0, 0.0, 0.5, 0.5]];
+/// AimOffsets' TargetWeightInterpolationSpeedPerSec.
+const AIM_WEIGHT_RATE: f32 = 4.0;
+
+/// The RangedAiming machine's states (the conduits StartAiming / DoneAiming resolve at once).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum AimState {
+    #[default]
+    Idle,
+    Enter,
+    Aiming,
+    Exit,
+}
+
+/// The AimOffsets samples' target weights at `pitch` (degrees; bilinear on the grid, X at 0).
+fn aim_targets(pitch: f32) -> [f32; 4] {
+    let y = (pitch.clamp(-90.0, 90.0) + 90.0) / 45.0;
+    let (i, f) = ((y.floor() as usize).min(3), y - (y.floor()).min(3.0));
+    std::array::from_fn(|k| AIM_GRID[i][k] * (1.0 - f) + AIM_GRID[i + 1][k] * f)
+}
 
 /// Base_Counselor_AnimBP's CombatUpperBody slot: a LayeredBoneBlend over her stance pose (spine_01, BlendDepth 2,
 /// bMeshSpaceRotationBlend), chosen over the CombatFullBody slot while she moves (BlendListByBool on bIsMoving:
@@ -299,6 +337,16 @@ pub struct Rig {
     snap: bool,
     /// Whether her last footstep was the left.
     left_last: bool,
+    /// The RangedAiming machine: its state and the time in it.
+    pub(crate) aim_state: AimState,
+    aim_t: f32,
+    /// The AimOffsets samples' weights ([`AIM_POSES`]), and whether the aim offset is in the pose.
+    aim_weights: [f32; 4],
+    aim_on: bool,
+    /// A state's sequence player (restarts as its state is entered): its animation, time (s) and whether it loops.
+    timed: Option<(&'static str, f32, bool)>,
+    /// A ShotgunHold notify state is active (an animation in her pose is inside its window; items.rs).
+    pub(crate) shotgun_hold: bool,
 }
 
 /// A full-body animation a character plays now (hit reactions, grabs, kills, death), whatever its movement state.
@@ -361,6 +409,12 @@ pub fn spawn_model(commands: &mut Commands, assets: &AssetServer, character: &Ch
         action: None,
         snap: false,
         left_last: false,
+        aim_state: AimState::Idle,
+        aim_t: 0.0,
+        aim_weights: [0.0; 4],
+        aim_on: false,
+        timed: None,
+        shotgun_hold: false,
     });
     rig
 }
@@ -450,7 +504,8 @@ pub(crate) fn animate(
     tuning: Res<PlayerTuning>,
     forced: Option<Res<ForcedPose>>,
     anim_sounds: Option<Res<crate::audio::AnimSounds>>,
-    players: Query<(Entity, &Player, &Transform, Option<&crate::interact::UsingItem>, Option<&PlayAction>, Has<crate::items::Blocking>, Has<RestartAction>, Option<&SeekAction>)>,
+    players: Query<(Entity, &Player, &Transform, Option<&crate::interact::UsingItem>, Option<&PlayAction>, Has<crate::items::Blocking>, Has<RestartAction>, Option<&SeekAction>, (Option<&crate::items::GunAim>, Option<&crate::interact::Inventory>))>,
+    items: Query<&crate::props::Item>,
     mut rigs: Query<(&ChildOf, &mut Rig, &mut AnimationPlayer), Without<crate::ragdoll::Ragdolled>>,
     mut layers: Query<&mut LayeredBlend, With<Player>>,
 ) {
@@ -471,7 +526,7 @@ pub(crate) fn animate(
         return;
     }
     for (parent, mut rig, mut anim) in &mut rigs {
-        let Ok((pe, p, xf, using, scripted, blocking, restart, seek)) = players.get(parent.parent()) else { continue };
+        let Ok((pe, p, xf, using, scripted, blocking, restart, seek, (gun_aim, inv))) = players.get(parent.parent()) else { continue };
         if restart {
             rig.action = None;
             commands.entity(pe).remove::<RestartAction>();
@@ -501,9 +556,65 @@ pub(crate) fn animate(
             crate::audio::play_anim_sounds(&mut commands, anim_sounds.as_deref(), rig.action_span(dt), xf.translation);
         }
 
+        // The gun branch: the gun in her hands (two-handed, a flare gun), standing.
+        let gun = inv.and_then(|i| i.hand).and_then(|h| items.get(h).ok()).and_then(|i| match &i.kind {
+            crate::props::ItemKind::Gun { stats, projectile, .. } => Some((stats.two_handed, *projectile)),
+            _ => None,
+        });
+        let gun_branch = gun.filter(|_| c.stance == Stance::Standing);
+        let aiming = gun_aim.is_some_and(|a| a.aiming);
+        rig.timed = None;
+        match gun_branch {
+            // Not relevant: the machine starts over at Idle when it is again (bReinitializeOnBecomingRelevant), and
+            // the blend space's samples with it.
+            None => {
+                rig.aim_state = AimState::Idle;
+                rig.aim_t = 0.0;
+                rig.aim_weights = [0.0; 4];
+            }
+            Some((two_handed, _)) => {
+                rig.aim_t += dt;
+                let len = |n: &str| character.length(n).unwrap_or(0.0);
+                let next = match rig.aim_state {
+                    AimState::Idle if aiming => Some(if two_handed { AimState::Enter } else { AimState::Aiming }),
+                    AimState::Enter if rig.aim_t >= len(AIM_ENTER) - AIM_CROSSFADE_S => Some(AimState::Aiming),
+                    AimState::Aiming if !aiming => Some(if two_handed { AimState::Exit } else { AimState::Idle }),
+                    AimState::Exit if rig.aim_t >= len(AIM_EXIT) - AIM_CROSSFADE_S => Some(AimState::Idle),
+                    _ => None,
+                };
+                if let Some(n) = next {
+                    rig.aim_state = n;
+                    rig.aim_t = 0.0;
+                }
+                // AimPitch moves the blend space's samples toward their weights at AIM_WEIGHT_RATE each (the 4.18
+                // InterpolateWeightOfSampleData), normalised.
+                let target = aim_targets(gun_aim.map_or(0.0, |a| a.pitch));
+                let step = AIM_WEIGHT_RATE * dt;
+                for (w, t) in rig.aim_weights.iter_mut().zip(target) {
+                    *w += (t - *w).clamp(-step, step);
+                    if *w <= 1e-5 {
+                        *w = 0.0;
+                    }
+                }
+                let sum: f32 = rig.aim_weights.iter().sum();
+                if sum > 0.0 {
+                    rig.aim_weights.iter_mut().for_each(|w| *w /= sum);
+                }
+            }
+        }
+        rig.aim_on = gun_branch.is_some() && rig.action.is_none();
+        let aim_clip = match (gun_branch, rig.aim_state) {
+            (Some(_), AimState::Enter) => Some((AIM_ENTER, false)),
+            (Some((_, flare)), AimState::Aiming) => Some((if flare { AIM_IDLE_FLARE } else { AIM_IDLE_SHOTGUN }, true)),
+            _ => None,
+        };
+
         let mut targets: HashMap<&str, f32> = HashMap::new();
         if rig.action.as_ref().is_some_and(|(a, _)| !character.clips.contains_key(a.as_str())) {
             targets.insert(IDLE, 1.0);
+        } else if let (None, Some((clip, looping))) = (&rig.action, aim_clip) {
+            targets.insert(clip, 1.0);
+            rig.timed = Some((clip, rig.aim_t, looping));
         } else if rig.action.is_none() {
             match c.stance {
                 Stance::Crouching => {
@@ -563,7 +674,25 @@ pub(crate) fn animate(
         let block_layer = if blocking && c.stance == Stance::Combat && speed > 1e-4 { 1.0 } else { 0.0 };
         match layers.get_mut(pe) {
             Ok(mut l) => {
-                let w = l.weight + (block_layer - l.weight).clamp(-dt / BLOCK_LAYER_BLEND_S, dt / BLOCK_LAYER_BLEND_S);
+                // The aim's Exit state takes the node's place while it plays and fades (her block needs combat stance,
+                // the gun branch standing).
+                let exiting = gun_branch.is_some() && rig.aim_state == AimState::Exit;
+                let (target, blend_s) = if exiting || (l.take == AIM_EXIT && l.weight > 0.0) {
+                    if l.take != AIM_EXIT {
+                        l.switch(AIM_EXIT_FILTERS, AIM_EXIT);
+                        l.mesh_space = false;
+                        l.hold = true;
+                    }
+                    (if exiting { 1.0 } else { 0.0 }, AIM_CROSSFADE_S)
+                } else {
+                    if l.take != BLOCK_IDLE {
+                        l.switch(BLOCK_LAYER_FILTERS, BLOCK_IDLE);
+                        l.mesh_space = true;
+                        l.hold = false;
+                    }
+                    (block_layer, BLOCK_LAYER_BLEND_S)
+                };
+                let w = l.weight + (target - l.weight).clamp(-dt / blend_s, dt / blend_s);
                 if l.weight != w {
                     l.weight = w;
                 }
@@ -572,6 +701,15 @@ pub(crate) fn animate(
                 commands.entity(pe).insert(LayeredBlend::new(BLOCK_LAYER_FILTERS, true, BLOCK_IDLE));
             }
         }
+
+        // ShotgunHold windows (the hunter aim takes, the shotgun's fire) in the action, the state's sequence or the
+        // Exit layer, while they weigh in.
+        let in_hold = |name: &str, t: f32| character.info.animations.get(name).and_then(|a| a.window("ShotgunHold")).is_some_and(|(s, e)| t >= s && t < e);
+        let len = |n: &str| character.length(n).unwrap_or(1.0).max(1e-3);
+        let layer = layers.get(pe).ok().filter(|l| l.take == AIM_EXIT && l.weight > 0.0).map(|l| l.t);
+        rig.shotgun_hold = rig.action.as_ref().is_some_and(|(a, t)| in_hold(a, *t))
+            || rig.timed.is_some_and(|(n, t, looping)| rig.weights.get(n).is_some_and(|w| *w > 1e-4) && in_hold(n, if looping { t % len(n) } else { t }))
+            || layer.is_some_and(|t| in_hold(AIM_EXIT, t));
 
         // The Footstep_L / Footstep_R notifies the locomotion cycle that weighs most passed this frame (audio.rs).
         let (before, after) = (rig.prev_phase, rig.phase);
@@ -693,6 +831,8 @@ impl Rig {
                 // Loop sections (a stun's middle, a drawer's Idle) repeat; the rest hold their last frame.
                 let t = self.action.as_ref().unwrap().1;
                 if name.contains("_loop") || name.contains("_cycle") || name.ends_with("_idle") { t % len.max(1e-3) } else { t.min(len) }
+            } else if let Some((_, t, looping)) = self.timed.filter(|(n, _, _)| n == name) {
+                if looping { t % len.max(1e-3) } else { t.min(len) }
             } else if synced(name) {
                 self.phase * len
             } else {
@@ -712,13 +852,15 @@ pub struct LayeredBlend {
     pub filters: &'static [(&'static str, i32)],
     /// bMeshSpaceRotationBlend.
     pub mesh_space: bool,
+    /// Holds the take's last frame instead of looping.
+    pub hold: bool,
     take: &'static str,
     t: f32,
 }
 
 impl LayeredBlend {
     pub fn new(filters: &'static [(&'static str, i32)], mesh_space: bool, take: &'static str) -> Self {
-        LayeredBlend { weight: 0.0, filters, mesh_space, take, t: 0.0 }
+        LayeredBlend { weight: 0.0, filters, mesh_space, hold: false, take, t: 0.0 }
     }
 
     /// Another layer in the same node's place (its take, from the start, and its branch filters).
@@ -831,7 +973,8 @@ fn layered_blend(
                 }
                 None => current,
             };
-            if let Some((r, tr)) = sample_take(data, *length, &b.name, l.t) {
+            let t = if l.hold { l.t.min(*length - 1e-4).max(0.0) } else { l.t };
+            if let Some((r, tr)) = sample_take(data, *length, &b.name, t) {
                 p.rotation = r;
                 if let Some(tr) = tr.filter(|_| b.retarget == "Animation") {
                     p.translation = tr;
@@ -873,6 +1016,100 @@ fn layered_blend(
     }
 }
 
+/// The AimOffsets RotationOffsetBlendSpace over the gun branch (Alpha 1): the samples' additives blended by their
+/// weights (as additive poses: weighted sums, rotations sign-aligned and normalised), then
+/// FAnimationRuntime::AccumulateMeshSpaceRotationAdditiveToLocalPose: her pose's rotations to component space, the
+/// additive's rotation before each, back to local; translations added. The samples (AAT_RotationOffsetMeshSpace against
+/// Aim_C_C) are cooked with the additive baked into their raw data: their tracks are already the deltas (Aim_C_C keeps
+/// only an identity root; a bone without a track is identity), component-space rotations (every spine delta turns
+/// about the component's lateral axis: a pitch), local translations. Bones the animation doesn't write every frame get
+/// back what they had before (so it doesn't build up).
+#[allow(clippy::type_complexity)]
+fn aim_offset(
+    counselor: Option<Res<CounselorCharacter>>,
+    rigs: Query<&Rig>,
+    mut transforms: Query<&mut Transform>,
+    mut written: Local<HashMap<Entity, (Transform, Transform)>>,
+) {
+    let Some(model) = counselor.as_deref().map(|c| &c.0) else { return };
+    for rig in &rigs {
+        if !matches!(rig.model, Model::Counselor) || !rig.aim_on || rig.aim_weights[1] >= 1.0 - 1e-5 {
+            continue;
+        }
+        let bones = &model.info.bones;
+        let n = bones.len();
+        // Each sample's delta per bone (translations only for the bones retargeted from the animation).
+        let mut deltas: Vec<Vec<(Quat, Vec3)>> = Vec::new();
+        for name in AIM_POSES {
+            let Some((data, length)) = model.layers.get(name) else { return };
+            deltas.push(
+                bones
+                    .iter()
+                    .map(|b| match sample_take(data, *length, &b.name, 0.0) {
+                        Some((q, tr)) => (q, tr.filter(|_| b.retarget == "Animation").unwrap_or(Vec3::ZERO)),
+                        None => (Quat::IDENTITY, Vec3::ZERO),
+                    })
+                    .collect(),
+            );
+        }
+        // The blended additive per bone.
+        let mut delta = vec![(Quat::IDENTITY, Vec3::ZERO); n];
+        for (i, d) in delta.iter_mut().enumerate() {
+            let mut q = Vec4::ZERO;
+            let mut t = Vec3::ZERO;
+            let mut first: Option<Quat> = None;
+            for (s, &w) in rig.aim_weights.iter().enumerate() {
+                if w <= 0.0 {
+                    continue;
+                }
+                let r = deltas[s][i].0;
+                let r = match first {
+                    Some(f) if f.dot(r) < 0.0 => -r,
+                    Some(_) => r,
+                    None => {
+                        first = Some(r);
+                        r
+                    }
+                };
+                q += Vec4::from(r) * w;
+                t += deltas[s][i].1 * w;
+            }
+            *d = (Quat::from_vec4(q).normalize(), t);
+        }
+        // Her pose.
+        let mut local = vec![Transform::IDENTITY; n];
+        let mut ents = vec![None; n];
+        for (i, b) in bones.iter().enumerate() {
+            let Some(&e) = rig.bones.get(&b.name) else { continue };
+            let Ok(xf) = transforms.get(e) else { continue };
+            local[i] = match written.get(&e) {
+                Some((before, after)) if after == xf => *before,
+                _ => *xf,
+            };
+            ents[i] = Some(e);
+        }
+        let mut now = vec![Quat::IDENTITY; n];
+        for i in 0..n {
+            let parent = bones[i].parent;
+            now[i] = if parent >= 0 { now[parent as usize] * local[i].rotation } else { local[i].rotation };
+        }
+        let out_mesh: Vec<Quat> = (0..n).map(|i| delta[i].0 * now[i]).collect();
+        for i in 0..n {
+            let Some(e) = ents[i] else { continue };
+            let parent = bones[i].parent;
+            let mut out = local[i];
+            out.rotation = if parent >= 0 { (out_mesh[parent as usize].inverse() * out_mesh[i]).normalize() } else { out_mesh[i] };
+            out.translation += delta[i].1;
+            if let Ok(mut xf) = transforms.get_mut(e) {
+                if *xf != out {
+                    *xf = out;
+                }
+                written.insert(e, (local[i], out));
+            }
+        }
+    }
+}
+
 /// Position of `speed` along the blendspace's speed marks (0 at marks[0], 1 at marks[1], ...).
 fn speed_state(speed: f32, marks: &[f32]) -> f32 {
     for i in 1..marks.len() {
@@ -887,6 +1124,15 @@ fn speed_state(speed: f32, marks: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aim_targets_follow_the_grid() {
+        assert_eq!(aim_targets(0.0), [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(aim_targets(-90.0), [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(aim_targets(90.0), [0.0, 0.0, 0.5, 0.5]);
+        assert_eq!(aim_targets(-22.5), [0.25, 0.75, 0.0, 0.0]);
+        assert_eq!(aim_targets(67.5), [0.0, 0.25, 0.375, 0.375]);
+    }
 
     #[test]
     fn speed_state_is_piecewise_linear() {

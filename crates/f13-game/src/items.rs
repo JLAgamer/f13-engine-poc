@@ -29,7 +29,16 @@
 //! Guns (SCGun): using one fires it at once (its Use: bHasAmmunition and bIsAiming -> Fire; the flare's OnUseItem
 //! notify is at 0 s too), and one shot spends it (bHasAmmunition false unless infinite ammo). Each shotgun pellet
 //! traces FireDistance / cos(its spread angle): it reaches FireDistance (SCGun's constructor, 2000 cm) ahead.
-//! Not ported: the game fires only while aiming (bIsAiming).
+//! Only while aiming (SCGun::Use needs bIsAiming).
+//!
+//! Aiming (CSLR_Aim, right mouse: the AimInputComponent's press 0x1403c0280 / release 0x1403c0480): the press, out of
+//! the water, not seated, picking up, emoting, interacting or in a montage, with a gun in her hands, calls
+//! SCGun::AimGun(true) (bIsAiming only with bHasAmmunition) and then the controller's SetIgnoreMoveInput(true)
+//! (vtable +0x6d0, the slot Controller::SetIgnoreMoveInput's thunk calls): she stands. The release: AimGun(false),
+//! SetIgnoreMoveInput(false). The tick (0x1403d8de0): her bIsAiming is the gun's (false without a gun); aiming, she
+//! takes the control yaw (bUseControllerRotationYaw, not oriented to movement) and AimPitch is the control pitch
+//! (-180..180), else AimPitch eases to 0 (FInterpTo, speed 5). In combat stance right mouse is CMBT_CSLR_Block too:
+//! there the port blocks (which input the game's stack takes first isn't read).
 //!
 //! The firecracker's throw (SCNoiseMaker::ThrowProjectile 0x14039aa60): the control pitch is clamped between two
 //! unreflected fields (+0x5a8 / +0x5ac) that the constructor zeroes and nothing sets, so it's always 0: the pack
@@ -58,6 +67,16 @@ use crate::match_flow::{ClassScore, Score};
 const ATTACK_ROTATION_ITERATION_DEG: f32 = 15.0;
 /// The most sweep steps a frame.
 const ATTACK_TRACE_STEPS: f32 = 9.0;
+/// The counselor's gun aim: bIsAiming and AimPitch (degrees, + up).
+#[derive(Component, Default, Debug)]
+pub struct GunAim {
+    pub aiming: bool,
+    pub pitch: f32,
+}
+
+/// AimPitch's FInterpTo speed back to 0 when not aiming (the tick's constant).
+const AIM_PITCH_RETURN_SPEED: f32 = 5.0;
+
 /// SCGun's FireDistance (constructor; the shotgun doesn't override it).
 const SHOTGUN_RANGE_M: f32 = 20.0;
 /// Firecracker throw speed (m/s): FirecrackerVelocityPitch_Curve at its pitch, always 0.
@@ -101,14 +120,25 @@ impl Plugin for ItemsPlugin {
     fn build(&self, app: &mut App) {
         // The wiggle axis, for her grab struggle (jason.rs) and trap struggle.
         app.init_resource::<crate::jason::Struggle>()
-            .add_systems(PreUpdate, crate::jason::read_struggle.after(bevy::input::InputSystems))
+            .add_systems(PreUpdate, (crate::jason::read_struggle, hold_aim).after(bevy::input::InputSystems))
             .add_systems(PostUpdate, give_items)
             .init_resource::<MapScreen>()
-            .add_systems(Update, (hold_in_hand, start_action, block, toggle_map).chain())
+            .add_systems(Update, (hold_in_hand, shotgun_hold, aim, start_action, block, toggle_map).chain())
             .add_observer(wear_on_block)
             .add_observer(set_killer_trap)
             .add_systems(FixedUpdate, (tick_action, fly, spring_traps, struggle_in_trap).chain().after(crate::player::move_player));
     }
+}
+
+/// Testing (--aim): right mouse held, the camera at this pitch (degrees).
+#[derive(Resource)]
+pub struct AimHold(pub f32);
+
+fn hold_aim(hold: Option<Res<AimHold>>, mut mouse: ResMut<ButtonInput<MouseButton>>, mut camera: Single<&mut PlayerCamera>) {
+    let Some(hold) = hold else { return };
+    mouse.release(MouseButton::Right);
+    mouse.press(MouseButton::Right);
+    camera.pitch = hold.0.to_radians();
 }
 
 /// Testing (--give): item classes the counselor starts with, taken from the match's spawned items.
@@ -152,6 +182,10 @@ fn give_items(
 /// The held item hangs off the counselor's hand socket.
 #[derive(Component)]
 pub struct InHand;
+
+/// The socket the item in her hands hangs from (its HandAttachSocket, or where ShotgunHold moved it).
+#[derive(Component)]
+pub struct HeldAt(pub String);
 
 #[derive(Clone, Debug)]
 enum Use {
@@ -329,6 +363,60 @@ fn wear_weapon(commands: &mut Commands, wear: &mut Query<Option<&mut Wear>>, inv
     true
 }
 
+/// Right mouse out of combat stance with a gun in her hands: aim while held (see the module notes).
+#[allow(clippy::type_complexity)]
+fn aim(
+    mut commands: Commands,
+    time: Res<Time>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    interaction: Res<crate::interact::Interaction>,
+    camera: Single<&PlayerCamera>,
+    mut player: Query<(Entity, &Player, &Inventory, &mut Transform, Option<&mut GunAim>, Has<ItemAction>, (Has<crate::vehicle::Driving>, Has<crate::hiding::Hiding>, Has<crate::jason::Held>, Has<crate::interact::UsingItem>))>,
+    items: Query<&Item>,
+) {
+    let Ok((pe, p, inv, mut xf, aim, acting, (driving, hiding, held, using))) = player.single_mut() else { return };
+    let Some(mut aim) = aim else {
+        commands.entity(pe).try_insert(GunAim::default());
+        return;
+    };
+    let c = &p.counselor;
+    let gun = inv.hand.and_then(|h| items.get(h).ok()).is_some_and(|i| matches!(i.kind, ItemKind::Gun { .. }));
+    use f13_core::counselor::Stance;
+    if !gun || !c.alive() || held || driving || hiding {
+        aim.aiming = false;
+    } else if !mouse.pressed(MouseButton::Right) {
+        aim.aiming = false;
+    } else if mouse.just_pressed(MouseButton::Right)
+        && !matches!(c.stance, Stance::Swimming | Stance::Combat)
+        && !interaction.busy()
+        && !using
+        && !acting
+        && p.root_motion.is_none()
+    {
+        // The gun has its one shot until it's fired (the shot spends it; the port drops the gun then).
+        aim.aiming = true;
+    }
+    if aim.aiming {
+        let (sin, cos) = camera.yaw.sin_cos();
+        xf.rotation = Quat::from_rotation_y((-sin).atan2(-cos));
+        aim.pitch = (camera.pitch.to_degrees() + 180.0).rem_euclid(360.0) - 180.0;
+    } else if aim.pitch.abs() > 1e-8 {
+        aim.pitch = finterp_to(aim.pitch, 0.0, time.delta_secs(), AIM_PITCH_RETURN_SPEED);
+    }
+}
+
+/// FMath::FInterpTo.
+pub(crate) fn finterp_to(current: f32, target: f32, dt: f32, speed: f32) -> f32 {
+    if speed <= 0.0 {
+        return target;
+    }
+    let dist = target - current;
+    if dist * dist < 1e-8 {
+        return target;
+    }
+    current + dist * (dt * speed).clamp(0.0, 1.0)
+}
+
 /// Right mouse in combat stance: block, while held, with a weapon in her hands.
 #[allow(clippy::type_complexity)]
 fn block(
@@ -454,11 +542,48 @@ fn hold_in_hand(
         let socket = character.info.sockets.get(&item.hand_socket).or_else(|| character.info.sockets.get("WeaponSocket"));
         let Some(bone) = socket.and_then(|s| rig.bones.get(&s.attach)) else { continue };
         let offset = socket.and_then(|s| s.transform.as_ref()).map(crate::to_transform).unwrap_or_default();
-        commands.entity(hand).insert((InHand, ChildOf(*bone), offset));
+        commands.entity(hand).insert((InHand, HeldAt(item.hand_socket.clone()), ChildOf(*bone), offset));
         if let Ok(mut v) = visibility.get_mut(hand) {
             *v = Visibility::Inherited;
         }
     }
+}
+
+/// ShotgunHold (the notify state on the hunter aim takes and the shotgun's fire): its begin moves the shotgun to
+/// her hand (Shotgun_C's AttachToCharacter(false, 'WeaponSocket')), its end back to shotgun_Socket unless she's
+/// aiming (the gun's bIsAiming).
+#[allow(clippy::type_complexity)]
+fn shotgun_hold(
+    mut commands: Commands,
+    character: Option<Res<CounselorCharacter>>,
+    players: Query<(Entity, &Inventory, Option<&GunAim>), With<Player>>,
+    rigs: Query<(&ChildOf, &Rig)>,
+    mut items: Query<(&Item, &mut HeldAt)>,
+    mut was: Local<bool>,
+) {
+    let Some(character) = character else { return };
+    let Ok((pe, inv, aim)) = players.single() else { return };
+    let Some((_, rig)) = rigs.iter().find(|(c, _)| c.parent() == pe) else { return };
+    let (now, before) = (rig.shotgun_hold, std::mem::replace(&mut *was, rig.shotgun_hold));
+    let Some(hand) = inv.hand else { return };
+    let Ok((item, mut at)) = items.get_mut(hand) else { return };
+    if item.class != "Shotgun_C" {
+        return;
+    }
+    let socket = match (before, now) {
+        (false, true) => "WeaponSocket",
+        (true, false) if !aim.is_some_and(|a| a.aiming) => "shotgun_Socket",
+        _ => return,
+    };
+    if at.0 == socket {
+        return;
+    }
+    let Some(s) = character.info.sockets.get(socket) else { return };
+    let Some(&bone) = rig.bones.get(&s.attach) else { return };
+    let offset = s.transform.as_ref().map(crate::to_transform).unwrap_or_default();
+    debug!("shotgun to {socket}");
+    at.0 = socket.to_string();
+    commands.entity(hand).insert((ChildOf(bone), offset));
 }
 
 /// Left mouse: use the item in the hands. 1-3: throw a firecracker from that pocket.
@@ -470,14 +595,15 @@ fn start_action(
     interaction: Res<crate::interact::Interaction>,
     camera: Single<&PlayerCamera>,
     mut player: Query<
-        (Entity, &Player, &Inventory, &mut Transform),
+        (Entity, &Player, &Inventory, &mut Transform, Option<&GunAim>),
         (Without<ItemAction>, Without<crate::interact::UsingItem>, Without<crate::jason::Held>, Without<crate::jason::Staggered>, Without<crate::vehicle::Driving>, Without<Blocking>, Without<Trapped>),
     >,
     items: Query<&Item>,
     anims: Res<crate::Anims>,
 ) {
     let Some(character) = character else { return };
-    let Ok((pe, p, inv, mut xf)) = player.single_mut() else { return };
+    let Ok((pe, p, inv, mut xf, aim)) = player.single_mut() else { return };
+    let aiming = aim.is_some_and(|a| a.aiming);
     if !p.counselor.alive() || interaction.busy() || p.counselor.dodging() || p.root_motion.is_some() {
         return;
     }
@@ -506,6 +632,9 @@ fn start_action(
                 start(Use::Swing { stats: stats.clone(), window, heavy: false }, hand, anim, window.0);
             }
             ItemKind::Gun { projectile, .. } => {
+                if !aiming {
+                    return;
+                }
                 info!("fire {}", item.name);
                 xf.rotation = face;
                 let anim = if *projectile { FLARE_FIRE } else { SHOTGUN_FIRE };
@@ -689,7 +818,7 @@ fn tick_action(
                 inv.hand = None;
                 commands
                     .entity(a.item)
-                    .remove::<(Carried, ChildOf, InHand, Item)>()
+                    .remove::<(Carried, ChildOf, InHand, HeldAt, Item)>()
                     .insert((ArmedTrap { clear: false, killer: false }, crate::prop_anim::PropAnim::new(crate::prop_anim::TRAP_ARMED), Transform::from_translation(Vec3::new(at.x, y, at.z)).with_rotation(xf.rotation), Visibility::Inherited));
                 info!("bear trap armed at ({:.1}, {:.1}, {:.1})", at.x, y, at.z);
                 if let Ok(item) = items.get(a.item) {

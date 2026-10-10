@@ -1368,6 +1368,16 @@ static class Mvp
         $"{Shared}/Interaction/Items/AM_normal_stand_use_firecracker",
         $"{Shared}/Interaction/Items/AM_normal_stand_use_flare",
         "/Game/Characters/Counselors/Base/Male/Animation/Hunter/AM_combat_stand_rifle_fire_01",
+        // Aiming a gun (Base_Counselor_AnimBP's RangedAiming machine: the Hunter's enter / exit, the aim idles by
+        // GunType) and the AimOffsets poses its RotationOffsetBlendSpace reads at yaw 0 (Aim_C_C its additive base).
+        "/Game/Characters/Counselors/Base/Male/Animation/Hunter/hunter_Aiming_idle_To_AIm",
+        "/Game/Characters/Counselors/Base/Male/Animation/Hunter/hunter_Aiming_To_Idle",
+        "/Game/Characters/Counselors/Base/Male/Animation/Hunter/combat_stand_idle_hunter_01",
+        "/Game/Characters/Counselors/Base/Male/Animation/Interaction/Items/m_normal_stand_flare_aim_idle",
+        "/Game/Characters/Counselors/Base/Male/Animation/Hunter/AimOffset/Aim_B_C",
+        "/Game/Characters/Counselors/Base/Male/Animation/Hunter/AimOffset/Aim_C_C",
+        "/Game/Characters/Counselors/Base/Male/Animation/Hunter/AimOffset/Aim_U_L",
+        "/Game/Characters/Counselors/Base/Male/Animation/Hunter/AimOffset/Aim_U_R",
         $"{Shared}/Interaction/Trap/AM_normal_stand_trap_place",
         // Doors: her open and close takes, and the shared montages (their OpenCloseDoor driver windows time the leaf).
         "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Doors/f_normal_stand_door_open_inside_forward",

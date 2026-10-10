@@ -392,7 +392,7 @@ pub(crate) fn move_player(
     tuning: Res<PlayerTuning>,
     camera: Single<&PlayerCamera>,
     mut player: Single<
-        (Entity, &mut Player, &mut Transform, Option<&crate::interact::UsingItem>, Option<&Unsettled>, (Has<crate::jason::Held>, Has<crate::hiding::Hiding>, Has<crate::items::Trapped>, (Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>, Has<crate::interact::BarricadeMove>, Has<crate::interact::MoveToSpot>, Has<crate::cabinets::CabinetUse>)), Has<crate::jason::Staggered>, Option<&crate::items::ItemAction>),
+        (Entity, &mut Player, &mut Transform, Option<&crate::interact::UsingItem>, Option<&Unsettled>, (Has<crate::jason::Held>, Has<crate::hiding::Hiding>, Has<crate::items::Trapped>, (Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>, Has<crate::interact::BarricadeMove>, Has<crate::interact::MoveToSpot>, Has<crate::cabinets::CabinetUse>)), Has<crate::jason::Staggered>, Option<&crate::items::ItemAction>, Option<&crate::items::GunAim>),
         Without<Driving>,
     >,
     interaction: Option<Res<crate::interact::Interaction>>,
@@ -402,7 +402,7 @@ pub(crate) fn move_player(
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
-    let (entity, ref mut p, ref mut xf, using, settle, (held, hiding, trapped, (door_move, window_move, barricade_move, sliding, searching)), staggered, item_action) = *player;
+    let (entity, ref mut p, ref mut xf, using, settle, (held, hiding, trapped, (door_move, window_move, barricade_move, sliding, searching)), staggered, item_action, gun_aim) = *player;
     p.hidden = hiding;
     if held || hiding || sliding {
         // In Jason's hands (he places her), in a hiding spot (hiding.rs places her) or sliding onto a move's spot
@@ -417,7 +417,9 @@ pub(crate) fn move_player(
     // A swing's montage moves her by its root motion while it plays (RootMotionFromMontagesOnly), her input ignored.
     let swing_root = item_action.and_then(|a| a.root);
     let item_action = item_action.is_some();
-    let busy = !p.counselor.alive() || using.is_some() || repairing || staggered || item_action || trapped || door_move || window_move || barricade_move || sliding || searching;
+    // Aiming a gun: the controller ignores move input (SetIgnoreMoveInput) and she takes the control yaw (items.rs).
+    let aiming = gun_aim.is_some_and(|a| a.aiming);
+    let busy = aiming || !p.counselor.alive() || using.is_some() || repairing || staggered || item_action || trapped || door_move || window_move || barricade_move || sliding || searching;
     let wish = match autopilot.get(entity) {
         _ if busy => Vec2::ZERO,
         Ok(a) => a.0.normalize_or_zero(),
@@ -512,7 +514,7 @@ pub(crate) fn move_player(
 
     // Orient to movement (the model faces +Z); in combat stance face where the camera looks. Not during root motion.
     let combat = p.counselor.stance == Stance::Combat;
-    if p.root_motion.is_none() && (combat || p.velocity.length_squared() > 1.0) {
+    if p.root_motion.is_none() && !aiming && (combat || p.velocity.length_squared() > 1.0) {
         let target = if combat { forward.x.atan2(forward.y) } else { p.velocity.x.atan2(p.velocity.y) };
         let (current, _, _) = xf.rotation.to_euler(EulerRot::YXZ);
         let delta = (target - current + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
