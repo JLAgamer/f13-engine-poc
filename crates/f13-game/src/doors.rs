@@ -49,6 +49,9 @@ pub struct Wall {
     /// its DistanceLimit (cm).
     pub interact: Vec3,
     pub reach: f32,
+    /// HitParticle and DestroyParticle (particle system names).
+    pub hit_particle: Option<String>,
+    pub destroy_particle: Option<String>,
 }
 
 impl Wall {
@@ -442,6 +445,8 @@ mod tests {
         let mut w = Wall {
             interact: Vec3::ZERO,
             reach: 300.0,
+            hit_particle: None,
+            destroy_particle: None,
             health: 60.0,
             base_health: 60.0,
             thresholds: [0.8, 0.6, 0.4],

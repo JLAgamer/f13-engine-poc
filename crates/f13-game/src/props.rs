@@ -472,6 +472,8 @@ fn spawn_props(
                 interact: interact.map_or(Vec3::ZERO, |c| local(c).translation),
                 // ILLInteractableComponent's constructor: DistanceLimit 200.
                 reach: interact.map_or(200.0, |c| reach(c, 200.0)),
+                hit_particle: classes.prop(&actor.class, "HitParticle").as_str().and_then(|s| s.split('\'').nth(1)).map(str::to_string),
+                destroy_particle: classes.prop(&actor.class, "DestroyParticle").as_str().and_then(|s| s.split('\'').nth(1)).map(str::to_string),
             });
             *counts.entry("walls").or_default() += 1;
             let p = to_transform(&actor.transform);

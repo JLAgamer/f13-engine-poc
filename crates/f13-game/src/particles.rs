@@ -39,8 +39,9 @@ impl Plugin for ParticlesPlugin {
         embedded_asset!(app, "shaders/particles.wgsl");
         app.add_plugins(MaterialPlugin::<ParticleMaterial>::default())
             .add_message::<ParticleActivation>()
+            .add_message::<SpawnParticles>()
             .add_systems(Startup, spawn_level_particles)
-            .add_systems(PostUpdate, (activate, simulate, draw).chain().after(bevy::transform::TransformSystems::Propagate));
+            .add_systems(PostUpdate, (spawn_requested, activate, follow_and_finish, simulate, draw).chain().after(bevy::transform::TransformSystems::Propagate));
     }
 }
 
@@ -165,6 +166,10 @@ pub struct ParticleSystemInstance {
     active: bool,
     /// The level actor it's on.
     actor: String,
+    /// The entity it follows and its offset from it (Bevy space).
+    follow: Option<(Entity, Transform)>,
+    /// Despawned once its emitters are done.
+    auto_destroy: bool,
 }
 
 fn rand(state: &mut u64) -> f32 {
@@ -378,8 +383,128 @@ impl Materials {
     }
 }
 
-/// Spawns the level's active particle systems.
-#[allow(clippy::too_many_arguments)]
+/// The loaded systems and materials, and the next system's random seed.
+#[derive(Resource)]
+pub(crate) struct ParticleAssets {
+    root: std::path::PathBuf,
+    systems: Systems,
+    mats: Materials,
+    seed: u64,
+}
+
+impl ParticleAssets {
+    /// A running system named `name` at an Unreal-space transform (cm, Z up), its emitters' entities spawned.
+    #[allow(clippy::too_many_arguments)]
+    fn instance(
+        &mut self,
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<ParticleMaterial>,
+        assets: &AssetServer,
+        name: &str,
+        (location, rotation, scale): (Vec3, Quat, Vec3),
+        active: bool,
+        actor: &str,
+        max_draw: f32,
+        warmup: Option<f32>,
+    ) -> Option<ParticleSystemInstance> {
+        let system = self.systems.get(&self.root, name)?;
+        self.seed = self.seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut emitters = vec![];
+        for def in &system.emitters {
+            let Some((material, mode)) = def.material.as_deref().and_then(|m| self.mats.get(m, &self.root, assets, materials)) else { continue };
+            // Every attribute from the start (a degenerate quad), so its layout never changes.
+            let mesh = meshes.add(
+                Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+                    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 4])
+                    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32; 2]; 4])
+                    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; 4])
+                    .with_inserted_attribute(ATTRIBUTE_DYNAMIC, vec![[0.0f32; 4]; 4])
+                    .with_inserted_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3])),
+            );
+            let entity = commands
+                .spawn((
+                    Mesh3d(mesh.clone()),
+                    MeshMaterial3d(material),
+                    Transform::from_translation(to_bevy(location)),
+                    Visibility::Hidden,
+                    NoFrustumCulling,
+                    NotShadowCaster,
+                    NotShadowReceiver,
+                    Name::new(format!("{name}.{}", def.name)),
+                ))
+                .id();
+            let pivot = def.modules.iter().find_map(|m| if let Module::PivotOffset(p) = m { Some(Vec2::from(*p)) } else { None }).unwrap_or(Vec2::ZERO) + Vec2::splat(-0.5);
+            emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: mode == 4 });
+        }
+        if emitters.is_empty() {
+            return None;
+        }
+        let mut inst = ParticleSystemInstance { emitters, location, rotation, scale, max_draw, rng: self.seed, active, actor: actor.to_string(), follow: None, auto_destroy: false };
+        // WarmupTime: ticked in 0.032 s steps (UParticleSystemComponent's default warmup step).
+        let warmup = warmup.unwrap_or(system.warmup);
+        let mut t = 0.0;
+        while active && t < warmup {
+            tick(&mut inst, 0.032);
+            t += 0.032;
+        }
+        Some(inst)
+    }
+}
+
+/// Spawns a system (UGameplayStatics::SpawnEmitterAtLocation: auto-destroyed once its emitters are done), or one that
+/// follows an entity (a component on a runtime actor: the knife's trail, the cars' tyre dust), with an `actor` name
+/// for [`ParticleActivation`].
+#[derive(Message, Clone)]
+pub struct SpawnParticles {
+    pub system: String,
+    /// Bevy space: where, or (following) the offset from the entity.
+    pub transform: Transform,
+    pub follow: Option<Entity>,
+    pub actor: String,
+    pub active: bool,
+}
+
+impl SpawnParticles {
+    pub fn at(system: &str, transform: Transform) -> Self {
+        SpawnParticles { system: system.to_string(), transform, follow: None, actor: String::new(), active: true }
+    }
+}
+
+/// Bevy space (m, Y up) to Unreal's (cm, Z up): the inverse of the export's glTF conversion.
+fn to_unreal(t: &Transform) -> (Vec3, Quat, Vec3) {
+    let p = t.translation * 100.0;
+    let q = t.rotation;
+    (Vec3::new(p.x, p.z, p.y), Quat::from_xyzw(-q.x, -q.z, -q.y, q.w), Vec3::new(t.scale.x, t.scale.z, t.scale.y))
+}
+
+/// Spawns the systems asked for.
+fn spawn_requested(
+    mut commands: Commands,
+    mut requests: MessageReader<SpawnParticles>,
+    mut pa: Option<ResMut<ParticleAssets>>,
+    assets: Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ParticleMaterial>>,
+    globals: Query<&GlobalTransform>,
+) {
+    let Some(pa) = pa.as_mut() else { return };
+    for r in requests.read() {
+        let world = match r.follow {
+            Some(e) => match globals.get(e) {
+                Ok(g) => g.mul_transform(r.transform).compute_transform(),
+                Err(_) => continue,
+            },
+            None => r.transform,
+        };
+        let Some(mut inst) = pa.instance(&mut commands, &mut meshes, &mut materials, &assets, &r.system, to_unreal(&world), r.active, &r.actor, 0.0, Some(0.0)) else { continue };
+        inst.follow = r.follow.map(|e| (e, r.transform));
+        inst.auto_destroy = r.follow.is_none();
+        commands.spawn((inst, Name::new(format!("particles {}", r.system))));
+    }
+}
+
+/// Spawns the level's particle systems (inactive ones waiting for their [`ParticleActivation`]).
 fn spawn_level_particles(
     mut commands: Commands,
     level: Option<Res<crate::Level>>,
@@ -388,76 +513,62 @@ fn spawn_level_particles(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ParticleMaterial>>,
 ) {
-    let Some(level) = level else { return };
     let root = export.0.clone();
     let entries: HashMap<String, MaterialEntry> = std::fs::read_to_string(root.join("materials.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-    let mut mats = Materials { entries, built: HashMap::new() };
-    let mut systems = Systems::default();
+    let mut pa = ParticleAssets { root, systems: Systems::default(), mats: Materials { entries, built: HashMap::new() }, seed: 0x9e37_79b9_7f4a_7c15 };
     let mut n = 0;
-    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
-    for layout in &level.layouts {
-        for a in &layout.actors {
-            for c in &a.components {
-                if c.kind != "ParticleSystemComponent" || c.hidden {
-                    continue;
-                }
-                let p = &c.props;
-                if p["bVisible"].as_bool() == Some(false) || p["bHiddenInGame"].as_bool() == Some(true) {
-                    continue;
-                }
-                let active = p["bAutoActivate"].as_bool() != Some(false);
-                let Some(name) = p["Template"].as_str().and_then(|t| t.split('\'').nth(1)) else { continue };
-                let Some(world) = &c.world else { continue };
-                let Some(system) = systems.get(&root, name) else { continue };
-                seed = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
-                let location = Vec3::from(world.t);
-                let rotation = Quat::from_array(world.r).normalize();
-                let scale = Vec3::from(world.s);
-                let max_draw = p["LDMaxDrawDistance"].as_f64().unwrap_or(0.0) as f32 * crate::VIEW_DISTANCE_SCALE / 100.0;
-                let warmup = p["WarmupTime"].as_f64().map_or(system.warmup, |w| w as f32);
-                let mut emitters = vec![];
-                for def in &system.emitters {
-                    let Some((material, mode)) = def.material.as_deref().and_then(|m| mats.get(m, &root, &assets, &mut materials)) else { continue };
-                    // Every attribute from the start (a degenerate quad), so its layout never changes.
-                    let mesh = meshes.add(
-                        Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-                            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 4])
-                            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32; 2]; 4])
-                            .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; 4])
-                            .with_inserted_attribute(ATTRIBUTE_DYNAMIC, vec![[0.0f32; 4]; 4])
-                            .with_inserted_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3])),
-                    );
-                    let entity = commands
-                        .spawn((
-                            Mesh3d(mesh.clone()),
-                            MeshMaterial3d(material),
-                            Transform::from_translation(to_bevy(location)),
-                            Visibility::Hidden,
-                            NoFrustumCulling,
-                            NotShadowCaster,
-                            NotShadowReceiver,
-                            Name::new(format!("{name}.{}", def.name)),
-                        ))
-                        .id();
-                    let pivot = def.modules.iter().find_map(|m| if let Module::PivotOffset(p) = m { Some(Vec2::from(*p)) } else { None }).unwrap_or(Vec2::ZERO) + Vec2::splat(-0.5);
-                    emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: mode == 4 });
-                }
-                if emitters.is_empty() {
-                    continue;
-                }
-                let mut inst = ParticleSystemInstance { emitters, location, rotation, scale, max_draw, rng: seed, active, actor: a.name.clone() };
-                // WarmupTime: ticked in 0.032 s steps (UParticleSystemComponent's default warmup step).
-                let mut t = 0.0;
-                while active && t < warmup {
-                    tick(&mut inst, 0.032);
-                    t += 0.032;
-                }
-                commands.spawn((inst, Name::new(format!("particles {name}"))));
-                n += 1;
+    for a in level.iter().flat_map(|l| &l.layouts).flat_map(|l| &l.actors) {
+        for c in &a.components {
+            if c.kind != "ParticleSystemComponent" || c.hidden {
+                continue;
             }
+            let p = &c.props;
+            if p["bVisible"].as_bool() == Some(false) || p["bHiddenInGame"].as_bool() == Some(true) {
+                continue;
+            }
+            let active = p["bAutoActivate"].as_bool() != Some(false);
+            let Some(name) = p["Template"].as_str().and_then(|t| t.split('\'').nth(1)) else { continue };
+            let Some(world) = &c.world else { continue };
+            let xf = (Vec3::from(world.t), Quat::from_array(world.r).normalize(), Vec3::from(world.s));
+            let max_draw = p["LDMaxDrawDistance"].as_f64().unwrap_or(0.0) as f32 * crate::VIEW_DISTANCE_SCALE / 100.0;
+            let warmup = p["WarmupTime"].as_f64().map(|w| w as f32);
+            let Some(inst) = pa.instance(&mut commands, &mut meshes, &mut materials, &assets, name, xf, active, &a.name, max_draw, warmup) else { continue };
+            commands.spawn((inst, Name::new(format!("particles {name}"))));
+            n += 1;
         }
     }
     info!("particles: {n} systems");
+    commands.insert_resource(pa);
+}
+
+/// Systems that follow an entity take its transform; with it gone they stop spawning and go once done, as one-shots do.
+fn follow_and_finish(mut commands: Commands, mut systems: Query<(Entity, &mut ParticleSystemInstance)>, globals: Query<&GlobalTransform>) {
+    for (e, mut s) in &mut systems {
+        if let Some((target, local)) = s.follow {
+            match globals.get(target) {
+                Ok(g) => {
+                    let (location, rotation, scale) = to_unreal(&g.mul_transform(local).compute_transform());
+                    (s.location, s.rotation, s.scale) = (location, rotation, scale);
+                    for em in &s.emitters {
+                        commands.entity(em.entity).insert(Transform::from_translation(to_bevy(location)));
+                    }
+                }
+                Err(_) => {
+                    s.follow = None;
+                    s.active = false;
+                    s.auto_destroy = true;
+                }
+            }
+        }
+        // Done: every emitter finished (its loops, or the system deactivated) and empty.
+        let done = s.emitters.iter().all(|em| em.particles.is_empty() && (!s.active || (em.def.loops > 0 && em.loops_done >= em.def.loops)));
+        if s.auto_destroy && done && s.emitters.iter().all(|em| em.seconds > 0.0) {
+            for em in &s.emitters {
+                commands.entity(em.entity).despawn();
+            }
+            commands.entity(e).despawn();
+        }
+    }
 }
 
 /// Activations by actor.

@@ -2559,7 +2559,15 @@ pub(crate) fn update_jason(
                         (at, section) = (0.0, 2);
                     } else {
                         hit = true;
-                        if w.damage(we, t.world_damage, crate::doors::Wall::is_inside(g, xf.translation), &mut commands) {
+                        let broke = w.damage(we, t.world_damage, crate::doors::Wall::is_inside(g, xf.translation), &mut commands);
+                        // OnRep_Health: every blow SpawnEmitterAttached(HitParticle, InteractComponent); DestroyWall:
+                        // DestroyParticle there (0x14033cfc0; scale 1, no offset, auto-destroyed). Its place: the
+                        // Interactable's (its rotation the wall's here).
+                        if let Some(fx) = if broke { w.destroy_particle.clone() } else { w.hit_particle.clone() } {
+                            let at = Transform::from_translation(g.transform_point(w.interact)).with_rotation(g.rotation());
+                            commands.write_message(crate::particles::SpawnParticles::at(&fx, at));
+                        }
+                        if broke {
                             info!("Jason: broke through the wall");
                             if let Some(s) = w.section {
                                 commands.trigger(crate::doors::BreakApart { piece: s, from: xf.translation, force: w.burst_force });

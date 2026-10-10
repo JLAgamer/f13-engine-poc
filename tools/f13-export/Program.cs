@@ -761,7 +761,7 @@ switch (rest[0])
             Console.WriteLine($"sequence sounds: {new SoundExporter(provider, outDir, ToFile).Export(sounds)} written");
         }
         break;
-    case "particles": // particles [system...]: Cascade systems (particles/) and their materials; default: every template the exported levels place
+    case "particles": // particles [system...]: Cascade systems (particles/) and their materials; default: every template the exported levels place and the classes name
         {
             var names = rest.Skip(1).ToList();
             if (names.Count == 0)
@@ -769,6 +769,11 @@ switch (rest[0])
                     foreach (var a in Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(f))["Actors"] ?? new Newtonsoft.Json.Linq.JArray())
                         foreach (var c in a["Components"] ?? new Newtonsoft.Json.Linq.JArray())
                             if (c["Props"]?["Template"]?.ToString() is { } t && t.StartsWith("ParticleSystem'")) names.Add(t.Split('\'')[1]);
+            // And the classes' (their components' templates and properties: HitParticle, MuzzleFlash, ...).
+            var classesJson = Path.Combine(outDir, "classes.json");
+            if (rest.Count == 1 && File.Exists(classesJson))
+                foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(classesJson), @"ParticleSystem'([A-Za-z0-9_]+)'"))
+                    names.Add(m.Groups[1].Value);
             Console.WriteLine($"particles: {ParticleExporter.Write(provider, outDir, names, Queue)} systems written");
         }
         break;
