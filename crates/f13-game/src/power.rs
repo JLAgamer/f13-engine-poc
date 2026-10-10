@@ -25,7 +25,7 @@ impl Plugin for PowerPlugin {
         app.insert_resource(CutPower(self.cut))
             .init_resource::<PowerGrids>()
             .add_systems(Startup, spawn_fuse_boxes)
-            .add_systems(Update, (find_fixtures, mark_fixtures, apply_power, dim_fixtures, hum).chain());
+            .add_systems(Update, (find_fixtures, mark_fixtures, apply_power, dim_fixtures, hum, break_vfx).chain());
     }
 }
 
@@ -81,6 +81,8 @@ impl PowerGrids {
 #[derive(Component)]
 pub struct FuseBox {
     pub class: String,
+    /// Its level actor.
+    pub actor: String,
     pub grid: Option<usize>,
     pub destroyed: bool,
     pub interact: Vec3,
@@ -125,6 +127,7 @@ fn spawn_fuse_boxes(mut commands: Commands, level: Res<crate::Level>, export: Re
         commands.spawn((
             FuseBox {
                 class: a.class.clone(),
+                actor: a.name.clone(),
                 grid,
                 destroyed,
                 interact: at,
@@ -241,6 +244,15 @@ fn apply_power(grids: Res<PowerGrids>, mut powered: Query<(&Powered, &mut Visibi
     }
     for (p, mut v) in &mut out {
         v.set_if_neq(if grids.on(p.0) { Visibility::Hidden } else { Visibility::Inherited });
+    }
+}
+
+/// PowerGridFuseBox's OnDeactivate (power out): BreakVFX->Activate(false); OnActivate: BreakVFX->Deactivate().
+fn break_vfx(boxes: Query<&FuseBox, Changed<FuseBox>>, mut particles: MessageWriter<crate::particles::ParticleActivation>, mut last: Local<std::collections::HashMap<String, bool>>) {
+    for f in &boxes {
+        if last.insert(f.actor.clone(), f.destroyed) != Some(f.destroyed) {
+            particles.write(crate::particles::ParticleActivation { actor: f.actor.clone(), active: f.destroyed });
+        }
     }
 }
 

@@ -12,8 +12,12 @@
 //!
 //! Not run (logged once per system): attractors, collision, event generators and receivers, source movement, light
 //! modules (their particle lights), spawn per unit, the GPU emitters' own simulation (TypeDataGpu emitters run on the
-//! CPU like the others); sub-image blending (PSUVIM_Linear_Blend draws the current image). The phone box's smoke waits
-//! for its destroyed state, the rain drips for rain (both start inactive or with their owner).
+//! CPU like the others); sub-image blending (PSUVIM_Linear_Blend draws the current image).
+//!
+//! Systems that start inactive (bAutoActivate off: the rain drips, the fuse boxes' sparks) wait for a
+//! [`ParticleActivation`] naming their actor: UParticleSystemComponent::Activate(true) resets one, Deactivate stops its
+//! spawning and lets its particles finish (the phone box's smoke: police.rs, PhoneJunctionBox_BP's
+//! OnPhoneBoxDestroyed / OnPhoneBoxRepaired).
 
 use bevy::asset::{embedded_asset, RenderAssetUsages};
 use bevy::camera::visibility::NoFrustumCulling;
@@ -34,9 +38,17 @@ impl Plugin for ParticlesPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shaders/particles.wgsl");
         app.add_plugins(MaterialPlugin::<ParticleMaterial>::default())
+            .add_message::<ParticleActivation>()
             .add_systems(Startup, spawn_level_particles)
-            .add_systems(PostUpdate, (simulate, draw).chain().after(bevy::transform::TransformSystems::Propagate));
+            .add_systems(PostUpdate, (activate, simulate, draw).chain().after(bevy::transform::TransformSystems::Propagate));
     }
+}
+
+/// Activates (Activate(true): reset) or deactivates (Deactivate: no more spawning) the systems on a level actor.
+#[derive(Message, Clone)]
+pub struct ParticleActivation {
+    pub actor: String,
+    pub active: bool,
 }
 
 /// The particle's dynamic parameter (Float32x4), for the material's DynamicParameter.
@@ -149,6 +161,10 @@ pub struct ParticleSystemInstance {
     /// LDMaxDrawDistance x the view distance scale (m in Bevy); 0: any distance.
     max_draw: f32,
     rng: u64,
+    /// Spawning (bAutoActivate, or since its Activate).
+    active: bool,
+    /// The level actor it's on.
+    actor: String,
 }
 
 fn rand(state: &mut u64) -> f32 {
@@ -386,13 +402,10 @@ fn spawn_level_particles(
                     continue;
                 }
                 let p = &c.props;
-                if p["bAutoActivate"].as_bool() == Some(false) || p["bVisible"].as_bool() == Some(false) || p["bHiddenInGame"].as_bool() == Some(true) {
+                if p["bVisible"].as_bool() == Some(false) || p["bHiddenInGame"].as_bool() == Some(true) {
                     continue;
                 }
-                // The phone box's smoke shows once it's destroyed (police.rs); not yet.
-                if a.class.starts_with("PhoneJunctionBox") {
-                    continue;
-                }
+                let active = p["bAutoActivate"].as_bool() != Some(false);
                 let Some(name) = p["Template"].as_str().and_then(|t| t.split('\'').nth(1)) else { continue };
                 let Some(world) = &c.world else { continue };
                 let Some(system) = systems.get(&root, name) else { continue };
@@ -432,10 +445,10 @@ fn spawn_level_particles(
                 if emitters.is_empty() {
                     continue;
                 }
-                let mut inst = ParticleSystemInstance { emitters, location, rotation, scale, max_draw, rng: seed };
+                let mut inst = ParticleSystemInstance { emitters, location, rotation, scale, max_draw, rng: seed, active, actor: a.name.clone() };
                 // WarmupTime: ticked in 0.032 s steps (UParticleSystemComponent's default warmup step).
                 let mut t = 0.0;
-                while t < warmup {
+                while active && t < warmup {
                     tick(&mut inst, 0.032);
                     t += 0.032;
                 }
@@ -445,6 +458,25 @@ fn spawn_level_particles(
         }
     }
     info!("particles: {n} systems");
+}
+
+/// Activations by actor.
+fn activate(mut messages: MessageReader<ParticleActivation>, mut systems: Query<&mut ParticleSystemInstance>) {
+    for m in messages.read() {
+        for mut s in systems.iter_mut().filter(|s| s.actor == m.actor) {
+            if m.active {
+                // Activate(true): from the start.
+                for e in &mut s.emitters {
+                    e.particles.clear();
+                    e.seconds = 0.0;
+                    e.spawn_fraction = 0.0;
+                    e.loops_done = 0;
+                    e.bursts_fired.iter_mut().for_each(|b| *b = false);
+                }
+            }
+            s.active = m.active;
+        }
+    }
 }
 
 /// Ticks every system (game time; on during cinematics too, as the engine's).
@@ -459,15 +491,16 @@ fn simulate(time: Res<Time<Real>>, virtual_time: Res<Time<Virtual>>, mut systems
 }
 
 fn tick(s: &mut ParticleSystemInstance, dt: f32) {
-    let (location, rotation, scale) = (s.location, s.rotation, s.scale);
+    let (location, rotation, scale, active) = (s.location, s.rotation, s.scale, s.active);
     let mut rng = s.rng;
     for e in &mut s.emitters {
-        tick_emitter(e, dt, location, rotation, scale, &mut rng);
+        tick_emitter(e, dt, location, rotation, scale, active, &mut rng);
     }
     s.rng = rng;
 }
 
-fn tick_emitter(e: &mut EmitterState, dt: f32, location: Vec3, rotation: Quat, scale: Vec3, rng: &mut u64) {
+#[allow(clippy::too_many_arguments)]
+fn tick_emitter(e: &mut EmitterState, dt: f32, location: Vec3, rotation: Quat, scale: Vec3, active: bool, rng: &mut u64) {
     let def = &e.def;
     // Tick_EmitterTimeSetup.
     let old_seconds = e.seconds;
@@ -483,7 +516,7 @@ fn tick_emitter(e: &mut EmitterState, dt: f32, location: Vec3, rotation: Quat, s
         }
         emitter_time = e.seconds - loops as f32 * duration;
     }
-    let finished = def.loops > 0 && duration > 0.0 && e.loops_done >= def.loops;
+    let finished = !active || (def.loops > 0 && duration > 0.0 && e.loops_done >= def.loops);
     let delay = if def.delay_first_loop_only && e.loops_done > 0 { 0.0 } else { def.delay };
     emitter_time -= delay;
     // KillParticles.

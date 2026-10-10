@@ -104,12 +104,15 @@ fn box_look(
     meshes: Query<(Entity, &BoxMesh)>,
     mut lights: Query<(&BoxLight, &mut Visibility)>,
     mut last: Local<std::collections::HashMap<String, bool>>,
+    mut particles: MessageWriter<crate::particles::ParticleActivation>,
 ) {
     for b in &boxes {
         let broken = !b.repaired || b.broken;
         if last.insert(b.actor.clone(), broken) == Some(broken) {
             continue;
         }
+        // OnPhoneBoxDestroyed: P_PhoneJunctionBox_Destroyed_Smoking_01->Activate(true); OnPhoneBoxRepaired: Deactivate.
+        particles.write(crate::particles::ParticleActivation { actor: b.actor.clone(), active: broken });
         for (l, mut v) in lights.iter_mut().filter(|(l, _)| l.actor == b.actor) {
             v.set_if_neq(if l.broken == broken { Visibility::Inherited } else { Visibility::Hidden });
         }
