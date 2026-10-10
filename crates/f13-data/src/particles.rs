@@ -178,6 +178,11 @@ pub enum Module {
     LocationCylinder { radius: Dist, height: Dist, origin: Dist, axis: u8, surface_only: bool, velocity: bool, velocity_scale: Dist },
     /// ParticleModuleSourceMovement (FinalUpdate 0x14159bc20): SourceMovementScale.
     SourceMovement(Dist),
+    /// ParticleModuleCollision (Spawn 0x1415df650, Update 0x1415e4920): DampingFactor, DampingFactorRotation,
+    /// MaxCollisions, CollisionCompletionOption (0 kill, 1 freeze, 2 halt collisions, 3 freeze translation, 4 freeze
+    /// rotation, 5 freeze movement), DelayAmount, bOnlyVerticalNormalsDecrementCount, VerticalFudgeFactor and DirScalar
+    /// (constructor 0x1415b95f0: 0.1 and 3.5).
+    Collision { damping: Dist, damping_rotation: Dist, max_collisions: Dist, completion: u8, delay: Dist, only_vertical: bool, vertical_fudge: f32, dir_scalar: f32 },
     /// A module with no CPU effect (ParticleModuleAttractorPointGravity overrides only its GPU compile, vt +0x230).
     GpuOnly,
     /// A module f13-game doesn't run (its type).
@@ -435,6 +440,23 @@ impl System {
                     },
                     "ParticleModuleSourceMovement" => Module::SourceMovement(dist(&p["SourceMovementScale"], 3)),
                     "ParticleModuleAttractorPointGravity" => Module::GpuOnly,
+                    "ParticleModuleCollision" => Module::Collision {
+                        damping: dist(&p["DampingFactor"], 3),
+                        damping_rotation: dist(&p["DampingFactorRotation"], 3),
+                        max_collisions: dist(&p["MaxCollisions"], 1),
+                        completion: match p["CollisionCompletionOption"].as_str() {
+                            Some("EPCC_Freeze") => 1,
+                            Some("EPCC_HaltCollisions") => 2,
+                            Some("EPCC_FreezeTranslation") => 3,
+                            Some("EPCC_FreezeRotation") => 4,
+                            Some("EPCC_FreezeMovement") => 5,
+                            _ => 0,
+                        },
+                        delay: dist(&p["DelayAmount"], 1),
+                        only_vertical: p["bOnlyVerticalNormalsDecrementCount"].as_bool().unwrap_or(false),
+                        vertical_fudge: num(&p["VerticalFudgeFactor"], 0.1),
+                        dir_scalar: num(&p["DirScalar"], 3.5),
+                    },
                     "ParticleModuleMeshRotationRate" => Module::MeshRotationRate(dist(&p["StartRotationRate"], 3)),
                     "ParticleModuleSpawnPerUnit" => {
                         spawn_per_unit = Some((num(&p["UnitScalar"], 50.0), dist(&p["SpawnPerUnit"], 1)));

@@ -113,8 +113,23 @@ impl Material for ParticleMaterial {
 }
 
 /// One particle (FBaseParticle and the payloads f13-game keeps), Unreal space.
+/// FBaseParticle flags (Unreal's STATE_Particle_*).
+const FREEZE: u32 = 1;
+const IGNORE_COLLISIONS: u32 = 2;
+const FREEZE_TRANSLATION: u32 = 4;
+const FREEZE_ROTATION: u32 = 8;
+const DELAY_COLLISIONS: u32 = 16;
+
+/// A line trace in Unreal space (cm): the hit's fraction of the way and its normal.
+type Trace<'a> = &'a dyn Fn(Vec3, Vec3) -> Option<(f32, Vec3)>;
+
 #[derive(Clone, Default)]
 struct Particle {
+    /// Its state flags (FBaseParticle::Flags): STATE_Particle_Freeze, IgnoreCollisions, FreezeTranslation,
+    /// FreezeRotation, DelayCollisions.
+    state: u32,
+    /// FParticleCollisionPayload: UsedDampingFactor, UsedDampingFactorRotation, UsedCollisions, Delay.
+    collision: (Vec3, Vec3, i32, f32),
     /// FAttractorParticlePayload per ParticleModuleAttractorParticle (in module order, at most two): its source's
     /// index in the attracting emitter and the source's last velocity.
     attractor: [(i32, Vec3); 2],
@@ -663,7 +678,7 @@ impl ParticleAssets {
         let warmup = warmup.unwrap_or(system.warmup);
         let mut t = 0.0;
         while active && t < warmup {
-            tick(&mut inst, 0.032);
+            tick(&mut inst, 0.032, None);
             t += 0.032;
         }
         Some(inst)
@@ -1003,17 +1018,30 @@ fn reset(s: &mut ParticleSystemInstance) {
 }
 
 /// Ticks every system (game time; on during cinematics too, as the engine's).
-fn simulate(time: Res<Time<Real>>, virtual_time: Res<Time<Virtual>>, mut systems: Query<&mut ParticleSystemInstance>) {
+fn simulate(
+    time: Res<Time<Real>>,
+    virtual_time: Res<Time<Virtual>>,
+    mut systems: Query<&mut ParticleSystemInstance>,
+    collision: Option<Res<crate::collision::WorldCollision>>,
+    dynamic: Option<Res<crate::collision::DynamicColliders>>,
+) {
     let dt = (time.delta_secs() * virtual_time.relative_speed()).min(0.1);
     if dt <= 0.0 {
         return;
     }
+    // ParticleModuleCollision's traces against the world's collision (Unreal space in and out).
+    let world = collision.as_deref().zip(dynamic.as_deref()).map(|(c, d)| c.with(d));
+    let trace = |from: Vec3, to: Vec3| -> Option<(f32, Vec3)> {
+        let w = world.as_ref()?;
+        let (t, n) = f13_core::collision::segment_hit_normal(w, to_bevy(from), to_bevy(to), 2.0)?;
+        Some((t, Vec3::new(n.x, n.z, n.y)))
+    };
     for mut s in &mut systems {
-        tick(&mut s, dt);
+        tick(&mut s, dt, Some(&trace));
     }
 }
 
-fn tick(s: &mut ParticleSystemInstance, dt: f32) {
+fn tick(s: &mut ParticleSystemInstance, dt: f32, trace: Option<Trace>) {
     let (location, rotation, scale, active) = (s.location, s.rotation, s.scale, s.active);
     // The component's move since its last tick (ParticleModuleSourceMovement).
     let moved = s.ticked_at.map_or(Vec3::ZERO, |(l, _)| location - l);
@@ -1043,7 +1071,7 @@ fn tick(s: &mut ParticleSystemInstance, dt: f32) {
     s.ticked_at = Some((location, rotation));
     let mut rng = s.rng;
     for e in &mut s.emitters {
-        tick_emitter(e, dt, location, rotation, scale, active, &mut rng, &sources, moved);
+        tick_emitter(e, dt, location, rotation, scale, active, &mut rng, &sources, moved, trace);
     }
     s.rng = rng;
 }
@@ -1059,6 +1087,7 @@ fn tick_emitter(
     rng: &mut u64,
     sources: &HashMap<String, Vec<(Vec3, Vec3, f32)>>,
     moved: Vec3,
+    trace: Option<Trace>,
 ) {
     let def = &e.def;
     // Tick_EmitterTimeSetup.
@@ -1111,8 +1140,16 @@ fn tick_emitter(
                     attract_particle(p, k, src, range, strength, *by_distance, *affect_base, *inherit, dt);
                 }
             }
+            Module::Collision { completion, only_vertical, vertical_fudge, dir_scalar, .. } => {
+                if let Some(trace) = trace {
+                    for p in &mut e.particles {
+                        collide(p, dt, scale, *completion, *only_vertical, *vertical_fudge, *dir_scalar, trace);
+                    }
+                }
+            }
             _ => {
-                for p in &mut e.particles {
+                // BEGIN_UPDATE_LOOP skips frozen particles.
+                for p in e.particles.iter_mut().filter(|p| p.state & FREEZE == 0) {
                     update(m, p, dt, emitter_time);
                 }
             }
@@ -1180,14 +1217,69 @@ fn tick_emitter(
     }
     // UpdateBoundingBox: the linear integrator.
     for p in &mut e.particles {
-        p.location += p.velocity * dt;
-        p.rotation += p.rotation_rate * dt;
+        if p.state & (FREEZE | FREEZE_TRANSLATION) == 0 {
+            p.location += p.velocity * dt;
+        }
+        if p.state & (FREEZE | FREEZE_ROTATION) == 0 {
+            p.rotation += p.rotation_rate * dt;
+        }
     }
     if def.mesh.is_some() {
         for p in &mut e.particles {
             p.mesh_continuous += p.mesh_rate * dt;
         }
     }
+}
+
+/// UParticleModuleCollision::Update (0x1415e4920) for one particle, skipping frozen, halted or held ones (a delay
+/// passes once its relative time reaches it): a trace from where it is to where it's going, pushed on by its size
+/// (x the component's scale) / DirScalar along the way; a hit counts down its collisions (with
+/// bOnlyVerticalNormalsDecrementCount, only hits on a normal within VerticalFudgeFactor of vertical); out of them it
+/// takes the completion option there (killed, frozen, collisions halted, translation, rotation or both frozen); else
+/// its velocity and base velocity mirror on the normal x the damping factor (per axis) and its rotation rate scales by
+/// the rotation damping's X, at the hit. The view-distance cull (MaxCollisionDistance with eight or more particles)
+/// and the physics impulses (ParticleMass) aren't run.
+#[allow(clippy::too_many_arguments)]
+fn collide(p: &mut Particle, dt: f32, scale: Vec3, completion: u8, only_vertical: bool, vertical_fudge: f32, dir_scalar: f32, trace: Trace) {
+    if p.state & (FREEZE | IGNORE_COLLISIONS | FREEZE_TRANSLATION | FREEZE_ROTATION) != 0 {
+        return;
+    }
+    if p.state & DELAY_COLLISIONS != 0 {
+        if p.relative_time < p.collision.3 {
+            return;
+        }
+        p.state &= !DELAY_COLLISIONS;
+    }
+    let from = p.location;
+    let to = from + p.velocity * dt;
+    let dir = (to - from).normalize_or_zero();
+    let end = to + dir * (scale * p.size) / dir_scalar.max(1e-3);
+    let Some((t, n)) = trace(from, end) else { return };
+    let hit = from + (end - from) * t;
+    let vertical = n.abs().max_element() <= 1e-4 || n.z.abs() + vertical_fudge >= 1.0;
+    if !only_vertical || vertical {
+        p.collision.2 -= 1;
+    }
+    p.location = hit;
+    if p.collision.2 < 1 {
+        p.state |= match completion {
+            0 => {
+                p.relative_time = 2.0;
+                0
+            }
+            1 => FREEZE,
+            2 => IGNORE_COLLISIONS,
+            3 => FREEZE_TRANSLATION,
+            4 => FREEZE_ROTATION,
+            _ => FREEZE_TRANSLATION | FREEZE_ROTATION,
+        };
+        return;
+    }
+    let mirror = |v: Vec3| v - 2.0 * v.dot(n) * n;
+    p.velocity = mirror(p.velocity) * p.collision.0;
+    p.base_velocity = mirror(p.base_velocity) * p.collision.0;
+    p.rotation_rate *= p.collision.1.x;
+    p.base_rotation_rate *= p.collision.1.x;
 }
 
 /// UParticleModuleAttractorPoint::Update (0x1415b2a70): Position at the emitter time (a random pick each tick for a
@@ -1347,6 +1439,15 @@ fn spawn(def: &Emitter, spawn_time: f32, emitter_time: f32, location: Vec3, rota
                     let v = to_world(offset * velocity_scale.eval(emitter_time, rand(rng)));
                     p.velocity += v;
                     p.base_velocity += v;
+                }
+            }
+            // UParticleModuleCollision::Spawn (0x1415df650): the payload at the emitter time; collisions held off
+            // while the delay is past the spawn time.
+            Module::Collision { damping, damping_rotation, max_collisions, delay, .. } => {
+                let d = delay.eval(emitter_time, rand(rng));
+                p.collision = (damping.eval3(emitter_time, rand3(rng)), damping_rotation.eval3(emitter_time, rand3(rng)), max_collisions.eval(emitter_time, rand(rng)).round() as i32, d);
+                if spawn_time < d {
+                    p.state |= DELAY_COLLISIONS;
                 }
             }
             Module::LocationCylinder { radius, height, origin, axis, surface_only, velocity, velocity_scale } => {
