@@ -171,7 +171,11 @@ void ExportLevel(string mapPath, params string[] extra)
                 foreach (var c in components.GetValueOrDefault(actor.Name) ?? [])
                 {
                     if (c is UStaticMeshComponent) continue;
-                    var j = classes.Describe(c, c.Name, null);
+                    // Its attach parent's name (on the instance or its archetypes): the cabins' roof drips hang under Rain.
+                    string? attach = null;
+                    for (UObject? o = c; o != null && attach == null; o = o.Template?.Load())
+                        attach = o.GetOrDefault<FPackageIndex?>("AttachParent")?.Name;
+                    var j = classes.Describe(c, c.Name, attach);
                     if (j == null) continue;
                     if (c is USceneComponent sc) j["World"] = ClassExporter.Xf(sc.GetAbsoluteTransform());
                     info.Components.Add(j);

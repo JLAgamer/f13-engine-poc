@@ -38,7 +38,7 @@ Moved from Milestone 1 (not tied to gameplay):
       Remaining: Jason's embers and eye glow (M_Savini_Jason_Ashes_01, M_Procedural_Dust_01), the translucency
       lighting volume the lit ones read (a stand-in now: MODLOG "Particle materials"), particle lights, attractors and
       collision, and the effects spawned by gameplay: the walls' and doors' hit dust (HitParticle), the knife's trail
-      (P_Jason_ThrowingKnife_01), blood, the cars' exhaust, rain and its roof drips, the broken phone box's smoke,
+      (P_Jason_ThrowingKnife_01), blood, the cars' exhaust, the falling rain, the broken phone box's smoke,
       the intro's and outro's particle tracks
 - [ ] Counselor model, remaining: facial animation and hair dynamics (their own anim Blueprints), the eyes' iris and
       lid overlays, outfit choice
@@ -48,8 +48,8 @@ Moved from Milestone 1 (not tied to gameplay):
       locomotion and the grab and block layers; their look-at, IK and additive nodes aren't ported). Not in the game:
       turn-in-place takes, limp movement
 - [ ] Lighting, remaining: Enlighten GI, local light shadows (a real-time budget of the 4 nearest for now, unverified
-      visually and for cost), rain (the camera's rain grid and the roof drips are read and the drips follow the
-      weather; their material M_Rain_Master and the grid's tick aren't ported: MODLOG "Rain")
+      visually and for cost), the falling rain (the camera's rain grid is read; its tick isn't ported: MODLOG
+      "Rain"), the rain material's refraction
 - [ ] Read the stock pak directly, so users don't need to extract it first (with the host CLI's first-run setup).
       Its footer is known (an encrypted-index flag, magics 'Atae' and 'kcid', version 5, index offset and size,
       hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold

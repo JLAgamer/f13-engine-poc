@@ -22,14 +22,25 @@ pub struct WeatherPlugin;
 
 impl Plugin for WeatherPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RainMpc>().add_systems(Update, (start_storm, storm).chain());
+        app.init_resource::<RainMpc>().add_systems(Update, (rain_mpc, start_storm, storm).chain());
     }
 }
 
-/// Rain_MPC's parameters the game writes: LightiningIntensity (SCZeus's tick).
+/// Rain_MPC's parameters the game writes: Rain (SCWorldSettings::OnRep_IsRaining 0x140439ca0: 1 when raining, else
+/// 0) and LightiningIntensity (SCZeus's tick).
 #[derive(Resource, Default, Clone, Copy, PartialEq)]
 pub struct RainMpc {
+    pub rain: f32,
     pub lightning: f32,
+}
+
+/// OnRep_IsRaining: Rain_MPC's Rain follows the weather.
+fn rain_mpc(weather: Option<Res<Weather>>, mut mpc: ResMut<RainMpc>) {
+    let Some(w) = weather else { return };
+    let rain = if w.rain { 1.0 } else { 0.0 };
+    if mpc.rain != rain {
+        mpc.rain = rain;
+    }
 }
 
 /// The match's weather roll.
@@ -166,13 +177,16 @@ fn storm(
     if t >= end {
         storm.active = None;
         moon.illuminance = storm.base;
-        mpc.set_if_neq(RainMpc { lightning: 0.0 });
+        mpc.lightning = 0.0;
         return;
     }
     let v = c.eval(t);
     moon.illuminance = v * storm.base;
     let (lo, hi) = c.keys.iter().fold((f32::MAX, f32::MIN), |(lo, hi), k| (lo.min(k.value), hi.max(k.value)));
-    mpc.set_if_neq(RainMpc { lightning: ((v - lo) / hi.max(f32::EPSILON)).clamp(0.0, 1.0) });
+    let lightning = ((v - lo) / hi.max(f32::EPSILON)).clamp(0.0, 1.0);
+    if mpc.lightning != lightning {
+        mpc.lightning = lightning;
+    }
     let mut thunder = thunder;
     if !thunder && prev <= storm.threshold && storm.threshold < v {
         thunder = true;

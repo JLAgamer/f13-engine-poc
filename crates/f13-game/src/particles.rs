@@ -41,7 +41,7 @@ impl Plugin for ParticlesPlugin {
             .add_message::<ParticleActivation>()
             .add_message::<SpawnParticles>()
             .add_systems(Startup, spawn_level_particles)
-            .add_systems(PostUpdate, (rain_drips, spawn_requested, activate, follow_and_finish, simulate, draw).chain().after(bevy::transform::TransformSystems::Propagate));
+            .add_systems(PostUpdate, (rain_drips, rain_mpc_materials, spawn_requested, activate, follow_and_finish, simulate, draw).chain().after(bevy::transform::TransformSystems::Propagate));
     }
 }
 
@@ -351,6 +351,23 @@ impl Materials {
                 p[14] = Vec4::new(s("0_PixelDepthDistance", 0.0), s("0_Opacity_Multiplier", 1.0), s("RefractionDepthBias", 0.0), 0.0);
                 (6.0, [tex("DistortionTexture"), tex("Texture3"), tex("Texture1"), tex("Texture2")])
             }
+            "M_Rain_Master" => {
+                // uniexpr.py M_Rain_Master: cb1[2] EmissiveColor.rgb, [3] SelectionColor.rgb (0), [5] BaseColor.rgb,
+                // [6..10] below; Rain_MPC's Rain in p[15].x (rain_mpc_materials).
+                let vec = |n: &str, d: [f32; 4]| e.vectors.get(n).or_else(|| master.and_then(|m| m.vectors.get(n))).copied().unwrap_or(d);
+                let (ec, bc) = (vec("EmissiveColor", [1.0; 4]), vec("BaseColor", [0.0, 0.0, 0.0, 1.0]));
+                let radius = s("SphereMaskRadius", 0.5).max(1e-5);
+                let hard = s("SphereMaskHardness", 0.0);
+                let soft = (1.0 - hard).max(1e-5);
+                p[2] = Vec4::new(ec[0], ec[1], ec[2], 0.0);
+                p[5] = Vec4::new(bc[0], bc[1], bc[2], 0.0);
+                p[6] = Vec4::new(s("ScrollSpeed_Texture1", 0.01), s("ScrollSpeed_Texture1", 0.01), s("UV_MasterScaleMultiplier", 0.3), s("NRM_Intensity", 0.0));
+                p[7] = Vec4::new(s("ScrollSpeed_Emissive1", 0.3), s("ScrollSpeed_Emissive1", 0.3), s("UV_EmissiveScaleMultiplier", 1.0), s("z_U_Emissive_OFFSET", 0.0));
+                p[8] = Vec4::new(s("z_V_Emissive_OFFSET", 0.0), s("EmissiveLevel", 10.0), s("SphereMaskRadius", 0.5), radius);
+                p[9] = Vec4::new(1.0 / radius, hard, 1.0 - hard, soft);
+                p[10] = Vec4::new(1.0 / soft, s("0_Alpha_Contrast_Opacity_MASTER", 10.0), s("Index of Refraction", 1.333), s("RefractionDepthBias", 0.0));
+                (7.0, [tex("Normal1"), tex("EmissiveTexture1"), tex("ScrollTexture1"), None])
+            }
             // Masters whose graphs aren't ported yet aren't drawn (F13_PARTICLE_STANDINS=1 draws them as their first
             // texture x the particle colour, PLACEHOLDER, to check the simulation).
             _ if std::env::var("F13_PARTICLE_STANDINS").is_ok() => {
@@ -576,14 +593,23 @@ fn follow_and_finish(mut commands: Commands, mut systems: Query<(Entity, &mut Pa
 
 /// The cabins' roof drips follow the weather: SCCabin's BeginPlay (FUN_1403e6010) calls Cabin_Base_C's
 /// SetRaining(the world settings' rain flag), which SetActive(bRaining)s each child of its Rain component.
-fn rain_drips(weather: Option<Res<crate::weather::Weather>>, mut systems: Query<&mut ParticleSystemInstance>, mut seen: Local<Option<bool>>) {
+fn rain_drips(weather: Option<Res<crate::weather::Weather>>, mut systems: Query<Mut<ParticleSystemInstance>>, mut seen: Local<Option<bool>>) {
     let Some(w) = weather else { return };
-    if *seen == Some(w.rain) {
-        return;
-    }
+    let changed = *seen != Some(w.rain);
     *seen = Some(w.rain);
-    for mut s in systems.iter_mut().filter(|s| s.parent.as_deref() == Some("Rain")) {
+    for mut s in systems.iter_mut().filter(|s| s.parent.as_deref() == Some("Rain") && (changed || s.is_added())) {
         s.active = w.rain;
+    }
+}
+
+/// Rain_MPC's Rain into the rain materials (M_Rain_Master's opacity).
+fn rain_mpc_materials(mpc: Option<Res<crate::weather::RainMpc>>, mut materials: ResMut<Assets<ParticleMaterial>>) {
+    let Some(mpc) = mpc.filter(|m| m.is_changed()) else { return };
+    let rain: Vec<_> = materials.iter().filter(|(_, m)| m.params.mode.x == 7.0).map(|(id, _)| id).collect();
+    for id in rain {
+        if let Some(mut m) = materials.get_mut(id) {
+            m.params.p[15].x = mpc.rain;
+        }
     }
 }
 

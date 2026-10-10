@@ -20,7 +20,7 @@
 
 struct ParticleParams {
     // x: mode (0 stand-in, 1 M_Procedural_Fire_01, 2 M_Procedural_Fire_02, 3 M_MasterParticle_Emissive,
-    // 4 M_Fly_Animated_01, 5 M_MasterParticle_Diffuse_nearFade, 6 M_Procedural_Smoke_05); y: additive
+    // 4 M_Fly_Animated_01, 5 M_MasterParticle_Diffuse_nearFade, 6 M_Procedural_Smoke_05, 7 M_Rain_Master); y: additive
     mode: vec4<f32>,
     // The master's material uniform buffer as its compiled shader reads it (uniexpr.py's cb1[n]).
     p: array<vec4<f32>, 16>,
@@ -298,6 +298,28 @@ fn smoke_05(in: VertexOutput) -> vec4<f32> {
     return vec4(emissive + volume_lit(in, saturate(diffuse)), alpha);
 }
 
+// M_Rain_Master (the roof drips; lit translucency, s094): t0 Normal1 (its lighting normal, which the volume stand-in
+// doesn't take), t1 EmissiveTexture1, t2 ScrollTexture1. Emissive EmissiveTexture1 at (uv x UV_EmissiveScale +
+// (z_U, z_V)_Emissive_OFFSET) + time x ScrollSpeed_Emissive1, x colour x EmissiveLevel x EmissiveColor; diffuse
+// saturate(colour x BaseColor) under the lighting volume; opacity ScrollTexture1 at uv x UV_MasterScale +/- time x
+// ScrollSpeed_Texture1 (both), x a sphere mask, saturate(x 0.45) x 0_Alpha_Contrast_Opacity_MASTER x colour.a x
+// Rain_MPC's Rain (p[15].x). The refraction (its distortion pass) isn't drawn.
+fn rain_master(in: VertexOutput) -> vec4<f32> {
+    let p = params.p;
+    let uv = in.uv;
+    let time = globals.time;
+    let base_uv = uv * p[6].z;
+    let s1 = time * p[6].y + base_uv;
+    let s2 = time * p[6].y - base_uv;
+    let euv = vec2(uv.x * p[7].z + p[7].w, uv.y * p[7].z + p[8].x) + time * p[7].y;
+    let e = textureSample(t1, s, euv).rgb;
+    let emissive = max(e * (in.color.rgb * p[8].y * p[2].xyz) + p[3].xyz, vec3(0.0));
+    let diffuse = saturate(in.color.rgb * p[5].xyz);
+    let mask = saturate((1.0 - length(uv - 0.5) * p[9].x) * p[10].x);
+    let o = saturate(textureSample(t2, s, s1).x * textureSample(t2, s, s2).x * mask * 0.45) * p[10].y * in.color.a;
+    return vec4(emissive + volume_lit(in, diffuse), saturate(o * p[15].x));
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let mode = u32(params.mode.x);
@@ -312,6 +334,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         c = near_fade(in);
     } else if mode == 6u {
         c = smoke_05(in);
+    } else if mode == 7u {
+        c = rain_master(in);
     } else if mode == 4u {
         // Already exposed (apply_pbr_lighting).
         c = fly(in);
