@@ -98,7 +98,8 @@ impl Plugin for CharacterPlugin {
             }
         })
         .add_systems(Update, (assemble, animate).chain())
-        .add_systems(PostUpdate, (layered_blend, aim_offset).chain().after(bevy::app::AnimationSystems).before(bevy::transform::TransformSystems::Propagate));
+        .init_resource::<LayerRestore>()
+        .add_systems(PostUpdate, (restore_unanimated, layered_blend, item_hand_layer, aim_offset, item_arm_layer).chain().after(bevy::app::AnimationSystems).before(bevy::transform::TransformSystems::Propagate));
     }
 }
 
@@ -118,6 +119,26 @@ pub struct CharacterModel {
 /// setter, SCCharacter::SetStruggling, is called by no code or Blueprint); her block idle's CombatUpperBody track;
 /// his (Jason_AnimBP's CombatUpperBody).
 const LAYER_TAKES: [&str; 8] = ["normal_grab_idle", BLOCK_IDLE, crate::jason::BLOCK, AIM_EXIT, AIM_POSES[0], AIM_POSES[1], AIM_POSES[2], AIM_POSES[3]];
+
+/// The counselor items' idle poses (their IdleAsset, a loaded gun's LoadedIdle), played in the held-item layers.
+const ITEM_POSES: [&str; 12] = [
+    "2x4Grip",
+    "BatGrip",
+    "FlareGunGrip",
+    "PropGrip",
+    "UniversalGrip",
+    "macheteGrip",
+    "pokerGrip",
+    "potGrip",
+    "stickGrip",
+    "normal_stand_carry_heavy_01",
+    "normal_stand_idle_carry_beartrap_add",
+    "normal_stand_idle_hunter_01",
+];
+const ITEM_HAND_FILTERS: &[(&str, i32)] = &[("hand_r", 1), ("weapon_attach_r", 1)];
+const ITEM_ARM_FILTERS: &[(&str, i32)] = &[("clavicle_R", 3)];
+/// SCCounselorAnimInstance's ItemAlphaCurveName (its constructor 0x1402f3630).
+const ITEM_ALPHA_CURVE: &str = "ItemWeightAlpha";
 
 /// Base_Counselor_AnimBP's gun branch (Standing stance only: BlendListByEnum on CurrentStance, then bHasWeapon, then
 /// bHasGun): the RangedAiming machine under the AimOffsets aim offset, all under the DefaultFullBody slot. States:
@@ -212,7 +233,7 @@ impl CharacterModel {
             }
             let clip = build_clip(&data, a.length, &animated);
             nodes.insert(name.clone(), (graph.add_clip(clips.add(clip), 1.0, graph.root), a.length));
-            if LAYER_TAKES.contains(&name.as_str()) {
+            if LAYER_TAKES.contains(&name.as_str()) || ITEM_POSES.contains(&name.as_str()) {
                 layers.insert(name.clone(), (data, a.length));
             }
         }
@@ -347,6 +368,9 @@ pub struct Rig {
     timed: Option<(&'static str, f32, bool)>,
     /// A ShotgunHold notify state is active (an animation in her pose is inside its window; items.rs).
     pub(crate) shotgun_hold: bool,
+    /// The held item's pose on the hand layer, and on the arm layer with its weight (UpperBodyItemAlpha).
+    item_hand: Option<String>,
+    item_arm: Option<(String, f32)>,
 }
 
 /// A full-body animation a character plays now (hit reactions, grabs, kills, death), whatever its movement state.
@@ -415,6 +439,8 @@ pub fn spawn_model(commands: &mut Commands, assets: &AssetServer, character: &Ch
         aim_on: false,
         timed: None,
         shotgun_hold: false,
+        item_hand: None,
+        item_arm: None,
     });
     rig
 }
@@ -505,7 +531,7 @@ pub(crate) fn animate(
     forced: Option<Res<ForcedPose>>,
     anim_sounds: Option<Res<crate::audio::AnimSounds>>,
     players: Query<(Entity, &Player, &Transform, Option<&crate::interact::UsingItem>, Option<&PlayAction>, Has<crate::items::Blocking>, Has<RestartAction>, Option<&SeekAction>, (Option<&crate::items::GunAim>, Option<&crate::interact::Inventory>))>,
-    items: Query<&crate::props::Item>,
+    items: Query<(&crate::props::Item, Has<crate::items::Spent>)>,
     mut rigs: Query<(&ChildOf, &mut Rig, &mut AnimationPlayer), Without<crate::ragdoll::Ragdolled>>,
     mut layers: Query<&mut LayeredBlend, With<Player>>,
 ) {
@@ -557,11 +583,14 @@ pub(crate) fn animate(
         }
 
         // The gun branch: the gun in her hands (two-handed, a flare gun), standing.
-        let gun = inv.and_then(|i| i.hand).and_then(|h| items.get(h).ok()).and_then(|i| match &i.kind {
+        let held = inv.and_then(|i| i.hand).and_then(|h| items.get(h).ok());
+        let gun = held.and_then(|(i, _)| match &i.kind {
             crate::props::ItemKind::Gun { stats, projectile, .. } => Some((stats.two_handed, *projectile)),
             _ => None,
         });
-        let gun_branch = gun.filter(|_| c.stance == Stance::Standing);
+        // The stance switch above it (BlendListByEnum on CurrentStance) has no EnumToPoseIndex: every stance takes its
+        // first pose, the weapon and gun branch.
+        let gun_branch = gun;
         let aiming = gun_aim.is_some_and(|a| a.aiming);
         rig.timed = None;
         match gun_branch {
@@ -603,6 +632,26 @@ pub(crate) fn animate(
             }
         }
         rig.aim_on = gun_branch.is_some() && rig.action.is_none();
+        // The held item's layers: a weapon's idle pose on her hand, a gun's in the aim machine's Idle state (its
+        // LoadedIdle while loaded); anything else's on her right arm, by its montage's ItemWeightAlpha in one.
+        rig.item_hand = None;
+        rig.item_arm = None;
+        if let Some((item, spent)) = held {
+            match &item.kind {
+                crate::props::ItemKind::Weapon(_) => rig.item_hand = item.idle_pose.clone(),
+                crate::props::ItemKind::Gun { .. } if rig.aim_state == AimState::Idle => {
+                    rig.item_hand = if spent { item.idle_pose.clone() } else { item.loaded_idle.clone().or_else(|| item.idle_pose.clone()) };
+                }
+                crate::props::ItemKind::Gun { .. } => {}
+                _ => {
+                    let w = match &rig.action {
+                        Some((a, at)) => character.info.animations.get(a).and_then(|x| x.curve(ITEM_ALPHA_CURVE)).map_or(0.0, |c| c.eval(*at)),
+                        None => 1.0,
+                    };
+                    rig.item_arm = item.idle_pose.clone().map(|p| (p, w));
+                }
+            }
+        }
         let aim_clip = match (gun_branch, rig.aim_state) {
             (Some(_), AimState::Enter) => Some((AIM_ENTER, false)),
             (Some((_, flare)), AimState::Aiming) => Some((if flare { AIM_IDLE_FLARE } else { AIM_IDLE_SHOTGUN }, true)),
@@ -931,7 +980,7 @@ fn layered_blend(
     mut owners: Query<(Entity, &mut LayeredBlend)>,
     rigs: Query<(&ChildOf, &Rig)>,
     mut transforms: Query<&mut Transform>,
-    mut written: Local<HashMap<Entity, (Transform, Transform)>>,
+    mut written: ResMut<LayerRestore>,
 ) {
     let dt = time.delta_secs();
     for (owner, mut l) in &mut owners {
@@ -950,69 +999,141 @@ fn layered_blend(
         };
         let Some(model) = model else { continue };
         let Some((data, length)) = model.layers.get(l.take) else { continue };
-        let bones = &model.info.bones;
-        let mask = mask_weights(bones, l.filters);
-        let n = bones.len();
-        let (mut base, mut layer) = (vec![Transform::IDENTITY; n], vec![Transform::IDENTITY; n]);
-        let mut ents = vec![None; n];
-        for (i, b) in bones.iter().enumerate() {
-            let Some(&e) = rig.bones.get(&b.name) else { continue };
-            let Ok(xf) = transforms.get(e) else { continue };
-            // Not written by the animation since the last blend: what it had before that.
-            let current = match written.get(&e) {
-                Some((before, after)) if after == xf => *before,
-                _ => *xf,
-            };
-            ents[i] = Some(e);
-            base[i] = current;
-            // A bone the take doesn't key is at its reference pose.
-            let mut p = match &b.local {
-                Some(x) => {
-                    let g = x.to_gltf_space();
-                    Transform { translation: Vec3::from_array(g.translation), rotation: Quat::from_array(g.rotation).normalize(), scale: current.scale }
-                }
-                None => current,
-            };
-            let t = if l.hold { l.t.min(*length - 1e-4).max(0.0) } else { l.t };
-            if let Some((r, tr)) = sample_take(data, *length, &b.name, t) {
-                p.rotation = r;
-                if let Some(tr) = tr.filter(|_| b.retarget == "Animation") {
-                    p.translation = tr;
-                }
+        let t = if l.hold { l.t.min(*length - 1e-4).max(0.0) } else { l.t };
+        blend_layer(model, rig, data, *length, t, l.filters, l.mesh_space, l.weight, &mut transforms, &mut written.0);
+    }
+}
+
+/// What the post-animation passes (the layers, the aim offset) changed this frame: each bone's value before them and
+/// after the last.
+#[derive(Resource, Default)]
+struct LayerRestore(HashMap<Entity, (Transform, Transform)>);
+
+/// Bones the animation didn't write since the passes last ran get back what they had before them (so they don't build
+/// up frame over frame).
+fn restore_unanimated(mut restore: ResMut<LayerRestore>, mut transforms: Query<&mut Transform>) {
+    for (e, (before, after)) in restore.0.drain() {
+        if let Ok(mut xf) = transforms.get_mut(e) {
+            if *xf == after {
+                *xf = before;
             }
-            layer[i] = p;
         }
-        // Component-space rotations (parents come first in the reference skeleton).
-        let mesh = |pose: &[Transform]| {
-            let mut m = vec![Quat::IDENTITY; n];
-            for i in 0..n {
-                let parent = bones[i].parent;
-                m[i] = if parent >= 0 { m[parent as usize] * pose[i].rotation } else { pose[i].rotation };
+    }
+}
+
+/// One LayeredBoneBlend layer onto the rig's pose (see [`layered_blend`]): `data` at `t` (looping) over the bones the
+/// branch filters pick, by `weight`.
+#[allow(clippy::too_many_arguments)]
+fn blend_layer(
+    model: &CharacterModel,
+    rig: &Rig,
+    data: &AnimData,
+    length: f32,
+    t: f32,
+    filters: &[(&str, i32)],
+    mesh_space: bool,
+    weight: f32,
+    transforms: &mut Query<&mut Transform>,
+    written: &mut HashMap<Entity, (Transform, Transform)>,
+) {
+    let bones = &model.info.bones;
+    let mask = mask_weights(bones, filters);
+    let n = bones.len();
+    let (mut base, mut layer) = (vec![Transform::IDENTITY; n], vec![Transform::IDENTITY; n]);
+    let mut ents = vec![None; n];
+    for (i, b) in bones.iter().enumerate() {
+        let Some(&e) = rig.bones.get(&b.name) else { continue };
+        let Ok(xf) = transforms.get(e) else { continue };
+        let current = *xf;
+        ents[i] = Some(e);
+        base[i] = current;
+        // A bone the take doesn't key is at its reference pose.
+        let mut p = match &b.local {
+            Some(x) => {
+                let g = x.to_gltf_space();
+                Transform { translation: Vec3::from_array(g.translation), rotation: Quat::from_array(g.rotation).normalize(), scale: current.scale }
             }
-            m
+            None => current,
         };
-        let (base_mesh, layer_mesh) = if l.mesh_space { (mesh(&base), mesh(&layer)) } else { (vec![], vec![]) };
-        let mut out_mesh = vec![Quat::IDENTITY; n];
-        for i in 0..n {
-            let w = (mask[i] * l.weight).clamp(0.0, 1.0);
-            let mut out = base[i];
-            out.translation = base[i].translation.lerp(layer[i].translation, w);
-            if l.mesh_space {
-                out_mesh[i] = if w <= 1e-5 { base_mesh[i] } else if w >= 1.0 - 1e-5 { layer_mesh[i] } else { fast_lerp(base_mesh[i], layer_mesh[i], w) };
-                let parent = bones[i].parent;
-                out.rotation = if parent >= 0 { (out_mesh[parent as usize].inverse() * out_mesh[i]).normalize() } else { out_mesh[i] };
-            } else {
-                out.rotation = fast_lerp(base[i].rotation, layer[i].rotation, w);
-            }
-            if let Some(e) = ents[i] {
-                if let Ok(mut xf) = transforms.get_mut(e) {
-                    if *xf != out {
-                        *xf = out;
-                    }
-                    written.insert(e, (base[i], out));
-                }
+        if let Some((r, tr)) = sample_take(data, length, &b.name, t) {
+            p.rotation = r;
+            if let Some(tr) = tr.filter(|_| b.retarget == "Animation") {
+                p.translation = tr;
             }
         }
+        layer[i] = p;
+    }
+    // Component-space rotations (parents come first in the reference skeleton).
+    let mesh = |pose: &[Transform]| {
+        let mut m = vec![Quat::IDENTITY; n];
+        for i in 0..n {
+            let parent = bones[i].parent;
+            m[i] = if parent >= 0 { m[parent as usize] * pose[i].rotation } else { pose[i].rotation };
+        }
+        m
+    };
+    let (base_mesh, layer_mesh) = if mesh_space { (mesh(&base), mesh(&layer)) } else { (vec![], vec![]) };
+    let mut out_mesh = vec![Quat::IDENTITY; n];
+    for i in 0..n {
+        let w = (mask[i] * weight).clamp(0.0, 1.0);
+        let mut out = base[i];
+        out.translation = base[i].translation.lerp(layer[i].translation, w);
+        if mesh_space {
+            out_mesh[i] = if w <= 1e-5 { base_mesh[i] } else if w >= 1.0 - 1e-5 { layer_mesh[i] } else { fast_lerp(base_mesh[i], layer_mesh[i], w) };
+            let parent = bones[i].parent;
+            out.rotation = if parent >= 0 { (out_mesh[parent as usize].inverse() * out_mesh[i]).normalize() } else { out_mesh[i] };
+        } else {
+            out.rotation = fast_lerp(base[i].rotation, layer[i].rotation, w);
+        }
+        if let Some(e) = ents[i] {
+            if let Ok(mut xf) = transforms.get_mut(e) {
+                if *xf != out {
+                    *xf = out;
+                }
+                written.entry(e).or_insert((base[i], out)).1 = out;
+            }
+        }
+    }
+}
+
+/// Base_Counselor_AnimBP's held-item layers (ItemIdleAddtive: the item's idle pose, SCCounselorAnimInstance's update
+/// 0x1403133b0): with a weapon, LayeredBoneBlend_0C12 (hand_r and weapon_attach_r, BlendDepth 1, local, weight 1)
+/// over the stance pose; with a gun, the same in the RangedAiming machine's Idle state. Under the aim offset and the
+/// DefaultFullBody slot (not during a full-body action).
+fn item_hand_layer(
+    time: Res<Time>,
+    counselor: Option<Res<CounselorCharacter>>,
+    rigs: Query<&Rig>,
+    mut transforms: Query<&mut Transform>,
+    mut written: ResMut<LayerRestore>,
+    mut t: Local<f32>,
+) {
+    *t += time.delta_secs();
+    let Some(model) = counselor.as_deref().map(|c| &c.0) else { return };
+    for rig in &rigs {
+        let Some(pose) = rig.item_hand.as_deref().filter(|_| rig.action.is_none() && matches!(rig.model, Model::Counselor)) else { continue };
+        let Some((data, length)) = model.layers.get(pose) else { continue };
+        blend_layer(model, rig, data, *length, *t, ITEM_HAND_FILTERS, false, 1.0, &mut transforms, &mut written.0);
+    }
+}
+
+/// LayeredBoneBlend_DC1C at the graph's root (over every slot): with a held item that isn't a weapon, its idle pose on
+/// the right arm (clavicle_R, BlendDepth 3, mesh-space rotation blend) by UpperBodyItemAlpha (1, or in a montage its
+/// ItemWeightAlpha curve: 0 where the montage has none).
+fn item_arm_layer(
+    time: Res<Time>,
+    counselor: Option<Res<CounselorCharacter>>,
+    rigs: Query<&Rig>,
+    mut transforms: Query<&mut Transform>,
+    mut written: ResMut<LayerRestore>,
+    mut t: Local<f32>,
+) {
+    *t += time.delta_secs();
+    let Some(model) = counselor.as_deref().map(|c| &c.0) else { return };
+    for rig in &rigs {
+        let Some((pose, weight)) = rig.item_arm.as_ref().filter(|(_, w)| *w > 1e-4 && matches!(rig.model, Model::Counselor)) else { continue };
+        let Some((data, length)) = model.layers.get(pose.as_str()) else { continue };
+        blend_layer(model, rig, data, *length, *t, ITEM_ARM_FILTERS, true, *weight, &mut transforms, &mut written.0);
     }
 }
 
@@ -1029,7 +1150,7 @@ fn aim_offset(
     counselor: Option<Res<CounselorCharacter>>,
     rigs: Query<&Rig>,
     mut transforms: Query<&mut Transform>,
-    mut written: Local<HashMap<Entity, (Transform, Transform)>>,
+    mut written: ResMut<LayerRestore>,
 ) {
     let Some(model) = counselor.as_deref().map(|c| &c.0) else { return };
     for rig in &rigs {
@@ -1082,10 +1203,7 @@ fn aim_offset(
         for (i, b) in bones.iter().enumerate() {
             let Some(&e) = rig.bones.get(&b.name) else { continue };
             let Ok(xf) = transforms.get(e) else { continue };
-            local[i] = match written.get(&e) {
-                Some((before, after)) if after == xf => *before,
-                _ => *xf,
-            };
+            local[i] = *xf;
             ents[i] = Some(e);
         }
         let mut now = vec![Quat::IDENTITY; n];
@@ -1104,7 +1222,7 @@ fn aim_offset(
                 if *xf != out {
                     *xf = out;
                 }
-                written.insert(e, (local[i], out));
+                written.0.entry(e).or_insert((local[i], out)).1 = out;
             }
         }
     }

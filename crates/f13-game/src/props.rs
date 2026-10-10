@@ -27,6 +27,10 @@ pub struct Item {
     pub inventory_max: u32,
     /// bIsSpecial (SCSpecialItem's constructor sets it: the map): kept apart from her pockets.
     pub special: bool,
+    /// Its idle pose in her hands (SCItem::GetIdlePose: the first IdleAsset on her skeleton; they all are) and a
+    /// gun's LoadedIdle (SCGun's override while it has ammunition).
+    pub idle_pose: Option<String>,
+    pub loaded_idle: Option<String>,
 }
 
 /// What an item does (by its native class).
@@ -613,6 +617,8 @@ fn spawn_props(
                 drop_cue: classes.prop(&actor.class, "DroppedSoundCue")["AssetPathName"].as_str().and_then(|p| p.rsplit('.').next()).map(String::from),
                 inventory_max: classes.prop(&actor.class, "InventoryMax").as_u64().unwrap_or(0) as u32,
                 special: classes.is_child_of(&actor.class, "SCSpecialItem"),
+                idle_pose: classes.prop(&actor.class, "IdleAsset").as_array().and_then(|a| a.iter().find_map(|v| v.as_str().map(asset_name))),
+                loaded_idle: classes.prop(&actor.class, "LoadedIdle").as_str().map(asset_name),
             });
             *item_classes.entry(actor.class.clone()).or_default() += 1;
             *counts.entry(if actor.kind == Some(SpawnKind::RepairPart) { "repair parts" } else { "items" }).or_default() += 1;
@@ -823,4 +829,9 @@ fn tag_vehicle_parts(
             }
         }
     }
+}
+
+/// An object reference's asset name ("AnimSequence'BatGrip'" -> "BatGrip").
+fn asset_name(v: &str) -> String {
+    v.split('\'').nth(1).unwrap_or(v).rsplit('.').next().unwrap_or(v).to_string()
 }
