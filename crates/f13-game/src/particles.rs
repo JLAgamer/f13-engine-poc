@@ -41,7 +41,7 @@ impl Plugin for ParticlesPlugin {
             .add_message::<ParticleActivation>()
             .add_message::<SpawnParticles>()
             .add_systems(Startup, spawn_level_particles)
-            .add_systems(PostUpdate, (spawn_requested, activate, follow_and_finish, simulate, draw).chain().after(bevy::transform::TransformSystems::Propagate));
+            .add_systems(PostUpdate, (rain_drips, spawn_requested, activate, follow_and_finish, simulate, draw).chain().after(bevy::transform::TransformSystems::Propagate));
     }
 }
 
@@ -166,6 +166,8 @@ pub struct ParticleSystemInstance {
     active: bool,
     /// The level actor it's on.
     actor: String,
+    /// The component it's attached to on that actor (the cabins' roof drips hang under "Rain").
+    parent: Option<String>,
     /// The entity it follows and its offset from it (Bevy space).
     follow: Option<(Entity, Transform)>,
     /// Despawned once its emitters are done.
@@ -440,7 +442,7 @@ impl ParticleAssets {
         if emitters.is_empty() {
             return None;
         }
-        let mut inst = ParticleSystemInstance { emitters, location, rotation, scale, max_draw, rng: self.seed, active, actor: actor.to_string(), follow: None, auto_destroy: false };
+        let mut inst = ParticleSystemInstance { emitters, location, rotation, scale, max_draw, rng: self.seed, active, actor: actor.to_string(), parent: None, follow: None, auto_destroy: false };
         // WarmupTime: ticked in 0.032 s steps (UParticleSystemComponent's default warmup step).
         let warmup = warmup.unwrap_or(system.warmup);
         let mut t = 0.0;
@@ -532,7 +534,8 @@ fn spawn_level_particles(
             let xf = (Vec3::from(world.t), Quat::from_array(world.r).normalize(), Vec3::from(world.s));
             let max_draw = p["LDMaxDrawDistance"].as_f64().unwrap_or(0.0) as f32 * crate::VIEW_DISTANCE_SCALE / 100.0;
             let warmup = p["WarmupTime"].as_f64().map(|w| w as f32);
-            let Some(inst) = pa.instance(&mut commands, &mut meshes, &mut materials, &assets, name, xf, active, &a.name, max_draw, warmup) else { continue };
+            let Some(mut inst) = pa.instance(&mut commands, &mut meshes, &mut materials, &assets, name, xf, active, &a.name, max_draw, warmup) else { continue };
+            inst.parent = c.parent.clone();
             commands.spawn((inst, Name::new(format!("particles {name}"))));
             n += 1;
         }
@@ -568,6 +571,19 @@ fn follow_and_finish(mut commands: Commands, mut systems: Query<(Entity, &mut Pa
             }
             commands.entity(e).despawn();
         }
+    }
+}
+
+/// The cabins' roof drips follow the weather: SCCabin's BeginPlay (FUN_1403e6010) calls Cabin_Base_C's
+/// SetRaining(the world settings' rain flag), which SetActive(bRaining)s each child of its Rain component.
+fn rain_drips(weather: Option<Res<crate::weather::Weather>>, mut systems: Query<&mut ParticleSystemInstance>, mut seen: Local<Option<bool>>) {
+    let Some(w) = weather else { return };
+    if *seen == Some(w.rain) {
+        return;
+    }
+    *seen = Some(w.rain);
+    for mut s in systems.iter_mut().filter(|s| s.parent.as_deref() == Some("Rain")) {
+        s.active = w.rain;
     }
 }
 

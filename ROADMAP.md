@@ -48,8 +48,8 @@ Moved from Milestone 1 (not tied to gameplay):
       locomotion and the grab and block layers; their look-at, IK and additive nodes aren't ported). Not in the game:
       turn-in-place takes, limp movement
 - [ ] Lighting, remaining: Enlighten GI, local light shadows (a real-time budget of the 4 nearest for now, unverified
-      visually and for cost), rain (the colour grading and bloom: Decomp audit's
-      post-processing)
+      visually and for cost), rain (the camera's rain grid and the roof drips are read and the drips follow the
+      weather; their material M_Rain_Master and the grid's tick aren't ported: MODLOG "Rain")
 - [ ] Read the stock pak directly, so users don't need to extract it first (with the host CLI's first-run setup).
       Its footer is known (an encrypted-index flag, magics 'Atae' and 'kcid', version 5, index offset and size,
       hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold
