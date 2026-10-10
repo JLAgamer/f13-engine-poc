@@ -61,7 +61,7 @@ const ATTRIBUTE_DYNAMIC: MeshVertexAttribute = MeshVertexAttribute::new("Particl
 #[derive(Clone, Copy, ShaderType, Default)]
 struct ParticleParams {
     mode: Vec4,
-    p: [Vec4; 16],
+    p: [Vec4; 32],
 }
 
 /// A particle material: the master's port (`mode`), its uniform buffer as the compiled shader lays it out, and its
@@ -274,7 +274,7 @@ impl Materials {
             let color = !n.contains("Flow") && !n.contains("Distortion") && !n.contains("Normal");
             e.textures.get(n).or_else(|| master.and_then(|m| m.textures.get(n))).and_then(|p| crate::materials::load_texture(root, assets, p, color))
         };
-        let mut p = [Vec4::ZERO; 16];
+        let mut p = [Vec4::ZERO; 32];
         let (mode, t) = match e.master.as_str() {
             "M_Procedural_Fire_01" => {
                 // uniexpr.py M_Procedural_Fire_01: cb1[1] SelectionColor.rgb (0), [2..9] below.
@@ -357,6 +357,32 @@ impl Materials {
                 p[13] = Vec4::new(s("BaseMin", 0.1), s("Emissive_Multiplier", 0.01), s("FadeDistance", 3.0), s("FadeDistance", 3.0).max(1e-5));
                 p[14] = Vec4::new(s("0_PixelDepthDistance", 0.0), s("0_Opacity_Multiplier", 1.0), s("RefractionDepthBias", 0.0), 0.0);
                 (6.0, [tex("DistortionTexture"), tex("Texture3"), tex("Texture1"), tex("Texture2")])
+            }
+            "M_Procedural_Smoke_01B_no-self-shadow" => {
+                // uniexpr.py M_Procedural_Smoke_01B_no-self-shadow: cb1[5] Base_ALPHA_Texture1_Scale.rg x
+                // BaseMask_Master_Scale, [8] Texture2's, [9].x -Diffuse_Contrast, [10].x -0_BaseContrast, [11]
+                // SelectionColor.rgb (0), [13].x -0_AlphaContrast, [15..24] below.
+                let vec = |n: &str, d: [f32; 4]| e.vectors.get(n).or_else(|| master.and_then(|m| m.vectors.get(n))).copied().unwrap_or(d);
+                let (t1s, t2s) = (vec("Base_ALPHA_Texture1_Scale", [0.95, 0.95, 0.0, 1.0]), vec("Base_ALPHA_Texture2_Scale", [1.0, 1.0, 0.0, 1.0]));
+                let mask = s("BaseMask_Master_Scale", 1.3);
+                let (bc, dc, ac, hard) = (s("0_BaseContrast", 0.1), s("Diffuse_Contrast", 0.0), s("0_AlphaContrast", 0.0), s("SphereMask_Hardness", 0.0));
+                let soft = (1.0 - hard).max(1e-5);
+                p[5] = Vec4::new(t1s[0] * mask, t1s[1] * mask, t1s[2] * mask, 0.0);
+                p[8] = Vec4::new(t2s[0] * mask, t2s[1] * mask, t2s[2] * mask, 0.0);
+                p[9] = Vec4::splat(-dc);
+                p[10] = Vec4::splat(-bc);
+                p[13] = Vec4::splat(-ac);
+                p[15] = Vec4::new(s("0_MasterScrollMultiplier", 0.001), s("Distortion1_Scroll_Multiplier", 0.05), s("Distortion1_UV_Coord_Multiplier", 0.5), s("Distortion2_Scroll_Multiplier", 0.08));
+                p[16] = Vec4::new(s("Distortion2_UV_Coord_Multiplier", 0.5), s("z_DistortionBaseMapPower", 5.0), s("0_DistortionMultiplier", 1.0), s("DistortionMax", 5.0));
+                p[17] = Vec4::new(s("DistortionMin", 0.0), s("0_MasterRotationMultiplier", 0.5), mask, s("Texture3_Scroll_Multiplier", 0.15));
+                p[18] = Vec4::new(s("Texture3_UV_Coord_Multiplier", 0.5), s("Texture3_Max", 1.0), s("Texture3_Min", 0.5), s("z_DistortionSphereMaskPower", 1.0));
+                p[19] = Vec4::new(s("SphereMask_Distotrion_Multiplier", 1.0), s("SM_U_Offset", 0.5), s("SM_V_Offset", 0.5), s("SphereMask_Radius", 0.5));
+                p[20] = Vec4::new(hard, 1.0 - hard, soft, 1.0 / soft);
+                p[21] = Vec4::new(dc + 1.0, s("Diffuse_Max", 1.0), s("Diffuse_Min", 0.2), bc + 1.0);
+                p[22] = Vec4::new(s("FadeDistance", 3.0), s("FadeDistance", 3.0).max(1e-5), s("0_PixelDepthDistance", 0.0), s("Emissive_Multiplier", 0.05));
+                p[23] = Vec4::new(ac, -ac, ac + 1.0, s("0_Opacity_Multiplier", 3.0));
+                p[24] = Vec4::new(s("0_AlphaPower", 2.0), s("RefractionDepthBias", 0.0), 0.0, 0.0);
+                (9.0, [tex("DistortionTexture"), tex("Base_ALPHA_Texture1"), tex("Base_ALPHA_Texture2"), tex("Base_ALPHA_Texture3")])
             }
             // M_Procedural_Tire_Dust_01_Inst's own shader map (static switches: 0_NRM_switch off); the master's other
             // instances aren't ported.

@@ -295,7 +295,11 @@ impl System {
             }
             let spawn = get(&lp["SpawnModule"]);
             let sp = spawn.map(|s| &s["Props"]);
-            let spawn_enabled = sp.is_some_and(|s| s["bEnabled"].as_bool() != Some(false) && s["bProcessSpawnRate"].as_bool() != Some(false));
+            // The Spawn module's own bProcessSpawnRate isn't read: the flag gates the rate from the stacked spawn modules
+            // (UParticleLODLevel's SpawningModules, from Modules: SpawnPerUnit). PLACEHOLDER, unverified in the binary;
+            // the data agrees: the smoking effects (the hood's, the phone box's, the fuse box's) have it off, a rate and
+            // no bursts.
+            let spawn_enabled = sp.is_some_and(|s| s["bEnabled"].as_bool() != Some(false));
             let mut modules = vec![];
             let mut spawn_per_unit = None;
             for mr in lp["Modules"].as_array().into_iter().flatten() {

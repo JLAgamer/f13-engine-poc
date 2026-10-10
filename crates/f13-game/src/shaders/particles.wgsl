@@ -21,10 +21,10 @@
 struct ParticleParams {
     // x: mode (0 stand-in, 1 M_Procedural_Fire_01, 2 M_Procedural_Fire_02, 3 M_MasterParticle_Emissive,
     // 4 M_Fly_Animated_01, 5 M_MasterParticle_Diffuse_nearFade, 6 M_Procedural_Smoke_05, 7 M_Rain_Master,
-    // 8 M_Procedural_Tire_Dust_01_Inst); y: additive
+    // 8 M_Procedural_Tire_Dust_01_Inst, 9 M_Procedural_Smoke_01B_no-self-shadow); y: additive
     mode: vec4<f32>,
     // The master's material uniform buffer as its compiled shader reads it (uniexpr.py's cb1[n]).
-    p: array<vec4<f32>, 16>,
+    p: array<vec4<f32>, 32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> params: ParticleParams;
@@ -366,6 +366,62 @@ fn tire_dust(in: VertexOutput) -> vec4<f32> {
     return vec4(emissive + volume_lit(in, diffuse), saturate(shape * opacity));
 }
 
+// M_Procedural_Smoke_01B_no-self-shadow (the hood smoke, the fuse boxes' and the phone box's flashes, the shotgun's
+// blast, the electric shocks; lit translucency, the master's shader map: no instance has its own; sprite pass s003):
+// t0 DistortionTexture, t1..t3 Base_ALPHA_Texture1..3 (their red). Two circling DistortionTexture samples (the second
+// mirrored) summed, ^ z_DistortionBaseMapPower x DynamicParameter.z x 0_DistortionMultiplier clamped to
+// DistortionMin..Max, offset Texture1 and Texture2, each pulsing in scale ((cos / 2 + 6) / 7 x
+// Base_ALPHA_TextureN_Scale x BaseMask_Master_Scale; the second on the mirrored uv) and turning; x Texture3 (circling,
+// clamped to Texture3_Min..Max) is the shape. A sphere mask (offset by the distortion ^ z_DistortionSphereMaskPower).
+// Diffuse: mask x shape x 3 contrasted by Diffuse_Contrast, clamped to Diffuse_Min..Max, contrasted by 0_BaseContrast,
+// x the colour (under the lighting volume); emissive that x the depth fades x Emissive_Multiplier. Opacity: (shape x
+// mask - DynamicParameter.x / 26) contrasted by DynamicParameter.x, x 2 x the fades, contrasted by 0_AlphaContrast,
+// x 0_Opacity_Multiplier, ^ 0_AlphaPower, at most 1.
+fn smoke_01b(in: VertexOutput) -> vec4<f32> {
+    let p = params.p;
+    let dp = in.dynamic;
+    let uv = in.uv;
+    let col = in.color;
+    let time = globals.time;
+    let scroll = time * p[15].x;
+    let a = scroll * p[15].y * 6.283185;
+    let b = scroll * p[15].w * 6.283185;
+    let d1 = textureSample(t0, s, (vec2(cos(a), sin(a)) * 0.75 + uv) * p[15].z + dp.w).xy;
+    let d2 = textureSample(t0, s, 1.0 - ((vec2(cos(b), sin(b)) * -0.75 + uv) * p[16].x + dp.w)).xy;
+    let lg = log(max(d1 + d2, vec2(0.0)));
+    let amount = dp.z * p[16].z;
+    let dist = clamp(amount * exp(lg * p[16].y), vec2(p[17].x), vec2(p[16].w));
+    let rot = time * p[17].y;
+    let a1 = (rot + dp.y + rot * 1.052632 + dp.w * 10.0) * 0.75;
+    let pulse1 = (cos((rot + dp.w) * 3.141593) * 0.5 + 6.0) * 0.142857;
+    let pulse2 = (cos((rot + dp.w) * 3.926991) * 0.5 + 6.0) * 0.142857;
+    let scale1 = pulse1 * p[5].xy;
+    let uv1 = uv * 0.95 / scale1 + 0.5 - 0.5 / scale1 - 0.5;
+    let tex1 = textureSample(t1, s, dist + turn(uv1, sin(a1), cos(a1)) + 0.5).x;
+    let a2 = ((rot + dp.y) + rot + dp.w * 10.0) * -0.6;
+    let scale2 = pulse2 * p[8].xy;
+    let uv2 = (1.0 - uv) / scale2 + 0.5 - 0.5 / scale2 - 0.5;
+    let tex2 = textureSample(t2, s, dist + turn(uv2, sin(a2), cos(a2)) + 0.5).x;
+    let a3 = rot * p[17].w * 6.283185;
+    let tex3 = clamp(textureSample(t3, s, (vec2(cos(a3), sin(a3)) * 0.75 + uv) * p[18].x + dp.w).x, p[18].z, p[18].y);
+    let shape = tex1 * tex2 * tex3;
+    let amount2 = amount * p[19].x;
+    let centre = amount2 * vec2(0.613497, 0.333333) + p[19].yz;
+    let len = length(exp(lg * p[18].w) * amount2 + uv - centre);
+    let radius = max(clamp(-amount2 * 0.1 + p[19].w, 0.0, 0.7), 0.00001);
+    let mask = saturate((1.0 - len / radius) * p[20].w);
+    var base = saturate(mask * shape * 3.0 * (p[21].x - p[9].x) + p[9].x);
+    base = saturate(clamp(base, p[21].z, p[21].y) * (p[21].w - p[10].x) + p[10].x);
+    let diffuse = base * col.rgb;
+    let f = depth_fades(in, p[22].y, p[22].z);
+    let fade = saturate(f.x * col.a) * f.y;
+    let emissive = max(diffuse * fade * p[22].w + p[11].xyz, vec3(0.0));
+    let shaped = saturate((shape * mask - dp.x * 0.038462) * (dp.x * 0.666667 + 1.0) - dp.x * 0.333333);
+    var alpha = saturate(2.0 * shaped * fade * (p[23].z - p[13].x) + p[13].x) * p[23].w;
+    alpha = min(pow(max(alpha, 0.0), p[24].x), 1.0);
+    return vec4(emissive + volume_lit(in, saturate(diffuse)), alpha);
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let mode = u32(params.mode.x);
@@ -384,6 +440,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         c = rain_master(in);
     } else if mode == 8u {
         c = tire_dust(in);
+    } else if mode == 9u {
+        c = smoke_01b(in);
     } else if mode == 4u {
         // Already exposed (apply_pbr_lighting).
         c = fly(in);
