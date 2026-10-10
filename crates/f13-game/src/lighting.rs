@@ -295,11 +295,29 @@ impl Plugin for LightingPlugin {
             app.insert_resource(Unlit);
         }
         app.add_systems(Startup, spawn_lights)
-            .add_systems(Update, (setup_cameras, update_fog, fade_lights, shadow_budget, add_flashlight, toggle_flashlight, aim_flashlight).chain());
+            .add_systems(Update, (setup_cameras, update_fog, fade_lights, light_functions, shadow_budget, add_flashlight, toggle_flashlight, aim_flashlight).chain());
     }
 }
 
-fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<crate::ExportRoot>, unlit: Option<Res<Unlit>>) {
+/// A light's light function (its LightFunctionMaterial's FLightFunctionPS, F13-decomp MODLOG "Light functions"): its
+/// value scales the light (the function is evaluated per pixel in the light's space; these two barely vary across it,
+/// so here once per frame). Fade by LightFunctionFadeDistance (100000 cm by default) is ignored: it starts 800 m out.
+/// - M_FixedLightFunction: 0.44 sin(time x 1.256637) + 0.44.
+/// - M_BrokenLightFunction: saturate(Flicker2(u x 0.001 + FlickerOffset + time x 0.1, v x 0.1 + 1 + time x 0.01).r x 5
+///   - 2), (u, v) the direction's spherical (point lights) or projected (spot) coordinates: PLACEHOLDER (0.5, 0.5),
+///   the middle of the light, for the per-pixel spread of v x 0.1.
+/// The cars' M_LightFunction_CarHeadlights_01 (a pattern across the beam) isn't run.
+#[derive(Component, Clone, Copy)]
+enum LightFunction {
+    Pulse,
+    Flicker,
+}
+
+/// The Flicker2 texture, read on the CPU for [`LightFunction::Flicker`].
+#[derive(Resource)]
+struct FlickerTexture(Handle<Image>);
+
+fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<crate::ExportRoot>, unlit: Option<Res<Unlit>>, assets: Res<AssetServer>) {
     if unlit.is_some() {
         info!("lighting: off (--unlit)");
         commands.insert_resource(GlobalAmbientLight { color: Color::WHITE, brightness: UNLIT_AMBIENT, ..default() });
@@ -316,6 +334,10 @@ fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
         }
     };
     let lights = placed_lights(&level, &classes);
+    // Data (not sRGB), as the material samples it.
+    commands.insert_resource(FlickerTexture(
+        assets.load_with_settings("SummerCamp/Content/Art/Textures/Flicker2.png", |s: &mut bevy::image::ImageLoaderSettings| s.is_srgb = false),
+    ));
     let grids = crate::power::PowerGrids::from_level(&level);
     let mut moon = false;
     let (mut points, mut spots) = (0, 0);
@@ -364,6 +386,15 @@ fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
                 };
                 if l.flag("CastShadows", true) {
                     commands.entity(e).insert(ShadowCaster);
+                }
+                match l.props.get("LightFunctionMaterial").and_then(Value::as_str).and_then(|m| m.split('\'').nth(1)) {
+                    Some("M_FixedLightFunction") => {
+                        commands.entity(e).insert(LightFunction::Pulse);
+                    }
+                    Some("M_BrokenLightFunction") => {
+                        commands.entity(e).insert(LightFunction::Flicker);
+                    }
+                    _ => {}
                 }
                 if let Some(b) = box_light(l) {
                     commands.entity(e).insert((b, if l.visible() { Visibility::Inherited } else { Visibility::Hidden }));
@@ -491,6 +522,42 @@ fn fade_lights(
         if l.intensity != i {
             l.intensity = i;
         }
+    }
+}
+
+/// Scales the lights with a [`LightFunction`] (after [`fade_lights`] set their intensity).
+fn light_functions(
+    time: Res<Time>,
+    flicker: Option<Res<FlickerTexture>>,
+    images: Res<Assets<Image>>,
+    mut points: Query<(&mut PointLight, &LightFunction), Without<SpotLight>>,
+    mut spots: Query<(&mut SpotLight, &LightFunction), Without<PointLight>>,
+) {
+    let t = time.elapsed_secs();
+    let pulse = (0.44 * (t * 1.256637).sin() + 0.44).max(0.0);
+    let flicker = flicker.and_then(|f| images.get(&f.0)).map_or(1.0, |img| {
+        let size = img.size().as_vec2();
+        // Bilinear, wrapping (the texture's sampler).
+        let uv = Vec2::new(0.5 * 0.001 + t * 0.1, 0.5 * 0.1 + 1.0 + t * 0.01) * size - 0.5;
+        let (x0, f) = (uv.floor(), uv.fract());
+        let at = |x: f32, y: f32| {
+            let (w, h) = (size.x as i64, size.y as i64);
+            let (x, y) = ((x as i64).rem_euclid(w) as u32, (y as i64).rem_euclid(h) as u32);
+            img.get_color_at(x, y).map_or(0.0, |c| c.to_linear().red)
+        };
+        let top = at(x0.x, x0.y) * (1.0 - f.x) + at(x0.x + 1.0, x0.y) * f.x;
+        let bottom = at(x0.x, x0.y + 1.0) * (1.0 - f.x) + at(x0.x + 1.0, x0.y + 1.0) * f.x;
+        ((top * (1.0 - f.y) + bottom * f.y) * 5.0 - 2.0).clamp(0.0, 1.0)
+    });
+    let value = |f: &LightFunction| match f {
+        LightFunction::Pulse => pulse,
+        LightFunction::Flicker => flicker,
+    };
+    for (mut l, f) in &mut points {
+        l.intensity *= value(f);
+    }
+    for (mut l, f) in &mut spots {
+        l.intensity *= value(f);
     }
 }
 
