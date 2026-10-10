@@ -22,7 +22,9 @@
 //! - an actor attached to another's root takes its transform track as its offset from it.
 //! - lights' Temperature (float) and LightColor (colour: its linear curves, as UE sets an FColor property from them,
 //!   ToFColor(sRGB)).
-//! Not played: the Fear track, the cameras' depth of field.
+//! - the cine cameras' Circle DOF (circle_dof.rs): CurrentAperture and the manual focus distance, their tracks over
+//!   their placed values, the filmback's width as above.
+//! Not played: the Fear track.
 
 use crate::lighting::{LightKind, PlacedLight};
 use bevy::prelude::*;
@@ -408,7 +410,8 @@ struct Playing {
     takes: HashMap<(String, String), (AnimData, f32)>,
     lengths: HashMap<(String, String), f32>,
     /// Camera actor -> (field of view at its focal length, that focal length).
-    cameras: HashMap<String, (f32, f32)>,
+    /// A cine camera's placed FieldOfView, CurrentFocalLength, CurrentAperture and ManualFocusDistance.
+    cameras: HashMap<String, (f32, f32, f32, f32)>,
     frames_waited: u32,
     /// The frame every attachment's bone was first there.
     found_at: Option<u32>,
@@ -536,7 +539,9 @@ fn start(
         if class == "CineCameraActor" {
             if let Some(c) = comps.iter().find(|c| c["Type"] == "CineCameraComponent") {
                 let p = &c["Props"];
-                cameras.insert(name.clone(), (p["FieldOfView"].as_f64().unwrap_or(90.0) as f32, p["CurrentFocalLength"].as_f64().unwrap_or(35.0) as f32));
+                let f = |v: &Value, d: f64| v.as_f64().unwrap_or(d) as f32;
+                // The constructor's ManualFocusDistance 100000 when it isn't set.
+                cameras.insert(name.clone(), (f(&p["FieldOfView"], 90.0), f(&p["CurrentFocalLength"], 35.0), f(&p["CurrentAperture"], 2.0), f(&p["FocusSettings"]["ManualFocusDistance"], 100000.0)));
             }
         }
         if let Some(parent) = a["AttachParent"].as_str() {
@@ -786,12 +791,12 @@ fn play(
     mut lights: Query<(&StagedLight, Option<&mut SpotLight>, Option<&mut PointLight>)>,
     children: Query<&Children>,
     names: Query<&Name>,
-    mut camera: Single<(&mut Transform, &mut Projection), With<crate::player::PlayerCamera>>,
+    mut camera: Single<(Entity, &mut Transform, &mut Projection), With<crate::player::PlayerCamera>>,
     mut overlay: Query<(Entity, &mut BackgroundColor), With<FadeOverlay>>,
     staged: Query<Entity, With<Staged>>,
     windows: Query<&Window>,
     roots: Query<Entity, (With<Node>, Without<ChildOf>, Without<FadeOverlay>)>,
-    (mut attached, titles, mut title_materials): (Query<&mut Attached>, Query<&TitleText>, ResMut<Assets<StandardMaterial>>),
+    (mut attached, titles, mut title_materials, frames): (Query<&mut Attached>, Query<&TitleText>, ResMut<Assets<StandardMaterial>>, Res<bevy::diagnostic::FrameCount>),
 ) {
     let Some(mut p) = playing else { return };
     // No HUD over it (its own systems may show parts of it again, or spawn new roots such as the minimap's: hidden
@@ -905,16 +910,25 @@ fn play(
         let xf = frame.transforms.get(cam).or_else(|| p.base.get(cam)).cloned();
         if let Some(xf) = xf {
             let world = crate::to_transform(&xf);
-            let (ref mut cxf, ref mut proj) = *camera;
+            let (camera_entity, ref mut cxf, ref mut proj) = *camera;
             cxf.translation = world.translation;
             cxf.rotation = world.rotation * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
-            if let (Projection::Perspective(persp), Some(&(fov0, focal0))) = (&mut **proj, p.cameras.get(cam)) {
+            if let (Projection::Perspective(persp), Some(&(fov0, focal0, aperture0, focus0))) = (&mut **proj, p.cameras.get(cam)) {
                 // The filmback's width from the placed field of view at the placed focal length.
                 let sensor = 2.0 * focal0 * (fov0.to_radians() / 2.0).tan();
                 let focal = frame.floats.get(&(cam.clone(), Some("CameraComponent".into()), "CurrentFocalLength".into())).copied().unwrap_or(focal0);
                 let hfov = 2.0 * (sensor / (2.0 * focal.max(1.0))).atan();
                 let aspect = windows.iter().next().map_or(16.0 / 9.0, |w| w.width() / w.height().max(1.0));
                 persp.fov = 2.0 * ((hfov / 2.0).tan() / aspect).atan();
+                let float = |prop: &str, or: f32| frame.floats.get(&(cam.clone(), Some("CameraComponent".into()), prop.into())).copied().unwrap_or(or);
+                commands.entity(camera_entity).insert(crate::circle_dof::CircleDof {
+                    focal_distance: float("ManualFocusDistance", focus0),
+                    fstop: float("CurrentAperture", aperture0),
+                    sensor_width: sensor,
+                    hfov,
+                    near: persp.near,
+                    frame: frames.0,
+                });
             }
         }
     }
@@ -962,6 +976,7 @@ fn play(
                 *vis = *v;
             }
         }
+        commands.entity(camera.0).remove::<crate::circle_dof::CircleDof>();
         commands.remove_resource::<Playing>();
         virtual_time.unpause();
         done.0 = true;
