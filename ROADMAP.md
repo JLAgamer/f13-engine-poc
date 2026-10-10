@@ -43,7 +43,7 @@ Moved from Milestone 1 (not tied to gameplay):
       squirt (M_Blood_Squirt_01's own permutation) and the impact effects on surfaces (dirt, wood, metal: their FX,
       sounds and decals), the tire dust's cylinder spawn and attractor
 - [ ] Counselor model, remaining: the eye look against a capture of the game (it rolls the eyes 90 degrees from their bind: MODLOG
-      "The eyes' look"), the face's brow and jaw additives (their montage curves are read: the graph's additive sequences aren't)
+      "The eyes' look")
       (MODLOG "The counselor's face"), hair dynamics (its anim
       Blueprint), the eyes' iris and lid overlays, outfit choice
 - [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: their root doesn't turn, the body turns about it; how the actor turns with them is unread), foot-marker

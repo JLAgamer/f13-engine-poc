@@ -625,11 +625,29 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         var cls = Inherited<FPackageIndex>(face, "AnimClass")?.Load<UStruct>();
         // Its base pose: the graph's cached SequencePlayer (looping, rate 1; Face_AnimBP's PrepFace_417, each child's own
         // Counselor_Face_<counselor>_Anim), on the face's skeleton: faces/<counselor>.json, its name as Face.BasePose.
-        if (ClassValue<FStructFallback>(cls, "AnimGraphNode_SequencePlayer_DAB881C7491C1A63B21EA08DC6E2AAA0")?.GetOrDefault<FPackageIndex?>("Sequence")?.Load() is UAnimSequence seq
-            && Inherited<FPackageIndex>(face, "SkeletalMesh")?.Load() is USkeletalMesh mesh && mesh.Owner is { } pkg)
+        // And the graph's additives (ApplyAdditive: JawOpen x JawAlpha; Brows_Anger_01 / Brows_Fear_01 /
+        // Brows_Suprise_01 x BrowAnger / BrowFear / BrowShock on the brows), as raw poses: UE 4.18 makes them additive
+        // at runtime against their base (GetBonePose_Additive), translations retargeted as any sequence's.
+        if (Inherited<FPackageIndex>(face, "SkeletalMesh")?.Load() is USkeletalMesh mesh && mesh.Owner is { } pkg)
         {
-            ExportPropAnims(pkg.Name, [seq.Owner!.Name], "faces", info.Name);
-            (info.Names ??= new())["Face.BasePose"] = seq.Name;
+            var sequences = new List<string>();
+            foreach (var (key, node) in new[] { ("BasePose", "DAB881C7491C1A63B21EA08DC6E2AAA0"), ("JawOpen", "193861A44C8C06B7C5E2618DD8DDE978"),
+                         ("BrowAnger", "25F5C88D470B8DF810F502ADCFEDFF55"), ("BrowFear", "85EFBECC4D27F33B1310F88833FC2BE0"), ("BrowShock", "8C985B424A836C5749CC248E221B5B6B") })
+                if (ClassValue<FStructFallback>(cls, "AnimGraphNode_SequencePlayer_" + node)?.GetOrDefault<FPackageIndex?>("Sequence")?.Load() is UAnimSequence seq)
+                {
+                    sequences.Add(seq.Owner!.Name);
+                    (info.Names ??= new())["Face." + key] = seq.Name;
+                    if (key == "BasePose") continue;
+                    // Its AdditiveAnimType, RefPoseType and (ABPT_AnimScaled / AnimFrame) RefPoseSeq, exported alongside.
+                    info.Names["Face." + key + ".Type"] = seq.GetOrDefault<FName>("AdditiveAnimType").Text;
+                    info.Names["Face." + key + ".RefPoseType"] = seq.GetOrDefault<FName>("RefPoseType").Text;
+                    if (seq.GetOrDefault<FPackageIndex?>("RefPoseSeq")?.Load() is UAnimSequence refSeq)
+                    {
+                        sequences.Add(refSeq.Owner!.Name);
+                        info.Names["Face." + key + ".RefPoseSeq"] = refSeq.Name;
+                    }
+                }
+            ExportPropAnims(pkg.Name, sequences, "faces", info.Name);
         }
         foreach (var (name, fallback) in new[] { ("FearFaceMin", 0.75f), ("ShockFaceMin", 0.35f), ("FearToNeutralInterpSpeed", 5f),
                      ("LookDistance", 2500f), ("MaxEyeLookYawOffset", 30f), ("MaxEyeLookPitchOffset", 25f), ("EyeMovementSpeed", 1f),

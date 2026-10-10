@@ -641,6 +641,14 @@ switch (rest[0])
                 var p = m.ReferenceSkeleton.FinalRefBonePose[i];
                 Console.WriteLine($"{i}\t{b.Name.Text}\t{b.ParentIndex}\t{p.Rotation.Rotator()}\t{p.Translation}");
             }
+        // And its skeleton asset's own reference pose.
+        foreach (var m in provider.LoadPackage(ToFile(rest[1])).GetExports().OfType<USkeletalMesh>())
+            if (m.Skeleton.Load<CUE4Parse.UE4.Assets.Exports.Animation.USkeleton>() is { } sk)
+                for (var i = 0; i < sk.ReferenceSkeleton.FinalRefBoneInfo.Length; i++)
+                {
+                    var p = sk.ReferenceSkeleton.FinalRefBonePose[i];
+                    Console.WriteLine($"skeleton {i}\t{sk.ReferenceSkeleton.FinalRefBoneInfo[i].Name.Text}\t{p.Rotation.Rotator()}\t{p.Translation}");
+                }
         return 0;
     case "cdo": // cdo <class name>...: each Blueprint class's defaults (its CDO's properties), one JSON line each
         foreach (var name in rest.Skip(1))

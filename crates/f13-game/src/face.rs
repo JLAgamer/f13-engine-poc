@@ -29,8 +29,11 @@
 //!   Disgust, Face_Happy -> Happy) set to its body curve (the face BP's CurveNames only; others 0) when it moves by
 //!   more than 1e-4; the EmotionCurve fear faces only outside montages.
 //!
-//! Not ported yet: the brow and jaw additives that the montage's Face_Jaw / Brow_* / L_/R_Brow_Alpha curves weight,
-//! bAnimationOverride's blink override and look at target_jnt.
+//! - alive: the graph's additives over the base pose, weighted by the montage's Face_Jaw / Brow_* / L_/R_Brow_Alpha
+//!   curves ([`additives`]). The counselor faces are skinned to Head_Root and the eyes only (their expressions are the
+//!   morph targets), so the base pose and these additives move nothing on them that shows.
+//!
+//! Not ported yet: bAnimationOverride's blink override and look at target_jnt.
 
 use bevy::mesh::morph::MorphWeights;
 use bevy::prelude::*;
@@ -63,6 +66,27 @@ struct FaceAnim {
     /// bIsBodyPlayingMontage, and MontageFaceNames' last values.
     montage: bool,
     montage_last: [f32; 6],
+    /// JawAlpha, BrowAnger, BrowFear, BrowShock, BrowLAlpha, BrowRAlpha (set only during body montages; they keep
+    /// their last values after).
+    alphas: [f32; 6],
+    /// The face bones' rest local transforms (the mesh's reference pose), by bone name.
+    rest: std::collections::HashMap<String, Transform>,
+}
+
+/// A single-frame pose's local transforms by bone name (glTF space; no translation: the bone's retargeted one, the
+/// mesh's reference).
+type Pose = std::collections::HashMap<String, (Quat, Option<Vec3>)>;
+
+/// The first frame of a face sequence the export wrote (faces/<counselor>/<name>.anim) as a pose.
+fn load_pose(root: &std::path::Path, info: &f13_data::character::CharacterInfo, name: &str) -> Option<Pose> {
+    let index: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("faces").join(format!("{}.json", info.name))).ok()?).ok()?;
+    let data = f13_data::character::AnimData::load(&root.join(index[name]["File"].as_str()?)).ok()?;
+    Some(
+        data.tracks
+            .iter()
+            .filter_map(|t| Some((t.bone.clone(), (Quat::from_array(*t.rotation.first()?).normalize(), t.translation.as_ref().and_then(|v| v.first()).map(|v| Vec3::from_array(*v))))))
+            .collect(),
+    )
 }
 
 /// SCFaceAnimInstance's constructor (0x1402f3840): MontageFaceNames (body curve -> morph target) and
@@ -114,6 +138,11 @@ struct FaceTuning {
     right_eye: String,
     /// The base pose and its length (s).
     base: Option<(f13_data::character::AnimData, f32)>,
+    /// JawOpen's local-space additive (AAT_LocalSpaceBase against its RefPoseSeq: rotation target x base^-1,
+    /// translation target - base), and the brows' mesh-space rotation targets (AAT_RotationOffsetMeshSpace against
+    /// the reference pose: their deltas need the rest pose).
+    jaw: Option<Pose>,
+    brows: [Option<Pose>; 3],
 }
 
 impl FaceTuning {
@@ -151,6 +180,124 @@ impl FaceTuning {
                 let file = index[seq]["File"].as_str()?;
                 Some((f13_data::character::AnimData::load(&root.join(file)).ok()?, index[seq]["Length"].as_f64()? as f32))
             }),
+            jaw: (|| {
+                let target = load_pose(root, info, info.names.get("Face.JawOpen")?)?;
+                let base = load_pose(root, info, info.names.get("Face.JawOpen.RefPoseSeq")?)?;
+                Some(target.iter().filter_map(|(b, (q, t))| base.get(b).map(|(bq, bt)| (b.clone(), (*q * bq.inverse(), Some(t.zip(*bt).map_or(Vec3::ZERO, |(t, bt)| t - bt)))))).collect())
+            })(),
+            brows: ["BrowAnger", "BrowFear", "BrowShock"].map(|k| info.names.get(&format!("Face.{k}")).and_then(|n| load_pose(root, info, n))),
+        }
+    }
+}
+
+/// Face_AnimBP's graph after its cached base pose: the right brows (R_Brow_1..3 and below) blended toward the base
+/// plus the mesh-space brow additives (Brows_Anger_01 x BrowAnger, then Brows_Fear_01 x BrowFear, Brows_Suprise_01 x
+/// BrowShock) by BrowRAlpha, the left brows likewise by BrowLAlpha (LayeredBoneBlends, local blend), then JawOpen's
+/// local-space additive x JawAlpha on everything. Additives as FTransform::BlendFromIdentityAndAccumulate: rotation
+/// slerp(identity, delta, w) x base, translation + delta x w; the mesh-space ones (FAnimationRuntime::
+/// AccumulateMeshSpaceRotationAdditiveToLocalPose) on the component-space rotations, then back to local.
+fn additives(
+    t: &FaceTuning,
+    f: &mut FaceAnim,
+    face_entity: Entity,
+    children: &Query<&Children>,
+    names: &Query<&Name>,
+    bones: &mut Query<(&mut Transform, &GlobalTransform)>,
+    parents: &Query<&ChildOf>,
+) {
+    let [jaw_a, anger, fear, shock, l_a, r_a] = f.alphas;
+    if [jaw_a, anger * l_a.max(r_a), fear * l_a.max(r_a), shock * l_a.max(r_a)].iter().all(|w| w.abs() < 1e-6) {
+        return;
+    }
+    // The skeleton: each bone's entity, name, parent (by name) and current local pose, root first.
+    let mut list: Vec<(Entity, String, Option<String>)> = vec![];
+    for e in children.iter_descendants(face_entity) {
+        let (Ok(n), Ok(_)) = (names.get(e), bones.get(e)) else { continue };
+        let parent = parents.get(e).ok().and_then(|c| names.get(c.parent()).ok()).map(|p| p.as_str().to_string());
+        list.push((e, n.as_str().to_string(), parent));
+    }
+    let local: std::collections::HashMap<String, (Quat, Vec3)> = list.iter().filter_map(|(e, n, _)| bones.get(*e).ok().map(|(x, _)| (n.clone(), (x.rotation, x.translation)))).collect();
+    let parent_of: std::collections::HashMap<&str, &str> = list.iter().filter_map(|(_, n, p)| p.as_deref().filter(|p| local.contains_key(*p)).map(|p| (n.as_str(), p))).collect();
+    // Component-space rotation of a bone from local rotations.
+    fn cs(rot: &dyn Fn(&str) -> Quat, parent_of: &std::collections::HashMap<&str, &str>, bone: &str) -> Quat {
+        let mut q = rot(bone);
+        let mut b = bone;
+        while let Some(p) = parent_of.get(b) {
+            q = rot(p) * q;
+            b = p;
+        }
+        q
+    }
+    let rest_q = |b: &str| f.rest.get(b).map_or(Quat::IDENTITY, |x| x.rotation);
+    // The brow branch: the base plus the three mesh-space additives.
+    let mut branch = local.clone();
+    for (target, w) in t.brows.iter().zip([anger, fear, shock]) {
+        let Some(target) = target else { continue };
+        if w.abs() < 1e-6 {
+            continue;
+        }
+        let branch_q = branch.clone();
+        let now_q = |b: &str| branch_q.get(b).map_or(Quat::IDENTITY, |x| x.0);
+        let target_q = |b: &str| target.get(b).map_or_else(|| rest_q(b), |x| x.0);
+        let mut cs_new: std::collections::HashMap<String, Quat> = branch.keys().map(|b| (b.clone(), cs(&now_q, &parent_of, b))).collect();
+        for (b, (_, tt)) in target {
+            let Some(rest) = f.rest.get(b) else { continue };
+            // The delta against the reference pose, in component space (translations local).
+            let delta_rot = cs(&target_q, &parent_of, b) * cs(&rest_q, &parent_of, b).inverse();
+            let delta_t = tt.map_or(Vec3::ZERO, |t| t - rest.translation);
+            if let Some(q) = cs_new.get_mut(b) {
+                *q = Quat::IDENTITY.slerp(delta_rot, w) * *q;
+            }
+            if let Some(l) = branch.get_mut(b) {
+                l.1 += delta_t * w;
+            }
+        }
+        for (b, l) in branch.iter_mut() {
+            let parent_cs = parent_of.get(b.as_str()).and_then(|p| cs_new.get(*p)).copied().unwrap_or(Quat::IDENTITY);
+            l.0 = parent_cs.inverse() * cs_new[b];
+        }
+    }
+    // The layered blends on the brows (BlendDepth 0: each filter bone and everything below it).
+    let under = |b: &str, roots: [&str; 3]| -> bool {
+        let mut c = b;
+        loop {
+            if roots.contains(&c) {
+                return true;
+            }
+            match parent_of.get(c) {
+                Some(p) => c = p,
+                None => return false,
+            }
+        }
+    };
+    let mut out = local.clone();
+    for (b, l) in out.iter_mut() {
+        let w = if under(b, ["R_Brow_1", "R_Brow_2", "R_Brow_3"]) {
+            r_a
+        } else if under(b, ["L_Brow_1", "L_Brow_2", "L_Brow_3"]) {
+            l_a
+        } else {
+            continue;
+        };
+        let w = w.clamp(0.0, 1.0);
+        if let Some(target) = branch.get(b) {
+            *l = (l.0.slerp(target.0, w), l.1.lerp(target.1, w));
+        }
+    }
+    // JawOpen.
+    if let Some(jaw) = &t.jaw {
+        if jaw_a.abs() > 1e-6 {
+            for (b, (dq, dt)) in jaw {
+                if let Some(l) = out.get_mut(b) {
+                    *l = (Quat::IDENTITY.slerp(*dq, jaw_a) * l.0, l.1 + dt.unwrap_or(Vec3::ZERO) * jaw_a);
+                }
+            }
+        }
+    }
+    for (e, n, _) in &list {
+        if let (Some(&(q, v)), Ok((mut x, _))) = (out.get(n), bones.get_mut(*e)) {
+            x.rotation = q.normalize();
+            x.translation = v;
         }
     }
 }
@@ -235,7 +382,7 @@ fn face(
         let Some(face_entity) = rig.part(face_index) else { continue };
         let Ok(mut f) = faces.get_mut(face_entity) else {
             let timer = frand(rng) * (t.blink_max - t.blink_min) + t.blink_min;
-            commands.entity(face_entity).try_insert(FaceAnim { blink_timer: timer, blink: false, eyelid: 0.0, eyelid_target: 1.0, fear: 0.0, shock: 0.0, look: Look::default(), pose_time: 0.0, montage: false, montage_last: [0.0; 6] });
+            commands.entity(face_entity).try_insert(FaceAnim { blink_timer: timer, blink: false, eyelid: 0.0, eyelid_target: 1.0, fear: 0.0, shock: 0.0, look: Look::default(), pose_time: 0.0, montage: false, montage_last: [0.0; 6], alphas: [0.0; 6], rest: Default::default() });
             continue;
         };
         let alive = p.counselor.alive();
@@ -261,8 +408,11 @@ fn face(
         }
         f.montage = montage;
         if montage {
-            // Each MontageFaceNames morph follows its body curve when it moves by more than 1e-4. (JawAlpha and the brow
-            // alphas, also read here, weight the face graph's additives: not ported.)
+            // JawAlpha and the brow alphas from their body curves; each MontageFaceNames morph follows its body curve
+            // when it moves by more than 1e-4.
+            for (i, k) in ["Face_Jaw", "Brow_Anger", "Brow_Fear", "Brow_Shock", "L_Brow_Alpha", "R_Brow_Alpha"].iter().enumerate() {
+                f.alphas[i] = body_curve(k);
+            }
             for (i, (curve, morph)) in MONTAGE_FACE.iter().enumerate() {
                 let v = body_curve(curve);
                 if (v - f.montage_last[i]).abs() > 9.999999747378752e-05 {
@@ -280,6 +430,12 @@ fn face(
             f.fear = if fear_alpha <= t.fear_min { finterp_to(f.fear, 0.0, dt, t.to_neutral) } else { fear_alpha.min(cy.eval(at)) };
             set.push((&t.fear_morph, f.fear));
             set.push((&t.shock_morph, f.shock));
+        }
+        // The rest pose (the bones as the mesh spawned them), captured before anything poses them.
+        for bone in children.iter_descendants(face_entity) {
+            if let (Ok(n), Ok((x, _))) = (names.get(bone), bones.get(bone)) {
+                f.rest.entry(n.as_str().to_string()).or_insert(*x);
+            }
         }
         // The base pose, looping.
         if let Some((data, length)) = &t.base {
@@ -299,6 +455,10 @@ fn face(
                     xf.translation = Vec3::from_array(*t0).lerp(Vec3::from_array(*t1), a);
                 }
             }
+        }
+        // The graph's additives over the base pose (alive: the dead branch is the cached base pose alone).
+        if alive {
+            additives(&t, &mut f, face_entity, &children, &names, &mut bones, &parents);
         }
         // The eyes' look (alive only).
         let find = |name: &str| children.iter_descendants(face_entity).find(|&d| names.get(d).is_ok_and(|n| n.as_str() == name));
