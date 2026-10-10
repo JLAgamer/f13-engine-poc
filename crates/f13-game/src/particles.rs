@@ -199,6 +199,8 @@ struct MaterialEntry {
     #[serde(default)]
     scalars: HashMap<String, f32>,
     #[serde(default)]
+    vectors: HashMap<String, [f32; 4]>,
+    #[serde(default)]
     textures: HashMap<String, String>,
 }
 
@@ -262,6 +264,16 @@ impl Materials {
                 // t0 the flame (Base_ALPHA_Texture1), t1 the smoke tile its opacity turns (Base_ALPHA_Texture3):
                 // by how the compiled shader samples them (t0's colour and alpha, t1's red).
                 (2.0, [tex("Base_ALPHA_Texture1"), tex("Base_ALPHA_Texture3"), None])
+            }
+            "M_MasterParticle_Emissive" => {
+                // uniexpr.py M_MasterParticle_Emissive: cb1[2] the vector parameter (named "None"; "" in the export),
+                // cb1[3] SelectionColor.rgb (0), [4..6] below.
+                let v = e.vectors.get("").or_else(|| master.and_then(|m| m.vectors.get(""))).copied().unwrap_or([1.0; 4]);
+                p[2] = Vec4::new(v[0], v[1], v[2], 0.0);
+                p[4] = Vec4::new(s("EmissiveLevel", 1.0), s("TimeMultiplier", 1.0), s("Texture3_Scroll_Multiplier", 0.5), s("Texture3_UV_Coord_Multiplier", 1.0));
+                p[5] = Vec4::new(s("TimeMultiplier_2", 0.83), s("Texture3_Scroll_Multiplier_2", -0.4), s("Texture3_UV_Coord_Multiplier_2", 1.0), s("fadeAmount", 0.0));
+                p[6] = Vec4::new(s("fadeAmount", 0.0).max(1e-5), s("Opacity_Power", 2.0), s("RefractionDepthBias", 0.0), 0.0);
+                (3.0, [tex("ParticleTexture"), tex("Texture1"), tex("Texture1_1")])
             }
             // Masters whose graphs aren't ported yet aren't drawn (F13_PARTICLE_STANDINS=1 draws them as their first
             // texture x the particle colour, PLACEHOLDER, to check the simulation).

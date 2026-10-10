@@ -17,7 +17,7 @@
 #endif
 
 struct ParticleParams {
-    // x: mode (0 stand-in, 1 M_Procedural_Fire_01, 2 M_Procedural_Fire_02); y: additive
+    // x: mode (0 stand-in, 1 M_Procedural_Fire_01, 2 M_Procedural_Fire_02, 3 M_MasterParticle_Emissive); y: additive
     mode: vec4<f32>,
     // The master's material uniform buffer as its compiled shader reads it (uniexpr.py's cb1[n]).
     p: array<vec4<f32>, 12>,
@@ -140,6 +140,27 @@ fn fire_02(in: VertexOutput) -> vec4<f32> {
     return vec4(emissive, alpha);
 }
 
+// M_MasterParticle_Emissive (the sparks): ParticleTexture x the particle's colour x EmissiveLevel x the vector
+// parameter, x (Texture1 + Texture1_1), each turning on a circle of 0.75 and scrolling with time x TimeMultiplier(_2);
+// both x the depth fade (fadeAmount) x the particle's alpha; opacity that x ParticleTexture.a ^ Opacity_Power.
+fn emissive_master(in: VertexOutput) -> vec4<f32> {
+    let p = params.p;
+    let uv = in.uv;
+    let base = textureSample(t0, s, uv);
+    var c = base.rgb * in.color.rgb * p[4].x * p[2].xyz;
+    let time1 = globals.time * p[4].y;
+    let a1 = time1 * p[4].z * 6.283185;
+    let s1 = textureSample(t1, s, vec2((cos(a1) * 0.75 + uv.x) * p[4].w, p[4].w * (sin(a1) * 0.75 + uv.y) + time1)).rgb;
+    let time2 = globals.time * p[5].x;
+    let a2 = time2 * p[5].y * 6.283185;
+    let s2 = textureSample(t2, s, vec2((cos(a2) * 0.75 + uv.x) * p[5].z, p[5].z * (sin(a2) * 0.75 + uv.y) + time2)).rgb;
+    c = c * (s1 + s2);
+    let d = depth_fades(in, p[6].x, 0.0).x * in.color.a;
+    let emissive = max(c * d + p[3].xyz, vec3(0.0));
+    let alpha = saturate(d * pow(max(base.a, 0.0), p[6].y));
+    return vec4(emissive, alpha);
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let mode = u32(params.mode.x);
@@ -148,6 +169,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         c = fire_01(in);
     } else if mode == 2u {
         c = fire_02(in);
+    } else if mode == 3u {
+        c = emissive_master(in);
     } else {
         let t = textureSample(t0, s, in.uv);
         c = vec4(t.rgb * in.color.rgb, t.a * in.color.a);
