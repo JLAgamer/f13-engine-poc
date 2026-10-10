@@ -856,7 +856,9 @@ fn rain_mpc_materials(mpc: Option<Res<crate::weather::RainMpc>>, mut materials: 
 fn activate(mut messages: MessageReader<ParticleActivation>, mut systems: Query<&mut ParticleSystemInstance>) {
     for m in messages.read() {
         for mut s in systems.iter_mut().filter(|s| s.actor == m.actor) {
-            if m.active && m.reset {
+            // Activate(true) on an inactive system: from the start (the sequences' Activate keys on one that's running
+            // leave it be).
+            if m.active && m.reset && !s.active {
                 reset(&mut s);
             }
             s.active = m.active;

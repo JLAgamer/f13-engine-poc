@@ -31,7 +31,7 @@ Bugs:
       wiggle. Needs a retest to say what still sounds wrong
 
 Moved from Milestone 1 (not tied to gameplay):
-- [ ] Match flow, remaining: in the intro and outro their particle tracks (with the particles), the title text, the
+- [ ] Match flow, remaining: in the intro and outro the title text, the
       cameras' depth of field and the material/colour tracks (MODLOG "Level intro"). (Badges: their award sites and classes are read, see MODLOG; the game shows them in the
       lobby's SCMatchEndLobbyWidget, so with the lobby in Milestone 3)
 - [ ] Materials, remaining: foliage subsurface (its transmission is the deferred light pass's, whose code isn't

@@ -13,8 +13,12 @@
 //! The level Blueprint's own setup: the killer stand-in (Jason_TS, Jts_Mask) wears the picked killer's default body and
 //! mask (GetKillerDefaultMeshAndMask: J2's). Actors attached to another's socket or bone follow it.
 //! While it plays the match's own clock is held (virtual time paused): it runs on real time at the game's speed.
-//! Not played: particle tracks (no Cascade yet), the material parameter, Fear and colour tracks, the cameras' depth of
-//! field, the TextRenderActor's title.
+//! - particle tracks: their keys (EParticleKey: Activate 0, Deactivate 1, Trigger 2) as playback crosses them, through
+//!   the shots' time mapping, activate (from the start, when it isn't active) or deactivate the bound Emitter actor's
+//!   systems (particles.rs ParticleActivation). PLACEHOLDER: from UE 4.18's particle track template (engine source,
+//!   not the game's code); Trigger isn't used by these sequences.
+//! Not played: the material parameter, Fear and colour tracks, the cameras' depth of field, the TextRenderActor's
+//! title.
 
 use crate::lighting::{LightKind, PlacedLight};
 use bevy::prelude::*;
@@ -84,6 +88,7 @@ enum Kind {
     Fade,
     Audio,
     Event,
+    Particle,
     Other,
 }
 
@@ -132,6 +137,7 @@ impl Sequence {
                     "MovieSceneFadeTrack" => Kind::Fade,
                     "MovieSceneAudioTrack" => Kind::Audio,
                     "MovieSceneEventTrack" => Kind::Event,
+                    "MovieSceneParticleTrack" => Kind::Particle,
                     _ => Kind::Other,
                 };
                 let sections = t["Sections"]
@@ -293,6 +299,42 @@ fn crossings(seq: &Sequence, from: f32, to: f32) -> (Vec<String>, Vec<String>) {
         }
     }
     (sounds, events)
+}
+
+/// The particle keys crossed in (from, to] of a sequence, through its shots (each mapped into its sub-sequence's
+/// time): the bound actor and the key (0 Activate, 1 Deactivate, 2 Trigger).
+fn particle_crossings(seqs: &HashMap<String, Sequence>, name: &str, from: f32, to: f32, out: &mut Vec<(String, i64)>) {
+    let Some(seq) = seqs.get(name) else { return };
+    for track in &seq.tracks {
+        match track.kind {
+            Kind::Particle => {
+                let Some((actor, _)) = track.binding.as_deref().and_then(|g| seq.target(g)) else { continue };
+                for s in &track.sections {
+                    for k in s.props["ParticleKeys"]["Keys"].as_array().into_iter().flatten() {
+                        let at = k["Time"].as_f64().unwrap_or(0.0) as f32;
+                        if from < at && at <= to && s.start <= at && at <= s.end {
+                            out.push((actor.clone(), k["Value"].as_i64().unwrap_or(0)));
+                        }
+                    }
+                }
+            }
+            Kind::Shot => {
+                for s in &track.sections {
+                    if to < s.start || from >= s.end {
+                        continue;
+                    }
+                    let Some(sub) = s.props["SubSequence"]["ObjectName"].as_str().and_then(|n| n.split('\'').nth(1)) else { continue };
+                    let offset = s.props["Parameters"]["StartOffset"].as_f64().unwrap_or(0.0) as f32;
+                    let scale = s.props["Parameters"]["TimeScale"].as_f64().unwrap_or(1.0) as f32;
+                    let local = |t: f32| (t - s.start.max(0.0)) * scale + offset;
+                    // Entering the shot: from just before its first frame.
+                    let sub_from = if from < s.start { local(s.start) - 1e-4 } else { local(from) };
+                    particle_crossings(seqs, sub, sub_from, local(to.min(s.end)), out);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 // ---- Playing.
@@ -678,6 +720,12 @@ fn play(
     let (sounds, events) = p.sequences.get(p.cinematic.master).map_or((vec![], vec![]), |s| crossings(s, if from == 0.0 { -1.0 } else { from }, t));
     for cue in sounds {
         commands.trigger(crate::audio::PlaySound { cue, at: None });
+    }
+    let mut keys = vec![];
+    particle_crossings(&p.sequences, p.cinematic.master, if from == 0.0 { -1.0 } else { from }, t, &mut keys);
+    for (actor, key) in keys {
+        debug!("cinematic: {actor} particle key {key} at {t:.2} s");
+        commands.write_message(crate::particles::ParticleActivation { actor, active: key != 1, reset: true });
     }
     let end = p.sequences.get(p.cinematic.master).map_or(0.0, |s| s.end);
     let finished = match p.cinematic.end_event {
