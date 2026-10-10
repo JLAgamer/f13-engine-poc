@@ -49,7 +49,7 @@ Moved from Milestone 1 (not tied to gameplay):
 - [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: their root doesn't turn, the body turns about it; how the actor turns with them is unread), 
       the rest of the anim Blueprints' graphs (f13-rs
       plays their locomotion, the grab and block layers, the gun branch and the head looks; Jason_AnimBP's BoneDrivenControllers
-      and RotateRootBone (MeshRootOffset) aren't ported). Not in the game:
+      (his forearm twists) aren't ported). Not in the game:
       turn-in-place takes, limp movement
 - [ ] Lighting, remaining: Enlighten GI, local light shadows (a real-time budget of the 4 nearest for now, unverified
       visually and for cost), the rain material's refraction, the falling rain's cost (49 CPU-simulated systems,

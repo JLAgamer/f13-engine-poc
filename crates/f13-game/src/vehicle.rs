@@ -26,6 +26,9 @@ use crate::props::{EscapeZone, Vehicle, VehiclePart};
 use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings};
 use bevy::prelude::*;
 
+/// The game's PhysicsSettings (DefaultEngine.ini): MaxSubstepDeltaTime and MaxSubsteps (bSubstepping on).
+const PHYSICS_MAX_SUBSTEP_DT: f32 = 0.05;
+const PHYSICS_MAX_SUBSTEPS: u32 = 4;
 /// The Chevette's axles, front to back (its wheel bones are about this far apart).
 const WHEELBASE_CM: f32 = 250.0;
 /// Half the car's length (front bumper distance from the root), metres.
@@ -194,7 +197,15 @@ fn drive(
             })
         };
         let handbrake = escaped.is_none() && keys.pressed(KeyCode::Space);
-        car.step(dt, throttle, steer, handbrake, &mut ray, &mut contact);
+        // FPhysSubstepTask::UpdateTime (0x141662930) under the game's PhysicsSettings (DefaultEngine.ini:
+        // bSubstepping, MaxSubstepDeltaTime 0.05, MaxSubsteps 4): the frame's delta (SetUpForFrame 0x14162f470 keeps
+        // it unclamped) capped at MaxSubsteps x MaxSubstepDeltaTime, in ceil(delta / MaxSubstepDeltaTime) equal
+        // substeps (1..MaxSubsteps); the vehicles update each substep.
+        let used = dt.min(PHYSICS_MAX_SUBSTEPS as f32 * PHYSICS_MAX_SUBSTEP_DT);
+        let n = ((used / PHYSICS_MAX_SUBSTEP_DT).ceil() as u32).clamp(1, PHYSICS_MAX_SUBSTEPS);
+        for _ in 0..n {
+            car.step(used / n as f32, throttle, steer, handbrake, &mut ray, &mut contact);
+        }
         // Jason in front of (or behind) the car stops it dead (KillersInFrontOfCar / KillersBehindCar).
         let speed = car.forward_speed();
         let (pos, rot) = (to_bevy(car.position), bevy_quat(car.rotation));
