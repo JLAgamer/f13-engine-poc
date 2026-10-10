@@ -711,8 +711,11 @@ fn spawn_props(
             let spots = crate::car_lights::spot_lights(&info.components);
             if !spots.is_empty() {
                 commands.entity(root).insert(crate::car_lights::CarLights::new(&classes, &actor.class)).with_children(|c| {
-                    for s in spots {
-                        c.spawn(s);
+                    for (s, cookie) in spots {
+                        let mut e = c.spawn(s);
+                        if let Some(k) = cookie {
+                            e.insert(k);
+                        }
                     }
                 });
             }

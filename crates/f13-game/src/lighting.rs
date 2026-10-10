@@ -33,7 +33,6 @@
 //! Not ported:
 //! - Enlighten global illumination (the moon's indirect light);
 //! - local lights' shadows (only the moon and the flashlight cast them);
-//! - light functions (the flashlight's cookie);
 //! - the colour grading LUT, ColorContrast and bloom;
 //! - rain (CLsm_RainOn);
 //! - the power's flicker curves (power.rs turns lights off and on).
@@ -294,6 +293,8 @@ impl Plugin for LightingPlugin {
             app.insert_resource(Unlit);
         }
         app.add_systems(Startup, spawn_lights)
+            .init_resource::<Cookies>()
+            .add_systems(Update, light_cookies)
             .add_systems(Update, (setup_cameras, update_fog, fade_lights, light_functions, shadow_budget, add_flashlight, toggle_flashlight, aim_flashlight).chain());
     }
 }
@@ -310,6 +311,67 @@ impl Plugin for LightingPlugin {
 enum LightFunction {
     Pulse,
     Flicker,
+}
+
+/// A spot light's projected light function (M_FlashlightFunction_01, M_LightFunction_CarHeadlights_01: the same
+/// compiled FLightFunctionPS, s012): its texture (export-relative, no extension) sampled at 0.5 + 0.5 x (up, right) /
+/// (forward x tan(outer cone)) in the light's space, the light scaled by the mean of its rgb. Baked once into Bevy's
+/// light texture ([`SpotLightTexture`], red, its own projection: uv = 0.5 + 0.5 x (right, -up) / (forward x tan)), so
+/// Bevy's (u, v) reads the function at (1 - v, u).
+#[derive(Component, Clone, Copy)]
+pub(crate) struct LightCookie(pub(crate) &'static str);
+
+/// A light function material's texture, for [`LightCookie`] (their TextureSample's Texture, f13-export debug-json).
+pub(crate) fn light_function_texture(material: &str) -> Option<&'static str> {
+    match material {
+        "M_FlashlightFunction_01" => Some("SummerCamp/Content/Art/Textures/LightFunctionTest"),
+        "M_LightFunction_CarHeadlights_01" => Some("SummerCamp/Content/Lighting/LightFunctions/T_LightFunction_CarHeadlights_01"),
+        _ => None,
+    }
+}
+
+/// The baked light textures by source texture (and the sources while they load).
+#[derive(Resource, Default)]
+struct Cookies(std::collections::HashMap<&'static str, (Handle<Image>, Option<Handle<Image>>)>);
+
+/// Bakes each [`LightCookie`]'s texture once it's loaded and gives the light its [`SpotLightTexture`].
+fn light_cookies(
+    mut commands: Commands,
+    mut cookies: ResMut<Cookies>,
+    assets: Res<AssetServer>,
+    mut images: ResMut<Assets<Image>>,
+    lights: Query<(Entity, &LightCookie), Without<bevy::light::SpotLightTexture>>,
+) {
+    for (e, c) in &lights {
+        let entry = cookies.0.entry(c.0).or_insert_with(|| {
+            let path = format!("{}.png", c.0);
+            (assets.load_with_settings(path, |s: &mut bevy::image::ImageLoaderSettings| s.is_srgb = false), None)
+        });
+        if entry.1.is_none() {
+            let Some(src) = images.get(&entry.0) else { continue };
+            let (w, h) = (src.width(), src.height());
+            let mut data = Vec::with_capacity((w * h) as usize);
+            for y in 0..h {
+                for x in 0..w {
+                    let (u, v) = ((x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32);
+                    let (su, sv) = (((1.0 - v) * w as f32) as u32, (u * h as f32) as u32);
+                    let c = src.get_color_at(su.min(w - 1), sv.min(h - 1)).map(|c| c.to_linear()).unwrap_or(LinearRgba::BLACK);
+                    data.push((((c.red + c.green + c.blue) * 0.3333).clamp(0.0, 1.0) * 255.0).round() as u8);
+                }
+            }
+            let baked = Image::new(
+                bevy::render::render_resource::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                bevy::render::render_resource::TextureDimension::D2,
+                data,
+                bevy::render::render_resource::TextureFormat::R8Unorm,
+                bevy::asset::RenderAssetUsages::RENDER_WORLD,
+            );
+            entry.1 = Some(images.add(baked));
+        }
+        if let Some(image) = entry.1.clone() {
+            commands.entity(e).insert(bevy::light::SpotLightTexture { image });
+        }
+    }
 }
 
 /// The Flicker2 texture, read on the CPU for [`LightFunction::Flicker`].
@@ -624,6 +686,8 @@ fn add_flashlight(
         .spawn((
             SpotLight { color: t.color.into(), intensity: 0.0, range: t.range, inner_angle: t.inner, outer_angle: t.outer, shadow_maps_enabled: true, ..default() },
             Transform::from_translation(xf.translation),
+            // Base_Counselor's Flashlight: LightFunctionMaterial M_FlashlightFunction_01 (MODLOG "Night lighting").
+            LightCookie(light_function_texture("M_FlashlightFunction_01").unwrap_or_default()),
         ))
         .id();
     info!("flashlight: {lumens:.0} lm, {:.0} m, cone {:.0}/{:.0} degrees", t.range, t.inner.to_degrees(), t.outer.to_degrees());

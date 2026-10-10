@@ -10,8 +10,8 @@
 //! - OnHandbrake: on, Tailights TaillightsHandbrake and the tail spot 10; off, TailightsDefault and 6;
 //! - OnThrottle: below 0, Backup Lights ReverseLights, else 0.
 //!
-//! Not ported: the headlights' light function (M_LightFunction_CarHeadlights_01, with the other light functions), the
-//! spots' shadows (with the other local lights').
+//! The headlights' light function (M_LightFunction_CarHeadlights_01) is their cookie (lighting.rs LightCookie). Not
+//! ported: the spots' shadows (with the other local lights').
 
 use crate::lighting::{LightKind, PlacedLight};
 use crate::materials::PropMaterial;
@@ -70,7 +70,7 @@ pub struct CarSpot {
 }
 
 /// The car's Headlights and TailLights spot light components, as children of its root (Bevy local transforms).
-pub fn spot_lights(components: &[ComponentInfo]) -> Vec<(CarSpot, SpotLight, Transform, Visibility)> {
+pub fn spot_lights(components: &[ComponentInfo]) -> Vec<((CarSpot, SpotLight, Transform, Visibility), Option<crate::lighting::LightCookie>)> {
     components
         .iter()
         .filter(|c| c.kind == "SpotLightComponent" && (c.name == "Headlights" || c.name == "TailLights"))
@@ -95,7 +95,9 @@ pub fn spot_lights(components: &[ComponentInfo]) -> Vec<(CarSpot, SpotLight, Tra
             };
             let xf = Transform::from_translation(local.translation).looking_to(dir, Vec3::Y);
             let visibility = if l.visible() { Visibility::Inherited } else { Visibility::Hidden };
-            (CarSpot { tail: c.name == "TailLights", lumens_per_intensity: if intensity > 0.0 { lumens / intensity } else { 0.0 } }, spot, xf, visibility)
+            // Its LightFunctionMaterial (the headlights'), as a cookie.
+            let cookie = l.props.get("LightFunctionMaterial").and_then(|m| m.as_str()).and_then(|m| m.split('\'').nth(1)).and_then(crate::lighting::light_function_texture).map(crate::lighting::LightCookie);
+            ((CarSpot { tail: c.name == "TailLights", lumens_per_intensity: if intensity > 0.0 { lumens / intensity } else { 0.0 } }, spot, xf, visibility), cookie)
         })
         .collect()
 }
