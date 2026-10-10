@@ -24,8 +24,13 @@
 //!   looping at rate 1; the export's faces/<counselor>.json, named by Face.BasePose) on the face's bones, under the
 //!   eyes' ModifyBones; dead or alive (the dead branch is the cached pose).
 //!
-//! Not ported yet: the brow and jaw additives and the body montages' face curves that weight them (MontageFaceNames,
-//! the jaw and brow alphas, the blink override), bAnimationOverride's look at target_jnt.
+//! - in a body montage (its full-body action here): as it starts, FacesOfFearNames (Fear, Shock) 0; each
+//!   MontageFaceNames morph (Concept, Face_Fear -> Fear, Face_Shock -> Shock, Face_Anger -> Anger, Face_Disgust ->
+//!   Disgust, Face_Happy -> Happy) set to its body curve (the face BP's CurveNames only; others 0) when it moves by
+//!   more than 1e-4; the EmotionCurve fear faces only outside montages.
+//!
+//! Not ported yet: the brow and jaw additives that the montage's Face_Jaw / Brow_* / L_/R_Brow_Alpha curves weight,
+//! bAnimationOverride's blink override and look at target_jnt.
 
 use bevy::mesh::morph::MorphWeights;
 use bevy::prelude::*;
@@ -55,7 +60,17 @@ struct FaceAnim {
     look: Look,
     /// The base pose's play time (its sequence player's accumulator).
     pose_time: f32,
+    /// bIsBodyPlayingMontage, and MontageFaceNames' last values.
+    montage: bool,
+    montage_last: [f32; 6],
 }
+
+/// SCFaceAnimInstance's constructor (0x1402f3840): MontageFaceNames (body curve -> morph target) and
+/// FacesOfFearNames (zeroed as a body montage starts).
+const MONTAGE_FACE: [(&str, &str); 6] = [("Concept", "Concept"), ("Face_Fear", "Fear"), ("Face_Shock", "Shock"), ("Face_Anger", "Anger"), ("Face_Disgust", "Disgust"), ("Face_Happy", "Happy")];
+const FACES_OF_FEAR: [&str; 2] = ["Fear", "Shock"];
+/// Face_AnimBP's CurveNames: the body curves it copies each update (GetBodyCurveValue reads only these; others are 0).
+const CURVE_NAMES: [&str; 11] = ["Face_Fear", "Face_Shock", "Face_Anger", "Face_Jaw", "Brow_Fear", "Brow_Shock", "Brow_Anger", "L_Brow_Alpha", "R_Brow_Alpha", "Blink", "Face_Disgust"];
 
 /// The eyes' look state (SCFaceAnimInstance +0x4c8..0x554).
 #[derive(Default)]
@@ -220,7 +235,7 @@ fn face(
         let Some(face_entity) = rig.part(face_index) else { continue };
         let Ok(mut f) = faces.get_mut(face_entity) else {
             let timer = frand(rng) * (t.blink_max - t.blink_min) + t.blink_min;
-            commands.entity(face_entity).try_insert(FaceAnim { blink_timer: timer, blink: false, eyelid: 0.0, eyelid_target: 1.0, fear: 0.0, shock: 0.0, look: Look::default(), pose_time: 0.0 });
+            commands.entity(face_entity).try_insert(FaceAnim { blink_timer: timer, blink: false, eyelid: 0.0, eyelid_target: 1.0, fear: 0.0, shock: 0.0, look: Look::default(), pose_time: 0.0, montage: false, montage_last: [0.0; 6] });
             continue;
         };
         let alive = p.counselor.alive();
@@ -229,9 +244,34 @@ fn face(
             set.push((&t.blink_left, 1.0));
             set.push((&t.blink_right, 1.0));
         }
-        // The fear faces (PLACEHOLDER: during the body's montages the game drives the face from their curves instead,
-        // not ported; the fear faces carry on here).
-        if let Some([cx, cy]) = &t.emotion {
+        // The body's montage (Montage_IsPlaying: its full-body action) and its copied curves at its time.
+        let action = rig.action.as_ref().and_then(|(name, at)| info.animations.get(name).map(|a| (a, *at)));
+        let body_curve = |name: &str| -> f32 {
+            let Some((a, at)) = action else { return 0.0 };
+            if !CURVE_NAMES.contains(&name) {
+                return 0.0;
+            }
+            a.curve(name).map_or(0.0, |c| c.eval(at))
+        };
+        let montage = action.is_some();
+        if montage && !f.montage {
+            for m in FACES_OF_FEAR {
+                set.push((m, 0.0));
+            }
+        }
+        f.montage = montage;
+        if montage {
+            // Each MontageFaceNames morph follows its body curve when it moves by more than 1e-4. (JawAlpha and the brow
+            // alphas, also read here, weight the face graph's additives: not ported.)
+            for (i, (curve, morph)) in MONTAGE_FACE.iter().enumerate() {
+                let v = body_curve(curve);
+                if (v - f.montage_last[i]).abs() > 9.999999747378752e-05 {
+                    set.push((morph, v));
+                    f.montage_last[i] = v;
+                }
+            }
+        } else if let Some([cx, cy]) = &t.emotion {
+            // The fear faces, outside montages.
             let fear_alpha = fear.map_or(0.0, |f| f.0.fear) * 0.009999999776482582;
             let length = cx.keys.iter().chain(cy.keys.iter()).map(|k| k.time).fold(0.0, f32::max);
             let now = time.elapsed_secs();
