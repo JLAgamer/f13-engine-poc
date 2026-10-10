@@ -99,6 +99,8 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         public SortedDictionary<string, List<CurveKey>>? Curves;
         /// Sounds by property name, as "SoundCue'Name'" / "SoundWave'Name'" (f13-export sounds exports them).
         public SortedDictionary<string, string>? Sounds;
+        /// Names the values refer to (the face anim instance's morph targets and eye bones), by property name.
+        public SortedDictionary<string, string>? Names;
         /// The character's music object (MusicObjectClass's defaults: MusicData, idle times, warning cues), object
         /// references as their names ("SoundCue'Name'").
         public Newtonsoft.Json.Linq.JObject? Music;
@@ -243,6 +245,7 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         var rotateScale = ClassValue<FVector2D?>(cls, "CameraRotateScale") ?? new FVector2D(0.5f, 0.5f);
         values["CameraRotateScaleX"] = rotateScale.X;
         values["CameraRotateScaleY"] = rotateScale.Y;
+        FaceAnim(face, values, info);
         info.Values = values;
         info.Stats = new() { ["NoiseStatMod"] = StatValue(cls, "NoiseStatMod", 1f) };
         // Holding her breath while hiding (constructor: MaxBreath 100, MinHoldBreathThreshold 50, MinHoldBreathTimer
@@ -612,6 +615,35 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             else if (p.Name.Text == "StatModifiers" && p.ArrayIndex < 7) v[1 + p.ArrayIndex] = p.Tag?.GetValue<float>() ?? 0;
         }
         return v;
+    }
+
+    /// Her face's SCFaceAnimInstance (the face part's AnimClass, Face_AnimBP_<counselor>): its blink, eye-look and
+    /// fear-face values as "Face.<name>" (Blueprint overrides, else the constructor's, 0x1402f3840), its morph target and
+    /// eye bone names, and its EmotionCurve's three channels (Face.EmotionCurve.X / Y / Z).
+    static void FaceAnim(UObject face, SortedDictionary<string, float> values, Info info)
+    {
+        var cls = Inherited<FPackageIndex>(face, "AnimClass")?.Load<UStruct>();
+        foreach (var (name, fallback) in new[] { ("FearFaceMin", 0.75f), ("ShockFaceMin", 0.35f), ("FearToNeutralInterpSpeed", 5f),
+                     ("LookDistance", 2500f), ("MaxEyeLookYawOffset", 30f), ("MaxEyeLookPitchOffset", 25f), ("EyeMovementSpeed", 1f),
+                     ("MinLookUpdateFrequency", 5f), ("MaxLookUpdateFrequency", 10f), ("MinEyelidWeight", 0f), ("MaxEyelidWeight", 1f),
+                     ("EyelidMovementSpeed", 1f), ("MinBlinkUpdateFrequency", 5f), ("MaxBlinkUpdateFrequency", 10f), ("MaxLookTime", 1.5f) })
+            values["Face." + name] = ClassValue<float?>(cls, name) ?? fallback;
+        var names = info.Names ??= new();
+        foreach (var (name, fallback) in new[] { ("EyelidMorphTarget", "None"), ("EyelashMorphTarget", "None"), ("FearMorphTargetName", "Fear"),
+                     ("ShockMorphTargetName", "Shock"), ("BlinkLeftName", "Blink_L"), ("BlinkRightName", "Blink_R"), ("LeftEyeBoneName", "L_Eye"),
+                     ("RightEyeBoneName", "R_Eye") })
+            names["Face." + name] = ClassValue<FName?>(cls, name)?.Text ?? fallback;
+        if (ClassValue<FPackageIndex>(cls, "EmotionCurve")?.Load() is not { } curve) return;
+        var props = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(curve))["Properties"];
+        foreach (var (key, axis) in new[] { ("FloatCurves", "X"), ("FloatCurves[1]", "Y"), ("FloatCurves[2]", "Z") })
+        {
+            var keys = props?[key]?["Keys"] as Newtonsoft.Json.Linq.JArray ?? [];
+            (info.Curves ??= new())["Face.EmotionCurve." + axis] = keys.Select(k => new CurveKey
+            {
+                Time = (float)k["Time"]!, Value = (float)k["Value"]!, ArriveTangent = (float)k["ArriveTangent"]!, LeaveTangent = (float)k["LeaveTangent"]!,
+                Interp = k["InterpMode"]?.ToString() switch { "RCIM_Linear" => "linear", "RCIM_Constant" => "constant", _ => "cubic" },
+            }).ToList();
+        }
     }
 
     /// A curve property's keys through the Blueprint's parents (null when unset).

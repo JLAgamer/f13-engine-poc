@@ -39,8 +39,9 @@ Moved from Milestone 1 (not tied to gameplay):
       lighting volume the lit ones read (a stand-in now: MODLOG "Particle materials"), particle lights, attractors and
       collision, and the effects spawned by gameplay: the hit dust's chunks (M_door_chunks_01, a mesh emitter), the knife's trail
       (P_Jason_ThrowingKnife_01), blood, the tire dust's cylinder spawn and attractor
-- [ ] Counselor model, remaining: facial animation and hair dynamics (their own anim Blueprints), the eyes' iris and
-      lid overlays, outfit choice
+- [ ] Counselor model, remaining: the face's eye look (its L_Eye / R_Eye bones), its skeleton's base pose and brow and
+      jaw additives, the body montages' face curves (MODLOG "The counselor's face"), hair dynamics (its anim
+      Blueprint), the eyes' iris and lid overlays, outfit choice
 - [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: their root doesn't turn, the body turns about it; how the actor turns with them is unread), foot-marker
       sync (now normalised time), aim offsets (Base_Counselor_AnimBP's AimOffsets, the Hunter's poses on the shared
       skeleton, by AimPitch while bIsAiming), BS_Run_Lean, the rest of the anim Blueprints' graphs (f13-rs plays their

@@ -267,6 +267,13 @@ pub fn flat(t: Transform) -> Transform {
     Transform { translation: t.translation, rotation: Quat::from_rotation_y(f.x.atan2(f.z)), scale: Vec3::ONE }
 }
 
+impl Rig {
+    /// The entity holding an attached part's scene (the face, the hair), by the part's index.
+    pub(crate) fn part(&self, index: usize) -> Option<Entity> {
+        self.attached.iter().find(|(i, _)| *i == index).map(|(_, e)| *e)
+    }
+}
+
 /// The animated model under a character: holds the AnimationPlayer every bone is animated by.
 #[derive(Component)]
 pub struct Rig {
