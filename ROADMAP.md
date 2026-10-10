@@ -31,8 +31,6 @@ Bugs:
       wiggle. Needs a retest to say what still sounds wrong
 
 Moved from Milestone 1 (not tied to gameplay):
-- [ ] Match flow, remaining: in the intro the Fear track on Base_Cinematic_Face (MODLOG "Level intro"). (Badges: their award sites and classes are read, see MODLOG; the game shows them in the
-      lobby's SCMatchEndLobbyWidget, so with the lobby in Milestone 3)
 - [ ] Materials, remaining: foliage subsurface (its transmission is the deferred light pass's, whose code isn't
       in the shipped global shader cache: MODLOG "Foliage subsurface: blocked")
 - [ ] Particle effects (Cascade): the level's systems simulate (particles.rs) and the fire masters are ported (the
@@ -70,7 +68,8 @@ Server-authoritative netcode, tested with bots, then an 8-player lobby.
 Moved from Milestone 2 (they need more than one counselor):
 - [ ] Fear events near friendlies and corpses (other counselors)
 - [ ] Car passengers, and the car running counselors over
-- [ ] The lobby, the Tommy Jarvis timer and Jason dying (killing him needs Tommy and other counselors)
+- [ ] The lobby (with the match's badges: their award sites and classes are read (MODLOG); the game shows them in its
+      SCMatchEndLobbyWidget), the Tommy Jarvis timer and Jason dying (killing him needs Tommy and other counselors)
 
 Moved from Afterwards:
 - [ ] Tommy Jarvis

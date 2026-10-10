@@ -24,7 +24,9 @@
 //!   ToFColor(sRGB)).
 //! - the cine cameras' Circle DOF (circle_dof.rs): CurrentAperture and the manual focus distance, their tracks over
 //!   their placed values, the filmback's width as above.
-//! Not played: the Fear track.
+//! - the staged faces' morph targets (Base_Cinematic_Face_*: its tick SetMorphTarget()s JawOpen, Blink_L/R, Anger,
+//!   Concept, Disgust, Happy, Shock, Fear and Neutral from its own properties), their float tracks (Fear) over the
+//!   placed values.
 
 use crate::lighting::{LightKind, PlacedLight};
 use bevy::prelude::*;
@@ -41,7 +43,7 @@ impl Plugin for CinematicPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CinematicDone>()
             .add_systems(Update, (start, ready, attach, title_text).chain())
-            .add_systems(PostUpdate, play.before(bevy::transform::TransformSystems::Propagate));
+            .add_systems(PostUpdate, (play, face_morphs).chain().before(bevy::transform::TransformSystems::Propagate));
     }
 }
 
@@ -410,6 +412,8 @@ struct Playing {
     takes: HashMap<(String, String), (AnimData, f32)>,
     lengths: HashMap<(String, String), f32>,
     /// Camera actor -> (field of view at its focal length, that focal length).
+    /// This frame's float tracks on actors (not components), by actor and property: the faces' morph targets.
+    face_floats: HashMap<(String, String), f32>,
     /// A cine camera's placed FieldOfView, CurrentFocalLength, CurrentAperture and ManualFocusDistance.
     cameras: HashMap<String, (f32, f32, f32, f32)>,
     frames_waited: u32,
@@ -508,6 +512,11 @@ fn start(
                 e.insert(StagedLight(l));
             }
         }
+        if class.starts_with("Base_Cinematic_Face") {
+            // Its placed values (the class sets none: 0).
+            let weights = FACE_MORPHS.iter().map(|&m| (m, a["Props"][m].as_f64().unwrap_or(0.0) as f32)).collect();
+            e.insert(StagedFace(weights));
+        }
         if class == "TextRenderActor" {
             if let Some(c) = comps.iter().find(|c| c["Type"] == "TextRenderComponent") {
                 let p = &c["Props"];
@@ -581,7 +590,7 @@ fn start(
         hud.push((e, *v));
         *v = Visibility::Hidden;
     }
-    commands.insert_resource(Playing { cinematic: c, sequences, t: 0.0, started: false, base, actors, takes, lengths, cameras, frames_waited: 0, found_at: None, hud });
+    commands.insert_resource(Playing { cinematic: c, sequences, t: 0.0, started: false, base, actors, takes, lengths, face_floats: HashMap::new(), cameras, frames_waited: 0, found_at: None, hud });
 }
 
 /// Starts once the staged meshes are in (their attached actors' offsets taken at the bind pose).
@@ -624,6 +633,39 @@ fn ready(
         }
     }
     p.started = true;
+}
+
+/// The morph targets a Base_Cinematic_Face's tick sets from its properties of the same names.
+const FACE_MORPHS: [&str; 10] = ["JawOpen", "Blink_L", "Blink_R", "Anger", "Concept", "Disgust", "Happy", "Shock", "Fear", "Neutral"];
+
+/// A staged face's morph target weights (its properties), the sequence's float tracks applied each frame.
+#[derive(Component)]
+struct StagedFace(Vec<(&'static str, f32)>);
+
+/// The faces' SetMorphTarget calls: each weight on the mesh's target of that name (none: nothing).
+fn face_morphs(
+    playing: Option<Res<Playing>>,
+    faces: Query<(Entity, &Staged, &StagedFace)>,
+    children: Query<&Children>,
+    mut weights: Query<(&mut bevy::mesh::morph::MorphWeights, &Children)>,
+    mesh_of: Query<&Mesh3d>,
+    meshes: Res<Assets<Mesh>>,
+) {
+    let Some(p) = playing else { return };
+    for (e, staged, face) in &faces {
+        for d in children.iter_descendants(e) {
+            let Ok((mut w, kids)) = weights.get_mut(d) else { continue };
+            let Some(names) = kids.iter().find_map(|k| mesh_of.get(k).ok()).and_then(|m| meshes.get(&m.0)).and_then(|m| m.morph_target_names().map(|n| n.to_vec())) else { continue };
+            for &(name, placed) in &face.0 {
+                let v = p.face_floats.get(&(staged.name.clone(), name.to_string())).copied().unwrap_or(placed);
+                if let Some(i) = names.iter().position(|n| n == name) {
+                    if let Some(slot) = w.weights_mut().get_mut(i) {
+                        *slot = v;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// A TextRenderActor's text waiting for its font's page.
@@ -838,6 +880,7 @@ fn play(
             }
         }
     }
+    p.face_floats = frame.floats.iter().filter(|((_, c, _), _)| c.is_none()).map(|((a, _, prop), v)| ((a.clone(), prop.clone()), *v)).collect();
     // The texts' Transparency.
     for ((actor, _component, prop), v) in &frame.floats {
         if prop != "Transparency" {

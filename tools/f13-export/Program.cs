@@ -89,8 +89,13 @@ var meshCollision = new SortedDictionary<string, Collision.MeshShapes>(StringCom
 var session = new ExportSession();
 ClassExporter classes = null!;
 var queued = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-// Morph targets are off: CUE4Parse writes empty morph buffers for some F13 face meshes, which glTF loaders reject.
+// Morph targets only on the counselors' faces (their expressions and visemes: Blink_L, JawOpen, Fear...): CUE4Parse
+// writes a target's empty deltas as an accessor without a bufferView (zeros, which glTF allows) that Bevy's loader
+// rejects, so FillEmptyAccessors points those at a zero-filled view.
 var options = new ExportOptions(meshFormat: EMeshFormat.Gltf2, textureFormat: ETextureFormat.Png, exportMorphTargets: false);
+var faceOptions = new ExportOptions(meshFormat: EMeshFormat.Gltf2, textureFormat: ETextureFormat.Png, exportMorphTargets: true);
+var faceSession = new ExportSession();
+var faces = new List<string>();
 Directory.CreateDirectory(outDir);
 classes = new ClassExporter(provider, Queue, o => o is UStaticMesh sm ? OutPath(sm) : new SkinnedAssetExporter((USkeletalMesh)o).SavePath + ".glb");
 
@@ -102,7 +107,12 @@ void Queue(UObject obj)
         MeshMaterials.RestoreStaticMaterials(sm);
         if (Collision.Shapes(sm) is { } shapes) meshCollision[OutPath(sm)] = shapes;
     }
-    session.Add(obj);
+    if (obj is USkeletalMesh face && face.Name.EndsWith("_Face", StringComparison.OrdinalIgnoreCase))
+    {
+        faceSession.Add(obj);
+        faces.Add(new SkinnedAssetExporter(face).SavePath + ".glb");
+    }
+    else session.Add(obj);
 }
 
 void ExportAsset(string path)
@@ -835,13 +845,51 @@ switch (rest[0])
 }
 
 Console.WriteLine($"exporting {session.TotalQueued} objects...");
-var results = await session.RunAsync(outDir, options);
+var results = (await session.RunAsync(outDir, options)).Concat(await faceSession.RunAsync(outDir, faceOptions)).ToList();
+foreach (var f in faces) FillEmptyAccessors(Path.Combine(outDir, f));
 var failed = results.Where(r => !r.Success).ToList();
 Console.WriteLine($"done: {results.Count - failed.Count} ok, {failed.Count} failed");
 foreach (var f in failed.Take(20)) Console.WriteLine($"  failed {f.ObjectPath}");
 WriteMaterialIndex();
 DdsExporter.WriteAll(provider, outDir);
 return 0;
+
+// A glb's accessors without a bufferView (and not sparse: all zeros) pointed at one zero-filled view appended to its
+// binary chunk.
+static void FillEmptyAccessors(string path)
+{
+    if (!File.Exists(path)) return;
+    var b = File.ReadAllBytes(path);
+    var jsonLen = BitConverter.ToInt32(b, 12);
+    var json = Newtonsoft.Json.Linq.JObject.Parse(System.Text.Encoding.UTF8.GetString(b, 20, jsonLen));
+    var binAt = 20 + jsonLen;
+    var bin = binAt + 8 <= b.Length ? b.AsSpan(binAt + 8, BitConverter.ToInt32(b, binAt)).ToArray() : [];
+    var empty = json["accessors"]!.Where(a => a["bufferView"] == null && a["sparse"] == null).ToList();
+    if (empty.Count == 0) return;
+    static int Components(string t) => t switch { "SCALAR" => 1, "VEC2" => 2, "VEC3" => 3, "VEC4" => 4, "MAT4" => 16, _ => 4 };
+    var size = empty.Max(a => (int)a["count"]! * Components(a["type"]!.ToString()) * 4);
+    var offset = (bin.Length + 3) & ~3;
+    var views = (Newtonsoft.Json.Linq.JArray)json["bufferViews"]!;
+    views.Add(new Newtonsoft.Json.Linq.JObject { ["buffer"] = 0, ["byteOffset"] = offset, ["byteLength"] = size });
+    foreach (var a in empty) a["bufferView"] = views.Count - 1;
+    var newBin = new byte[(offset + size + 3) & ~3];
+    Array.Copy(bin, newBin, bin.Length);
+    json["buffers"]![0]!["byteLength"] = offset + size;
+    var jsonBytes = System.Text.Encoding.UTF8.GetBytes(json.ToString(Newtonsoft.Json.Formatting.None));
+    var jsonPadded = new byte[(jsonBytes.Length + 3) & ~3];
+    Array.Fill(jsonPadded, (byte)' ');
+    Array.Copy(jsonBytes, jsonPadded, jsonBytes.Length);
+    using var o = new BinaryWriter(File.Create(path));
+    o.Write(0x46546C67u);
+    o.Write(2u);
+    o.Write((uint)(12 + 8 + jsonPadded.Length + 8 + newBin.Length));
+    o.Write((uint)jsonPadded.Length);
+    o.Write(0x4E4F534Au);
+    o.Write(jsonPadded);
+    o.Write((uint)newBin.Length);
+    o.Write(0x004E4942u);
+    o.Write(newBin);
+}
 
 // materials.json: name -> exported JSON file, effective blend mode and two-sidedness. Material instances usually
 // inherit these from a parent material, which the per-material JSON does not reflect.
