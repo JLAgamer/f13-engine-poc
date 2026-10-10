@@ -384,6 +384,31 @@ impl Materials {
                 p[24] = Vec4::new(s("0_AlphaPower", 2.0), s("RefractionDepthBias", 0.0), 0.0, 0.0);
                 (9.0, [tex("DistortionTexture"), tex("Base_ALPHA_Texture1"), tex("Base_ALPHA_Texture2"), tex("Base_ALPHA_Texture3")])
             }
+            "M_Procedural_Smoke_01B_no-self-shadow_separate-transparency_off" => {
+                // uniexpr.py of it: cb1[5] Base_ALPHA_Texture1_Scale.rg x BaseMask_Master_Scale, [8] Texture2's, [9].x
+                // -Diffuse_Contrast, [10].x -0_BaseContrast, [11] SelectionColor.rgb (0), [13].x -0_AlphaContrast,
+                // [15..23] below.
+                let vec = |n: &str, d: [f32; 4]| e.vectors.get(n).or_else(|| master.and_then(|m| m.vectors.get(n))).copied().unwrap_or(d);
+                let (t1s, t2s) = (vec("Base_ALPHA_Texture1_Scale", [0.95, 0.95, 0.0, 1.0]), vec("Base_ALPHA_Texture2_Scale", [1.0, 1.0, 0.0, 1.0]));
+                let mask = s("BaseMask_Master_Scale", 2.0);
+                let (bc, dc, ac, hard) = (s("0_BaseContrast", 0.1), s("Diffuse_Contrast", 0.0), s("0_AlphaContrast", 0.0), s("SphereMask_Hardness", 0.0));
+                let soft = (1.0 - hard).max(1e-5);
+                p[5] = Vec4::new(t1s[0] * mask, t1s[1] * mask, t1s[2] * mask, 0.0);
+                p[8] = Vec4::new(t2s[0] * mask, t2s[1] * mask, t2s[2] * mask, 0.0);
+                p[9] = Vec4::splat(-dc);
+                p[10] = Vec4::splat(-bc);
+                p[13] = Vec4::splat(-ac);
+                p[15] = Vec4::new(s("0_MasterScrollMultiplier", 0.001), s("Distortion1_Scroll_Multiplier", 0.05), s("Distortion1_UV_Coord_Multiplier", 0.5), s("DistortionTexturePower", 5.0));
+                p[16] = Vec4::new(s("Distortion2_Scroll_Multiplier", 0.08), s("Distortion2_UV_Coord_Multiplier", 0.4), s("0_DistortionMultiplier", 0.3), s("DistortionMax", 1.0));
+                p[17] = Vec4::new(s("DistortionMin", 0.0), s("0_MasterRotationMultiplier", 0.5), mask, s("Texture3_Scroll_Multiplier", 0.15));
+                p[18] = Vec4::new(s("Texture3_UV_Coord_Multiplier", 0.5), s("Texture3_Max", 1.0), s("Texture3_Min", 0.5), s("SphereMask_Distotrion_Multiplier", 1.0));
+                p[19] = Vec4::new(s("SphereMask_Radius", 0.6), hard, 1.0 - hard, soft);
+                p[20] = Vec4::new(1.0 / soft, dc + 1.0, s("Diffuse_Max", 1.0), s("Diffuse_Min", 0.2));
+                p[21] = Vec4::new(bc + 1.0, s("FadeDistance", 3.0), s("FadeDistance", 3.0).max(1e-5), s("0_PixelDepthDistance", 0.0));
+                p[22] = Vec4::new(s("Emissive_Multiplier", 0.05), ac, -ac, ac + 1.0);
+                p[23] = Vec4::new(s("0_Opacity_Multiplier", 3.0), s("RefractionDepthBias", 0.0), 0.0, 0.0);
+                (10.0, [tex("DistortionTexture"), tex("Base_ALPHA_Texture1"), tex("Base_ALPHA_Texture2"), tex("Base_ALPHA_Texture3")])
+            }
             // M_Procedural_Tire_Dust_01_Inst's own shader map (static switches: 0_NRM_switch off); the master's other
             // instances aren't ported.
             "M_Procedural_Smoke_04_no-self-shadow" if name == "M_Procedural_Tire_Dust_01_Inst" => {

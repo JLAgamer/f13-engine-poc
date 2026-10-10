@@ -21,7 +21,8 @@
 struct ParticleParams {
     // x: mode (0 stand-in, 1 M_Procedural_Fire_01, 2 M_Procedural_Fire_02, 3 M_MasterParticle_Emissive,
     // 4 M_Fly_Animated_01, 5 M_MasterParticle_Diffuse_nearFade, 6 M_Procedural_Smoke_05, 7 M_Rain_Master,
-    // 8 M_Procedural_Tire_Dust_01_Inst, 9 M_Procedural_Smoke_01B_no-self-shadow); y: additive
+    // 8 M_Procedural_Tire_Dust_01_Inst, 9 M_Procedural_Smoke_01B_no-self-shadow, 10 its
+    // _separate-transparency_off sibling); y: additive
     mode: vec4<f32>,
     // The master's material uniform buffer as its compiled shader reads it (uniexpr.py's cb1[n]).
     p: array<vec4<f32>, 32>,
@@ -422,6 +423,52 @@ fn smoke_01b(in: VertexOutput) -> vec4<f32> {
     return vec4(emissive + volume_lit(in, saturate(diffuse)), alpha);
 }
 
+// M_Procedural_Smoke_01B_no-self-shadow_separate-transparency_off (the broken phone box's smoke; its own master,
+// s003): smoke_01b's graph but each DistortionTexture sample ^ DistortionTexturePower before the sum (x dp.z x
+// 0_DistortionMultiplier, clamped DistortionMin..Max for the offsets); the mask at (that x
+// SphereMask_Distotrion_Multiplier + uv - a / 16 - 0.5) over clamp(SphereMask_Radius - a / 30, 0, 0.7); opacity
+// 2 x shaped through 0_AlphaContrast x 0_Opacity_Multiplier, saturate(x the fades) (no power).
+fn smoke_01b_sto(in: VertexOutput) -> vec4<f32> {
+    let p = params.p;
+    let dp = in.dynamic;
+    let uv = in.uv;
+    let col = in.color;
+    let time = globals.time;
+    let scroll = time * p[15].x;
+    let a = scroll * p[15].y * 6.283185;
+    let b = scroll * p[16].x * 6.283185;
+    let d1 = pow(max(textureSample(t0, s, (vec2(cos(a), sin(a)) * 0.75 + uv) * p[15].z + dp.w).xy, vec2(0.0)), vec2(p[15].w));
+    let d2 = pow(max(textureSample(t0, s, 1.0 - ((vec2(cos(b), sin(b)) * -0.75 + uv) * p[16].y + dp.w)).xy, vec2(0.0)), vec2(p[15].w));
+    let amount = dp.z * p[16].z;
+    let d = amount * (d1 + d2);
+    let dist = clamp(d, vec2(p[17].x), vec2(p[16].w));
+    let rot = time * p[17].y;
+    let a1 = (rot + dp.y + rot * 1.052632 + dp.w * 10.0) * 0.75;
+    let pulse1 = (cos((rot + dp.w) * 3.141593) * 0.5 + 6.0) * 0.142857;
+    let pulse2 = (cos((rot + dp.w) * 3.926991) * 0.5 + 6.0) * 0.142857;
+    let scale1 = pulse1 * p[5].xy;
+    let uv1 = uv * 0.95 / scale1 + 0.5 - 0.5 / scale1 - 0.5;
+    let tex1 = textureSample(t1, s, dist + turn(uv1, sin(a1), cos(a1)) + 0.5).x;
+    let a2 = ((rot + dp.y) + rot + dp.w * 10.0) * -0.6;
+    let scale2 = pulse2 * p[8].xy;
+    let uv2 = (1.0 - uv) / scale2 + 0.5 - 0.5 / scale2 - 0.5;
+    let tex2 = textureSample(t2, s, dist + turn(uv2, sin(a2), cos(a2)) + 0.5).x;
+    let a3 = rot * p[17].w * 6.283185;
+    let tex3 = clamp(textureSample(t3, s, (vec2(cos(a3), sin(a3)) * 0.75 + uv) * p[18].x + dp.w).x, p[18].z, p[18].y);
+    let shape = tex1 * tex2 * tex3;
+    let len = length(d * p[18].w + uv - amount * 0.0625 - 0.5);
+    let radius = max(clamp(p[19].x - amount * 0.033333, 0.0, 0.7), 0.00001);
+    let mask = saturate((1.0 - len / radius) * p[20].x);
+    var base = saturate(mask * shape * 3.0 * (p[20].y - p[9].x) + p[9].x);
+    base = saturate(clamp(base, p[20].w, p[20].z) * (p[21].x - p[10].x) + p[10].x);
+    let f = depth_fades(in, p[21].z, p[21].w);
+    let fade = saturate(f.x * col.a) * f.y;
+    let emissive = max(fade * base * p[22].x * col.rgb + p[11].xyz, vec3(0.0));
+    let shaped = saturate((shape * mask - dp.x * 0.038462) * (dp.x * 0.666667 + 1.0) - dp.x * 0.333333);
+    let opacity = saturate(shaped * 2.0 * (p[22].w - p[13].x) + p[13].x) * p[23].x;
+    return vec4(emissive + volume_lit(in, saturate(base * col.rgb)), saturate(fade * opacity));
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let mode = u32(params.mode.x);
@@ -442,6 +489,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         c = tire_dust(in);
     } else if mode == 9u {
         c = smoke_01b(in);
+    } else if mode == 10u {
+        c = smoke_01b_sto(in);
     } else if mode == 4u {
         // Already exposed (apply_pbr_lighting).
         c = fly(in);
