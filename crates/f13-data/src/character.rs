@@ -56,6 +56,10 @@ pub struct CharacterInfo {
     /// The camera shakes her graph plays, by class name: their CDO's properties.
     #[serde(default, deserialize_with = "crate::level::null_as_empty")]
     pub camera_shakes: HashMap<String, serde_json::Map<String, serde_json::Value>>,
+    /// The hair's anim Blueprint: "Node" its AnimDynamics node's settings, "TargetFramerate" / "MaxAlpha" when it
+    /// overrides SCHairAnimInstance's.
+    #[serde(default)]
+    pub hair_dynamics: Option<serde_json::Value>,
 }
 
 /// A UCameraShake CDO's oscillation. UCameraShake's defaults: duration 1, blend in and out 0.1; an FOscillator's

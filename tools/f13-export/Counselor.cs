@@ -116,6 +116,9 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         public Newtonsoft.Json.Linq.JObject? Cameras;
         /// The camera shakes her graph plays (ED_Shake2 on a chase), by class name: their CDO's properties.
         public Newtonsoft.Json.Linq.JObject? CameraShakes;
+        /// The hair's anim Blueprint (the Hair component's AnimClass, an SCHairAnimInstance): its AnimDynamics node's
+        /// settings, and its TargetFramerate / MaxAlpha when the Blueprint overrides them.
+        public Newtonsoft.Json.Linq.JObject? HairDynamics;
     }
 
     /// A physics asset body: its bone's capsules ("Sphyl": Radius, Length between the sphere centres, along the
@@ -211,6 +214,16 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         var hairMesh = hair.GetOrDefault<FPackageIndex>("SkeletalMesh").Load<USkeletalMesh>()!;
         queue(hairMesh);
         info.Parts.Add(new Part { Name = "Hair", File = MeshFile(hairMesh), Attach = "Face", Transform = Xf(hair.GetOrDefault<FVector>("RelativeLocation"), hair.GetOrDefault<FRotator>("RelativeRotation")) });
+        if (Inherited<FPackageIndex>(hair, "AnimClass")?.Load<UStruct>() is UBlueprintGeneratedClass hairBp && CdoProps(hairBp) is { } hairProps)
+        {
+            var node = hairProps.Properties().FirstOrDefault(p => p.Name.StartsWith("AnimGraphNode_AnimDynamics_"))?.Value as Newtonsoft.Json.Linq.JObject;
+            if (node != null)
+            {
+                info.HairDynamics = new Newtonsoft.Json.Linq.JObject { ["Node"] = node };
+                foreach (var name in new[] { "TargetFramerate", "MaxAlpha" })
+                    if (hairProps[name] is { } v) info.HairDynamics[name] = v;
+            }
+        }
 
         var skeleton = body.Skeleton.Load<USkeleton>()!;
         AddBones(info, body, skeleton);
@@ -757,6 +770,21 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
                 foreach (var n in scs.GetOrDefault<FPackageIndex[]>("RootNodes", [])) Walk(n);
         }
         return result.Count > 0 ? result : null;
+    }
+
+    /// A Blueprint class's defaults (its CDO's own properties), object references flattened to their names.
+    static Newtonsoft.Json.Linq.JObject? CdoProps(UBlueprintGeneratedClass bp)
+    {
+        if (bp.ClassDefaultObject.Load() is not { } cdo) return null;
+        static Newtonsoft.Json.Linq.JToken Flatten(Newtonsoft.Json.Linq.JToken t) => t switch
+        {
+            Newtonsoft.Json.Linq.JObject o when o["ObjectName"] is { } n => n.DeepClone(),
+            Newtonsoft.Json.Linq.JObject o => new Newtonsoft.Json.Linq.JObject(o.Properties().Select(p => new Newtonsoft.Json.Linq.JProperty(p.Name, Flatten(p.Value)))),
+            Newtonsoft.Json.Linq.JArray a => new Newtonsoft.Json.Linq.JArray(a.Select(Flatten)),
+            _ => t.DeepClone(),
+        };
+        var props = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(cdo))["Properties"];
+        return props == null ? null : Flatten(props) as Newtonsoft.Json.Linq.JObject;
     }
 
     /// The defaults of a character's MusicObjectClass, with object references flattened to their names.
