@@ -143,6 +143,11 @@ struct Particle {
     mesh_continuous: Vec3,
     mesh_rate: Vec3,
     mesh_rate_base: Vec3,
+    /// FLightParticlePayload: ColorScale, RadiusScale, LightExponent, bValid.
+    light_color: Vec3,
+    light_radius: f32,
+    light_exponent: f32,
+    light_valid: bool,
 }
 
 /// A running emitter.
@@ -162,6 +167,8 @@ struct EmitterState {
     loops_done: u32,
     /// A mesh emitter's drawn particles: one scene of its mesh each (MaxDrawCount of them, at most 32).
     slots: Vec<Entity>,
+    /// A ParticleModuleLight emitter's simple lights (MaxDrawCount of them, at most 16).
+    lights: Vec<Entity>,
 }
 
 /// A placed ParticleSystemComponent.
@@ -587,7 +594,7 @@ impl ParticleAssets {
                     .map(|i| commands.spawn((bevy::world_serialization::WorldAssetRoot(scene.clone()), Transform::default(), Visibility::Hidden, Name::new(format!("{name}.{} {i}", def.name)))).id())
                     .collect();
                 let entity = commands.spawn((Transform::default(), Visibility::Hidden)).id();
-                emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, slots });
+                emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, slots, lights: vec![] });
                 continue;
             }
             let Some((material, mode)) = def.material.as_deref().and_then(|m| self.mats.get(m, &self.root, assets, materials)) else { continue };
@@ -613,7 +620,7 @@ impl ParticleAssets {
                 ))
                 .id();
             let pivot = def.modules.iter().find_map(|m| if let Module::PivotOffset(p) = m { Some(Vec2::from(*p)) } else { None }).unwrap_or(Vec2::ZERO) + Vec2::splat(-0.5);
-            emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: mode == 4, slots: vec![] });
+            emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: mode == 4, slots: vec![], lights: light_pool(commands, def, name) });
         }
         if emitters.is_empty() {
             return None;
@@ -628,6 +635,17 @@ impl ParticleAssets {
         }
         Some(inst)
     }
+}
+
+/// An emitter's simple lights (its ParticleModuleLight's): MaxDrawCount point lights at most 16, hidden until drawn.
+fn light_pool(commands: &mut Commands, def: &Emitter, name: &str) -> Vec<Entity> {
+    if !def.modules.iter().any(|m| matches!(m, Module::Light { .. })) {
+        return vec![];
+    }
+    let n = def.max_draw_count.unwrap_or(500).min(16) as usize;
+    (0..n)
+        .map(|i| commands.spawn((PointLight { intensity: 0.0, shadow_maps_enabled: false, ..default() }, Transform::default(), Visibility::Hidden, Name::new(format!("{name}.{} light {i}", def.name)))).id())
+        .collect()
 }
 
 /// Spawns a system (UGameplayStatics::SpawnEmitterAtLocation: auto-destroyed once its emitters are done), or one that
@@ -745,7 +763,7 @@ fn follow_and_finish(mut commands: Commands, mut systems: Query<(Entity, &mut Pa
         if s.auto_destroy && done && s.emitters.iter().all(|em| em.seconds > 0.0) {
             for em in &s.emitters {
                 commands.entity(em.entity).despawn();
-                for &slot in &em.slots {
+                for &slot in em.slots.iter().chain(&em.lights) {
                     commands.entity(slot).despawn();
                 }
             }
@@ -838,7 +856,7 @@ fn rain_grid(
             for (e, _, s) in &cells {
                 for em in &s.emitters {
                     commands.entity(em.entity).despawn();
-                    for &slot in &em.slots {
+                    for &slot in em.slots.iter().chain(&em.lights) {
                         commands.entity(slot).despawn();
                     }
                 }
@@ -1099,6 +1117,9 @@ fn update(m: &Module, p: &mut Particle, dt: f32, emitter_time: f32) {
             }
         }
         Module::Orbit { .. } => p.orbit_rotation += p.orbit_rate * dt,
+        // UParticleModuleLight::Update (0x1415b3580): ColorScale = BrightnessOverLife x ColorScaleOverLife at the
+        // particle's relative time.
+        Module::Light { color, brightness, .. } => p.light_color = color.eval3(t, [0.0; 3]) * brightness.eval(t, 0.0),
         _ => {}
     }
 }
@@ -1170,6 +1191,15 @@ fn spawn(def: &Emitter, spawn_time: f32, emitter_time: f32, location: Vec3, rota
                 p.mesh_rate += r;
                 p.mesh_rate_base += r;
             }
+            // UParticleModuleLight::Spawn (FUN_1415ae8b0, r.ParticleLightQuality > 0): ColorScale at the particle's
+            // relative time, RadiusScale and LightExponent (0 with inverse-squared falloff) at the emitter's,
+            // bValid = rand < SpawnFraction. bHighQualityLights' point light components aren't spawned.
+            Module::Light { color, brightness, radius, exponent, inverse_squared, spawn_fraction, high_quality } => {
+                p.light_color = color.eval3(p.relative_time, rand3(rng)) * brightness.eval(p.relative_time, rand(rng));
+                p.light_radius = radius.eval(emitter_time, rand(rng));
+                p.light_exponent = if *inverse_squared { 0.0 } else { exponent.eval(emitter_time, rand(rng)) };
+                p.light_valid = rand(rng) < *spawn_fraction && !*high_quality;
+            }
             Module::Orbit { offset, rotation: rot, rate, .. } => {
                 p.orbit_offset = offset.eval3(emitter_time, rand3(rng));
                 p.orbit_rotation = rot.eval3(emitter_time, rand3(rng));
@@ -1201,6 +1231,7 @@ fn draw(
     mut meshes: ResMut<Assets<Mesh>>,
     mut vis: Query<&mut Visibility>,
     mut slot_xf: Query<&mut Transform>,
+    mut point_lights: Query<&mut PointLight>,
 ) {
     let Some(cam) = camera.iter().next() else { return };
     let cam_pos = cam.translation();
@@ -1238,6 +1269,43 @@ fn draw(
                     }
                 }
                 continue;
+            }
+            if !e.lights.is_empty() {
+                // FDynamicSpriteEmitterDataBase::GatherSimpleLights (FUN_1415cee00): each valid particle (of the first
+                // MaxDrawCount) a light of colour Color.rgb x Color.a x ColorScale, radius (|Size.x| + |Size.y|) / 2 x
+                // RadiusScale (Size.y = Size.x for the square alignments), its exponent, at its location; skipped when
+                // both radius and colour are about 0. Unshadowed. Their colour is the deferred light's LightColor
+                // (cm-based inverse square), so Bevy lumens = colour x 4pi / 100^2 (lighting.rs takes a placed
+                // inverse-squared light's Intensity as lumens: LightColor = lumens x 100^2 / 4pi).
+                let square = matches!(e.def.screen_alignment.as_str(), "PSA_FacingCameraPosition" | "PSA_Square" | "PSA_FacingCameraDistanceBlend");
+                let max = e.def.max_draw_count.map_or(usize::MAX, |m| m as usize);
+                let mut lit = e.particles.iter().take(max).filter_map(|p| {
+                    let sx = (p.size.x * s.scale.x).abs();
+                    let sy = if square { sx } else { (p.size.y * s.scale.y).abs() };
+                    let radius = (sx + sy) * 0.5 * p.light_radius;
+                    let color = p.color.truncate() * p.color.w * p.light_color;
+                    (p.light_valid && (radius > 1e-4 || color.max_element() > 1e-4)).then_some((p, radius, color))
+                });
+                for &l in &e.lights {
+                    let next = if near { lit.next() } else { None };
+                    if let Ok(mut v) = vis.get_mut(l) {
+                        v.set_if_neq(if next.is_some() { Visibility::Inherited } else { Visibility::Hidden });
+                    }
+                    let Some((p, radius, color)) = next else { continue };
+                    let peak = color.max_element().max(1e-6);
+                    if let Ok(mut pl) = point_lights.get_mut(l) {
+                        pl.color = Color::linear_rgb(color.x / peak, color.y / peak, color.z / peak);
+                        pl.intensity = if p.light_exponent == 0.0 {
+                            peak * 4.0 * std::f32::consts::PI / 10_000.0
+                        } else {
+                            crate::lighting::unreal_falloff_lumens(peak, radius, p.light_exponent)
+                        };
+                        pl.range = radius * 0.01;
+                    }
+                    if let Ok(mut xf) = slot_xf.get_mut(l) {
+                        xf.translation = to_bevy(p.location);
+                    }
+                }
             }
             let shown = near && !e.particles.is_empty();
             if let Ok(mut v) = vis.get_mut(e.entity) {

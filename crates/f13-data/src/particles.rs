@@ -155,8 +155,9 @@ pub enum Module {
     SubUV(Dist),
     /// The dynamic parameters (up to four), each: value distribution, spawn time only, by emitter time.
     Dynamic([Option<(Dist, bool, bool)>; 4]),
-    /// ColorScaleOverLife, BrightnessOverLife, RadiusScale, LightExponent.
-    Light { color: Dist, brightness: Dist, radius: Dist, exponent: Dist },
+    /// ColorScaleOverLife, BrightnessOverLife, RadiusScale, LightExponent (InitializeDefaults 0x1415aa300: 1, 32, 15,
+    /// 16), bUseInverseSquaredFalloff (default on), SpawnFraction (default 1), bHighQualityLights.
+    Light { color: Dist, brightness: Dist, radius: Dist, exponent: Dist, inverse_squared: bool, spawn_fraction: f32, high_quality: bool },
     PivotOffset([f32; 2]),
     /// ParticleModuleOrientationAxisLock's LockAxisFlags (EPAL_...).
     AxisLock(String),
@@ -370,12 +371,18 @@ impl System {
                         }
                         Module::Dynamic(d)
                     }
-                    "ParticleModuleLight" => Module::Light {
-                        color: dist(&p["ColorScaleOverLife"], 3),
-                        brightness: dist(&p["BrightnessOverLife"], 1),
-                        radius: dist(&p["RadiusScale"], 1),
-                        exponent: dist(&p["LightExponent"], 1),
-                    },
+                    "ParticleModuleLight" => {
+                        let or = |k: &str, n: usize, d: f32| if p[k].is_null() { Dist::constant(&vec![d; n]) } else { dist(&p[k], n) };
+                        Module::Light {
+                            color: or("ColorScaleOverLife", 3, 1.0),
+                            brightness: or("BrightnessOverLife", 1, 32.0),
+                            radius: or("RadiusScale", 1, 15.0),
+                            exponent: or("LightExponent", 1, 16.0),
+                            inverse_squared: p["bUseInverseSquaredFalloff"].as_bool().unwrap_or(true),
+                            spawn_fraction: num(&p["SpawnFraction"], 1.0),
+                            high_quality: p["bHighQualityLights"].as_bool().unwrap_or(false),
+                        }
+                    }
                     "ParticleModulePivotOffset" => Module::PivotOffset([num(&p["PivotOffset"]["X"], 0.0), num(&p["PivotOffset"]["Y"], 0.0)]),
                     "ParticleModuleOrientationAxisLock" => Module::AxisLock(p["LockAxisFlags"].as_str().unwrap_or("EPAL_NONE").to_string()),
                     "ParticleModuleMeshRotation" => Module::MeshRotation(dist(&p["StartRotation"], 3)),

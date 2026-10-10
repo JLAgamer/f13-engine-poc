@@ -37,7 +37,7 @@ Moved from Milestone 1 (not tied to gameplay):
       campfire's and fireplace's flames, sparks and smoke, the candles, the lamps' flies, dust specks, the low fog, the
       intro's Savini embers and eye glows).
       Remaining: the translucency
-      lighting volume the lit ones read (a stand-in now: MODLOG "Particle materials"), particle lights, attractors and
+      lighting volume the lit ones read (a stand-in now: MODLOG "Particle materials"), particle lights' high-quality (shadowed) variant, attractors and
       collision, mesh emitters' camera facing, axis lock and velocity alignment, the thrown knife's ribbon trail
       (TracerTrail, M_Jason_ThrowingKnife_Trail_02), blood, the tire dust's cylinder spawn and attractor
 - [ ] Counselor model, remaining: the eye look against a capture of the game (it rolls the eyes 90 degrees from their bind: MODLOG
