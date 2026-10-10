@@ -160,6 +160,10 @@ pub enum Module {
     PivotOffset([f32; 2]),
     /// ParticleModuleOrientationAxisLock's LockAxisFlags (EPAL_...).
     AxisLock(String),
+    /// ParticleModuleMeshRotation's StartRotation (turns, x 360 into the mesh rotation payload's InitRotation).
+    MeshRotation(Dist),
+    /// ParticleModuleMeshRotationRate's StartRotationRate (turns per second, x 360: the payload's RotationRate).
+    MeshRotationRate(Dist),
     /// A module f13-game doesn't run (its type).
     Unported(String),
 }
@@ -196,7 +200,25 @@ pub struct Emitter {
     /// SpawnPerUnit (particles per UnitScalar cm moved).
     pub spawn_per_unit: Option<(f32, Dist)>,
     pub gpu: bool,
+    /// ParticleModuleTypeDataMesh: its particles are the mesh.
+    pub mesh: Option<MeshData>,
     pub modules: Vec<Module>,
+}
+
+/// A mesh emitter's ParticleModuleTypeDataMesh.
+#[derive(Clone, Debug)]
+pub struct MeshData {
+    /// The static mesh's glTF (export-relative).
+    pub file: String,
+    /// RollPitchYawRange (degrees, the payload's InitialOrientation: the pre-rotation).
+    pub roll_pitch_yaw: Dist,
+    /// bOverrideMaterial: the required module's material instead of the mesh's.
+    pub override_material: bool,
+    /// bCameraFacing, AxisLockOption, CameraFacingOption, bApplyParticleRotationAsSpin (not drawn yet when set).
+    pub camera_facing: bool,
+    pub axis_lock: String,
+    pub camera_facing_option: String,
+    pub spin: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -356,6 +378,8 @@ impl System {
                     },
                     "ParticleModulePivotOffset" => Module::PivotOffset([num(&p["PivotOffset"]["X"], 0.0), num(&p["PivotOffset"]["Y"], 0.0)]),
                     "ParticleModuleOrientationAxisLock" => Module::AxisLock(p["LockAxisFlags"].as_str().unwrap_or("EPAL_NONE").to_string()),
+                    "ParticleModuleMeshRotation" => Module::MeshRotation(dist(&p["StartRotation"], 3)),
+                    "ParticleModuleMeshRotationRate" => Module::MeshRotationRate(dist(&p["StartRotationRate"], 3)),
                     "ParticleModuleSpawnPerUnit" => {
                         spawn_per_unit = Some((num(&p["UnitScalar"], 50.0), dist(&p["SpawnPerUnit"], 1)));
                         continue;
@@ -391,6 +415,21 @@ impl System {
                 bursts,
                 spawn_per_unit,
                 gpu: get(&lp["TypeDataModule"]).is_some_and(|t| t["Type"] == "ParticleModuleTypeDataGpu"),
+                mesh: get(&lp["TypeDataModule"]).filter(|t| t["Type"] == "ParticleModuleTypeDataMesh").and_then(|t| {
+                    let tp = &t["Props"];
+                    let path = tp["Mesh"]["ObjectPath"].as_str()?;
+                    let path = path.trim_start_matches('/');
+                    let path = path.rsplit_once('.').map_or(path, |(a, _)| a);
+                    Some(MeshData {
+                        file: format!("{path}.glb"),
+                        roll_pitch_yaw: dist(&tp["RollPitchYawRange"], 3),
+                        override_material: tp["bOverrideMaterial"].as_bool().unwrap_or(false),
+                        camera_facing: tp["bCameraFacing"].as_bool().unwrap_or(false),
+                        axis_lock: tp["AxisLockOption"].as_str().unwrap_or("EPAL_NONE").to_string(),
+                        camera_facing_option: tp["CameraFacingOption"].as_str().unwrap_or("XAxisFacing_NoUp").to_string(),
+                        spin: tp["bApplyParticleRotationAsSpin"].as_bool().unwrap_or(false),
+                    })
+                }),
                 modules,
             });
         }

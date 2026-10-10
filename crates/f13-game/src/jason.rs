@@ -972,6 +972,15 @@ fn spawn_knife(ev: On<ThrowKnife>, mut commands: Commands, look: Option<Res<Knif
     let knife = commands.spawn((Transform::from_translation(ev.from).with_rotation(knife_rotation(ev.vel)), Visibility::default())).id();
     let dart = look.map(|l| commands.spawn((WorldAssetRoot(l.0.clone()), l.1, Visibility::Hidden, ChildOf(knife))).id());
     commands.entity(knife).insert(Knife { vel: ev.vel, age: 0.0, damage: ev.damage, stuck: false, dart });
+    // MULTICAST_Use (0x1403f7170) activates its ParticleSystem (P_Jason_ThrowingKnife_01 on its root): the spinning
+    // dart (a mesh emitter) while it flies; its ribbon trail (TracerTrail) isn't drawn.
+    commands.write_message(crate::particles::SpawnParticles {
+        system: "P_Jason_ThrowingKnife_01".into(),
+        transform: Transform::IDENTITY,
+        follow: Some(knife),
+        actor: String::new(),
+        active: true,
+    });
 }
 
 /// Knives fly (ProjectileGravityScale 8), hit her (its damage, a hit reaction) or stick in what they hit, and go after

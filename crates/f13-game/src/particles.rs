@@ -135,6 +135,14 @@ struct Particle {
     orbit_offset: Vec3,
     orbit_rotation: Vec3,
     orbit_rate: Vec3,
+    /// A mesh emitter's FMeshRotationPayloadData (degrees, Euler as FRotator::MakeFromEuler reads it):
+    /// InitialOrientation, InitRotation, Rotation, CurContinuousRotation, RotationRate, RotationRateBase.
+    mesh_orientation: Vec3,
+    mesh_init_rotation: Vec3,
+    mesh_rotation: Vec3,
+    mesh_continuous: Vec3,
+    mesh_rate: Vec3,
+    mesh_rate_base: Vec3,
 }
 
 /// A running emitter.
@@ -152,6 +160,8 @@ struct EmitterState {
     /// The bursts fired in the current loop.
     bursts_fired: Vec<bool>,
     loops_done: u32,
+    /// A mesh emitter's drawn particles: one scene of its mesh each (MaxDrawCount of them, at most 32).
+    slots: Vec<Entity>,
 }
 
 /// A placed ParticleSystemComponent.
@@ -563,6 +573,23 @@ impl ParticleAssets {
         self.seed = self.seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
         let mut emitters = vec![];
         for def in &system.emitters {
+            if let Some(md) = &def.mesh {
+                // FDynamicMeshEmitterData: the mesh's own materials (bOverrideMaterial off); UE's default transform
+                // only (CalculateParticleTransform without camera facing, axis lock or velocity alignment).
+                let aligned = matches!(def.screen_alignment.as_str(), "PSA_Velocity" | "PSA_AwayFromCenter" | "PSA_TypeSpecific");
+                if md.override_material || md.camera_facing || md.axis_lock != "EPAL_NONE" || aligned || !self.root.join(&md.file).exists() {
+                    info!("particles: {name}.{}: mesh emitter {} not drawn (override material, facing, axis lock or alignment, or not exported)", def.name, md.file);
+                    continue;
+                }
+                let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(md.file.clone()));
+                let n = def.max_draw_count.unwrap_or(500).min(32) as usize;
+                let slots = (0..n)
+                    .map(|i| commands.spawn((bevy::world_serialization::WorldAssetRoot(scene.clone()), Transform::default(), Visibility::Hidden, Name::new(format!("{name}.{} {i}", def.name)))).id())
+                    .collect();
+                let entity = commands.spawn((Transform::default(), Visibility::Hidden)).id();
+                emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, slots });
+                continue;
+            }
             let Some((material, mode)) = def.material.as_deref().and_then(|m| self.mats.get(m, &self.root, assets, materials)) else { continue };
             // Every attribute from the start (a degenerate quad), so its layout never changes.
             let mesh = meshes.add(
@@ -586,7 +613,7 @@ impl ParticleAssets {
                 ))
                 .id();
             let pivot = def.modules.iter().find_map(|m| if let Module::PivotOffset(p) = m { Some(Vec2::from(*p)) } else { None }).unwrap_or(Vec2::ZERO) + Vec2::splat(-0.5);
-            emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: mode == 4 });
+            emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: mode == 4, slots: vec![] });
         }
         if emitters.is_empty() {
             return None;
@@ -718,6 +745,9 @@ fn follow_and_finish(mut commands: Commands, mut systems: Query<(Entity, &mut Pa
         if s.auto_destroy && done && s.emitters.iter().all(|em| em.seconds > 0.0) {
             for em in &s.emitters {
                 commands.entity(em.entity).despawn();
+                for &slot in &em.slots {
+                    commands.entity(slot).despawn();
+                }
             }
             commands.entity(e).despawn();
         }
@@ -808,6 +838,9 @@ fn rain_grid(
             for (e, _, s) in &cells {
                 for em in &s.emitters {
                     commands.entity(em.entity).despawn();
+                    for &slot in &em.slots {
+                        commands.entity(slot).despawn();
+                    }
                 }
                 commands.entity(e).despawn();
             }
@@ -970,6 +1003,14 @@ fn tick_emitter(e: &mut EmitterState, dt: f32, location: Vec3, rotation: Quat, s
         p.color = p.base_color;
         p.relative_time += p.one_over_max_lifetime * dt;
     }
+    // FParticleMeshEmitterInstance::Tick (bMeshRotationActive): RotationRate from its base, Rotation = InitRotation +
+    // CurContinuousRotation (before the modules; the continuous rotation advances after them).
+    if def.mesh.is_some() {
+        for p in &mut e.particles {
+            p.mesh_rate = p.mesh_rate_base;
+            p.mesh_rotation = p.mesh_init_rotation + p.mesh_continuous;
+        }
+    }
     // The modules' updates.
     for m in &def.modules {
         for p in &mut e.particles {
@@ -1008,6 +1049,11 @@ fn tick_emitter(e: &mut EmitterState, dt: f32, location: Vec3, rotation: Quat, s
     for p in &mut e.particles {
         p.location += p.velocity * dt;
         p.rotation += p.rotation_rate * dt;
+    }
+    if def.mesh.is_some() {
+        for p in &mut e.particles {
+            p.mesh_continuous += p.mesh_rate * dt;
+        }
     }
 }
 
@@ -1112,6 +1158,18 @@ fn spawn(def: &Emitter, spawn_time: f32, emitter_time: f32, location: Vec3, rota
                 p.velocity += *accel * spawn_time;
                 p.base_velocity += *accel * spawn_time;
             }
+            // UParticleModuleMeshRotation / MeshRotationRate Spawn (FUN_1415aea90 / FUN_1415aec40): x 360. Not run:
+            // bInheritParent (the component's rotation added).
+            Module::MeshRotation(d) => {
+                let r = d.eval3(emitter_time, rand3(rng)) * 360.0;
+                p.mesh_init_rotation = r;
+                p.mesh_rotation += r;
+            }
+            Module::MeshRotationRate(d) => {
+                let r = d.eval3(emitter_time, rand3(rng)) * 360.0;
+                p.mesh_rate += r;
+                p.mesh_rate_base += r;
+            }
             Module::Orbit { offset, rotation: rot, rate, .. } => {
                 p.orbit_offset = offset.eval3(emitter_time, rand3(rng));
                 p.orbit_rotation = rot.eval3(emitter_time, rand3(rng));
@@ -1128,8 +1186,11 @@ fn spawn(def: &Emitter, spawn_time: f32, emitter_time: f32, location: Vec3, rota
             _ => update(m, &mut p, 0.0, emitter_time),
         }
     }
-    // PostSpawn.
+    // PostSpawn; a mesh emitter's (FParticleMeshEmitterInstance, unaligned): InitialOrientation from RollPitchYawRange.
     p.location += spawn_time * p.velocity;
+    if let Some(md) = &def.mesh {
+        p.mesh_orientation = md.roll_pitch_yaw.eval3(emitter_time, rand3(rng));
+    }
     p
 }
 
@@ -1139,6 +1200,7 @@ fn draw(
     systems: Query<&ParticleSystemInstance>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut vis: Query<&mut Visibility>,
+    mut slot_xf: Query<&mut Transform>,
 ) {
     let Some(cam) = camera.iter().next() else { return };
     let cam_pos = cam.translation();
@@ -1147,6 +1209,36 @@ fn draw(
         let origin = to_bevy(s.location);
         let near = !s.hidden && (s.max_draw <= 0.0 || origin.distance(cam_pos) <= s.max_draw);
         for e in &s.emitters {
+            if !e.slots.is_empty() {
+                // A mesh emitter: its first MaxDrawCount particles, each its mesh at FDynamicMeshEmitterData::
+                // CalculateParticleTransform's default (FUN_1415be6e0): v x PreRot(MakeFromEuler(InitialOrientation)) x
+                // Scale(Size) x Rot(MakeFromEuler(Rotation x 180 / pi on every axis) + MakeFromEuler(payload Rotation))
+                // + its location, then the component's rotation for local-space emitters (Unreal row vectors).
+                let euler = |v: Vec3| Vec3::new(v.y, v.z, v.x);
+                for (i, &slot) in e.slots.iter().enumerate() {
+                    let Some(p) = e.particles.get(i).filter(|_| near) else {
+                        if let Ok(mut v) = vis.get_mut(slot) {
+                            v.set_if_neq(Visibility::Hidden);
+                        }
+                        continue;
+                    };
+                    let pre = Mat3::from_quat(f13_core::camera_spline::quaternion(euler(p.mesh_orientation)));
+                    let rotator = euler(Vec3::splat(p.rotation.to_degrees())) + euler(p.mesh_rotation);
+                    let rot = Mat3::from_quat(f13_core::camera_spline::quaternion(rotator));
+                    let local = if e.def.local_space { Mat3::from_quat(s.rotation) } else { Mat3::IDENTITY };
+                    let lin = local * rot * Mat3::from_diagonal(p.size * s.scale) * pre;
+                    // Unreal to Bevy: the export's basis change (x, z, y) on both sides; the mesh is already in metres.
+                    let swap = Mat3::from_cols(Vec3::X, Vec3::Z, Vec3::Y);
+                    let affine = bevy::math::Affine3A::from_mat3_translation(swap * lin * swap, to_bevy(p.location));
+                    if let Ok(mut xf) = slot_xf.get_mut(slot) {
+                        *xf = Transform::from_matrix(affine.into());
+                    }
+                    if let Ok(mut v) = vis.get_mut(slot) {
+                        v.set_if_neq(Visibility::Inherited);
+                    }
+                }
+                continue;
+            }
             let shown = near && !e.particles.is_empty();
             if let Ok(mut v) = vis.get_mut(e.entity) {
                 v.set_if_neq(if shown { Visibility::Inherited } else { Visibility::Hidden });
