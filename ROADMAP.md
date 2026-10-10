@@ -48,8 +48,9 @@ Moved from Milestone 1 (not tied to gameplay):
       locomotion and the grab and block layers; their look-at, IK and additive nodes aren't ported). Not in the game:
       turn-in-place takes, limp movement
 - [ ] Lighting, remaining: Enlighten GI, local light shadows (a real-time budget of the 4 nearest for now, unverified
-      visually and for cost), the car headlights' light function (the phone boxes' run: MODLOG "Light functions"), the sky texture, rain (the colour
-      grading and bloom: Decomp audit's post-processing)
+      visually and for cost), the flashlight's and car headlights' light functions (the phone boxes' run: MODLOG
+      "Light functions"), the sky's lightning response, rain (the colour grading and bloom: Decomp audit's
+      post-processing)
 - [ ] Read the stock pak directly, so users don't need to extract it first (with the host CLI's first-run setup).
       Its footer is known (an encrypted-index flag, magics 'Atae' and 'kcid', version 5, index offset and size,
       hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold
