@@ -11,8 +11,10 @@
 //!   thunder (ThunderAudio) once as the curve rises past LightningSoundThreshold; on the last timing 60 s more are
 //!   drawn. At the curve's end the light goes back to its base.
 //!
-//! Not ported: what writes Rain_MPC's LightiningIntensity (the sky's material brightens by exp(x 8) with it:
-//! shaders/masters.wgsl), the rain itself (particles) and wet materials.
+//! While a curve plays, Rain_MPC's LightiningIntensity is clamp((v - min) / max(max, eps), 0, 1) over the curve's
+//! value range, 0 after ([`RainMpc`]: the sky's material brightens by exp(x 8) with it, shaders/masters.wgsl).
+//!
+//! Not ported: the rain itself (particles) and wet materials.
 
 use bevy::prelude::*;
 
@@ -20,8 +22,14 @@ pub struct WeatherPlugin;
 
 impl Plugin for WeatherPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (start_storm, storm).chain());
+        app.init_resource::<RainMpc>().add_systems(Update, (start_storm, storm).chain());
     }
+}
+
+/// Rain_MPC's parameters the game writes: LightiningIntensity (SCZeus's tick).
+#[derive(Resource, Default, Clone, Copy, PartialEq)]
+pub struct RainMpc {
+    pub lightning: f32,
 }
 
 /// The match's weather roll.
@@ -123,6 +131,7 @@ fn storm(
     game: Option<Res<crate::match_flow::GameMatch>>,
     mut rng: ResMut<crate::GameRng>,
     mut moons: Query<&mut DirectionalLight, With<Moon>>,
+    mut mpc: ResMut<RainMpc>,
 ) {
     let (Some(mut storm), Some(game)) = (storm, game) else { return };
     if storm.curves.is_empty() {
@@ -157,10 +166,13 @@ fn storm(
     if t >= end {
         storm.active = None;
         moon.illuminance = storm.base;
+        mpc.set_if_neq(RainMpc { lightning: 0.0 });
         return;
     }
     let v = c.eval(t);
     moon.illuminance = v * storm.base;
+    let (lo, hi) = c.keys.iter().fold((f32::MAX, f32::MIN), |(lo, hi), k| (lo.min(k.value), hi.max(k.value)));
+    mpc.set_if_neq(RainMpc { lightning: ((v - lo) / hi.max(f32::EPSILON)).clamp(0.0, 1.0) });
     let mut thunder = thunder;
     if !thunder && prev <= storm.threshold && storm.threshold < v {
         thunder = true;

@@ -7,8 +7,8 @@
 // Mode 2, the cabin name signs: roughness = RMA.g, specular 0.1 (the StandardMaterial's reflectance).
 // Mode 3, the sky sphere (M_Sky, unlit; its G-buffer pass s005): s = Texture x Overall desaturated by Desaturation
 //   (towards its luminance (0.3, 0.59, 0.11)) x ColorTint; lerp(s, Texture x Overall2 x ColorTint2, AlphaMask); + the
-//   stars (T_Stars at uv x 12) x StarBrightness x (1 - AlphaMask); x exp(Rain_MPC LightiningIntensity x 8), that
-//   intensity 0 here (nothing writes it: weather.rs).
+//   stars (T_Stars at uv x 12) x StarBrightness x (1 - AlphaMask); x exp(Rain_MPC LightiningIntensity (mode.w) x 8)
+//   (weather.rs RainMpc).
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
@@ -69,6 +69,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         let mask = textureSample(tex2, tex_sampler, in.uv).rgb;
         var c = mask * (t * params.b.w * params.b.rgb - s) + s;
         c = c + (1.0 - mask) * textureSample(tex3, tex_sampler, in.uv * 12.0).rgb * params.mode.z;
+        c = c * exp(params.mode.w * 8.0);
         var out: FragmentOutput;
         out.color = vec4(max(c, vec3(0.0)) * view.exposure, 1.0);
         out.color = main_pass_post_lighting_processing(pbr_input, out.color);

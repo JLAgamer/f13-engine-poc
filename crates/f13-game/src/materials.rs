@@ -85,7 +85,7 @@ impl Plugin for MaterialsPlugin {
                 MaterialPlugin::<SkinMaterial>::default(),
                 MaterialPlugin::<MasterMaterial>::default(),
             ))
-            .add_systems(Update, (apply_materials, strip_vertex_colors).chain());
+            .add_systems(Update, ((apply_materials, strip_vertex_colors).chain(), sky_lightning));
     }
 }
 
@@ -585,6 +585,17 @@ struct MasterParams {
 impl MaterialExtension for MasterExt {
     fn fragment_shader() -> ShaderRef {
         "embedded://f13_game/shaders/masters.wgsl".into()
+    }
+}
+
+/// The sky's material takes Rain_MPC's LightiningIntensity (weather.rs) as it changes.
+fn sky_lightning(mpc: Option<Res<crate::weather::RainMpc>>, mut materials: ResMut<Assets<MasterMaterial>>) {
+    let Some(mpc) = mpc.filter(|m| m.is_changed()) else { return };
+    let skies: Vec<_> = materials.iter().filter(|(_, m)| m.extension.params.mode.x == 3.0).map(|(id, _)| id).collect();
+    for id in skies {
+        if let Some(mut m) = materials.get_mut(id) {
+            m.extension.params.mode.w = mpc.lightning;
+        }
     }
 }
 
