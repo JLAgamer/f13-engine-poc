@@ -11,8 +11,17 @@
 //!   weight moves dt x EyelidMovementSpeed x (target - weight), clamped to Min..MaxEyelidWeight, onto EyelidMorphTarget
 //!   and EyelashMorphTarget. (The constructor starts it at 0 with its target 1: a blink as she appears.)
 //!
-//! Not ported yet: the eyes' look (their L_Eye / R_Eye bones), the face skeleton's base pose, brow and jaw additives,
-//! and the body montages' face curves (MontageFaceNames, the jaw and brow alphas, the blink override).
+//! - alive: the eyes' look. Each time the left eye has reached its target (every component within 0.01 degrees,
+//!   wrapped), the look (unless held): a look-away flag with its timer (rand(MinLook, MaxLookUpdateFrequency)) and hold
+//!   (rand(0, MaxLookTime)) alternates a random direction (yaw +/- MaxEyeLookYawOffset, pitch +/-
+//!   MaxEyeLookPitchOffset) with straight ahead, x LookDistance; the target is the eyes' midpoint + that offset turned
+//!   by the left eye's parent bone; each eye's target rotator = the parent's world rotator minus the look's, with its
+//!   pitch moved to yaw and its yaw to roll (pitch 0); both move by RInterpTo at EyeMovementSpeed; the anim graph's
+//!   ModifyBone replaces the eye bones' component-space rotation with them (alpha EyeMovementOverride:
+//!   !bInContextKill; 1 here). Computed in Unreal space (to_unreal; the export's quaternion map (-x, -z, -y, w)).
+//!
+//! Not ported yet: the face skeleton's base pose, brow and jaw additives, the body montages' face curves
+//! (MontageFaceNames, the jaw and brow alphas, the blink override), bAnimationOverride's look at target_jnt.
 
 use bevy::mesh::morph::MorphWeights;
 use bevy::prelude::*;
@@ -39,6 +48,21 @@ struct FaceAnim {
     eyelid_target: f32,
     fear: f32,
     shock: f32,
+    look: Look,
+}
+
+/// The eyes' look state (SCFaceAnimInstance +0x4c8..0x554).
+#[derive(Default)]
+struct Look {
+    offset: Vec3,
+    ahead: bool,
+    trigger: bool,
+    timer: f32,
+    hold: f32,
+    left: Vec3,
+    right: Vec3,
+    left_target: Vec3,
+    right_target: Vec3,
 }
 
 /// The values the face reads, from the counselor's export.
@@ -58,6 +82,15 @@ struct FaceTuning {
     blink_left: String,
     blink_right: String,
     emotion: Option<[RichCurve; 2]>,
+    look_distance: f32,
+    max_yaw: f32,
+    max_pitch: f32,
+    eye_speed: f32,
+    look_min: f32,
+    look_max: f32,
+    max_look_time: f32,
+    left_eye: String,
+    right_eye: String,
 }
 
 impl FaceTuning {
@@ -81,8 +114,57 @@ impl FaceTuning {
             blink_left: n("BlinkLeftName", "Blink_L"),
             blink_right: n("BlinkRightName", "Blink_R"),
             emotion: curve("X").zip(curve("Y")).map(|(x, y)| [x, y]),
+            look_distance: v("LookDistance", 2500.0),
+            max_yaw: v("MaxEyeLookYawOffset", 30.0),
+            max_pitch: v("MaxEyeLookPitchOffset", 25.0),
+            eye_speed: v("EyeMovementSpeed", 1.0),
+            look_min: v("MinLookUpdateFrequency", 5.0),
+            look_max: v("MaxLookUpdateFrequency", 10.0),
+            max_look_time: v("MaxLookTime", 1.5),
+            left_eye: n("LeftEyeBoneName", "L_Eye"),
+            right_eye: n("RightEyeBoneName", "R_Eye"),
         }
     }
+}
+
+/// FRotator::NormalizeAxis: (-180, 180].
+fn normalize_axis(a: f32) -> f32 {
+    let a = a.rem_euclid(360.0);
+    if a > 180.0 { a - 360.0 } else { a }
+}
+
+fn normalize(r: Vec3) -> Vec3 {
+    Vec3::new(normalize_axis(r.x), normalize_axis(r.y), normalize_axis(r.z))
+}
+
+/// UE's FMath::RInterpTo on (pitch, yaw, roll).
+fn rinterp_to(current: Vec3, target: Vec3, dt: f32, speed: f32) -> Vec3 {
+    if dt == 0.0 || current == target {
+        return current;
+    }
+    if speed <= 0.0 {
+        return target;
+    }
+    let delta = normalize(target - current);
+    if delta.abs().max_element() <= 1.0e-4 {
+        return target;
+    }
+    normalize(current + delta * (dt * speed).clamp(0.0, 1.0))
+}
+
+/// Unreal quaternion <-> Bevy (the export's basis change: (x, z, y)).
+fn swap_quat(q: Quat) -> Quat {
+    Quat::from_xyzw(-q.x, -q.z, -q.y, q.w)
+}
+
+/// Unreal position (cm) of a Bevy one.
+fn ue_pos(v: Vec3) -> Vec3 {
+    Vec3::new(v.x, v.z, v.y) * 100.0
+}
+
+/// UKismetMathLibrary::Conv_VectorToRotator: (pitch, yaw, 0) of a direction.
+fn vector_rotator(v: Vec3) -> Vec3 {
+    Vec3::new(v.z.atan2((v.x * v.x + v.y * v.y).sqrt()).to_degrees(), v.y.atan2(v.x).to_degrees(), 0.0)
 }
 
 /// rand() / RAND_MAX: the face's own stream (the game's GameRng stays the AI's).
@@ -108,6 +190,7 @@ fn face(
     mesh_of: Query<&Mesh3d>,
     meshes: Res<Assets<Mesh>>,
     mut state: Local<(u64, Option<FaceTuning>)>,
+    (names, mut bones, parents): (Query<&Name>, Query<(&mut Transform, &GlobalTransform)>, Query<&ChildOf>),
 ) {
     let Some(character) = character else { return };
     let info = &character.0.info;
@@ -123,7 +206,7 @@ fn face(
         let Some(face_entity) = rig.part(face_index) else { continue };
         let Ok(mut f) = faces.get_mut(face_entity) else {
             let timer = frand(rng) * (t.blink_max - t.blink_min) + t.blink_min;
-            commands.entity(face_entity).insert(FaceAnim { blink_timer: timer, blink: false, eyelid: 0.0, eyelid_target: 1.0, fear: 0.0, shock: 0.0 });
+            commands.entity(face_entity).try_insert(FaceAnim { blink_timer: timer, blink: false, eyelid: 0.0, eyelid_target: 1.0, fear: 0.0, shock: 0.0, look: Look::default() });
             continue;
         };
         let alive = p.counselor.alive();
@@ -143,6 +226,66 @@ fn face(
             f.fear = if fear_alpha <= t.fear_min { finterp_to(f.fear, 0.0, dt, t.to_neutral) } else { fear_alpha.min(cy.eval(at)) };
             set.push((&t.fear_morph, f.fear));
             set.push((&t.shock_morph, f.shock));
+        }
+        // The eyes' look (alive only).
+        let find = |name: &str| children.iter_descendants(face_entity).find(|&d| names.get(d).is_ok_and(|n| n.as_str() == name));
+        if let (true, Some(le), Some(re)) = (alive, find(&t.left_eye), find(&t.right_eye)) {
+            let parent = parents.get(le).map(|c| c.parent()).ok();
+            let gt = |e: Entity| bones.get(e).map(|(_, g)| g.compute_transform()).ok();
+            if let (Some(l), Some(r), Some(pg), Some(cg)) = (gt(le), gt(re), parent.and_then(gt), gt(face_entity)) {
+                let k = &mut f.look;
+                let settled = normalize(k.left_target - k.left).abs().max_element() <= 0.009999999776482582;
+                let mut aim = false;
+                if settled {
+                    if k.ahead {
+                        k.timer -= dt;
+                        if k.timer <= 0.0 {
+                            k.trigger = true;
+                            k.timer = frand(rng) * (t.look_max - t.look_min) + t.look_min;
+                            k.hold = frand(rng) * t.max_look_time;
+                        }
+                    }
+                    if k.trigger && k.ahead {
+                        let yaw = frand(rng) * 2.0 * t.max_yaw - t.max_yaw;
+                        let pitch = frand(rng) * 2.0 * t.max_pitch - t.max_pitch;
+                        k.offset = (f13_core::camera_spline::quaternion(Vec3::new(pitch, yaw, 0.0)) * Vec3::X).normalize_or_zero() * t.look_distance;
+                        k.ahead = false;
+                        k.trigger = false;
+                        aim = true;
+                    } else if !k.ahead {
+                        if k.hold > 0.0 {
+                            k.hold -= dt;
+                        } else {
+                            k.offset = Vec3::X * t.look_distance;
+                            k.ahead = true;
+                            aim = true;
+                        }
+                    } else {
+                        aim = true;
+                    }
+                }
+                if aim {
+                    let (lp, rp) = (ue_pos(l.translation), ue_pos(r.translation));
+                    let parent_rot = swap_quat(pg.rotation);
+                    let target = (lp + rp) * 0.5 + parent_rot * k.offset;
+                    let pr = f13_core::camera_spline::rotator(parent_rot);
+                    let d = |eye: Vec3| {
+                        let look = vector_rotator(target - eye);
+                        Vec3::new(0.0, pr.x - look.x, pr.y - look.y)
+                    };
+                    k.left_target = d(lp);
+                    k.right_target = d(rp);
+                }
+                k.left = rinterp_to(k.left, k.left_target, dt, t.eye_speed);
+                k.right = rinterp_to(k.right, k.right_target, dt, t.eye_speed);
+                // ModifyBone: the component-space rotation replaced (the face's own transform as component space).
+                for (e, rot) in [(le, k.left), (re, k.right)] {
+                    let world = cg.rotation * swap_quat(f13_core::camera_spline::quaternion(rot));
+                    if let Ok((mut xf, _)) = bones.get_mut(e) {
+                        xf.rotation = pg.rotation.inverse() * world;
+                    }
+                }
+            }
         }
         // Blinks (alive only).
         if alive {

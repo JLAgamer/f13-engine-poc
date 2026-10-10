@@ -633,6 +633,15 @@ switch (rest[0])
             Console.WriteLine(Newtonsoft.Json.JsonConvert.SerializeObject(e, Newtonsoft.Json.Formatting.Indented));
         }
         return 0;
+    case "bones": // bones <skeletal mesh package>: its reference skeleton (name, parent, local rotator and translation, Unreal space)
+        foreach (var m in provider.LoadPackage(ToFile(rest[1])).GetExports().OfType<USkeletalMesh>())
+            for (var i = 0; i < m.ReferenceSkeleton.FinalRefBoneInfo.Length; i++)
+            {
+                var b = m.ReferenceSkeleton.FinalRefBoneInfo[i];
+                var p = m.ReferenceSkeleton.FinalRefBonePose[i];
+                Console.WriteLine($"{i}\t{b.Name.Text}\t{b.ParentIndex}\t{p.Rotation.Rotator()}\t{p.Translation}");
+            }
+        return 0;
     case "cdo": // cdo <class name>...: each Blueprint class's defaults (its CDO's properties), one JSON line each
         foreach (var name in rest.Skip(1))
         {
