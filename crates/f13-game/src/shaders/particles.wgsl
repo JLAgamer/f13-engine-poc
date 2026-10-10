@@ -5,6 +5,8 @@
 // Mode 0 is the stand-in for masters not ported (F13_PARTICLE_STANDINS): the first texture times the particle
 // colour (PLACEHOLDER).
 #import bevy_pbr::{
+    pbr_types,
+    pbr_functions::{apply_pbr_lighting, calculate_view},
     mesh_functions::get_world_from_local,
     view_transformations::{position_world_to_clip, depth_ndc_to_view_z, position_world_to_view},
     mesh_view_bindings::{globals, view},
@@ -17,7 +19,8 @@
 #endif
 
 struct ParticleParams {
-    // x: mode (0 stand-in, 1 M_Procedural_Fire_01, 2 M_Procedural_Fire_02, 3 M_MasterParticle_Emissive); y: additive
+    // x: mode (0 stand-in, 1 M_Procedural_Fire_01, 2 M_Procedural_Fire_02, 3 M_MasterParticle_Emissive,
+    // 4 M_Fly_Animated_01); y: additive
     mode: vec4<f32>,
     // The master's material uniform buffer as its compiled shader reads it (uniexpr.py's cb1[n]).
     p: array<vec4<f32>, 12>,
@@ -161,6 +164,57 @@ fn emissive_master(in: VertexOutput) -> vec4<f32> {
     return vec4(emissive, alpha);
 }
 
+// M_Fly_Animated_01 (the flies round the lamps; masked, lit: its G-buffer pass with no DBuffer decals): a sphere's
+// normal (the particle's position and radius, from the dynamic attribute here) under the flipbook's normal map
+// (Normal1); the UV turned 0.5 rad, zoomed by the view depth (/ ScaleByDistance x 0.1, clamped 0.1 to
+// MaximumDistanceSize) and stepped through UV_COLUMNS x UV_ROWS at (cos(time x FLIPBOOK_Speed x 2pi) + 1) / 2; masked
+// by Texture1's alpha x the particle's alpha x a circle, dithered (DitherTemporalAA) against 0.9; base colour 0.2,
+// specular 0. Lit by Bevy as the G-buffer is by the engine.
+fn fly(in: VertexOutput) -> vec4<f32> {
+    let p = params.p;
+    let centre = in.dynamic.xyz;
+    let radius = in.dynamic.w;
+    let pixel = in.world_position;
+    let forward = -normalize(view.world_from_view[2].xyz);
+    var n = vec3(0.0, 1.0, 0.0);
+    let d = pixel - centre;
+    let k = radius * radius - dot(d, d);
+    if k > 0.0 {
+        n = normalize(pixel - forward * sqrt(k) - centre);
+    }
+    let up = normalize(view.world_from_view[1].xyz);
+    let t = normalize(cross(up, n));
+    let b = cross(n, t);
+    let q = in.uv - 0.5;
+    let r = vec2(dot(vec2(0.877583, 0.479426), q), dot(vec2(-0.479426, 0.877583), q)) + 0.5;
+    let depth = -position_world_to_view(pixel).z * 100.0;
+    let scale = min(max(depth / p[5].y * 0.1, 0.1), p[5].z);
+    var uv = (r / scale + 0.5 - 0.5 / scale) / p[1].xy;
+    let f = fract((cos(globals.time * p[6].z * 6.283185) + 1.0) * 0.5);
+    uv = uv + floor(f * p[2].xy) / p[1].xy;
+    let nm = textureSample(t0, s, uv).xy * 2.0 - 1.0;
+    let nt = vec3(nm, sqrt(max(1.0 - dot(nm, nm), 0.0)));
+    let normal = normalize(t * nt.x + b * nt.y + n * nt.z);
+    let mask = textureSample(t1, s, uv).a * in.color.a;
+    let circle = saturate((1.0 - length(q) / clamp(scale * 0.8 - 0.2, 0.05, 0.5)) * 100000.0);
+    let xy = in.clip.xy;
+    let noise = (fract((2.0 * xy.y + xy.x - 1.5) * 0.2) * 5.0 + fract(dot(vec2(2.408451, 3.253521), xy))) * 0.166667;
+    if mask * circle + noise - 0.9 < 0.0 {
+        discard;
+    }
+    var pbr = pbr_types::pbr_input_new();
+    pbr.material.base_color = vec4(0.2, 0.2, 0.2, 1.0);
+    pbr.material.metallic = 0.0;
+    pbr.material.reflectance = vec3(0.0);
+    pbr.material.perceptual_roughness = 0.5;
+    pbr.frag_coord = in.clip;
+    pbr.world_position = vec4(pixel, 1.0);
+    pbr.world_normal = n;
+    pbr.N = normal;
+    pbr.V = calculate_view(pbr.world_position, false);
+    return vec4(apply_pbr_lighting(pbr).rgb, 1.0);
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let mode = u32(params.mode.x);
@@ -171,6 +225,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         c = fire_02(in);
     } else if mode == 3u {
         c = emissive_master(in);
+    } else if mode == 4u {
+        // Already exposed (apply_pbr_lighting).
+        c = fly(in);
+        c = vec4(c.rgb / view.exposure, 1.0);
     } else {
         let t = textureSample(t0, s, in.uv);
         c = vec4(t.rgb * in.color.rgb, t.a * in.color.a);

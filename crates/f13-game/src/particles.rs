@@ -128,6 +128,9 @@ struct EmitterState {
     entity: Entity,
     mesh: Handle<Mesh>,
     pivot: Vec2,
+    /// Its material reads the particle's sphere (centre and radius, Bevy space) from the dynamic attribute (the flies'
+    /// sphere normals; their material has no DynamicParameter).
+    sphere: bool,
     /// The bursts fired in the current loop.
     bursts_fired: Vec<bool>,
     loops_done: u32,
@@ -207,15 +210,19 @@ struct MaterialEntry {
 /// Builds the particle materials by name.
 struct Materials {
     entries: HashMap<String, MaterialEntry>,
-    built: HashMap<String, Option<Handle<ParticleMaterial>>>,
+    /// Each material and its master's port (`ParticleParams::mode`).
+    built: HashMap<String, Option<(Handle<ParticleMaterial>, u32)>>,
 }
 
 impl Materials {
-    fn get(&mut self, name: &str, root: &std::path::Path, assets: &AssetServer, materials: &mut Assets<ParticleMaterial>) -> Option<Handle<ParticleMaterial>> {
+    fn get(&mut self, name: &str, root: &std::path::Path, assets: &AssetServer, materials: &mut Assets<ParticleMaterial>) -> Option<(Handle<ParticleMaterial>, u32)> {
         if let Some(h) = self.built.get(name) {
             return h.clone();
         }
-        let built = self.build(name, root, assets).map(|m| materials.add(m));
+        let built = self.build(name, root, assets).map(|m| {
+            let mode = m.params.mode.x as u32;
+            (materials.add(m), mode)
+        });
         self.built.insert(name.to_string(), built.clone());
         built
     }
@@ -232,7 +239,7 @@ impl Materials {
         let s = |n: &str, d: f32| e.scalars.get(n).or_else(|| master.and_then(|m| m.scalars.get(n))).copied().unwrap_or(d);
         // Flow and distortion maps are data (linear), the rest colour.
         let tex = |n: &str| {
-            let color = !n.contains("Flow") && !n.contains("Distortion");
+            let color = !n.contains("Flow") && !n.contains("Distortion") && !n.contains("Normal");
             e.textures.get(n).or_else(|| master.and_then(|m| m.textures.get(n))).and_then(|p| crate::materials::load_texture(root, assets, p, color))
         };
         let mut p = [Vec4::ZERO; 12];
@@ -274,6 +281,18 @@ impl Materials {
                 p[5] = Vec4::new(s("TimeMultiplier_2", 0.83), s("Texture3_Scroll_Multiplier_2", -0.4), s("Texture3_UV_Coord_Multiplier_2", 1.0), s("fadeAmount", 0.0));
                 p[6] = Vec4::new(s("fadeAmount", 0.0).max(1e-5), s("Opacity_Power", 2.0), s("RefractionDepthBias", 0.0), 0.0);
                 (3.0, [tex("ParticleTexture"), tex("Texture1"), tex("Texture1_1")])
+            }
+            "M_Fly_Animated_01" => {
+                // uniexpr.py M_Fly_Animated_01: cb1[1] (UV_COLUMNS, UV_ROWS), [2] (columns x rows, UV_ROWS), [5]
+                // (FLIPBOOK_Speed, ScaleByDistance, MaximumDistanceSize, UV_ROWS), [6] (UV_COLUMNS, columns x rows,
+                // FLIPBOOK_Speed: the instance's one value for both of the graph's parameters of that name).
+                let (cols, rows) = (s("UV_COLUMNS", 2.0), s("UV_ROWS", 2.0));
+                let speed = s("FLIPBOOK_Speed", 30.0);
+                p[1] = Vec4::new(cols, rows, cols, rows);
+                p[2] = Vec4::new(cols * rows, rows, rows, rows);
+                p[5] = Vec4::new(speed, s("ScaleByDistance", 700.0), s("MaximumDistanceSize", 0.5), rows);
+                p[6] = Vec4::new(cols, cols * rows, speed, 0.0);
+                (4.0, [tex("Normal1"), tex("Texture1"), None])
             }
             // Masters whose graphs aren't ported yet aren't drawn (F13_PARTICLE_STANDINS=1 draws them as their first
             // texture x the particle colour, PLACEHOLDER, to check the simulation).
@@ -350,7 +369,7 @@ fn spawn_level_particles(
                 let warmup = p["WarmupTime"].as_f64().map_or(system.warmup, |w| w as f32);
                 let mut emitters = vec![];
                 for def in &system.emitters {
-                    let Some(material) = def.material.as_deref().and_then(|m| mats.get(m, &root, &assets, &mut materials)) else { continue };
+                    let Some((material, mode)) = def.material.as_deref().and_then(|m| mats.get(m, &root, &assets, &mut materials)) else { continue };
                     // Every attribute from the start (a degenerate quad), so its layout never changes.
                     let mesh = meshes.add(
                         Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
@@ -373,7 +392,7 @@ fn spawn_level_particles(
                         ))
                         .id();
                     let pivot = def.modules.iter().find_map(|m| if let Module::PivotOffset(p) = m { Some(Vec2::from(*p)) } else { None }).unwrap_or(Vec2::ZERO) + Vec2::splat(-0.5);
-                    emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0 });
+                    emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: mode == 4 });
                 }
                 if emitters.is_empty() {
                     continue;
@@ -678,7 +697,8 @@ fn draw(
                     positions.push((pos - origin).to_array());
                     uvs.push(((cell + corner) / Vec2::new(cols as f32, rows as f32)).to_array());
                     colors.push(p.color.to_array());
-                    dynamic.push(p.dynamic);
+                    // ParticlePositionAndSize: the centre and half the larger side.
+                    dynamic.push(if e.sphere { center.extend(0.5 * size.max_element()).to_array() } else { p.dynamic });
                 }
                 indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
             }
