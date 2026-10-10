@@ -25,7 +25,10 @@ Police, 4-seat car, boat, then the others, one at a time. The police and the 4-s
 
 Bugs:
 - [ ] Grabbing a counselor as Jason still loops the struggle audio (the sound cues' looping and random nodes are
-      ported, audio.rs Reloop; not the fix)
+      ported, audio.rs Reloop; not the fix). Read so far (MODLOG "The grab's struggle loop"): the game repeats her
+      Choke takes for as long as he holds her; the hold ends at her struggle's TotalStunTime (15 s, less with her
+      stats), a kill or a drop, and traces show Choke stopping at each. Playing Jason, his E no longer counts as her
+      wiggle. Needs a retest to say what still sounds wrong
 
 Moved from Milestone 1 (not tied to gameplay):
 - [ ] Match flow, remaining: in the intro and outro their particle tracks (with the particles), the title text, the

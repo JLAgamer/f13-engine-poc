@@ -2929,9 +2929,11 @@ fn snap_rig(rigs: &mut Query<(&mut Rig, &ChildOf, &Transform), (Without<Jason>, 
 }
 
 /// The wiggle input (FUN_1402dcfa0): -1 while one of GLB_Wiggle's keys is down (DefaultInput.ini: E), else 0; the
-/// minigame's tick counts its turning non-zero, so each press of E is a wiggle (at most MaxWigglesPerSecond).
-pub(crate) fn read_struggle(keys: Res<ButtonInput<KeyCode>>, mut s: ResMut<Struggle>) {
-    s.input = if keys.pressed(KeyCode::KeyE) { -1.0 } else { 0.0 };
+/// minigame's tick counts its turning non-zero, so each press of E is a wiggle (at most MaxWigglesPerSecond). Playing
+/// Jason, the keys are his (E is his interact): she doesn't wiggle and frees herself by the stun's time alone
+/// (PLACEHOLDER: the game's offline counselor AI's struggle isn't read).
+pub(crate) fn read_struggle(keys: Res<ButtonInput<KeyCode>>, mut s: ResMut<Struggle>, play_jason: Option<Res<crate::jason_player::PlayJason>>) {
+    s.input = if play_jason.is_none() && keys.pressed(KeyCode::KeyE) { -1.0 } else { 0.0 };
 }
 
 /// CounselorGrabStun_C: the grab is a stun she wiggles out of: TotalStunTime 15 s (lower with Strength 15 and
