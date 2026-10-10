@@ -99,7 +99,7 @@ impl Plugin for CharacterPlugin {
         })
         .add_systems(Update, (assemble, animate).chain())
         .init_resource::<LayerRestore>()
-        .add_systems(PostUpdate, (restore_unanimated, run_lean, layered_blend, item_hand_layer, aim_offset, item_arm_layer).chain().after(bevy::app::AnimationSystems).before(bevy::transform::TransformSystems::Propagate));
+        .add_systems(PostUpdate, (restore_unanimated, run_lean, layered_blend, item_hand_layer, aim_offset, head_look, item_arm_layer).chain().after(bevy::app::AnimationSystems).before(bevy::transform::TransformSystems::Propagate));
     }
 }
 
@@ -396,6 +396,10 @@ pub struct Rig {
     /// The held item's pose on the hand layer, and on the arm layer with its weight (UpperBodyItemAlpha).
     item_hand: Option<String>,
     item_arm: Option<(String, f32)>,
+    /// The head look (SCCharacter +0x10c4: the rotator's pitch, already negated, and yaw; degrees) and
+    /// TargetLookRotationAlpha (SCCounselorAnimInstance +0x624).
+    look: Vec2,
+    look_alpha: f32,
 }
 
 /// A full-body animation a character plays now (hit reactions, grabs, kills, death), whatever its movement state.
@@ -472,6 +476,8 @@ pub fn spawn_model(commands: &mut Commands, assets: &AssetServer, character: &Ch
         lean_on: false,
         item_hand: None,
         item_arm: None,
+        look: Vec2::ZERO,
+        look_alpha: 0.0,
     });
     rig
 }
@@ -1410,6 +1416,145 @@ fn aim_offset(
     }
 }
 
+/// SCCounselorAnimInstance's MaxLookAtFear (its constructor; no Blueprint sets it).
+const MAX_LOOK_AT_FEAR: f32 = 50.0;
+/// TargetLookRotationAlpha's FInterpTo speed (the anim update FUN_1403133b0).
+const LOOK_ALPHA_SPEED: f32 = 4.0;
+/// The head look's RInterpTo speed (DAT_14207a20c).
+const LOOK_INTERP_SPEED: f32 = 3.0;
+/// Within this of side-on (|cos| of the look against her facing, DAT_14209aa60) the head looks ahead.
+const LOOK_SIDE_COS: f32 = 0.2;
+/// ClampAngle limits (DAT_1420f5954..60): yaw +-55, pitch +-25 (from 0 when the look is behind her).
+const LOOK_MAX_YAW: f32 = 55.0;
+const LOOK_MAX_PITCH: f32 = 25.0;
+
+/// FRotator::NormalizeAxis.
+fn normalize_axis(a: f32) -> f32 {
+    let a = a.rem_euclid(360.0);
+    if a > 180.0 { a - 360.0 } else { a }
+}
+
+/// FMath::ClampAngle.
+fn clamp_angle(angle: f32, min: f32, max: f32) -> f32 {
+    let max_delta = (max - min).rem_euclid(360.0) * 0.5;
+    let center = (min + max_delta).rem_euclid(360.0);
+    let d = normalize_axis(angle - center);
+    if d > max_delta {
+        normalize_axis(center + max_delta)
+    } else if d < -max_delta {
+        normalize_axis(center - max_delta)
+    } else {
+        normalize_axis(angle)
+    }
+}
+
+/// UKismetMathLibrary::RInterpTo on (pitch, yaw) (roll stays 0).
+fn rinterp_to(current: Vec2, target: Vec2, dt: f32, speed: f32) -> Vec2 {
+    if dt == 0.0 || current == target {
+        return current;
+    }
+    let delta = Vec2::new(normalize_axis(target.x - current.x), normalize_axis(target.y - current.y));
+    if delta.abs().max_element() <= 1e-4 {
+        return target;
+    }
+    let m = current + delta * (speed * dt).clamp(0.0, 1.0);
+    Vec2::new(normalize_axis(m.x), normalize_axis(m.y))
+}
+
+/// FRotator::Quaternion in Unreal's axes, then to the rig's (glTF: (x, z, y), rotation (-x, -z, -y, w)).
+fn rotator_quat(pitch: f32, yaw: f32, roll: f32) -> Quat {
+    let (sp, cp) = (pitch.to_radians() * 0.5).sin_cos();
+    let (sy, cy) = (yaw.to_radians() * 0.5).sin_cos();
+    let (sr, cr) = (roll.to_radians() * 0.5).sin_cos();
+    let x = cr * sp * sy - sr * cp * cy;
+    let y = -cr * sp * cy - sr * cp * sy;
+    let z = cr * cp * sy - sr * sp * cy;
+    let w = cr * cp * cy + sr * sp * sy;
+    Quat::from_xyzw(-x, -z, -y, w)
+}
+
+/// The counselor's head look. SCCharacter's tick helper FUN_1402ecdf0 (locally controlled): the direction from her eyes
+/// (vt +0x5b8, GetActorEyesViewPoint: BaseEyeHeight above her capsule's centre) to the camera's last view location
+/// (ILLCharacter +0x7d0, cached by CalcCamera 0x14025ac71); flattened against her forward: within 0.2 of side-on no
+/// look, behind her the flat direction mirrored (looking where the camera looks), in front the full direction (at the
+/// camera). Its rotator against hers, yaw ClampAngle'd to +-55, pitch to +-25 (0..25 behind) and negated, RInterpTo'd
+/// at 3 into +0x10c4. The anim update (FUN_140311d00 0x140312045) makes TargetLookAtRotation (Pitch 0, Yaw, Roll =
+/// that pitch) and FUN_1403133b0 TargetLookRotationAlpha: FInterpTo at 4 toward 0 in a special move, stunned, out of
+/// the standing stance or at MaxLookAtFear, else 1. Base_Counselor_AnimBP applies it with ModifyBone_B9E86 on
+/// neck_01 (BMM_Additive in component space, after the aim offset, under the Cinematic slot): the rotation before the
+/// bone's component rotation, blended by the alpha; its children follow.
+#[allow(clippy::type_complexity)]
+fn head_look(
+    time: Res<Time>,
+    counselor: Option<Res<CounselorCharacter>>,
+    players: Query<(&Player, &GlobalTransform, Option<&PlayAction>)>,
+    cameras: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
+    mut rigs: Query<(&ChildOf, &mut Rig, &GlobalTransform)>,
+    mut transforms: Query<&mut Transform>,
+    mut written: ResMut<LayerRestore>,
+) {
+    let Some(model) = counselor.as_deref().map(|c| &c.0) else { return };
+    let Ok(camera) = cameras.single() else { return };
+    let dt = time.delta_secs();
+    let bones = &model.info.bones;
+    let Some(neck) = bones.iter().position(|b| b.name == "neck_01") else { return };
+    for (parent, mut rig, rig_xf) in &mut rigs {
+        if !matches!(rig.model, Model::Counselor) {
+            continue;
+        }
+        let Ok((p, xf, scripted)) = players.get(parent.parent()) else { continue };
+        // Into the mesh's component space, Unreal's axes.
+        let inv = rig_xf.rotation().inverse();
+        let ue = |v: Vec3| {
+            let l = inv * v;
+            Vec3::new(l.x, l.z, l.y)
+        };
+        let eyes = xf.translation() + Vec3::Y * (model.info.capsule_half_height / 100.0 + crate::interact::BASE_EYE_HEIGHT_M);
+        let d = ue(camera.translation() - eyes).normalize_or_zero();
+        let fwd = ue(xf.rotation() * Vec3::Z);
+        let flat = Vec3::new(d.x, d.y, 0.0).normalize_or_zero();
+        let cos = flat.dot(fwd);
+        let target = if cos.abs() < LOOK_SIDE_COS {
+            Vec2::ZERO
+        } else {
+            let dir = if cos < 0.0 { -flat } else { d };
+            let yaw = normalize_axis(dir.y.atan2(dir.x).to_degrees() - fwd.y.atan2(fwd.x).to_degrees());
+            let pitch = normalize_axis(dir.z.atan2(dir.truncate().length()).to_degrees());
+            let min_pitch = if cos >= 0.0 { -LOOK_MAX_PITCH } else { 0.0 };
+            Vec2::new(-clamp_angle(pitch, min_pitch, LOOK_MAX_PITCH), clamp_angle(yaw, -LOOK_MAX_YAW, LOOK_MAX_YAW))
+        };
+        rig.look = rinterp_to(rig.look, target, dt, LOOK_INTERP_SPEED);
+        // PLACEHOLDER: IsInSpecialMove / IsStunned as a scripted action (special moves, hits, grabs) or hiding.
+        let off = scripted.is_some() || p.hidden || p.counselor.stance != Stance::Standing || p.fear >= MAX_LOOK_AT_FEAR;
+        rig.look_alpha = crate::items::finterp_to(rig.look_alpha, if off { 0.0 } else { 1.0 }, dt, LOOK_ALPHA_SPEED);
+        // The Cinematic slot is over it.
+        if rig.look_alpha <= 1e-4 || rig.action.as_ref().is_some_and(|(a, _)| a.starts_with("cinematic_")) {
+            continue;
+        }
+        let rotation = rotator_quat(0.0, rig.look.y, rig.look.x);
+        // neck_01's parents' component rotation and its own.
+        let mut chain = Vec::new();
+        let mut i = bones[neck].parent;
+        while i >= 0 {
+            chain.push(i as usize);
+            i = bones[i as usize].parent;
+        }
+        let mut parent_cs = Quat::IDENTITY;
+        for &b in chain.iter().rev() {
+            let Some(r) = rig.bones.get(&bones[b].name).and_then(|e| transforms.get(*e).ok()).map(|x| x.rotation) else { return };
+            parent_cs *= r;
+        }
+        let Some(&e) = rig.bones.get("neck_01") else { continue };
+        let Ok(mut nxf) = transforms.get_mut(e) else { continue };
+        let before = *nxf;
+        let cs = parent_cs * before.rotation;
+        let out_cs = fast_lerp(cs, rotation * cs, rig.look_alpha);
+        let out = Transform { rotation: (parent_cs.inverse() * out_cs).normalize(), ..before };
+        *nxf = out;
+        written.0.entry(e).or_insert((before, out)).1 = out;
+    }
+}
+
 /// Position of `speed` along the blendspace's speed marks (0 at marks[0], 1 at marks[1], ...).
 fn speed_state(speed: f32, marks: &[f32]) -> f32 {
     for i in 1..marks.len() {
@@ -1424,6 +1569,20 @@ fn speed_state(speed: f32, marks: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn head_look_math() {
+        // As FRotationMatrix: yaw turns Unreal's X toward its Y (the rig's +Z), roll its Y toward -Z (the rig's -Y).
+        let q = rotator_quat(0.0, 90.0, 0.0);
+        assert!((q * Vec3::X - Vec3::Z).length() < 1e-5);
+        let q = rotator_quat(0.0, 0.0, 90.0);
+        assert!((q * Vec3::Z + Vec3::Y).length() < 1e-5);
+        assert_eq!(clamp_angle(80.0, -55.0, 55.0), 55.0);
+        assert_eq!(clamp_angle(-170.0, 0.0, 25.0), 25.0);
+        assert_eq!(clamp_angle(10.0, -25.0, 25.0), 10.0);
+        let r = rinterp_to(Vec2::ZERO, Vec2::new(0.0, 170.0), 0.1, 3.0);
+        assert!((r.y - 51.0).abs() < 1e-3);
+    }
 
     #[test]
     fn followers_take_the_leaders_marker_phase() {

@@ -31,7 +31,7 @@ const DEFAULT_MAX_YAW: f32 = 15.0;
 const DEFAULT_MAX_PITCH: f32 = 90.0;
 /// APawn's BaseEyeHeight (no counselor Blueprint sets it): her eyes above her capsule's centre (GetPawnViewLocation),
 /// where the interactables' occlusion traces start.
-const BASE_EYE_HEIGHT_M: f32 = 0.64;
+pub(crate) const BASE_EYE_HEIGHT_M: f32 = 0.64;
 
 /// One interactable component's range test settings (ILLInteractableComponent, FUN_14022e940): where it is (actor
 /// space; GetInteractionLocation is its location), its yaw and pitch limits (bUseYawLimit / bUsePitchLimit:
