@@ -20,7 +20,8 @@
 
 struct ParticleParams {
     // x: mode (0 stand-in, 1 M_Procedural_Fire_01, 2 M_Procedural_Fire_02, 3 M_MasterParticle_Emissive,
-    // 4 M_Fly_Animated_01, 5 M_MasterParticle_Diffuse_nearFade, 6 M_Procedural_Smoke_05, 7 M_Rain_Master); y: additive
+    // 4 M_Fly_Animated_01, 5 M_MasterParticle_Diffuse_nearFade, 6 M_Procedural_Smoke_05, 7 M_Rain_Master,
+    // 8 M_Procedural_Tire_Dust_01_Inst); y: additive
     mode: vec4<f32>,
     // The master's material uniform buffer as its compiled shader reads it (uniexpr.py's cb1[n]).
     p: array<vec4<f32>, 16>,
@@ -320,6 +321,51 @@ fn rain_master(in: VertexOutput) -> vec4<f32> {
     return vec4(emissive + volume_lit(in, diffuse), saturate(o * p[15].x));
 }
 
+// M_Procedural_Tire_Dust_01_Inst (the cars' tire dust; master M_Procedural_Smoke_04_no-self-shadow; lit translucency,
+// the instance's own shader map (0_NRM_switch off), its sprite pass s003): t0 FlowMap1, t1 BaseTexture1 (their red; the flow's red inverted). Two
+// flow phases (FlowMap1 at (uv + time x FlowmapN_XY_Time + DynamicParameter.w) x FlowmapN_UV (x 0.8 the first),
+// scaled by DynamicParameter.z x 0_FlowMap_Multiply x 5) distort the uv, each phase's BaseTexture1 at that x
+// Flowmaps_BasemapTileMultiply + a circle (DynamicParameter.y about time x BasemapN_XY_Time x 2pi) x BasemapN_UV,
+// / 0_SmokeTexSize (x 0.8 the first). Their sum / 0_BaseTextureDarken, contrasted by BaseTextureContrast, x 3, at
+// least 0.1, x the colour is the diffuse (x (1 - saturate(SPEC)): its Metallic) under the lighting volume; emissive
+// colour x 0_EmissiveMasterLevel. Opacity: the sum / 3 contrasted by DynamicParameter.x, x colour.a, x a sphere mask
+// (the distorted uv x SphereMaskGlobalDistortionLevel; radius SphereMask_Radius - 0.2 x the distortion), x 0.985,
+// contrasted by 0_MasterAlphaContrast, x 0_Alpha_Contrast_Opacity_MASTER, at most 0.9; x the depth fades x colour.a x
+// 0_Opacity_MASTER.
+fn tire_dust(in: VertexOutput) -> vec4<f32> {
+    let p = params.p;
+    let dp = in.dynamic;
+    let uv = in.uv;
+    let col = in.color;
+    let time = globals.time;
+    let d = dp.z * p[6].w;
+    let d5 = d * 5.0;
+    let emissive = max(col.rgb * p[6].x + p[1].xyz, vec3(0.0));
+    let base_uv = d * 0.15 + uv;
+    let uvm = d * -2.5 + base_uv;
+    let f1 = textureSample(t0, s, (time * p[7].x + uv + dp.w) * p[7].yz * 0.8).xy;
+    let a2 = uvm + vec2(d5 * (1.0 - f1.x), d5 * f1.y) + base_uv;
+    let ang1 = time * p[8].x * 6.283185;
+    let c1 = vec2((cos(ang1) * dp.y + uv.x) * p[8].y + dp.w, (sin(ang1) * dp.y + uv.y) * p[8].z + dp.w);
+    let base1 = textureSample(t1, s, (a2 * p[7].w + c1) / p[8].w * 0.8).x;
+    let f2 = textureSample(t0, s, (time * p[9].x + uv + dp.w) * p[9].yz).xy;
+    let b2 = uvm + vec2(d5 * (1.0 - f2.x), d5 * f2.y) + base_uv;
+    let ang2 = time * p[9].w * 6.283185;
+    let c2 = vec2((cos(ang2) * dp.y + uv.x) * p[10].x + dp.w, (sin(ang2) * dp.y + uv.y) * p[10].y + dp.w);
+    let base2 = textureSample(t1, s, (b2 * p[7].w + c2) / p[8].w).x;
+    let sum = base1 + base2;
+    let base = max(saturate(sum / p[10].z * (p[10].w - p[3].x) + p[3].x) * 3.0, 0.1);
+    let diffuse = saturate(base * col.rgb) * (1.0 - saturate(p[11].x));
+    let fades = depth_fades(in, p[11].z, p[11].w);
+    let opacity = fades.y * saturate(fades.x * col.a) * p[12].x;
+    var shape = saturate(sum * 0.333333 * (dp.x * 2.0 + 1.0) - dp.x) * col.a;
+    let m = (a2 * p[7].w + b2 * p[7].w - uv) * p[12].w + uv - 0.5;
+    let radius = max(d * -0.2 + p[13].x, 0.00001);
+    shape = shape * saturate((1.0 - length(m) / radius) * p[14].x) * 0.985;
+    shape = clamp(saturate(shape * (p[14].y - p[5].x) + p[5].x) * p[14].z, 0.0, 0.9);
+    return vec4(emissive + volume_lit(in, diffuse), saturate(shape * opacity));
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let mode = u32(params.mode.x);
@@ -336,6 +382,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         c = smoke_05(in);
     } else if mode == 7u {
         c = rain_master(in);
+    } else if mode == 8u {
+        c = tire_dust(in);
     } else if mode == 4u {
         // Already exposed (apply_pbr_lighting).
         c = fly(in);

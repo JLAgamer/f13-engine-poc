@@ -251,7 +251,7 @@ fn apply_power(grids: Res<PowerGrids>, mut powered: Query<(&Powered, &mut Visibi
 fn break_vfx(boxes: Query<&FuseBox, Changed<FuseBox>>, mut particles: MessageWriter<crate::particles::ParticleActivation>, mut last: Local<std::collections::HashMap<String, bool>>) {
     for f in &boxes {
         if last.insert(f.actor.clone(), f.destroyed) != Some(f.destroyed) {
-            particles.write(crate::particles::ParticleActivation { actor: f.actor.clone(), active: f.destroyed });
+            particles.write(crate::particles::ParticleActivation { actor: f.actor.clone(), active: f.destroyed, reset: true });
         }
     }
 }

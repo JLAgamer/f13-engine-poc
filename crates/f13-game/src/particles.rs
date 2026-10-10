@@ -50,6 +50,9 @@ impl Plugin for ParticlesPlugin {
 pub struct ParticleActivation {
     pub actor: String,
     pub active: bool,
+    /// Activate(bReset): from the start. Without it (SetActive(true, false)) an inactive system's spawning resumes
+    /// and its particles are kept (PLACEHOLDER: UParticleSystemComponent::ActivateSystem's bReset false path unread).
+    pub reset: bool,
 }
 
 /// The particle's dynamic parameter (Float32x4), for the material's DynamicParameter.
@@ -354,6 +357,26 @@ impl Materials {
                 p[13] = Vec4::new(s("BaseMin", 0.1), s("Emissive_Multiplier", 0.01), s("FadeDistance", 3.0), s("FadeDistance", 3.0).max(1e-5));
                 p[14] = Vec4::new(s("0_PixelDepthDistance", 0.0), s("0_Opacity_Multiplier", 1.0), s("RefractionDepthBias", 0.0), 0.0);
                 (6.0, [tex("DistortionTexture"), tex("Texture3"), tex("Texture1"), tex("Texture2")])
+            }
+            // M_Procedural_Tire_Dust_01_Inst's own shader map (static switches: 0_NRM_switch off); the master's other
+            // instances aren't ported.
+            "M_Procedural_Smoke_04_no-self-shadow" if name == "M_Procedural_Tire_Dust_01_Inst" => {
+                // uniexpr.py M_Procedural_Tire_Dust_01_Inst: cb1[1] SelectionColor.rgb (0), [3].x
+                // -BaseTextureContrast, [5].x -0_MasterAlphaContrast, [6..14] below.
+                let (btc, mac, hard) = (s("BaseTextureContrast", 0.3), s("0_MasterAlphaContrast", 0.0), s("SphereMask_Hardness", 0.0));
+                let soft = (1.0 - hard).max(1e-5);
+                p[3] = Vec4::splat(-btc);
+                p[5] = Vec4::splat(-mac);
+                p[6] = Vec4::new(s("0_EmissiveMasterLevel", 0.01), btc, -btc, s("0_FlowMap_Multiply", 0.1));
+                p[7] = Vec4::new(s("0_Flowmap1_XY_Time_Multiply", -0.3), s("Flowmap1_U_Coord_Multiply", 0.75), s("Flowmap1_V_Coord_Multiply", 0.75), s("Flowmaps_BasemapTileMultiply", 0.25));
+                p[8] = Vec4::new(s("0_Basemap1_XY_Time_Multiply", 0.1), s("Basemap1_U_Coord_Multiply", 1.0), s("Basemap1_V_Coord_Multiply", 1.0), s("0_SmokeTexSize", 5.0));
+                p[9] = Vec4::new(s("0_Flowmap2_XY_Time_Multiply", 0.251), s("Flowmap2_U_Coord_Multiply", 0.75), s("Flowmap2_V_Coord_Multiply", 0.75), s("0_Basemap2_XY_Time_Multiply", -0.05));
+                p[10] = Vec4::new(s("Basemap2_U_Multiply", 1.0), s("Basemap2_V_Multiply", 1.0), s("0_BaseTextureDarken", 5.0), btc + 1.0);
+                p[11] = Vec4::new(s("SPEC", 0.1), s("0_FadeDistance", 25.0), s("0_FadeDistance", 25.0).max(1e-5), s("0_PixelDepthDistance", 0.0));
+                p[12] = Vec4::new(s("0_Opacity_MASTER", 1.0), mac, -mac, s("SphereMaskGlobalDistortionLevel", 1.0));
+                p[13] = Vec4::new(s("SphereMask_Radius", 0.5), hard, 1.0 - hard, soft);
+                p[14] = Vec4::new(1.0 / soft, mac + 1.0, s("0_Alpha_Contrast_Opacity_MASTER", 3.0), s("RefractionDepthBias", 0.0));
+                (8.0, [tex("FlowMap1"), tex("BaseTexture1"), None, None])
             }
             "M_Rain_Master" => {
                 // uniexpr.py M_Rain_Master: cb1[2] EmissiveColor.rgb, [3] SelectionColor.rgb (0), [5] BaseColor.rgb,
@@ -758,7 +781,7 @@ fn rain_mpc_materials(mpc: Option<Res<crate::weather::RainMpc>>, mut materials: 
 fn activate(mut messages: MessageReader<ParticleActivation>, mut systems: Query<&mut ParticleSystemInstance>) {
     for m in messages.read() {
         for mut s in systems.iter_mut().filter(|s| s.actor == m.actor) {
-            if m.active {
+            if m.active && m.reset {
                 reset(&mut s);
             }
             s.active = m.active;

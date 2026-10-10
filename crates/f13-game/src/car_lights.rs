@@ -8,7 +8,9 @@
 //!   intensity to v, Headlights v x HeadlightsDefault, Tailights v x TailightsDefault; when it ends, both spots are
 //!   hidden and every parameter is 0;
 //! - OnHandbrake: on, Tailights TaillightsHandbrake and the tail spot 10; off, TailightsDefault and 6;
-//! - OnThrottle: below 0, Backup Lights ReverseLights, else 0.
+//! - OnThrottle: below 0, Backup Lights ReverseLights, else 0;
+//! - OnStarted turns the hood smoke (P_Car_Hood_Destroyed_Smoking_01) off, OnStalled on;
+//! - Tick: LeftTireParticles and RightTireParticles SetActive(forward speed > 200, false).
 //!
 //! The headlights' light function (M_LightFunction_CarHeadlights_01) is their cookie (lighting.rs LightCookie). Not
 //! ported: the spots' shadows (with the other local lights').
@@ -42,10 +44,14 @@ pub struct CarLights {
     backing: bool,
     /// The Fade Lights timeline's time, while it plays.
     fade: Option<f32>,
+    /// Its root entity's name, for its particle systems (`<root>.<component>`: props.rs).
+    actor: String,
+    /// The tire dust's SetActive state.
+    dust: bool,
 }
 
 impl CarLights {
-    pub fn new(classes: &ClassDb, class: &str) -> Self {
+    pub fn new(classes: &ClassDb, class: &str, root: &str) -> Self {
         let f = |name: &str, default: f32| classes.prop(class, name).as_f64().map_or(default, |v| v as f32);
         CarLights {
             head_default: f("HeadlightsDefault", 5.0),
@@ -53,6 +59,8 @@ impl CarLights {
             reverse: f("ReverseLights", 3.0),
             tail_handbrake: f("TaillightsHandbrake", 2.0),
             material: None,
+            actor: root.to_string(),
+            dust: false,
             started: false,
             handbrake: false,
             backing: false,
@@ -141,6 +149,7 @@ fn fade_curve(t: f32) -> f32 {
 }
 
 fn car_lights(
+    mut commands: Commands,
     time: Res<Time>,
     mut cars: Query<(Entity, &Vehicle, &mut CarLights)>,
     mut spots: Query<(&CarSpot, &ChildOf, &mut SpotLight, &mut Visibility)>,
@@ -148,6 +157,20 @@ fn car_lights(
 ) {
     let dt = time.delta_secs();
     for (car, v, mut l) in &mut cars {
+        let name = l.actor.clone();
+        let set_active = |commands: &mut Commands, component: &str, active: bool| {
+            commands.write_message(crate::particles::ParticleActivation { actor: format!("{name}.{component}"), active, reset: false });
+        };
+        // Tick: the tire dust above 200 cm/s.
+        let dust = v.speed > 200.0;
+        if dust != l.dust {
+            set_active(&mut commands, "LeftTireParticles", dust);
+            set_active(&mut commands, "RightTireParticles", dust);
+            l.dust = dust;
+        }
+        if v.started != l.started {
+            set_active(&mut commands, "P_Car_Hood_Destroyed_Smoking_01", !v.started);
+        }
         let Some(handle) = l.material.clone() else { continue };
         let mut spot = |tail: bool, intensity: Option<f32>, visible: Option<bool>| {
             for (s, parent, mut light, mut vis) in &mut spots {

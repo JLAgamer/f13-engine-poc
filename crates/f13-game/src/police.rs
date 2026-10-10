@@ -112,7 +112,7 @@ fn box_look(
             continue;
         }
         // OnPhoneBoxDestroyed: P_PhoneJunctionBox_Destroyed_Smoking_01->Activate(true); OnPhoneBoxRepaired: Deactivate.
-        particles.write(crate::particles::ParticleActivation { actor: b.actor.clone(), active: broken });
+        particles.write(crate::particles::ParticleActivation { actor: b.actor.clone(), active: broken, reset: true });
         for (l, mut v) in lights.iter_mut().filter(|(l, _)| l.actor == b.actor) {
             v.set_if_neq(if l.broken == broken { Visibility::Inherited } else { Visibility::Hidden });
         }

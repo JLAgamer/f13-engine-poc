@@ -710,13 +710,25 @@ fn spawn_props(
             // Its lights (the Chevettes' Headlights and TailLights).
             let spots = crate::car_lights::spot_lights(&info.components);
             if !spots.is_empty() {
-                commands.entity(root).insert(crate::car_lights::CarLights::new(&classes, &actor.class)).with_children(|c| {
+                commands.entity(root).insert(crate::car_lights::CarLights::new(&classes, &actor.class, &format!("{root}"))).with_children(|c| {
                     for (s, cookie) in spots {
                         let mut e = c.spawn(s);
                         if let Some(k) = cookie {
                             e.insert(k);
                         }
                     }
+                });
+            }
+            // Its particle systems (the tire dust, the hood smoke), following it; named <root entity>.<component> for the
+            // Blueprint's SetActive calls (car_lights.rs).
+            for c in info.components.iter().filter(|c| c.kind == "ParticleSystemComponent") {
+                let Some(system) = c.props["Template"].as_str().and_then(|t| t.split('\'').nth(1)) else { continue };
+                commands.write_message(crate::particles::SpawnParticles {
+                    system: system.to_string(),
+                    transform: local(c),
+                    follow: Some(root),
+                    actor: format!("{root}.{}", c.name),
+                    active: c.props["bAutoActivate"].as_bool() != Some(false),
                 });
             }
             let p = to_transform(&actor.transform).translation;

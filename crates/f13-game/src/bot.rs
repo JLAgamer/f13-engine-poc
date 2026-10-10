@@ -795,6 +795,13 @@ fn run_bot(
                 info!("bot: screenshot {}", path.display());
                 commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
             }
+            // The tire dust once it's moving (car_lights.rs; temp f13-bot-car-dust.png).
+            if bot.timer > 2.5 && !bot.jason_shots.contains(&"car dust") {
+                bot.jason_shots.push("car dust");
+                let path = std::env::temp_dir().join("f13-bot-car-dust.png");
+                info!("bot: screenshot {}", path.display());
+                commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+            }
             if (bot.timer * 2.0) as u32 != ((bot.timer - dt) * 2.0) as u32 {
                 let nearest = zones.iter().filter(|(z, _)| z.car).map(|(z, x)| (x.translation().distance(vxf.translation), z.radius_m)).min_by(|a, b| a.0.total_cmp(&b.0));
                 info!("bot: car at ({:.1}, {:.1}, {:.1}) speed {:.0} cm/s, zone {:?}", vxf.translation.x, vxf.translation.y, vxf.translation.z, v.speed, nearest);

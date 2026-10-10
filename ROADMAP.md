@@ -38,7 +38,8 @@ Moved from Milestone 1 (not tied to gameplay):
       Remaining: Jason's embers and eye glow (M_Savini_Jason_Ashes_01, M_Procedural_Dust_01), the translucency
       lighting volume the lit ones read (a stand-in now: MODLOG "Particle materials"), particle lights, attractors and
       collision, and the effects spawned by gameplay: the walls' and doors' hit dust (HitParticle), the knife's trail
-      (P_Jason_ThrowingKnife_01), blood, the cars' exhaust, the broken phone box's smoke,
+      (P_Jason_ThrowingKnife_01), blood, the cars' hood smoke (spawned and switched; its master
+      M_Procedural_Smoke_02B isn't ported), the tire dust's cylinder spawn and attractor, the broken phone box's smoke,
       the intro's and outro's particle tracks
 - [ ] Counselor model, remaining: facial animation and hair dynamics (their own anim Blueprints), the eyes' iris and
       lid overlays, outfit choice
