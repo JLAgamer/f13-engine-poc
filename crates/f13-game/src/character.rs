@@ -397,9 +397,11 @@ pub struct Rig {
     item_hand: Option<String>,
     item_arm: Option<(String, f32)>,
     /// The head look (SCCharacter +0x10c4: the rotator's pitch, already negated, and yaw; degrees) and
-    /// TargetLookRotationAlpha (SCCounselorAnimInstance +0x624).
+    /// TargetLookRotationAlpha (SCCounselorAnimInstance +0x624), or Jason's: the special move switch's blend progress
+    /// and the grab enter switch's look weight.
     look: Vec2,
     look_alpha: f32,
+    look_grab: f32,
 }
 
 /// A full-body animation a character plays now (hit reactions, grabs, kills, death), whatever its movement state.
@@ -478,6 +480,7 @@ pub fn spawn_model(commands: &mut Commands, assets: &AssetServer, character: &Ch
         item_arm: None,
         look: Vec2::ZERO,
         look_alpha: 0.0,
+        look_grab: 1.0,
     });
     rig
 }
@@ -1422,6 +1425,10 @@ const MAX_LOOK_AT_FEAR: f32 = 50.0;
 const LOOK_ALPHA_SPEED: f32 = 4.0;
 /// The head look's RInterpTo speed (DAT_14207a20c).
 const LOOK_INTERP_SPEED: f32 = 3.0;
+/// Jason_AnimBP's look switches' blend times: BlendListByBool_3F6B (bIsInSpecialMove, back to the look) and
+/// BlendListByBool_F4E4 (bIsGrabEnterPlaying).
+const JASON_LOOK_SPECIAL_BLEND_S: f32 = 0.1;
+const JASON_LOOK_GRAB_BLEND_S: f32 = 0.5;
 /// Within this of side-on (|cos| of the look against her facing, DAT_14209aa60) the head looks ahead.
 const LOOK_SIDE_COS: f32 = 0.2;
 /// ClampAngle limits (DAT_1420f5954..60): yaw +-55, pitch +-25 (from 0 when the look is behind her).
@@ -1473,85 +1480,139 @@ fn rotator_quat(pitch: f32, yaw: f32, roll: f32) -> Quat {
     Quat::from_xyzw(-x, -z, -y, w)
 }
 
-/// The counselor's head look. SCCharacter's tick helper FUN_1402ecdf0 (locally controlled): the direction from her eyes
-/// (vt +0x5b8, GetActorEyesViewPoint: BaseEyeHeight above her capsule's centre) to the camera's last view location
-/// (ILLCharacter +0x7d0, cached by CalcCamera 0x14025ac71); flattened against her forward: within 0.2 of side-on no
-/// look, behind her the flat direction mirrored (looking where the camera looks), in front the full direction (at the
-/// camera). Its rotator against hers, yaw ClampAngle'd to +-55, pitch to +-25 (0..25 behind) and negated, RInterpTo'd
-/// at 3 into +0x10c4. The anim update (FUN_140311d00 0x140312045) makes TargetLookAtRotation (Pitch 0, Yaw, Roll =
-/// that pitch) and FUN_1403133b0 TargetLookRotationAlpha: FInterpTo at 4 toward 0 in a special move, stunned, out of
-/// the standing stance or at MaxLookAtFear, else 1. Base_Counselor_AnimBP applies it with ModifyBone_B9E86 on
-/// neck_01 (BMM_Additive in component space, after the aim offset, under the Cinematic slot): the rotation before the
-/// bone's component rotation, blended by the alpha; its children follow.
-#[allow(clippy::type_complexity)]
+/// The look rotator's target (SCCharacter's tick helper FUN_1402ecdf0, locally controlled): `d` the direction from
+/// the eyes to the view location and `fwd` the actor's forward, both in the mesh's component space in Unreal's axes.
+/// Flattened against the forward: within 0.2 of side-on none, behind the flat direction mirrored (where the camera
+/// looks), in front the full one (at the camera); its rotator against the actor's, yaw ClampAngle'd to +-55, pitch to
+/// +-25 (0..25 behind) and negated. (pitch, yaw), degrees.
+fn look_target(d: Vec3, fwd: Vec3) -> Vec2 {
+    let flat = Vec3::new(d.x, d.y, 0.0).normalize_or_zero();
+    let cos = flat.dot(fwd);
+    if cos.abs() < LOOK_SIDE_COS {
+        return Vec2::ZERO;
+    }
+    let dir = if cos < 0.0 { -flat } else { d };
+    let yaw = normalize_axis(dir.y.atan2(dir.x).to_degrees() - fwd.y.atan2(fwd.x).to_degrees());
+    let pitch = normalize_axis(dir.z.atan2(dir.truncate().length()).to_degrees());
+    let min_pitch = if cos >= 0.0 { -LOOK_MAX_PITCH } else { 0.0 };
+    Vec2::new(-clamp_angle(pitch, min_pitch, LOOK_MAX_PITCH), clamp_angle(yaw, -LOOK_MAX_YAW, LOOK_MAX_YAW))
+}
+
+/// FAnimNode_ModifyBone with BMM_Additive rotation in component space: `rotation` before the bone's component
+/// rotation, blended with it by `alpha` (FastLerp); the bone's local rotation follows (its children keep theirs).
+/// Returns the bone and its transform before.
+fn modify_bone_additive(model: &CharacterModel, rig: &Rig, bone: &str, rotation: Quat, alpha: f32, transforms: &mut Query<&mut Transform>) -> Option<(Entity, Transform)> {
+    let bones = &model.info.bones;
+    let index = bones.iter().position(|b| b.name == bone)?;
+    let mut chain = Vec::new();
+    let mut i = bones[index].parent;
+    while i >= 0 {
+        chain.push(i as usize);
+        i = bones[i as usize].parent;
+    }
+    let mut parent_cs = Quat::IDENTITY;
+    for &b in chain.iter().rev() {
+        parent_cs *= rig.bones.get(&bones[b].name).and_then(|e| transforms.get(*e).ok())?.rotation;
+    }
+    let e = *rig.bones.get(bone)?;
+    let mut xf = transforms.get_mut(e).ok()?;
+    let before = *xf;
+    let cs = parent_cs * before.rotation;
+    xf.rotation = (parent_cs.inverse() * fast_lerp(cs, rotation * cs, alpha)).normalize();
+    Some((e, before))
+}
+
+/// The head look (SCCharacter's tick helper FUN_1402ecdf0, [`look_target`]) RInterpTo'd at 3 into +0x10c4; the anim
+/// update (FUN_140311d00 0x140312045) makes it TargetLookAtRotation (Pitch 0, Yaw, Roll = the negated pitch) and the
+/// graphs' additive component-space ModifyBones take it:
+/// - Base_Counselor_AnimBP: ModifyBone_B9E86 on neck_01 (after the aim offset, under the Cinematic slot) by
+///   TargetLookRotationAlpha (FUN_1403133b0: FInterpTo at 4 toward 0 in a special move, stunned, out of the standing
+///   stance or at MaxLookAtFear, else 1);
+/// - Jason_AnimBP: neck_01 then spine_02 by GrabWeight_Neck01 / GrabWeight_Spine02 (SCKillerAnimInstance's update
+///   0x140314310: 1 / 0 at GrabWeight 1, else 0.6 / 0.4), switched off by BlendListByBool_F4E4 on
+///   bIsGrabEnterPlaying (0.5 s, linear) under BlendListByBool_3F6B on bIsInSpecialMove (at once; 0.1 s ExpOut back),
+///   both under the Cinematic slot.
+/// The view location is the camera's (ILLCharacter +0x7d0, cached by CalcCamera 0x14025ac71), the eyes BaseEyeHeight
+/// above the capsule's centre (GetActorEyesViewPoint). An AI Jason looks at his AIController's focal point, which
+/// only his path following sets (no game Blueprint calls SetFocus; UE's move focus is 100 m ahead along the path):
+/// straight ahead, so no look.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn head_look(
     time: Res<Time>,
     counselor: Option<Res<CounselorCharacter>>,
+    killer: Option<Res<KillerCharacter>>,
+    play_jason: Option<Res<crate::jason_player::PlayJason>>,
     players: Query<(&Player, &GlobalTransform, Option<&PlayAction>)>,
+    jasons: Query<(&crate::jason::Jason, &GlobalTransform)>,
     cameras: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
     mut rigs: Query<(&ChildOf, &mut Rig, &GlobalTransform)>,
     mut transforms: Query<&mut Transform>,
     mut written: ResMut<LayerRestore>,
 ) {
-    let Some(model) = counselor.as_deref().map(|c| &c.0) else { return };
     let Ok(camera) = cameras.single() else { return };
     let dt = time.delta_secs();
-    let bones = &model.info.bones;
-    let Some(neck) = bones.iter().position(|b| b.name == "neck_01") else { return };
     for (parent, mut rig, rig_xf) in &mut rigs {
-        if !matches!(rig.model, Model::Counselor) {
-            continue;
-        }
-        let Ok((p, xf, scripted)) = players.get(parent.parent()) else { continue };
+        let (model, owner_xf) = match rig.model {
+            Model::Counselor => match (counselor.as_deref(), players.get(parent.parent())) {
+                (Some(c), Ok((_, xf, _))) => (&c.0, xf),
+                _ => continue,
+            },
+            Model::Killer => match (killer.as_deref(), jasons.get(parent.parent())) {
+                (Some(k), Ok((_, xf))) if play_jason.is_some() => (&k.0, xf),
+                _ => continue,
+            },
+        };
         // Into the mesh's component space, Unreal's axes.
         let inv = rig_xf.rotation().inverse();
         let ue = |v: Vec3| {
             let l = inv * v;
             Vec3::new(l.x, l.z, l.y)
         };
-        let eyes = xf.translation() + Vec3::Y * (model.info.capsule_half_height / 100.0 + crate::interact::BASE_EYE_HEIGHT_M);
-        let d = ue(camera.translation() - eyes).normalize_or_zero();
-        let fwd = ue(xf.rotation() * Vec3::Z);
-        let flat = Vec3::new(d.x, d.y, 0.0).normalize_or_zero();
-        let cos = flat.dot(fwd);
-        let target = if cos.abs() < LOOK_SIDE_COS {
-            Vec2::ZERO
-        } else {
-            let dir = if cos < 0.0 { -flat } else { d };
-            let yaw = normalize_axis(dir.y.atan2(dir.x).to_degrees() - fwd.y.atan2(fwd.x).to_degrees());
-            let pitch = normalize_axis(dir.z.atan2(dir.truncate().length()).to_degrees());
-            let min_pitch = if cos >= 0.0 { -LOOK_MAX_PITCH } else { 0.0 };
-            Vec2::new(-clamp_angle(pitch, min_pitch, LOOK_MAX_PITCH), clamp_angle(yaw, -LOOK_MAX_YAW, LOOK_MAX_YAW))
-        };
+        let eyes = owner_xf.translation() + Vec3::Y * (model.info.capsule_half_height / 100.0 + crate::interact::BASE_EYE_HEIGHT_M);
+        let target = look_target(ue(camera.translation() - eyes).normalize_or_zero(), ue(owner_xf.rotation() * Vec3::Z));
         rig.look = rinterp_to(rig.look, target, dt, LOOK_INTERP_SPEED);
-        // PLACEHOLDER: IsInSpecialMove / IsStunned as a scripted action (special moves, hits, grabs) or hiding.
-        let off = scripted.is_some() || p.hidden || p.counselor.stance != Stance::Standing || p.fear >= MAX_LOOK_AT_FEAR;
-        rig.look_alpha = crate::items::finterp_to(rig.look_alpha, if off { 0.0 } else { 1.0 }, dt, LOOK_ALPHA_SPEED);
-        // The Cinematic slot is over it.
-        if rig.look_alpha <= 1e-4 || rig.action.as_ref().is_some_and(|(a, _)| a.starts_with("cinematic_")) {
-            continue;
-        }
+        let cinematic = rig.action.as_ref().is_some_and(|(a, _)| a.starts_with("cinematic_"));
         let rotation = rotator_quat(0.0, rig.look.y, rig.look.x);
-        // neck_01's parents' component rotation and its own.
-        let mut chain = Vec::new();
-        let mut i = bones[neck].parent;
-        while i >= 0 {
-            chain.push(i as usize);
-            i = bones[i as usize].parent;
+        match rig.model {
+            Model::Counselor => {
+                let Ok((p, _, scripted)) = players.get(parent.parent()) else { continue };
+                // PLACEHOLDER: IsInSpecialMove / IsStunned as a scripted action (special moves, hits, grabs) or hiding.
+                let off = scripted.is_some() || p.hidden || p.counselor.stance != Stance::Standing || p.fear >= MAX_LOOK_AT_FEAR;
+                rig.look_alpha = crate::items::finterp_to(rig.look_alpha, if off { 0.0 } else { 1.0 }, dt, LOOK_ALPHA_SPEED);
+                if rig.look_alpha <= 1e-4 || cinematic {
+                    continue;
+                }
+                if let Some((e, before)) = modify_bone_additive(model, &rig, "neck_01", rotation, rig.look_alpha, &mut transforms) {
+                    let Ok(out) = transforms.get(e).copied() else { continue };
+                    written.0.entry(e).or_insert((before, out)).1 = out;
+                }
+            }
+            Model::Killer => {
+                let Ok((j, _)) = jasons.get(parent.parent()) else { continue };
+                // The outer switch: off at once, back over 0.1 s ExpOut (its progress in look_alpha); the inner: 0.5 s
+                // linear (its weight in look_grab).
+                rig.look_alpha = if j.in_special_move() { 0.0 } else { (rig.look_alpha + dt / JASON_LOOK_SPECIAL_BLEND_S).min(1.0) };
+                let grab_enter = rig.action.as_ref().is_some_and(|(a, _)| crate::jason::Jason::grab_enter_playing(a));
+                let step = dt / JASON_LOOK_GRAB_BLEND_S;
+                rig.look_grab = (rig.look_grab + if grab_enter { -step } else { step }).clamp(0.0, 1.0);
+                let outer = if rig.look_alpha >= 1.0 { 1.0 } else { 1.0 - 2f32.powf(-10.0 * rig.look_alpha) };
+                let w = outer * rig.look_grab;
+                if w <= 1e-4 || cinematic {
+                    continue;
+                }
+                let (neck, spine) = if j.holding() { (1.0, 0.0) } else { (0.6, 0.4) };
+                let mut changed = Vec::new();
+                changed.extend(modify_bone_additive(model, &rig, "neck_01", rotation, neck, &mut transforms));
+                changed.extend(modify_bone_additive(model, &rig, "spine_02", rotation, spine, &mut transforms));
+                // The switches blend the looked pose with the one before it, in local space.
+                for (e, before) in changed {
+                    let Ok(mut xf) = transforms.get_mut(e) else { continue };
+                    xf.rotation = fast_lerp(before.rotation, xf.rotation, w);
+                    let out = *xf;
+                    written.0.entry(e).or_insert((before, out)).1 = out;
+                }
+            }
         }
-        let mut parent_cs = Quat::IDENTITY;
-        for &b in chain.iter().rev() {
-            let Some(r) = rig.bones.get(&bones[b].name).and_then(|e| transforms.get(*e).ok()).map(|x| x.rotation) else { return };
-            parent_cs *= r;
-        }
-        let Some(&e) = rig.bones.get("neck_01") else { continue };
-        let Ok(mut nxf) = transforms.get_mut(e) else { continue };
-        let before = *nxf;
-        let cs = parent_cs * before.rotation;
-        let out_cs = fast_lerp(cs, rotation * cs, rig.look_alpha);
-        let out = Transform { rotation: (parent_cs.inverse() * out_cs).normalize(), ..before };
-        *nxf = out;
-        written.0.entry(e).or_insert((before, out)).1 = out;
     }
 }
 

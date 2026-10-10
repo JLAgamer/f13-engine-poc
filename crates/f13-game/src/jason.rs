@@ -642,6 +642,29 @@ impl Jason {
         matches!(self.state, JasonState::Holding { .. })
     }
 
+    /// IsInSpecialMove for his anim instance (Jason_AnimBP's look-at switch): the moves the game plays through an
+    /// SCSpecialMoveComponent's handler. PLACEHOLDER: the set is read off the handlers f13-rs plays, not the binary.
+    pub(crate) fn in_special_move(&self) -> bool {
+        matches!(
+            self.state,
+            JasonState::OpeningDoor { .. }
+                | JasonState::BreakingDoor { .. }
+                | JasonState::BreakingWall { .. }
+                | JasonState::BurstingDoor { .. }
+                | JasonState::Killing { .. }
+                | JasonState::Searching { .. }
+                | JasonState::HideKill { .. }
+                | JasonState::PullingOut { .. }
+                | JasonState::BreakingFuse { .. }
+        )
+    }
+
+    /// bIsGrabEnterPlaying (SCKillerAnimInstance's update 0x140314310: Montage_IsPlaying(GrabMontage)): one of
+    /// AM_Jason_Enter_Grab_Montage's sections is his action.
+    pub(crate) fn grab_enter_playing(action: &str) -> bool {
+        [GRAB_STARTUP, GRAB_ENTER, GRAB_MISS].contains(&action)
+    }
+
     /// His stun's minigame while it runs: its completion and the stun class's StunText.
     pub fn stun_minigame(&self) -> Option<(f32, &'static str)> {
         match self.state {
