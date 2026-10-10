@@ -29,9 +29,7 @@ Bugs:
 
 Moved from Milestone 1 (not tied to gameplay):
 - [ ] Match flow, remaining: in the intro and outro their particle tracks (with the particles), the title text, the
-      cameras' depth of field and the material/colour tracks (MODLOG "Level intro"). Bug: in the outro Jason's sack mask
-      appears to float at the shack door (its attachment follows the body's bone; the pose or another level actor is
-      unchecked). (Badges: their award sites and classes are read, see MODLOG; the game shows them in the
+      cameras' depth of field and the material/colour tracks (MODLOG "Level intro"). (Badges: their award sites and classes are read, see MODLOG; the game shows them in the
       lobby's SCMatchEndLobbyWidget, so with the lobby in Milestone 3)
 - [ ] Materials, remaining: foliage subsurface (its transmission is the deferred light pass's, whose code isn't
       in the shipped global shader cache: MODLOG "Foliage subsurface: blocked")
