@@ -165,6 +165,21 @@ pub enum Module {
     MeshRotation(Dist),
     /// ParticleModuleMeshRotationRate's StartRotationRate (turns per second, x 360: the payload's RotationRate).
     MeshRotationRate(Dist),
+    /// ParticleModuleAttractorPoint (Update 0x1415b2a70): Position, Range, Strength, and its flags (bit 0
+    /// bStrengthByDistance, 1 bAffectBaseVelocity, 2 bOverrideVelocity, 3 bUseWorldSpacePosition, 4-6 Positive_X/Y/Z,
+    /// 7-9 Negative_X/Y/Z; the constructor 0x141592e20 sets 0x3f1).
+    AttractorPoint { position: Dist, range: Dist, strength: Dist, flags: u32 },
+    /// ParticleModuleAttractorParticle (Spawn 0x1415adf20, Update 0x1415b2480): the attracting emitter, Range,
+    /// Strength, bStrengthByDistance (constructor 0x141592d00: on), bAffectBaseVelocity, SelectionMethod random,
+    /// bRenewSource, bInheritSourceVel (off).
+    AttractorParticle { emitter: String, range: Dist, strength: Dist, by_distance: bool, affect_base: bool, random: bool, renew: bool, inherit: bool },
+    /// ParticleModuleLocationPrimitiveCylinder (SpawnEx 0x1415e1ca0): StartRadius, StartHeight, StartLocation,
+    /// HeightAxis (0 X, 1 Y, 2 Z), SurfaceOnly, Velocity, VelocityScale.
+    LocationCylinder { radius: Dist, height: Dist, origin: Dist, axis: u8, surface_only: bool, velocity: bool, velocity_scale: Dist },
+    /// ParticleModuleSourceMovement (FinalUpdate 0x14159bc20): SourceMovementScale.
+    SourceMovement(Dist),
+    /// A module with no CPU effect (ParticleModuleAttractorPointGravity overrides only its GPU compile, vt +0x230).
+    GpuOnly,
     /// A module f13-game doesn't run (its type).
     Unported(String),
 }
@@ -386,6 +401,40 @@ impl System {
                     "ParticleModulePivotOffset" => Module::PivotOffset([num(&p["PivotOffset"]["X"], 0.0), num(&p["PivotOffset"]["Y"], 0.0)]),
                     "ParticleModuleOrientationAxisLock" => Module::AxisLock(p["LockAxisFlags"].as_str().unwrap_or("EPAL_NONE").to_string()),
                     "ParticleModuleMeshRotation" => Module::MeshRotation(dist(&p["StartRotation"], 3)),
+                    "ParticleModuleAttractorPoint" => {
+                        let mut flags = 0x3f1u32;
+                        for (bit, key) in [(0, "bStrengthByDistance"), (1, "bAffectBaseVelocity"), (2, "bOverrideVelocity"), (3, "bUseWorldSpacePosition"), (4, "Positive_X"), (5, "Positive_Y"), (6, "Positive_Z"), (7, "Negative_X"), (8, "Negative_Y"), (9, "Negative_Z")] {
+                            if let Some(b) = p[key].as_bool() {
+                                flags = if b { flags | 1 << bit } else { flags & !(1 << bit) };
+                            }
+                        }
+                        Module::AttractorPoint { position: dist(&p["Position"], 3), range: dist(&p["Range"], 1), strength: dist(&p["Strength"], 1), flags }
+                    }
+                    "ParticleModuleAttractorParticle" => Module::AttractorParticle {
+                        emitter: p["EmitterName"].as_str().unwrap_or("").to_string(),
+                        range: dist(&p["Range"], 1),
+                        strength: dist(&p["Strength"], 1),
+                        by_distance: p["bStrengthByDistance"].as_bool().unwrap_or(true),
+                        affect_base: p["bAffectBaseVelocity"].as_bool().unwrap_or(false),
+                        random: p["SelectionMethod"].as_str().is_none_or(|m| m == "EAPSM_Random"),
+                        renew: p["bRenewSource"].as_bool().unwrap_or(false),
+                        inherit: p["bInheritSourceVel"].as_bool().unwrap_or(false),
+                    },
+                    "ParticleModuleLocationPrimitiveCylinder" => Module::LocationCylinder {
+                        radius: dist(&p["StartRadius"], 1),
+                        height: dist(&p["StartHeight"], 1),
+                        origin: dist(&p["StartLocation"], 3),
+                        axis: match p["HeightAxis"].as_str() {
+                            Some("PMLPC_HEIGHTAXIS_X") => 0,
+                            Some("PMLPC_HEIGHTAXIS_Y") => 1,
+                            _ => 2,
+                        },
+                        surface_only: p["SurfaceOnly"].as_bool().unwrap_or(false),
+                        velocity: p["Velocity"].as_bool().unwrap_or(false),
+                        velocity_scale: dist(&p["VelocityScale"], 1),
+                    },
+                    "ParticleModuleSourceMovement" => Module::SourceMovement(dist(&p["SourceMovementScale"], 3)),
+                    "ParticleModuleAttractorPointGravity" => Module::GpuOnly,
                     "ParticleModuleMeshRotationRate" => Module::MeshRotationRate(dist(&p["StartRotationRate"], 3)),
                     "ParticleModuleSpawnPerUnit" => {
                         spawn_per_unit = Some((num(&p["UnitScalar"], 50.0), dist(&p["SpawnPerUnit"], 1)));

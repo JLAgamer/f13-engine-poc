@@ -27,7 +27,7 @@ use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
 use bevy::shader::ShaderRef;
-use f13_data::particles::{Emitter, Module, System};
+use f13_data::particles::{Dist, Emitter, Module, System};
 use std::collections::HashMap;
 use std::f32::consts::TAU;
 use std::sync::Arc;
@@ -115,6 +115,9 @@ impl Material for ParticleMaterial {
 /// One particle (FBaseParticle and the payloads f13-game keeps), Unreal space.
 #[derive(Clone, Default)]
 struct Particle {
+    /// FAttractorParticlePayload per ParticleModuleAttractorParticle (in module order, at most two): its source's
+    /// index in the attracting emitter and the source's last velocity.
+    attractor: [(i32, Vec3); 2],
     location: Vec3,
     velocity: Vec3,
     base_velocity: Vec3,
@@ -171,6 +174,10 @@ struct EmitterState {
     slots: Vec<Entity>,
     /// A ParticleModuleLight emitter's simple lights (MaxDrawCount of them, at most 16).
     lights: Vec<Entity>,
+    /// Drawn (an emitter kept only as another's attractor, its material unported or DefaultParticle, isn't).
+    drawn: bool,
+    /// Each ParticleModuleAttractorParticle's LastSelIndex (the module's own, in module order).
+    attractor_last: [i32; 2],
 }
 
 /// A placed ParticleSystemComponent.
@@ -612,10 +619,18 @@ impl ParticleAssets {
                 let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(md.file.clone()));
                 let n = def.max_draw_count.unwrap_or(500).min(32) as usize;
                 let entity = commands.spawn((Transform::default(), Visibility::Hidden)).id();
-                emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: Some((scene, n)), slots: vec![], lights: vec![] });
+                emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: Some((scene, n)), slots: vec![], lights: vec![], drawn: true, attractor_last: [0; 2] });
                 continue;
             }
-            let Some((material, mode)) = def.material.as_deref().and_then(|m| self.mats.get(m, &self.root, assets, materials)) else { continue };
+            let Some((material, mode)) = def.material.as_deref().and_then(|m| self.mats.get(m, &self.root, assets, materials)) else {
+                // Not drawn, but still simulated when another emitter's ParticleModuleAttractorParticle names it.
+                let named = system.emitters.iter().flat_map(|o| &o.modules).any(|m| matches!(m, Module::AttractorParticle { emitter, .. } if *emitter == def.name));
+                if named {
+                    let entity = commands.spawn((Transform::default(), Visibility::Hidden)).id();
+                    emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: None, slots: vec![], lights: vec![], drawn: false, attractor_last: [0; 2] });
+                }
+                continue;
+            };
             // Every attribute from the start (a degenerate quad), so its layout never changes.
             let mesh = meshes.add(
                 Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
@@ -638,7 +653,7 @@ impl ParticleAssets {
                 ))
                 .id();
             let pivot = def.modules.iter().find_map(|m| if let Module::PivotOffset(p) = m { Some(Vec2::from(*p)) } else { None }).unwrap_or(Vec2::ZERO) + Vec2::splat(-0.5);
-            emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: mode == 4, mesh_scene: None, slots: vec![], lights: light_pool(commands, def, name) });
+            emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: mode == 4, mesh_scene: None, slots: vec![], lights: light_pool(commands, def, name), drawn: true, attractor_last: [0; 2] });
         }
         if emitters.is_empty() {
             return None;
@@ -1000,6 +1015,20 @@ fn simulate(time: Res<Time<Real>>, virtual_time: Res<Time<Virtual>>, mut systems
 
 fn tick(s: &mut ParticleSystemInstance, dt: f32) {
     let (location, rotation, scale, active) = (s.location, s.rotation, s.scale, s.active);
+    // The component's move since its last tick (ParticleModuleSourceMovement).
+    let moved = s.ticked_at.map_or(Vec3::ZERO, |(l, _)| location - l);
+    // The attracting emitters' particles as they stand before this tick (each AttractorParticle reads its source
+    // emitter's particles by index; the sources here come after the emitters they attract, as in the assets).
+    let mut sources: HashMap<String, Vec<(Vec3, Vec3, f32)>> = HashMap::new();
+    for e in &s.emitters {
+        for m in &e.def.modules {
+            if let Module::AttractorParticle { emitter, .. } = m {
+                if let Some(src) = s.emitters.iter().find(|o| o.def.name == *emitter) {
+                    sources.entry(emitter.clone()).or_insert_with(|| src.particles.iter().map(|p| (p.location, p.velocity, p.relative_time)).collect());
+                }
+            }
+        }
+    }
     // Local-space emitters: their particles move with the component.
     if let Some((was_at, was_rot)) = s.ticked_at.filter(|&(l, r)| l != location || r != rotation) {
         let turn = rotation * was_rot.inverse();
@@ -1014,13 +1043,23 @@ fn tick(s: &mut ParticleSystemInstance, dt: f32) {
     s.ticked_at = Some((location, rotation));
     let mut rng = s.rng;
     for e in &mut s.emitters {
-        tick_emitter(e, dt, location, rotation, scale, active, &mut rng);
+        tick_emitter(e, dt, location, rotation, scale, active, &mut rng, &sources, moved);
     }
     s.rng = rng;
 }
 
 #[allow(clippy::too_many_arguments)]
-fn tick_emitter(e: &mut EmitterState, dt: f32, location: Vec3, rotation: Quat, scale: Vec3, active: bool, rng: &mut u64) {
+fn tick_emitter(
+    e: &mut EmitterState,
+    dt: f32,
+    location: Vec3,
+    rotation: Quat,
+    scale: Vec3,
+    active: bool,
+    rng: &mut u64,
+    sources: &HashMap<String, Vec<(Vec3, Vec3, f32)>>,
+    moved: Vec3,
+) {
     let def = &e.def;
     // Tick_EmitterTimeSetup.
     let old_seconds = e.seconds;
@@ -1058,9 +1097,25 @@ fn tick_emitter(e: &mut EmitterState, dt: f32, location: Vec3, rotation: Quat, s
         }
     }
     // The modules' updates.
+    let mut attractor_k = 0;
     for m in &def.modules {
-        for p in &mut e.particles {
-            update(m, p, dt, emitter_time);
+        match m {
+            Module::AttractorPoint { position, range, strength, flags } => {
+                attract_point(&mut e.particles, def.local_space, location, rotation, scale, emitter_time, dt, position, range, strength, *flags, rng);
+            }
+            Module::AttractorParticle { emitter, range, strength, by_distance, affect_base, inherit, .. } => {
+                let k = attractor_k.min(1);
+                attractor_k += 1;
+                let src = sources.get(emitter).map(Vec::as_slice).unwrap_or(&[]);
+                for p in &mut e.particles {
+                    attract_particle(p, k, src, range, strength, *by_distance, *affect_base, *inherit, dt);
+                }
+            }
+            _ => {
+                for p in &mut e.particles {
+                    update(m, p, dt, emitter_time);
+                }
+            }
         }
     }
     // Spawn.
@@ -1087,8 +1142,40 @@ fn tick_emitter(e: &mut EmitterState, dt: f32, location: Vec3, rotation: Quat, s
         }
         for i in 0..count + burst {
             let spawn_time = if i < count { start - i as f32 * increment } else { 0.0 };
-            let p = spawn(def, spawn_time.max(0.0), emitter_time, location, rotation, scale, rng);
+            let mut p = spawn(def, spawn_time.max(0.0), emitter_time, location, rotation, scale, rng);
+            // UParticleModuleAttractorParticle::Spawn (0x1415adf20): the module's LastSelIndex if the attracting
+            // emitter has a particle there (then the next one), else a new pick (random: SRand x its active count;
+            // sequential: its first particle).
+            let mut k = 0;
+            for m in &def.modules {
+                if let Module::AttractorParticle { emitter, random, .. } = m {
+                    let k_ = k.min(1);
+                    k += 1;
+                    let n = sources.get(emitter).map_or(0, Vec::len) as i32;
+                    let last = &mut e.attractor_last[k_];
+                    if *last >= 0 && *last < n {
+                        p.attractor[k_] = (*last, Vec3::ZERO);
+                        *last += 1;
+                    } else {
+                        let pick = if *random { (rand(rng) * n as f32) as i32 } else { 0 };
+                        *last = pick;
+                        let vel = sources.get(emitter).and_then(|v| v.get(pick as usize)).map_or(Vec3::ZERO, |s| s.1);
+                        p.attractor[k_] = (pick, if !*random && n > 0 { vel } else { Vec3::ZERO });
+                    }
+                }
+            }
             e.particles.push(p);
+        }
+    }
+    // The FinalUpdate modules: ParticleModuleSourceMovement (0x14159bc20) moves each particle older than two ticks by
+    // its scale (at its relative time) times the component's move since the last tick.
+    for m in &def.modules {
+        if let Module::SourceMovement(d) = m {
+            for p in &mut e.particles {
+                if 2.0 * dt * p.one_over_max_lifetime < p.relative_time {
+                    p.location += d.eval3(p.relative_time, [0.0; 3]) * moved;
+                }
+            }
         }
     }
     // UpdateBoundingBox: the linear integrator.
@@ -1100,6 +1187,86 @@ fn tick_emitter(e: &mut EmitterState, dt: f32, location: Vec3, rotation: Quat, s
         for p in &mut e.particles {
             p.mesh_continuous += p.mesh_rate * dt;
         }
+    }
+}
+
+/// UParticleModuleAttractorPoint::Update (0x1415b2a70): Position at the emitter time (a random pick each tick for a
+/// uniform distribution), in world space unless the emitter is local or bUseWorldSpacePosition; Range scaled by the
+/// component's scale vector's length (that of (1, 1, 1) when not transformed); within it, the strength (by
+/// (range - distance) / range with bStrengthByDistance, else at the emitter time; also scaled when transformed),
+/// toward the point (away and positive if negative), each axis clamped by its Positive_ / Negative_ flags, x dt onto
+/// the velocity (and the base velocity with bAffectBaseVelocity). Particles are kept in world space here.
+#[allow(clippy::too_many_arguments)]
+fn attract_point(particles: &mut [Particle], local: bool, location: Vec3, rotation: Quat, scale: Vec3, emitter_time: f32, dt: f32, position: &Dist, range: &Dist, strength: &Dist, flags: u32, rng: &mut u64) {
+    let world_flag = flags & 8 != 0;
+    let transformed = !local && !world_flag;
+    let pos = position.eval3(emitter_time, rand3(rng));
+    let pos = if world_flag { pos } else { location + rotation * (scale * pos) };
+    let scale_len = if transformed { scale.length() } else { Vec3::ONE.length() };
+    let range = range.eval(emitter_time, rand(rng)) * scale_len;
+    let bound = |pos_bit: u32, neg_bit: u32| (if flags & 1 << neg_bit != 0 { -1.0 } else { 0.0 }, if flags & 1 << pos_bit != 0 { 1.0 } else { 0.0 });
+    let bounds = [bound(4, 7), bound(5, 8), bound(6, 9)];
+    for p in particles {
+        let dir = pos - p.location;
+        let d2 = dir.length_squared();
+        let d = d2.sqrt();
+        if d > range {
+            continue;
+        }
+        let mut s = if flags & 1 != 0 {
+            if range != 0.0 { strength.eval((range - d) / range, rand(rng)) } else { 0.0 }
+        } else {
+            strength.eval(emitter_time, rand(rng))
+        };
+        if transformed {
+            s *= scale_len;
+        }
+        let mut n = if d2 > 1e-8 { dir / d } else { dir };
+        if s < 0.0 {
+            n = -n;
+            s = -s;
+        }
+        for (i, (lo, hi)) in bounds.iter().enumerate() {
+            n[i] = n[i].max(*lo).min(*hi);
+        }
+        let delta = n * s * dt;
+        p.velocity += delta;
+        if flags & 2 != 0 {
+            p.base_velocity += delta;
+        }
+    }
+}
+
+/// UParticleModuleAttractorParticle::Update (0x1415b2480) for one particle: its source (the attracting emitter's
+/// particle at its index, as that emitter stood before this tick) pulls it when within Range (at the source's relative
+/// time), by Strength at (range - distance) / range (bStrengthByDistance) or at the source's relative time, x dt onto
+/// the velocity (and the base velocity with bAffectBaseVelocity); the source's velocity is kept. A lost source (index
+/// -1, never set here: the spawn's SourcePointer stays 0, so every index is accepted) adds its last velocity with
+/// bInheritSourceVel.
+#[allow(clippy::too_many_arguments)]
+fn attract_particle(p: &mut Particle, k: usize, sources: &[(Vec3, Vec3, f32)], range: &Dist, strength: &Dist, by_distance: bool, affect_base: bool, inherit: bool, dt: f32) {
+    let (index, last_vel) = p.attractor[k];
+    if index < 0 {
+        if inherit {
+            p.velocity += last_vel;
+        }
+        return;
+    }
+    let Some(&(src, src_vel, src_time)) = sources.get(index as usize) else { return };
+    let range = range.eval(src_time, 0.0);
+    let dir = src - p.location;
+    let d2 = dir.length_squared();
+    let d = d2.sqrt();
+    if d > range {
+        return;
+    }
+    let s = if by_distance { strength.eval(if range != 0.0 { (range - d) / range } else { 0.0 }, 0.0) } else { strength.eval(src_time, 0.0) };
+    let n = if d2 > 1e-8 { dir / d } else { dir };
+    let delta = n * s * dt;
+    p.velocity += delta;
+    p.attractor[k].1 = src_vel;
+    if affect_base {
+        p.base_velocity += delta;
     }
 }
 
@@ -1181,6 +1348,47 @@ fn spawn(def: &Emitter, spawn_time: f32, emitter_time: f32, location: Vec3, rota
                     p.velocity += v;
                     p.base_velocity += v;
                 }
+            }
+            Module::LocationCylinder { radius, height, origin, axis, surface_only, velocity, velocity_scale } => {
+                // UParticleModuleLocationPrimitiveCylinder::SpawnEx (0x1415e1ca0): the radial axes and the height
+                // axis by HeightAxis; a unit direction from LocationPrimitiveBase's DetermineUnitDirection (each axis
+                // in -1..1) until its radial part falls in the circle (50 tries); the height within half StartHeight;
+                // SurfaceOnly puts it on the side's circle (or anywhere on a cap).
+                let h = *axis as usize;
+                let (r0, r1) = match h {
+                    0 => (1, 2),
+                    1 => (0, 2),
+                    _ => (0, 1),
+                };
+                let r = radius.eval(emitter_time, rand(rng));
+                let half = height.eval(emitter_time, rand(rng)) * 0.5;
+                let mut unit = Vec3::ZERO;
+                for _ in 0..50 {
+                    unit = Vec3::new(rand(rng) * 2.0 - 1.0, rand(rng) * 2.0 - 1.0, rand(rng) * 2.0 - 1.0);
+                    if (unit[r0] * r).powi(2) + (unit[r1] * r).powi(2) <= r * r {
+                        break;
+                    }
+                }
+                let flat = Vec2::new(unit[r0], unit[r1]).normalize_or_zero();
+                let mut offset = Vec3::ZERO;
+                offset[h] = unit[h] * half;
+                let on_cap = (offset[h].abs() - half.abs()).abs() <= 1e-4;
+                if *surface_only && !on_cap {
+                    offset[r0] = flat.x * r;
+                    offset[r1] = flat.y * r;
+                } else {
+                    offset[r0] = unit[r0] * r;
+                    offset[r1] = unit[r1] * r;
+                }
+                if *velocity {
+                    let mut dir = unit.normalize_or_zero();
+                    dir[r0] = flat.x;
+                    dir[r1] = flat.y;
+                    let v = to_world(dir * velocity_scale.eval(emitter_time, rand(rng)));
+                    p.velocity += v;
+                    p.base_velocity += v;
+                }
+                p.location += to_world(offset + origin.eval3(emitter_time, rand3(rng)));
             }
             Module::Velocity { start, radial, world } => {
                 let mut v = start.eval3(emitter_time, rand3(rng));
@@ -1347,7 +1555,7 @@ fn draw(
                     }
                 }
             }
-            let shown = near && !e.particles.is_empty();
+            let shown = near && e.drawn && !e.particles.is_empty();
             if let Ok(mut v) = vis.get_mut(e.entity) {
                 v.set_if_neq(if shown { Visibility::Inherited } else { Visibility::Hidden });
             }
