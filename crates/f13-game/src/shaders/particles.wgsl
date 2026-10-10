@@ -22,7 +22,8 @@ struct ParticleParams {
     // x: mode (0 stand-in, 1 M_Procedural_Fire_01, 2 M_Procedural_Fire_02, 3 M_MasterParticle_Emissive,
     // 4 M_Fly_Animated_01, 5 M_MasterParticle_Diffuse_nearFade, 6 M_Procedural_Smoke_05, 7 M_Rain_Master,
     // 8 M_Procedural_Tire_Dust_01_Inst, 9 M_Procedural_Smoke_01B_no-self-shadow, 10 its
-    // _separate-transparency_off sibling, 11 M_Enviroment_Fog_02, 12 M_Savini_Jason_Ashes_01); y: additive
+    // _separate-transparency_off sibling, 11 M_Enviroment_Fog_02, 12 M_Savini_Jason_Ashes_01,
+    // 13 M_Blood_Burst_01); y: additive
     mode: vec4<f32>,
     // The master's material uniform buffer as its compiled shader reads it (uniexpr.py's cb1[n]).
     p: array<vec4<f32>, 32>,
@@ -555,6 +556,36 @@ fn ashes(in: VertexOutput) -> vec4<f32> {
     return vec4(emissive + volume_lit(in, diffuse), saturate(f.x * alpha) * f.y);
 }
 
+// M_Blood_Burst_01 (the weapon hits' blood: P_Hit_Blood_Counselor/Jason_Default_01; lit translucency, the master's
+// shader map, sprite pass s003): t0 DIFF (its red; NRM only feeds the lighting normal). The flipbook: phase =
+// frac((time x FLIPBOOK_Global_Time + the particle's time) x FLIPBOOK_Master_Speed), moved toward DynamicParameter.w by
+// DynamicFrameAnimation_ON_OFF (1 in every instance drawn, so the particle's time, not passed here, drops out), cell =
+// floor(phase x (columns x rows, rows)) / (columns, rows) added to uv / (columns, rows) (the texture's wrap picks the
+// column), by 0_FLIPBOOK_PLAY_ON_OFF. Mask = DIFF.r; colour = colour x BloodColor x saturate(mask x (2 EHC + 1) -
+// EHC); emissive that x EmmissiveMultiplier, diffuse it saturated x (1 - MET). Opacity: saturate((mask - dp.x / 19) x
+// (1 + 4 dp.x / 3) - 2 dp.x / 3) x (dp.x + 1.5), clamped 0..4, x saturate(mask x colour.a x the depth fade) x the
+// pixel depth fade, x 0_Opacity_MASTER, saturated.
+fn blood(in: VertexOutput) -> vec4<f32> {
+    let p = params.p;
+    let dp = in.dynamic;
+    let uv = in.uv;
+    let col = in.color;
+    let time = globals.time;
+    var phase = fract((time * p[8].w) * p[9].x);
+    phase = fract(phase + p[9].y * (dp.w - phase));
+    let cell = floor(phase * p[2].xy) / p[1].xy;
+    let fuv = mix(uv, uv / p[1].xy + cell, p[9].z);
+    let mask = textureSample(t0, s, fuv).r;
+    let tint = col.rgb * p[6].xyz * saturate(mask * (p[10].z - p[4].x) + p[4].x);
+    let emissive = max(tint * p[10].w + p[7].xyz, vec3(0.0));
+    let diffuse = saturate(tint) * (1.0 - saturate(p[11].x));
+    let f = depth_fades(in, p[12].x, p[12].y);
+    let base = saturate(mask * col.a * f.x) * f.y;
+    var shape = saturate((mask - dp.x * 0.052632) * (dp.x * 1.333333 + 1.0) - dp.x * 0.666667) * (dp.x + 1.5);
+    shape = clamp(shape, 0.0, 4.0) * base;
+    return vec4(emissive + volume_lit(in, diffuse), saturate(shape * p[12].z));
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let mode = u32(params.mode.x);
@@ -581,6 +612,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         c = fog_02(in);
     } else if mode == 12u {
         c = ashes(in);
+    } else if mode == 13u {
+        c = blood(in);
     } else if mode == 4u {
         // Already exposed (apply_pbr_lighting).
         c = fly(in);

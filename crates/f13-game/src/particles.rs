@@ -500,6 +500,25 @@ impl Materials {
                 // the export doesn't carry; they draw it x EmissiveLevel 0.
                 (12.0, [tex("ScrollTexture1"), tex("EmissiveTexture1"), tex("BaseTextureMask1"), None])
             }
+            // M_Blood_Burst_01's shader map (M_Blood_Spray_10's own is the same, diffed; M_Blood_Bursts_03_Inst has none).
+            // M_Blood_Squirt_01's own permutation differs (a UV offset by DynamicParameter.y) and isn't ported.
+            "M_Blood_Burst_01" if name != "M_Blood_Squirt_01" => {
+                // uniexpr.py M_Blood_Burst_01: [1] (FLIPBOOK_COLUMNS, ROWS), [2] (COLUMNS x ROWS, ROWS), [4].x
+                // -EmissiveHighlightContrast, [6] BloodColor.rgb, [7] SelectionColor.rgb (0), [8..12] below.
+                let vec = |n: &str, d: [f32; 4]| e.vectors.get(n).or_else(|| master.and_then(|m| m.vectors.get(n))).copied().unwrap_or(d);
+                let (cols, rows, ehc) = (s("FLIPBOOK_COLUMNS", 8.0), s("FLIPBOOK_ROWS", 8.0), s("EmissiveHighlightContrast", 20.0));
+                let blood = vec("BloodColor", [0.1, 0.0, 0.0, 1.0]);
+                p[1] = Vec4::new(cols, rows, 0.0, 0.0);
+                p[2] = Vec4::new(cols * rows, rows, 0.0, 0.0);
+                p[4] = Vec4::splat(-ehc);
+                p[6] = Vec4::new(blood[0], blood[1], blood[2], 0.0);
+                p[8] = Vec4::new(rows, cols, cols * rows, s("FLIPBOOK_Global_Time", 1.0));
+                p[9] = Vec4::new(s("FLIPBOOK_Master_Speed", 1.0), s("DynamicFrameAnimation_ON_OFF", 1.0), s("0_FLIPBOOK_PLAY_ON_OFF", 1.0), s("NRM_Intensity", 0.5));
+                p[10] = Vec4::new(ehc, -ehc, ehc + 1.0, s("EmmissiveMultiplier", 0.1));
+                p[11] = Vec4::new(s("MET", 0.0), s("SPEC", 0.01), s("ROUGH", 0.05), s("FadeDistance", 3.0));
+                p[12] = Vec4::new(s("FadeDistance", 3.0).max(1e-5), s("0_PixelDepthDistance", 0.0), s("0_Opacity_MASTER", 2.0), s("RefractionDepthBias", 0.0));
+                (13.0, [tex("DIFF"), None, None, None])
+            }
             "M_Rain_Master" => {
                 // uniexpr.py M_Rain_Master: cb1[2] EmissiveColor.rgb, [3] SelectionColor.rgb (0), [5] BaseColor.rgb,
                 // [6..10] below; Rain_MPC's Rain in p[15].x (rain_mpc_materials).
@@ -662,6 +681,16 @@ pub struct SpawnParticles {
 }
 
 impl SpawnParticles {
+    /// A weapon's impact effect (SCImpactEffect's spawn, FUN_14035e130 -> FUN_14033cbc0): SpawnEmitterAtLocation at
+    /// the hit's ImpactPoint, turned to Conv_VectorToRotator(ImpactNormal) (pitch and yaw, no roll), scale 1. Bevy
+    /// space in, the normal pointing out of the hit surface.
+    pub fn impact(system: &str, point: Vec3, normal: Vec3) -> Self {
+        let n = Vec3::new(normal.x, normal.z, normal.y);
+        let rotator = Vec3::new(n.z.atan2((n.x * n.x + n.y * n.y).sqrt()).to_degrees(), n.y.atan2(n.x).to_degrees(), 0.0);
+        let q = f13_core::camera_spline::quaternion(rotator);
+        Self::at(system, Transform::from_translation(point).with_rotation(Quat::from_xyzw(-q.x, -q.z, -q.y, q.w)))
+    }
+
     pub fn at(system: &str, transform: Transform) -> Self {
         SpawnParticles { system: system.to_string(), transform, follow: None, actor: String::new(), active: true }
     }

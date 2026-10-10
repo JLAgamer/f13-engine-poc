@@ -2384,6 +2384,10 @@ pub(crate) fn update_jason(
                 if !hit && at >= window.0 && at <= window.1 && alive && dist <= t.attack_range_m && angle_to(xf.rotation, flat) <= t.attack_angle_deg {
                     hit = true;
                     let r = p.counselor.take_damage(Hit { amount: t.damage, blocked_with_weapon: blocking }, &ptuning.counselor);
+                    // His weapon's ImpactEffect (Killer_ImpactEffect_Base's CounselorFX for a counselor hit). PLACEHOLDER:
+                    // the ImpactPoint and ImpactNormal of his weapon's trace: her chest, facing him (hits are by range).
+                    let toward = (xf.translation - pxf.translation).with_y(0.0).normalize_or(Vec3::Z);
+                    commands.write_message(crate::particles::SpawnParticles::impact("P_Hit_Blood_Counselor_Default_01", pxf.translation + Vec3::Y * 1.2 + toward * 0.15, toward));
                     info!("Jason: hit Vanessa for {:.0}{} (health {:.0})", r.dealt, if blocking { ", blocked" } else { "" }, p.counselor.health);
                     if blocking {
                         commands.trigger(crate::items::BlockedHit);

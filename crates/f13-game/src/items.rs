@@ -618,6 +618,10 @@ fn tick_action(
                             if stun { "stun" } else { "no stun" }
                         );
                         commands.entity(je).insert(HitJason { stun: stun.then_some(Stun::Weapon { left }), from: xf.translation });
+                        // Her weapon's ImpactEffect (Counselor_ImpactEffect_Base's JasonFX for a hit on him). PLACEHOLDER: the
+                        // trace's ImpactPoint and ImpactNormal: his chest, facing her.
+                        let toward = (xf.translation - jxf.translation).with_y(0.0).normalize_or(Vec3::Z);
+                        commands.write_message(crate::particles::SpawnParticles::impact("P_Hit_Blood_Jason_Default_01", jxf.translation + Vec3::Y * 1.4 + toward * 0.25, toward));
                         let name = items.get(a.item).map_or("weapon".to_string(), |i| i.name.clone());
                         wear_weapon(&mut commands, &mut wear, &mut inv, a.item, stats.durability, stats.attacking_wear, &name);
                     }
