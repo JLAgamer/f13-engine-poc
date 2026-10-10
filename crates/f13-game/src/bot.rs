@@ -144,6 +144,14 @@ pub(crate) struct Bot {
     dodges_ok: usize,
     /// The first tap of a double tap was pressed last frame.
     second_tap: bool,
+    /// When the fixture step last pressed E (its timer).
+    pressed_at: f32,
+    /// The fixture step pressed E again after its first press did nothing.
+    retried: bool,
+    /// The fixtures' state (door open, locked, window open, broken, barred) when the step pressed E.
+    pressed_state: [bool; 5],
+    /// Hiding spots the bot couldn't get into (its move there was blocked).
+    failed_spots: Vec<Entity>,
     /// Keep E down across frames (a hold) instead of re-pressing it each frame.
     hold_e: bool,
     /// Holding E at a ready drawer to take its item (set each frame it's wanted).
@@ -165,7 +173,7 @@ pub(crate) struct Bot {
 
 impl Default for Bot {
     fn default() -> Self {
-        Self { jason_spawn: None, goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false, hold_e: false, cabinet_hold: false, fixtures: [None; 3], door_ok: false, jason_shots: Vec::new(), door_hits: Vec::new(), fear_seen: Vec::new(), last_health: 100.0, min_breath: f32::MAX }
+        Self { jason_spawn: None, goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false, pressed_at: 0.0, retried: false, pressed_state: [false; 5], failed_spots: Vec::new(), hold_e: false, cabinet_hold: false, fixtures: [None; 3], door_ok: false, jason_shots: Vec::new(), door_hits: Vec::new(), fear_seen: Vec::new(), last_health: 100.0, min_breath: f32::MAX }
     }
 }
 
@@ -299,7 +307,7 @@ fn run_bot(
         Option<Res<crate::power::PowerGrids>>,
         Option<Res<FourSeat>>,
     ),
-    (collision, dynamic, (mut phone_boxes, mut phones, arrived, police_cars, jason_entities, placed_kills), water, navmesh, moving): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<Res<crate::police::PoliceArrived>>, Query<&Transform, (With<crate::police::PoliceCar>, Without<Player>, Without<Vehicle>)>, Query<Entity, With<crate::jason::Jason>>, Query<(Entity, &crate::placed_kills::PlacedKill)>), Option<Res<crate::water::Water>>, Option<Res<crate::navigation::Navmesh>>, Query<(), (With<Player>, Or<(With<crate::interact::WindowMove>, With<crate::interact::MoveToSpot>)>)>),
+    (collision, dynamic, (mut phone_boxes, mut phones, arrived, police_cars, jason_entities, placed_kills), water, navmesh, moving): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<Res<crate::police::PoliceArrived>>, Query<&Transform, (With<crate::police::PoliceCar>, Without<Player>, Without<Vehicle>)>, Query<Entity, With<crate::jason::Jason>>, Query<(Entity, &crate::placed_kills::PlacedKill)>), Option<Res<crate::water::Water>>, Option<Res<crate::navigation::Navmesh>>, Query<(), (With<Player>, Or<(With<crate::interact::WindowMove>, With<crate::interact::MoveToSpot>, With<crate::interact::DoorMove>)>)>),
 ) {
     let world = collision.with(&dynamic);
     let dt = time.delta_secs();
@@ -598,8 +606,9 @@ fn run_bot(
         Step::DropTest(phase) => {
             let Some(inv) = inv else { return };
             match phase {
-                // Wait for the given items, then tap Z.
-                0 if inv.hand.is_some() && !inv.pockets.is_empty() && bot.timer > 0.5 => {
+                // Wait for the given items, then tap Z on a steady frame (the press frame's time counts toward
+                // DropItemHoldTime, 0.5 s: a hitch at speed, the navmesh build's say, makes a one-frame tap a hold).
+                0 if inv.hand.is_some() && !inv.pockets.is_empty() && bot.timer > 0.5 && dt < 0.2 => {
                     info!("bot: tapping Z with {} pocket item(s)", inv.pockets.len());
                     bot.door_hits.push((0.0, inv.pockets.len() as f32));
                     keys.press(KeyCode::KeyZ);
@@ -788,6 +797,19 @@ fn run_bot(
                 info!("bot: driving into the escape zone at ({:.0}, {:.0}, {:.0})", zone.x, zone.y, zone.z);
             }
             keys.press(KeyCode::KeyW);
+            // Steer at the zone (left of the heading: A), as a driver would; holding straight let the car drift into
+            // the roadside when frame pacing changed.
+            let car = vxf.translation;
+            if let Some((_, zxf)) = zones.iter().filter(|(z, _)| z.car).min_by(|a, b| a.1.translation().distance(car).total_cmp(&b.1.translation().distance(car))) {
+                let fwd = (vxf.rotation * Vec3::X).with_y(0.0).normalize_or_zero();
+                let to = (zxf.translation() - car).with_y(0.0).normalize_or_zero();
+                let angle = fwd.cross(to).y.atan2(fwd.dot(to));
+                if angle > 3f32.to_radians() {
+                    keys.press(KeyCode::KeyA);
+                } else if angle < -3f32.to_radians() {
+                    keys.press(KeyCode::KeyD);
+                }
+            }
             // The started car's lights from behind (car_lights.rs; temp f13-bot-car-lights.png).
             if bot.timer > 0.3 && !bot.jason_shots.contains(&"car lights") {
                 bot.jason_shots.push("car lights");
@@ -875,21 +897,33 @@ fn run_bot(
             if step.hold && bot.timer < 2.0 && step.walk.is_none() {
                 keys.press(KeyCode::KeyE);
                 bot.hold_e = true;
+                bot.pressed_at = bot.timer;
                 return;
             }
             bot.hold_e = false;
+            let door = target.filter(|_| step.fx != Fx::Window).and_then(|e| doors.get(e).ok());
+            let window = bot.fixtures[2].and_then(|e| windows.get(e).ok());
+            let state = [
+                door.is_some_and(|d| d.1.open),
+                door.is_some_and(|d| d.1.locked),
+                window.is_some_and(|w| w.1.open),
+                window.is_some_and(|w| w.1.destroyed),
+                door.is_some_and(|d| barricades.iter().any(|b| b.door == Some(d.0) && b.enabled)),
+            ];
             if !step.hold && !bot.second_tap && step.walk.is_none() {
                 keys.press(KeyCode::KeyE); // one frame: released next frame, so it reads as a press
                 bot.second_tap = true;
+                bot.pressed_at = bot.timer;
+                bot.pressed_state = state;
                 return;
             }
-            // Done with any move (a climb's take carries her over before it leaves her on the other side).
-            if bot.timer < 2.5 || !moving.is_empty() {
+            // Done with any move (a climb's take carries her over before it leaves her on the other side), and 2 s
+            // after the press (a loading hitch at speed can carry the timer past 2.5 s in the frame after it; a door's
+            // open state flips as its move ends, ~1.8 s on).
+            if bot.timer < 2.5 || bot.timer - bot.pressed_at < 2.0 || !moving.is_empty() {
                 return;
             }
             keys.release(KeyCode::ShiftLeft);
-            let door = target.filter(|_| step.fx != Fx::Window).and_then(|e| doors.get(e).ok());
-            let window = bot.fixtures[2].and_then(|e| windows.get(e).ok());
             let snap = Snap {
                 door_open: door.is_some_and(|d| d.1.open),
                 door_locked: door.is_some_and(|d| d.1.locked),
@@ -901,6 +935,13 @@ fn run_bot(
                 health: p.counselor.health,
             };
             let ok = (step.expect)(&snap);
+            // A tap that landed before the interaction picked its target does nothing: press once more.
+            if !ok && !step.hold && step.walk.is_none() && !bot.retried && state == bot.pressed_state {
+                info!("bot: {:?} step {i}: nothing happened, pressing E again", step.fx);
+                bot.retried = true;
+                bot.second_tap = false;
+                return;
+            }
             info!(
                 "bot: {:?} step {i} ({}): door open {} locked {} barred {} past {:.1} | window open {} broken {} inside {} | health {:.0} -> {}",
                 step.fx,
@@ -925,6 +966,7 @@ fn run_bot(
             }
             bot.step = Step::Door(i + 1);
             bot.second_tap = false;
+            bot.retried = false;
             bot.timer = 0.0;
         }
         Step::Dodge(i) => {
@@ -1565,7 +1607,7 @@ fn run_bot(
                     let from = if bot.goal == Goal::HideSeen { jxf.translation } else { pxf.translation };
                     let Some((e, s, g)) = spots
                         .iter()
-                        .filter(|(_, s, g)| s.usable() && (bot.goal != Goal::HideSeen || g.translation().distance(jxf.translation) > 4.0))
+                        .filter(|(e, s, g)| s.usable() && !bot.failed_spots.contains(e) && (bot.goal != Goal::HideSeen || g.translation().distance(jxf.translation) > 4.0))
                         .min_by(|a, b| a.2.translation().distance(from).total_cmp(&b.2.translation().distance(from)))
                     else {
                         error!("bot: no hiding spot");
@@ -1573,7 +1615,13 @@ fn run_bot(
                         return;
                     };
                     let point = g.transform_point(s.interact);
-                    let Some(stand) = stand_spot(&world, point, s.reach / 100.0 + 0.3) else {
+                    // A bed's interact point is over the mattress, where the nearest standing surface is the bed top:
+                    // stand on the floor at its enter spot instead (from the top, the slide down is blocked).
+                    let bed_floor = (s.kind == crate::hiding::SpotKind::Bed)
+                        .then(|| s.sides.first().map(|side| crate::hiding::HidingSpot::world(g, &side.enter).translation))
+                        .flatten()
+                        .filter(|&feet| f13_core::nav::capsule_fits(&world, feet + Vec3::Y * 0.05, &CAPSULE, &crate::player::WALK));
+                    let Some(stand) = bed_floor.or_else(|| stand_spot(&world, point, s.reach / 100.0 + 0.3)) else {
                         warn!("bot: nowhere to stand at {:?}", s.kind);
                         return;
                     };
@@ -1596,6 +1644,16 @@ fn run_bot(
                         bot.second_tap = true;
                     } else {
                         bot.second_tap = false;
+                    }
+                    // A spot whose move there is blocked (from where she was put): try the next nearest, twice.
+                    if bot.timer > 4.0 && bot.failed_spots.len() < 2 && moving.is_empty() {
+                        if let Some(e) = bot.vehicle {
+                            warn!("bot: couldn't get into {e:?}; trying another spot");
+                            bot.failed_spots.push(e);
+                        }
+                        bot.step = Step::Hide(0);
+                        bot.timer = 0.0;
+                        return;
                     }
                     // (8 s: at speed, a few long frames can pass 3 s with only a press or two.)
                     if bot.timer > 8.0 {

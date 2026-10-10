@@ -165,7 +165,9 @@ struct EmitterState {
     /// The bursts fired in the current loop.
     bursts_fired: Vec<bool>,
     loops_done: u32,
-    /// A mesh emitter's drawn particles: one scene of its mesh each (MaxDrawCount of them, at most 32).
+    /// A mesh emitter's mesh (its scene) and how many it draws (MaxDrawCount, at most 32); its drawn particles, one
+    /// scene each, spawned as particles first need them (an idle emitter holds none).
+    mesh_scene: Option<(Handle<WorldAsset>, usize)>,
     slots: Vec<Entity>,
     /// A ParticleModuleLight emitter's simple lights (MaxDrawCount of them, at most 16).
     lights: Vec<Entity>,
@@ -609,11 +611,8 @@ impl ParticleAssets {
                 }
                 let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(md.file.clone()));
                 let n = def.max_draw_count.unwrap_or(500).min(32) as usize;
-                let slots = (0..n)
-                    .map(|i| commands.spawn((bevy::world_serialization::WorldAssetRoot(scene.clone()), Transform::default(), Visibility::Hidden, Name::new(format!("{name}.{} {i}", def.name)))).id())
-                    .collect();
                 let entity = commands.spawn((Transform::default(), Visibility::Hidden)).id();
-                emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, slots, lights: vec![] });
+                emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: Some((scene, n)), slots: vec![], lights: vec![] });
                 continue;
             }
             let Some((material, mode)) = def.material.as_deref().and_then(|m| self.mats.get(m, &self.root, assets, materials)) else { continue };
@@ -639,7 +638,7 @@ impl ParticleAssets {
                 ))
                 .id();
             let pivot = def.modules.iter().find_map(|m| if let Module::PivotOffset(p) = m { Some(Vec2::from(*p)) } else { None }).unwrap_or(Vec2::ZERO) + Vec2::splat(-0.5);
-            emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: mode == 4, slots: vec![], lights: light_pool(commands, def, name) });
+            emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: mode == 4, mesh_scene: None, slots: vec![], lights: light_pool(commands, def, name) });
         }
         if emitters.is_empty() {
             return None;
@@ -1255,8 +1254,9 @@ fn spawn(def: &Emitter, spawn_time: f32, emitter_time: f32, location: Vec3, rota
 
 /// The emitters' quads, facing the camera.
 fn draw(
+    mut commands: Commands,
     camera: Query<&GlobalTransform, (With<Camera3d>, With<crate::lighting::Lit>)>,
-    systems: Query<&ParticleSystemInstance>,
+    mut systems: Query<&mut ParticleSystemInstance>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut vis: Query<&mut Visibility>,
     mut slot_xf: Query<&mut Transform>,
@@ -1265,16 +1265,27 @@ fn draw(
     let Some(cam) = camera.iter().next() else { return };
     let cam_pos = cam.translation();
     let (cam_right, cam_up, cam_fwd) = (cam.right().as_vec3(), cam.up().as_vec3(), cam.forward().as_vec3());
-    for s in &systems {
+    for mut s in &mut systems {
+        let s = &mut *s;
         let origin = to_bevy(s.location);
         let near = !s.hidden && (s.max_draw <= 0.0 || origin.distance(cam_pos) <= s.max_draw);
-        for e in &s.emitters {
-            if !e.slots.is_empty() {
+        for e in s.emitters.iter_mut() {
+            if let Some((scene, cap)) = &e.mesh_scene {
                 // A mesh emitter: its first MaxDrawCount particles, each its mesh at FDynamicMeshEmitterData::
                 // CalculateParticleTransform's default (FUN_1415be6e0): v x PreRot(MakeFromEuler(InitialOrientation)) x
                 // Scale(Size) x Rot(MakeFromEuler(Rotation x 180 / pi on every axis) + MakeFromEuler(payload Rotation))
                 // + its location, then the component's rotation for local-space emitters (Unreal row vectors).
                 let euler = |v: Vec3| Vec3::new(v.y, v.z, v.x);
+                // Scenes for the particles drawn now (kept for the emitter's life once spawned).
+                let want = if near { e.particles.len().min(*cap) } else { 0 };
+                let name = e.def.name.clone();
+                let more: Vec<Entity> = (e.slots.len()..want)
+                    .map(|i| commands.spawn((bevy::world_serialization::WorldAssetRoot(scene.clone()), Transform::default(), Visibility::Hidden, Name::new(format!("{name} {i}")))).id())
+                    .collect();
+                if !more.is_empty() {
+                    debug!("particles: {name}: {} mesh slots", e.slots.len() + more.len());
+                }
+                e.slots.extend(more);
                 for (i, &slot) in e.slots.iter().enumerate() {
                     let Some(p) = e.particles.get(i).filter(|_| near) else {
                         if let Ok(mut v) = vis.get_mut(slot) {

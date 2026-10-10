@@ -1495,6 +1495,9 @@ fn small_items(
     let hold_time = model.as_ref().and_then(|m| m.info.values.get("DropItemHoldTime").copied()).unwrap_or(1.5);
     let in_water = water.as_ref().is_some_and(|w| w.surface_at(xf.translation + Vec3::Y * 0.05).is_some());
     let free = !in_water && !interaction.busy() && !sliding;
+    if keys.just_pressed(KeyCode::KeyZ) {
+        debug!("drop key pressed (dt {:.3}): free {free} (water {in_water}, busy {}, sliding {sliding}), dropping {dropping}", time.delta_secs(), interaction.busy());
+    }
     if keys.just_pressed(KeyCode::KeyZ) && free && !dropping {
         *drop_held = Some(0.0);
     }
@@ -1510,6 +1513,7 @@ fn small_items(
         }
     }
     if keys.just_released(KeyCode::KeyZ) {
+        debug!("drop key released: held {:?}, free {free}, dropping {dropping}, hand {:?}, pockets {}", *drop_held, inv.hand, inv.pockets.len());
         if let Some(held) = drop_held.take() {
             if free && !dropping && (inv.hand.is_none() || held < hold_time) && !inv.pockets.is_empty() {
                 commands.entity(pe).insert((Dropping { large: false, t: 0.0 }, crate::character::PlayAction(DROP_SMALL_TAKE.into())));
