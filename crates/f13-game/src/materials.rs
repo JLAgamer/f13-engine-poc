@@ -645,6 +645,15 @@ fn master_material(root: &Path, info: &MaterialInfo, loader: &Loader) -> Option<
             };
             (params, t)
         }
+        "EyeMaster_LowerLid" => {
+            // BaseColor, Roughness, Specular (its Subsurface shading's SubsurfaceColor is black: lit as default).
+            let c = info.vectors.get("BaseColor").copied().unwrap_or([0.5, 0.5, 0.5, 1.0]);
+            base.base_color = LinearRgba::rgb(c[0], c[1], c[2]).into();
+            base.perceptual_roughness = info.scalar("Roughness", 0.5);
+            base.reflectance = (0.5f32 * info.scalar("Specular", 0.5)).sqrt();
+            base.alpha_mode = AlphaMode::Blend;
+            (MasterParams { mode: Vec4::new(4.0, info.scalar("FresnelPower", 1.0), 0.0, 0.0), a: Vec4::ZERO, b: Vec4::ZERO }, flicker()?)
+        }
         _ => return None,
     };
     let (tex2, tex3) = extra.unwrap_or_else(|| (tex.clone(), tex.clone()));
@@ -778,8 +787,9 @@ fn apply_materials(
                     Built::Standard(standard.add(glass_material(info)))
                 } else if info.blend != "BLEND_Opaque" && info.blend != "BLEND_Masked" && info.textures.is_empty() && !info.master.starts_with(WATER_MASTER) {
                     Built::Hidden
-                } else if info.master.starts_with("EyeMaster_") && info.textures.is_empty() {
-                    // The eyes' iris refraction and lower-lid film overlays (not ported; drawn plain they cover the eyes white).
+                } else if info.master.starts_with("EyeMaster_") && info.textures.is_empty() && info.master != "EyeMaster_LowerLid" {
+                    // EyeMaster_Iris: every compiled pass of it discards (discard_nz l(-1): its OpacityMask a constant
+                    // 0); the game never draws it either.
                     Built::Hidden
                 } else if info.master.starts_with(WATER_MASTER) {
                     Built::Water(waters.add(water_material(info, &loader, &fallback, &mut images)))

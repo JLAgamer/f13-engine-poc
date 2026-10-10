@@ -9,6 +9,9 @@
 //   (towards its luminance (0.3, 0.59, 0.11)) x ColorTint; lerp(s, Texture x Overall2 x ColorTint2, AlphaMask); + the
 //   stars (T_Stars at uv x 12) x StarBrightness x (1 - AlphaMask); x exp(Rain_MPC LightiningIntensity (mode.w) x 8)
 //   (weather.rs RainMpc).
+// Mode 4, the eyes' lower-lid film (EyeMaster_LowerLid, its masked depth pass s010): clipped where
+//   1 - (0.04 + 0.96 (1 - max(N.V, 0))^FresnelPower (mode.y)) < 0.3333 (it shows only facing the view); drawn blended at
+//   alpha 1 (so neither the depth prepass nor the shadows take its whole mesh).
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
@@ -76,6 +79,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         return out;
     }
 #endif
+    if mode == 4u {
+        let v = normalize(view.world_position - in.world_position.xyz);
+        let f = 0.04 + 0.96 * pow(1.0 - max(dot(pbr_input.N, v), 0.0), params.mode.y);
+        if 1.0 - f < 0.3333 {
+            discard;
+        }
+    }
     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
 #ifdef SCREEN_SPACE_AMBIENT_OCCLUSION
     // The ambient light's occlusion as the engine's ambient pass has it (FPostProcessAmbientPS): the screen-space AO

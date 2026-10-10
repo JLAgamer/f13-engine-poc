@@ -44,7 +44,7 @@ Moved from Milestone 1 (not tied to gameplay):
       hits spawn impact effects at all (MODLOG "A gun's pellets and their impacts"), the GPU emitters' modules (CollisionGPU, the event generator and receiver)
 - [ ] Counselor model, remaining: the eye look against a capture of the game (it rolls the eyes 90 degrees from their bind: MODLOG
       "The eyes' look")
-      (MODLOG "The counselor's face"), the eyes' iris and lid overlays, outfit choice
+      (MODLOG "The counselor's face"), outfit choice
 - [ ] Lighting, remaining: Enlighten GI, local light shadows (a real-time budget of the 4 nearest for now, unverified
       visually and for cost), the rain material's refraction, the falling rain's cost (49 CPU-simulated systems,
       about 3 ms a frame; the game's are GPU sprites: MODLOG "Rain")
