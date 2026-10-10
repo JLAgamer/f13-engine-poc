@@ -34,8 +34,9 @@ pub struct Item {
 pub enum ItemKind {
     /// SCWeapon: swung at Jason.
     Weapon(WeaponStats),
-    /// SCGun: the flare gun (a projectile) or the shotgun (pellets).
-    Gun { stats: WeaponStats, projectile: bool, pellets: u32, spread_deg: f32, velocity: f32 },
+    /// SCGun: the flare gun (a projectile) or the shotgun (pellets); `melee`: it has attack montages (NeutralAttack:
+    /// the shotgun swings as a two-handed weapon in combat stance, loaded or not; the flare gun's are None).
+    Gun { stats: WeaponStats, projectile: bool, pellets: u32, spread_deg: f32, velocity: f32, melee: bool },
     /// SCTrap: placed on the ground.
     Trap,
     FirstAid,
@@ -93,6 +94,7 @@ impl ItemKind {
                 pellets: p("NumPellets").as_u64().unwrap_or(1) as u32,
                 spread_deg: p("MaxSpreadAngle").as_f64().unwrap_or(1.0) as f32,
                 velocity: p("ProjectileVelocity").as_f64().unwrap_or(6000.0) as f32,
+                melee: p("NeutralAttack").as_array().is_some_and(|a| a.iter().any(|x| x["AttackMontage"].is_string())),
             }
         } else if is("SCWeapon") {
             ItemKind::Weapon(stats())

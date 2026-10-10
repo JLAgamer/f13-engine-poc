@@ -27,7 +27,11 @@
 //! don't stop the sweeps (only the line from her).
 //!
 //! Guns (SCGun): using one fires it at once (its Use: bHasAmmunition and bIsAiming -> Fire; the flare's OnUseItem
-//! notify is at 0 s too), and one shot spends it (bHasAmmunition false unless infinite ammo). Each shotgun pellet
+//! notify is at 0 s too), and one shot spends it (Fire 0x14044ea80: bHasAmmunition false unless infinite ammo, and
+//! bIsAiming false). The spent gun stays in her hands: SwapToOnUse (the shotgun's MeleeShotgun_C) is applied only by
+//! SCCounselorCharacter::OnSwapItemOnUse (vt +0x1190, 0x1403cac60), which only the AnimBP's AnimNotify_ItemSwap
+//! calls, and no package carries that notify (f13-export grep). The shotgun keeps its own attacks (NeutralAttack,
+//! ForwardAttack: the two-handed axe swings) in combat stance; the flare gun has none. Each shotgun pellet
 //! traces FireDistance / cos(its spread angle): it reaches FireDistance (SCGun's constructor, 2000 cm) ahead.
 //! Only while aiming (SCGun::Use needs bIsAiming).
 //!
@@ -182,6 +186,10 @@ fn give_items(
 /// The held item hangs off the counselor's hand socket.
 #[derive(Component)]
 pub struct InHand;
+
+/// A gun that has fired its shot (bHasAmmunition false): it can't aim again.
+#[derive(Component)]
+pub struct Spent;
 
 /// The socket the item in her hands hangs from (its HandAttachSocket, or where ShotgunHold moved it).
 #[derive(Component)]
@@ -372,7 +380,7 @@ fn aim(
     interaction: Res<crate::interact::Interaction>,
     camera: Single<&PlayerCamera>,
     mut player: Query<(Entity, &Player, &Inventory, &mut Transform, Option<&mut GunAim>, Has<ItemAction>, (Has<crate::vehicle::Driving>, Has<crate::hiding::Hiding>, Has<crate::jason::Held>, Has<crate::interact::UsingItem>))>,
-    items: Query<&Item>,
+    items: Query<(&Item, Has<Spent>)>,
 ) {
     let Ok((pe, p, inv, mut xf, aim, acting, (driving, hiding, held, using))) = player.single_mut() else { return };
     let Some(mut aim) = aim else {
@@ -380,7 +388,8 @@ fn aim(
         return;
     };
     let c = &p.counselor;
-    let gun = inv.hand.and_then(|h| items.get(h).ok()).is_some_and(|i| matches!(i.kind, ItemKind::Gun { .. }));
+    // A loaded gun (AimGun sets bIsAiming only with bHasAmmunition; Fire clears it).
+    let gun = inv.hand.and_then(|h| items.get(h).ok()).is_some_and(|(i, spent)| matches!(i.kind, ItemKind::Gun { .. }) && !spent);
     use f13_core::counselor::Stance;
     if !gun || !c.alive() || held || driving || hiding {
         aim.aiming = false;
@@ -599,6 +608,7 @@ fn start_action(
         (Without<ItemAction>, Without<crate::interact::UsingItem>, Without<crate::jason::Held>, Without<crate::jason::Staggered>, Without<crate::vehicle::Driving>, Without<Blocking>, Without<Trapped>),
     >,
     items: Query<&Item>,
+    spent: Query<(), With<Spent>>,
     anims: Res<crate::Anims>,
 ) {
     let Some(character) = character else { return };
@@ -621,8 +631,12 @@ fn start_action(
     if mouse.just_pressed(MouseButton::Left) {
         let Some(hand) = inv.hand else { return };
         let Ok(item) = items.get(hand) else { return };
-        match &item.kind {
-            ItemKind::Weapon(stats) => {
+        let melee_gun = match &item.kind {
+            ItemKind::Gun { stats, melee: true, .. } if combat && !(aiming && !spent.contains(hand)) => Some(stats.clone()),
+            _ => None,
+        };
+        match (&item.kind, melee_gun.as_ref()) {
+            (ItemKind::Weapon(stats), _) | (_, Some(stats)) => {
                 // The NeutralAttack (0x1402e5aa0: MULTICAST_Attack(false)); in combat stance the button's hold starts
                 // counting (the heavy attack after 0.1 s, in tick_action).
                 let anim = if stats.two_handed { SWING_2H[0] } else { SWING_1H[0] };
@@ -631,8 +645,8 @@ fn start_action(
                 xf.rotation = face;
                 start(Use::Swing { stats: stats.clone(), window, heavy: false }, hand, anim, window.0);
             }
-            ItemKind::Gun { projectile, .. } => {
-                if !aiming {
+            (ItemKind::Gun { projectile, .. }, None) => {
+                if !aiming || spent.contains(hand) {
                     return;
                 }
                 info!("fire {}", item.name);
@@ -640,7 +654,7 @@ fn start_action(
                 let anim = if *projectile { FLARE_FIRE } else { SHOTGUN_FIRE };
                 start(Use::Fire { kind: item.kind.clone() }, hand, anim, 0.0);
             }
-            ItemKind::Trap => {
+            (ItemKind::Trap, _) => {
                 info!("placing {}", item.name);
                 xf.rotation = face;
                 start(Use::PlaceTrap, hand, PLACE_TRAP, len(PLACE_TRAP));
@@ -790,9 +804,8 @@ fn tick_action(
                         info!("shotgun missed");
                     }
                 }
-                // One shot.
-                inv.hand = None;
-                commands.entity(a.item).despawn();
+                // One shot: the gun stays in her hands, spent.
+                commands.entity(a.item).insert(Spent);
             }
             Use::Fire { .. } => a.done = true,
             Use::Throw => {

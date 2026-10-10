@@ -49,8 +49,8 @@ Moved from Milestone 1 (not tied to gameplay):
 - [ ] Animations, remaining: directional starts (BS_F_Start_Normal_*Hemisphere 45-180: their root doesn't turn, the body turns about it; how the actor turns with them is unread), foot-marker
       sync (now normalised time), held items' hand layers (ItemIdleAddtive: the item's IdleAsset / a loaded gun's
       LoadedIdle over hand_r and weapon_attach_r; UpperBodyItemAlpha's clavicle_R layer for non-weapons), the aim
-      crossfades' 0.2 s HermiteCubic (eased at BLEND_RATE), aim yaw columns (X is 0 in the graph), the empty shotgun's
-      SwapToOnUse (MeleeShotgun_C; the port drops it), BS_Run_Lean, the rest of the anim Blueprints' graphs (f13-rs
+      crossfades' 0.2 s HermiteCubic (eased at BLEND_RATE), aim yaw columns (X is 0 in the graph),
+      BS_Run_Lean, the rest of the anim Blueprints' graphs (f13-rs
       plays their locomotion, the grab and block layers and the gun branch; their look-at and IK nodes aren't
       ported). Not in the game:
       turn-in-place takes, limp movement
