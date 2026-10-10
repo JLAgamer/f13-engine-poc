@@ -56,9 +56,9 @@ Moved from Milestone 1 (not tied to gameplay):
       counselor's other lines, X3DAudio's panning matrix,
       the doors' APEX debris, the death and spectating cameras, the counselor HUD's FearOpacity (her pockets' and stamina
       ring's tint during the match: its native writer wasn't found)
-- [ ] Audio, remaining: the audio volumes' reverb (the game's XAudio2 device runs XAudio2's own reverb from each
-      volume's ReverbEffect; what's done, and why the stingers, calls and dead bodies' lines aren't listed: MODLOG
-      "Scary sounds", "Her voice lines: where and when")
+- [ ] Audio, remaining: the audio volumes' AmbientZoneSettings (inside a cabin, the sounds of the classes with
+      bApplyAmbientVolumes outside it at its ExteriorVolume and ExteriorLPF; the volumes' reverb is silent here: MODLOG
+      "Reverb: none on this map")
 - [ ] Post-processing, remaining: compare against the game's own screenshots. (Bloom's fast blur: ported, ComputeOutputDesc's half-width X pass)
 
 ## Milestone 3: Networking
