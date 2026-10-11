@@ -20,6 +20,7 @@
 //! (a press with no take) the leaf turns at a steady rate over [`SWING_SECONDS`].
 
 use bevy::prelude::*;
+use std::collections::HashMap;
 
 pub const SWING_SECONDS: f32 = 0.5;
 const OPEN_DEGREES: f32 = 90.0;
@@ -38,8 +39,12 @@ pub struct Wall {
     pub broken: bool,
     pub section: Option<Entity>,
     pub collision: Option<Entity>,
-    /// BurstExplosionForce: how hard its section's chunks fly when it's broken through.
+    /// BurstExplosionForce, and HitExplosionForce (the force a blow that breaks it gives its chunks: TakeDamage's
+    /// DestroyWall(killer, HitExplosionForce)).
     pub burst_force: f32,
+    pub hit_force: f32,
+    /// WallLifespanAfterDestruction (s).
+    pub lifespan: f32,
     /// The section's place and look, and the Light / Medium / Heavy DestructionInside and Outside meshes it's swapped
     /// for as it takes damage (`[inside, outside][stage]`).
     pub section_xf: Transform,
@@ -138,6 +143,9 @@ pub struct Door {
     /// BreakExplosionForce and BurstExplosionForce: how hard its chunks fly when it's broken down or burst through.
     pub break_force: f32,
     pub burst_force: f32,
+    /// Its OutArrow (door local: the radius damage's origin) and LifespanAfterDestruction (s).
+    pub out_arrow: Vec3,
+    pub lifespan: f32,
     /// Its special move spots (component name -> door local): where her open, close, lock and unlock moves play from.
     pub spots: std::collections::HashMap<String, Transform>,
     /// The leaf's look (None in tests).
@@ -145,98 +153,223 @@ pub struct Door {
 }
 
 /// A door broken down or burst through, a wall broken through: the destructible piece (its leaf, its section: the
-/// mesh's chunks, the `Part` joints) flies apart from the blow at `from` with `force` (its Break/BurstExplosionForce). PLACEHOLDER: the APEX destructible's simulation
-/// isn't ported; the chunks fly out from the blow (force / 1000 m/s, upward a little), spin, fall under gravity onto
-/// the door's floor and are gone after a few seconds.
+/// mesh's chunks, the `Part` joints) breaks as APEX breaks it. The game calls UDestructibleComponent::
+/// ApplyRadiusDamage(100, `origin`, `radius`, `force`, bFullDamage) on it (SCDoor's destroy 0x14034d410: origin the
+/// OutArrow + 5 cm toward the killer from the InteractComponent, radius 3000; SCDestructableWall::DestroyWall
+/// 0x14033cfc0: the Interactable + 10 cm, radius 300), then clears its CastShadow and destroys it LifespanAfterDestruction
+/// (10 s) later (0x14034f810). APEX_Destructible_x64.dll (its PDB's names): applyRadiusDamage_immediate damages each
+/// visible chunk within the radius (DestructibleStructure::damageChunk: the default behaviour group's damage spread,
+/// minimumRadius 0, radiusMultiplier 1, falloffExponent 1, so a fraction (R - d) / R of the damage with d the chunk's
+/// distance from the origin; the door's DamageThreshold 1 against 100: every chunk breaks free), and gives each freed
+/// chunk the impulse normalize(its centroid - origin) x fraction x momentum (fractureImpulseScale 0 adds nothing),
+/// applied at the point on its bounding sphere toward the origin (fractureChunk: so no spin). Its mass:
+/// (hull volume x density)^0.5 (DestructibleScene::tasked_beforeTick: massScale 1, scaledMassExponent 0.5, the module's
+/// defaults; density PhysicalMaterial Density 1 x 0.001 kg/cm³ from DestructibleComponent's p3BodyDescTemplate.density
+/// 0x141e43f08). Then PhysX: gravity, linear damping 0.01 (FBodyInstance's), angular 0. PLACEHOLDER: PhysX's contact
+/// solver (a chunk's centroid traced against the static world, bouncing with the default material's restitution 0.3
+/// and friction 0.7 taken off its sliding speed), the chunk's convex hull from its render vertices (APEX's cooked hulls
+/// aren't exported) and its centroid the hull bounds' centre.
 #[derive(Event, Clone, Copy, Debug)]
 pub struct BreakApart {
     pub piece: Entity,
-    pub from: Vec3,
+    /// The radius damage's origin and radius (Bevy space, m).
+    pub origin: Vec3,
+    pub radius: f32,
+    /// ImpulseStrength (Break / Burst / HitExplosionForce: kg cm/s).
     pub force: f32,
+    /// LifespanAfterDestruction (s): the pieces are gone after it.
+    pub lifespan: f32,
 }
 
-/// The broken leaf's chunks in flight.
+impl BreakApart {
+    /// The radius damage's origin: `at` (the OutArrow, the Interactable) moved `offset_cm` toward the killer, the
+    /// direction flat (SCDoor's FUN_140331b10: killer - the InteractComponent, Z dropped, normalized).
+    pub fn origin(at: Vec3, interact: Vec3, killer: Vec3, offset_cm: f32) -> Vec3 {
+        at + (killer - interact).with_y(0.0).normalize_or_zero() * offset_cm / 100.0
+    }
+}
+
+/// The broken piece in flight: how long it has been, and how long it lasts.
 #[derive(Component)]
 struct Debris {
     t: f32,
-    from: Vec3,
-    speed: f32,
-    floor: f32,
+    lifespan: f32,
 }
 
-/// One chunk: its velocity and spin (the debris' local space) and its place.
+/// One freed chunk: its velocity (world, m/s) and where its centroid is (world).
 #[derive(Component)]
 struct Chunk {
     velocity: Vec3,
-    spin: Vec3,
+    centroid: Vec3,
 }
 
-/// How long the debris lasts (s), and gravity (m/s²).
-const DEBRIS_SECONDS: f32 = 5.0;
+/// A chunk's shape in its mesh's space (m): its hull bounds and volume (cm³).
+#[derive(Clone, Copy, Debug)]
+pub struct ChunkShape {
+    pub min: Vec3,
+    pub max: Vec3,
+    pub volume_cm3: f32,
+}
+
+impl ChunkShape {
+    pub fn centre(&self) -> Vec3 {
+        (self.min + self.max) * 0.5
+    }
+    pub fn radius(&self) -> f32 {
+        (self.max - self.min).length() * 0.5
+    }
+}
+
+/// Each skin joint's chunk of a destructible mesh's .glb (the vertices weighted to it): its convex hull's bounds and
+/// volume, by joint name.
+pub fn chunk_shapes(path: &std::path::Path) -> HashMap<String, ChunkShape> {
+    let (Some(prims), Some(names)) = (f13_data::glb::read_primitives(path), f13_data::glb::joint_names(path)) else { return HashMap::new() };
+    let mut points: Vec<Vec<Vec3>> = vec![vec![]; names.len()];
+    for p in &prims {
+        for ((pos, j), w) in p.positions.iter().zip(&p.joints).zip(&p.weights) {
+            let k = (0..4).max_by(|a, b| w[*a].total_cmp(&w[*b])).unwrap_or(0);
+            if let Some(v) = points.get_mut(j[k] as usize) {
+                v.push(Vec3::from_array(*pos));
+            }
+        }
+    }
+    names
+        .into_iter()
+        .zip(points)
+        .filter(|(_, p)| p.len() >= 4)
+        .map(|(name, p)| {
+            let hull = f13_core::collision::convex_hull(&p);
+            let volume = hull.iter().map(|t| t.a.dot(t.b.cross(t.c))).sum::<f32>().abs() / 6.0;
+            let (min, max) = p.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
+            (name, ChunkShape { min, max, volume_cm3: volume * 1.0e6 })
+        })
+        .collect()
+}
+
+/// The destructible meshes' chunk shapes, by scene path.
+#[derive(Resource, Default)]
+struct ChunkShapes(HashMap<String, std::sync::Arc<HashMap<String, ChunkShape>>>);
+
+/// UE's default gravity (cm/s² / 100) and the chunks' linear damping (FBodyInstance's LinearDamping 0.01, constructor
+/// 0x1415ee0ad).
 const GRAVITY: f32 = 9.8;
+const LINEAR_DAMPING: f32 = 0.01;
+/// The default physical material's (UPhysicalMaterial's constructor 0x1416148b0): Restitution 0.3, Friction 0.7,
+/// Density 1 (g/cm³; x 0.001 kg/cm³ for APEX).
+const RESTITUTION: f32 = 0.3;
+const FRICTION: f32 = 0.7;
+const DENSITY_KG_PER_CM3: f32 = 0.001;
 
 pub struct DebrisPlugin;
 
 impl Plugin for DebrisPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(break_apart).add_systems(Update, fly);
+        app.init_resource::<ChunkShapes>().add_observer(break_apart).add_systems(Update, fly);
     }
 }
 
+/// A freed chunk's velocity (m/s) from the radius damage (see [`BreakApart`]): `centroid` its world centroid, `reach`
+/// its bounding radius (m), `volume_cm3` its hull's volume.
+pub fn chunk_velocity(centroid: Vec3, reach: f32, volume_cm3: f32, origin: Vec3, radius: f32, force: f32) -> Vec3 {
+    // damageChunk: the chunk's distance from the origin (to its bounding sphere), the fraction (R - d) / R.
+    let d = (centroid.distance(origin) - reach).max(0.0);
+    let fraction = if radius > 0.0 { ((radius - d) / radius).clamp(0.0, 1.0) } else { 1.0 };
+    let mass = (volume_cm3 * DENSITY_KG_PER_CM3).max(1e-6).sqrt();
+    // Impulse in kg cm/s over kg: cm/s; to m/s.
+    (centroid - origin).normalize_or_zero() * fraction * force / mass / 100.0
+}
+
+#[allow(clippy::too_many_arguments)]
 fn break_apart(
     ev: On<BreakApart>,
     mut commands: Commands,
     pieces: Query<(&bevy::world_serialization::WorldAssetRoot, &GlobalTransform, Option<&crate::materials::MaterialOverrides>)>,
+    assets: Res<AssetServer>,
+    export: Res<crate::ExportRoot>,
+    mut shapes: ResMut<ChunkShapes>,
 ) {
     let Ok((scene, g, overrides)) = pieces.get(ev.piece) else { return };
     let at = g.compute_transform();
-    let mut e = commands.spawn((bevy::world_serialization::WorldAssetRoot(scene.0.clone()), at, Debris { t: 0.0, from: ev.from, speed: (ev.force / 1000.0).min(10.0), floor: at.translation.y }));
+    let path = assets.get_path(&scene.0).map(|p| p.path().to_string_lossy().into_owned()).unwrap_or_default();
+    let chunks = shapes.0.entry(path.clone()).or_insert_with(|| std::sync::Arc::new(chunk_shapes(&export.0.join(&path)))).clone();
+    debug!("break apart {path}: {} chunks, force {:.0} radius {:.1} m", chunks.len(), ev.force, ev.radius);
+    // Unshadowed (the destroy clears the component's CastShadow).
+    let mut e = commands.spawn((
+        bevy::world_serialization::WorldAssetRoot(scene.0.clone()),
+        at,
+        Debris { t: 0.0, lifespan: ev.lifespan },
+        crate::Placed { cast_shadow: false, cull_m: 0.0 },
+        PendingChunks { chunks, origin: ev.origin, radius: ev.radius, force: ev.force },
+    ));
     if let Some(o) = overrides {
         e.insert(o.clone());
     }
 }
 
+/// A broken piece whose scene hasn't spawned its chunk joints yet: their shapes and the blow.
+#[derive(Component)]
+struct PendingChunks {
+    chunks: std::sync::Arc<HashMap<String, ChunkShape>>,
+    origin: Vec3,
+    radius: f32,
+    force: f32,
+}
+
+#[allow(clippy::type_complexity)]
 fn fly(
     mut commands: Commands,
     time: Res<Time>,
-    mut debris: Query<(Entity, &mut Debris, &GlobalTransform)>,
+    mut debris: Query<(Entity, &mut Debris, &GlobalTransform, Option<&PendingChunks>)>,
     children: Query<&Children>,
     names: Query<&Name>,
-    mut chunks: Query<(&mut Transform, Option<&mut Chunk>, &GlobalTransform)>,
-    mut rng: ResMut<crate::GameRng>,
+    parents: Query<&ChildOf>,
+    globals: Query<&GlobalTransform>,
+    mut chunks: Query<(&mut Transform, Option<&mut Chunk>)>,
+    collision: Res<crate::collision::WorldCollision>,
+    dynamic: Res<crate::collision::DynamicColliders>,
 ) {
     let dt = time.delta_secs();
-    for (e, mut d, g) in &mut debris {
+    let (world, _) = collision.with(&dynamic);
+    for (e, mut d, g, pending) in &mut debris {
         d.t += dt;
-        if d.t > DEBRIS_SECONDS {
+        if d.t > d.lifespan {
             commands.entity(e).despawn();
             continue;
         }
-        let to_local = g.compute_transform().rotation.inverse();
+        // Free the chunks once the scene has them: each its velocity from the blow.
+        if let Some(p) = pending {
+            let mut freed = 0;
+            for c in children.iter_descendants(e) {
+                let Some(shape) = names.get(c).ok().and_then(|n| p.chunks.get(n.as_str())) else { continue };
+                let centroid = g.transform_point(shape.centre());
+                let reach = shape.radius() * g.scale().max_element();
+                let velocity = chunk_velocity(centroid, reach, shape.volume_cm3, p.origin, p.radius, p.force);
+                commands.entity(c).insert(Chunk { velocity, centroid });
+                freed += 1;
+            }
+            if freed > 0 {
+                commands.entity(e).remove::<PendingChunks>();
+            }
+            continue;
+        }
         for c in children.iter_descendants(e) {
-            if !names.get(c).is_ok_and(|n| n.as_str().starts_with("Part")) {
-                continue;
+            let Ok((mut xf, Some(mut ch))) = chunks.get_mut(c) else { continue };
+            // Gravity and PhysX's linear damping, then the move, stopped and bounced at the static world.
+            ch.velocity += Vec3::NEG_Y * GRAVITY * dt;
+            ch.velocity *= (1.0 - LINEAR_DAMPING * dt).max(0.0);
+            let from = ch.centroid;
+            let mut to = from + ch.velocity * dt;
+            if let Some((t, n)) = f13_core::collision::segment_hit_normal(&world, from, to, 0.25).filter(|(_, n)| n.dot(ch.velocity) < 0.0) {
+                to = from + (to - from) * t + n * 0.005;
+                let vn = n * ch.velocity.dot(n);
+                let vt = ch.velocity - vn;
+                ch.velocity = vt * (1.0 - FRICTION).max(0.0) - vn * RESTITUTION;
             }
-            let Ok((mut xf, chunk, cg)) = chunks.get_mut(c) else { continue };
-            match chunk {
-                None => {
-                    let mut r = || rng.0.frand() * 2.0 - 1.0;
-                    let out = (cg.translation() - d.from).with_y(0.0).normalize_or(Vec3::X) + Vec3::Y * 0.4 + Vec3::new(r(), r(), r()) * 0.25;
-                    let spin = Vec3::new(r(), r(), r()) * 6.0;
-                    commands.entity(c).insert(Chunk { velocity: to_local * (out.normalize() * d.speed * (0.6 + 0.4 * rng.0.frand())), spin });
-                }
-                Some(mut ch) => {
-                    // Gravity (world down, in the debris' space), then onto the floor.
-                    ch.velocity += to_local * Vec3::NEG_Y * GRAVITY * dt;
-                    xf.translation += ch.velocity * dt;
-                    let spin = ch.spin * dt;
-                    xf.rotation = Quat::from_euler(EulerRot::XYZ, spin.x, spin.y, spin.z) * xf.rotation;
-                    if cg.translation().y < d.floor {
-                        ch.velocity = Vec3::ZERO;
-                        ch.spin = Vec3::ZERO;
-                    }
-                }
-            }
+            let moved = to - from;
+            ch.centroid = to;
+            // Into the joint's parent's space.
+            let local = parents.get(c).ok().and_then(|p| globals.get(p.parent()).ok()).map_or(moved, |pg| pg.affine().inverse().transform_vector3(moved));
+            xf.translation += local;
         }
     }
 }
@@ -388,6 +521,27 @@ pub fn swing_doors(time: Res<Time>, mut doors: Query<&mut Door>, mut pivots: Que
 mod tests {
     use super::*;
 
+    /// The Higgins Haven door's heavy destruction mesh, when `F13_EXPORT` points at an export (skipped otherwise):
+    /// fourteen chunks (Part00..13, the Root joint has no vertices), and the break's speeds.
+    #[test]
+    fn door_chunks_fly() {
+        let Some(root) = std::env::var_os("F13_EXPORT").map(std::path::PathBuf::from) else { return };
+        let path = root.join("SummerCamp/Content/Props/Manmade/Door/S_Door_HigginsHaven_Door_01_b_DM.glb");
+        if !path.exists() {
+            return;
+        }
+        let shapes = chunk_shapes(&path);
+        assert_eq!(shapes.len(), 14, "{:?}", shapes.keys().collect::<Vec<_>>());
+        let total: f32 = shapes.values().map(|c| c.volume_cm3).sum();
+        // The leaf and its casing (1.34 m x 2.17 m x 18 cm overall): the hulls fill most of that box.
+        assert!((100_000.0..520_000.0).contains(&total), "volume {total}");
+        // BreakExplosionForce 5000 from 5 cm in front of the leaf: tens of metres a second, away from the blow.
+        for c in shapes.values() {
+            let v = chunk_velocity(c.centre(), c.radius(), c.volume_cm3, Vec3::new(0.0, 1.0, -0.05), 30.0, 5000.0);
+            assert!((2.0..200.0).contains(&v.length()), "{v}");
+        }
+    }
+
     fn door(locked: bool) -> Door {
         Door {
             open: false,
@@ -409,6 +563,8 @@ mod tests {
             spots: Default::default(),
             break_force: 5000.0,
             burst_force: 20000.0,
+            out_arrow: Vec3::ZERO,
+            lifespan: 10.0,
             visuals: None,
         }
     }
@@ -454,6 +610,8 @@ mod tests {
             section: None,
             collision: None,
             burst_force: 2000.0,
+            hit_force: 800.0,
+            lifespan: 10.0,
             section_xf: Transform::IDENTITY,
             overrides: None,
             damaged: [[mesh(), mesh(), mesh()], [None, None, None]],

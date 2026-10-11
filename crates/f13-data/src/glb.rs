@@ -11,6 +11,9 @@ pub struct Primitive {
     pub normals: Vec<[f32; 3]>,
     pub tangents: Vec<[f32; 4]>,
     pub uvs: Vec<Vec<[f32; 2]>>,
+    /// JOINTS_0 / WEIGHTS_0 (skin joint indices, empty when unskinned).
+    pub joints: Vec<[u16; 4]>,
+    pub weights: Vec<[f32; 4]>,
     pub indices: Vec<u32>,
 }
 
@@ -34,11 +37,17 @@ fn accessor(json: &serde_json::Value, bin: &[u8], index: usize) -> Option<(Vec<f
     let count = a["count"].as_u64()? as usize;
     let start = view["byteOffset"].as_u64().unwrap_or(0) as usize + a["byteOffset"].as_u64().unwrap_or(0) as usize;
     let stride = view["byteStride"].as_u64().map_or(comps * size, |s| s as usize);
+    // Normalized integers (weights, colours) as 0..1.
+    let scale = match (a["normalized"].as_bool(), size) {
+        (Some(true), 1) => 1.0 / 255.0,
+        (Some(true), 2) => 1.0 / 65535.0,
+        _ => 1.0,
+    };
     let mut out = Vec::with_capacity(count * comps);
     for i in 0..count {
         for c in 0..comps {
             let o = start + i * stride + c * size;
-            out.push(read(bin.get(o..o + size)?));
+            out.push(read(bin.get(o..o + size)?) * scale);
         }
     }
     Some((out, comps))
@@ -65,6 +74,10 @@ pub fn read_primitives(path: &Path) -> Option<Vec<Primitive>> {
         if let Some((t, _)) = get("TANGENT") {
             prim.tangents = t.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]).collect();
         }
+        if let (Some((j, 4)), Some((w, 4))) = (get("JOINTS_0"), get("WEIGHTS_0")) {
+            prim.joints = j.chunks_exact(4).map(|c| [c[0] as u16, c[1] as u16, c[2] as u16, c[3] as u16]).collect();
+            prim.weights = w.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]).collect();
+        }
         let mut i = 0;
         while let Some((uv, _)) = get(&format!("TEXCOORD_{i}")) {
             prim.uvs.push(uv.chunks_exact(2).map(|c| [c[0], c[1]]).collect());
@@ -77,6 +90,14 @@ pub fn read_primitives(path: &Path) -> Option<Vec<Primitive>> {
         out.push(prim);
     }
     Some(out)
+}
+
+/// The first skin's joint names, in joint order (the indices JOINTS_0 holds).
+pub fn joint_names(path: &Path) -> Option<Vec<String>> {
+    let b = std::fs::read(path).ok()?;
+    let json_len = u32::from_le_bytes(b.get(12..16)?.try_into().ok()?) as usize;
+    let json: serde_json::Value = serde_json::from_slice(b.get(20..20 + json_len)?).ok()?;
+    json["skins"][0]["joints"].as_array()?.iter().map(|j| json["nodes"][j.as_u64()? as usize]["name"].as_str().map(str::to_string)).collect()
 }
 
 #[cfg(test)]

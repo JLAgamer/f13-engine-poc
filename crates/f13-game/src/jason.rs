@@ -2490,7 +2490,8 @@ pub(crate) fn update_jason(
                     d.damage(health, false, &mut commands);
                     info!("Jason: burst through the door");
                     if let Some(v) = &d.visuals {
-                        commands.trigger(crate::doors::BreakApart { piece: v.leaf, from: xf.translation, force: d.burst_force });
+                        let origin = crate::doors::BreakApart::origin(g.transform_point(d.out_arrow), g.transform_point(d.interact), xf.translation, 5.0);
+                        commands.trigger(crate::doors::BreakApart { piece: v.leaf, origin, radius: 30.0, force: d.burst_force, lifespan: d.lifespan });
                     }
                     commands.entity(d.pivot).insert(Visibility::Hidden);
                     for mut b in barricades.iter_mut().filter(|b| b.door == Some(de)) {
@@ -2543,7 +2544,8 @@ pub(crate) fn update_jason(
                         if d.damage(t.world_damage, barred, &mut commands) {
                             info!("Jason: broke the door down");
                             if let Some(v) = &d.visuals {
-                                commands.trigger(crate::doors::BreakApart { piece: v.leaf, from: xf.translation, force: d.break_force });
+                                let origin = crate::doors::BreakApart::origin(g.transform_point(d.out_arrow), g.transform_point(d.interact), xf.translation, 5.0);
+                                commands.trigger(crate::doors::BreakApart { piece: v.leaf, origin, radius: 30.0, force: d.break_force, lifespan: d.lifespan });
                             }
                             commands.entity(d.pivot).insert(Visibility::Hidden);
                             for mut b in barricades.iter_mut().filter(|b| b.door == Some(de)) {
@@ -2604,7 +2606,9 @@ pub(crate) fn update_jason(
                         if broke {
                             info!("Jason: broke through the wall");
                             if let Some(s) = w.section {
-                                commands.trigger(crate::doors::BreakApart { piece: s, from: xf.translation, force: w.burst_force });
+                                let interact = g.transform_point(w.interact);
+                                let origin = crate::doors::BreakApart::origin(interact, interact, xf.translation, 10.0);
+                                commands.trigger(crate::doors::BreakApart { piece: s, origin, radius: 3.0, force: w.hit_force, lifespan: w.lifespan });
                             }
                             commands.trigger(crate::audio::ActorSound { actor: we, prop: "WallDestroySoundCue" });
                         } else {

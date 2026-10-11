@@ -45,7 +45,8 @@ Moved from Milestone 1 (not tied to gameplay):
       Its footer is known (an encrypted-index flag, magics 'Atae' and 'kcid', version 5, index offset and size,
       hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold
       for a decision on that
-- [ ] Not from the game's code, so marked PLACEHOLDER (MODLOG "Decomp audit, where it ends"): the doors' APEX debris
+- [ ] The door and wall chunks' contacts: APEX's break is ported (MODLOG "Door and wall debris from APEX"); the
+      chunks' PhysX contact solving is stood in by a centroid trace and a bounce (ref/PhysX-3.4 has the solver)
 - [ ] Post-processing, remaining: compare against the game's own screenshots. (Bloom's fast blur: ported, ComputeOutputDesc's half-width X pass)
 
 ## Milestone 3: Networking
