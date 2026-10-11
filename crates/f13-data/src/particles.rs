@@ -225,7 +225,20 @@ pub struct Emitter {
     pub gpu: bool,
     /// ParticleModuleTypeDataMesh: its particles are the mesh.
     pub mesh: Option<MeshData>,
+    /// ParticleModuleTypeDataRibbon: its particles are a trail's points.
+    pub ribbon: Option<Ribbon>,
     pub modules: Vec<Module>,
+}
+
+/// A ribbon emitter's ParticleModuleTypeDataRibbon (the constructor 0x1415ee8f0's defaults: MaxTessellationBetweenParticles
+/// 25, SheetsPerTrail 1, MaxTrailCount 1, MaxParticleInTrailCount 500, DistanceTessellationStepSize 15,
+/// TangentTessellationScalar 5).
+#[derive(Clone, Debug)]
+pub struct Ribbon {
+    /// RenderAxis: 0 Trails_CameraUp, 1 Trails_SourceUp, 2 Trails_WorldUp.
+    pub render_axis: u8,
+    /// MaxParticleInTrailCount (0: no limit).
+    pub max_particles: u32,
 }
 
 /// A mesh emitter's ParticleModuleTypeDataMesh.
@@ -512,6 +525,17 @@ impl System {
                         camera_facing_option: tp["CameraFacingOption"].as_str().unwrap_or("XAxisFacing_NoUp").to_string(),
                         spin: tp["bApplyParticleRotationAsSpin"].as_bool().unwrap_or(false),
                     })
+                }),
+                ribbon: get(&lp["TypeDataModule"]).filter(|t| t["Type"] == "ParticleModuleTypeDataRibbon").map(|t| {
+                    let tp = &t["Props"];
+                    Ribbon {
+                        render_axis: match tp["RenderAxis"].as_str() {
+                            Some("Trails_SourceUp") => 1,
+                            Some("Trails_WorldUp") => 2,
+                            _ => 0,
+                        },
+                        max_particles: tp["MaxParticleInTrailCount"].as_u64().unwrap_or(500) as u32,
+                    }
                 }),
                 modules,
             });

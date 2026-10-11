@@ -160,6 +160,8 @@ struct Collider<'a> {
 
 #[derive(Clone, Default)]
 struct Particle {
+    /// A ribbon's point: its up (Unreal space; FRibbonTypeDataPayload's UpVector, the source's at spawn).
+    ribbon_up: Vec3,
     /// Its state flags (FBaseParticle::Flags): STATE_Particle_Freeze, IgnoreCollisions, FreezeTranslation,
     /// FreezeRotation, DelayCollisions.
     state: u32,
@@ -230,6 +232,9 @@ struct EmitterState {
     attractor_last: [i32; 2],
     /// ParticleModuleCollision's instance byte: the bounds check runs when it is 0, counting 0..30.
     collision_check: u8,
+    /// ParticleModuleSpawnPerUnit: the source's place last tick (Unreal space) and the travel left over.
+    last_source: Option<Vec3>,
+    unit_fraction: f32,
 }
 
 /// A placed ParticleSystemComponent.
@@ -336,8 +341,14 @@ impl Materials {
         }
         let built = self.build(name, root, assets).map(|m| {
             let mode = m.params.mode.x as u32;
-            // A master with its distortion pass ported (the Refraction input's graph): M_Rain_Master's (mode 30).
-            let distortion = (mode == 7).then(|| ParticleMaterial { params: ParticleParams { mode: Vec4::new(30.0, 0.0, 0.0, 0.0), ..m.params }, alpha: AlphaMode::Opaque, distort: true, ..m.clone() });
+            // A master with its distortion pass ported (the Refraction input's graph): M_Rain_Master's (mode 30), the
+            // knife trail's (32).
+            let pass = match mode {
+                7 => Some(30.0),
+                31 => Some(32.0),
+                _ => None,
+            };
+            let distortion = pass.map(|d| ParticleMaterial { params: ParticleParams { mode: Vec4::new(d, 0.0, 0.0, 0.0), ..m.params }, alpha: AlphaMode::Opaque, distort: true, ..m.clone() });
             self.distortions.insert(name.to_string(), distortion.map(|d| materials.add(d)));
             (materials.add(m), mode)
         });
@@ -603,6 +614,16 @@ impl Materials {
                     (13.0, [tex("DIFF"), None, None, None])
                 }
             }
+            "M_Jason_ThrowingKnife_Trail_02" => {
+                // uniexpr.py M_Jason_ThrowingKnife_Trail_02: cb1[2] GlowColor.rgb, [3] SelectionColor.rgb (0), [4..6].
+                let vec = |n: &str, d: [f32; 4]| e.vectors.get(n).or_else(|| master.and_then(|m| m.vectors.get(n))).copied().unwrap_or(d);
+                let glow = vec("GlowColor", [0.3, 0.3, 0.3, 1.0]);
+                p[2] = Vec4::new(glow[0], glow[1], glow[2], 0.0);
+                p[4] = Vec4::new(s("Basemap1_X_Speed_Multiply", 0.05), s("Basemap1_U_Coord_Multiply", 3.0), s("Basemap1_Y_Speed_Multiply", 0.0), s("Basemap1_V_Coord_Multiply", 1.0));
+                p[5] = Vec4::new(s("NRM_MainTextureIntensity", 1.0), s("0_EdgeTransparencyMultiplier", 1.5), s("OPACITY_Multiplier", 0.025), s("Index of Refraction", 1.7));
+                p[6] = Vec4::new(s("RefractionDepthBias", 0.0), 0.0, 0.0, 0.0);
+                (31.0, [tex("Normal_Main"), tex("SpriteTexture"), None, None])
+            }
             "M_Rain_Master" => {
                 // uniexpr.py M_Rain_Master: cb1[2] EmissiveColor.rgb, [3] SelectionColor.rgb (0), [5] BaseColor.rgb,
                 // [6..10] below; Rain_MPC's Rain in p[15].x (rain_mpc_materials).
@@ -695,7 +716,7 @@ impl ParticleAssets {
                 let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(md.file.clone()));
                 let n = def.max_draw_count.unwrap_or(500).min(32) as usize;
                 let entity = commands.spawn((Transform::default(), Visibility::Hidden)).id();
-                emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: Some((scene, n)), slots: vec![], lights: vec![], drawn: true, attractor_last: [0; 2], collision_check: 0 });
+                emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: Some((scene, n)), slots: vec![], lights: vec![], drawn: true, attractor_last: [0; 2], collision_check: 0, last_source: None, unit_fraction: 0.0 });
                 continue;
             }
             let Some((material, mode)) = def.material.as_deref().and_then(|m| self.mats.get(m, &self.root, assets, materials)) else {
@@ -703,7 +724,7 @@ impl ParticleAssets {
                 let named = system.emitters.iter().flat_map(|o| &o.modules).any(|m| matches!(m, Module::AttractorParticle { emitter, .. } if *emitter == def.name));
                 if named {
                     let entity = commands.spawn((Transform::default(), Visibility::Hidden)).id();
-                    emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: None, slots: vec![], lights: vec![], drawn: false, attractor_last: [0; 2], collision_check: 0 });
+                    emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: None, slots: vec![], lights: vec![], drawn: false, attractor_last: [0; 2], collision_check: 0, last_source: None, unit_fraction: 0.0 });
                 }
                 continue;
             };
@@ -732,7 +753,7 @@ impl ParticleAssets {
                 commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(distortion), Transform::default(), Visibility::Inherited, NoFrustumCulling, NotShadowCaster, NotShadowReceiver, ChildOf(entity), Name::new(format!("{name}.{} distortion", def.name))));
             }
             let pivot = def.modules.iter().find_map(|m| if let Module::PivotOffset(p) = m { Some(Vec2::from(*p)) } else { None }).unwrap_or(Vec2::ZERO) + Vec2::splat(-0.5);
-            emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: mode == 4, mesh_scene: None, slots: vec![], lights: light_pool(commands, def, name), drawn: true, attractor_last: [0; 2], collision_check: 0 });
+            emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: mode == 4, mesh_scene: None, slots: vec![], lights: light_pool(commands, def, name), drawn: true, attractor_last: [0; 2], collision_check: 0, last_source: None, unit_fraction: 0.0 });
         }
         if emitters.is_empty() {
             return None;
@@ -1281,6 +1302,31 @@ fn tick_emitter(
             start = dt + e.spawn_fraction * increment - increment;
             e.spawn_fraction = leftover - count as f32;
         }
+        // ParticleModuleSpawnPerUnit along the source's move this tick: (distance / UnitScalar) x SpawnPerUnit, the
+        // fraction carried over, spaced along the move (a ribbon's points: FUN_1416098c0 spawns each at its share of
+        // the way, ResolveSource FUN_1415fc7f0). PLACEHOLDER: GetSpawnPerUnitAmount's MovementTolerance and
+        // bIgnoreSpawnRateWhenMoving aren't read; the source is the component (the knife's trail names an actor
+        // parameter, ProjMesh, that nothing sets).
+        let mut along: Vec<Vec3> = vec![];
+        if let Some((unit, per_unit)) = &def.spawn_per_unit {
+            let from = e.last_source.unwrap_or(location);
+            let units = from.distance(location) / unit.max(1e-3) * per_unit.eval(emitter_time, rand(rng)) + e.unit_fraction;
+            let n = units.floor().max(0.0) as u32;
+            e.unit_fraction = units - n as f32;
+            along = (1..=n).map(|i| from.lerp(location, i as f32 / n as f32)).collect();
+        }
+        e.last_source = Some(location);
+        for (i, at) in along.iter().enumerate() {
+            let spawn_time = dt * (1.0 - (i + 1) as f32 / along.len() as f32);
+            let mut p = spawn(def, spawn_time, emitter_time, *at, rotation, scale, rng);
+            // Trails_SourceUp: the component's up, scaled (the spawn's rotate of (0, 0, scale.z)).
+            p.ribbon_up = rotation * Vec3::new(0.0, 0.0, scale.z);
+            e.particles.push(p);
+        }
+        if let Some(max) = def.ribbon.as_ref().map(|r| r.max_particles as usize).filter(|&m| m > 0) {
+            let over = e.particles.len().saturating_sub(max);
+            e.particles.drain(..over);
+        }
         // Bursts: their Time is a fraction of the emitter's duration, each once a loop.
         let mut burst = 0u32;
         for (i, b) in def.bursts.iter().enumerate() {
@@ -1791,6 +1837,10 @@ fn draw(
                 continue;
             }
             let def = &e.def;
+            if let Some(ribbon) = &def.ribbon {
+                ribbon_mesh(e, ribbon, s.scale, origin, cam_pos, &mut meshes);
+                continue;
+            }
             // MaxDrawCount: the first so many.
             let mut order: Vec<usize> = (0..e.particles.len().min(def.max_draw_count.map_or(usize::MAX, |m| m as usize))).collect();
             // Translucent sprites back to front (PSORTMODE_ViewProjDepth / DistanceToView).
@@ -1856,6 +1906,60 @@ fn draw(
             }
         }
     }
+}
+
+/// A ribbon's strip (FDynamicRibbonEmitterData's vertex fill 0x1415cc230): from the trail's newest point to its oldest,
+/// each point two vertices at its location +/- its up x Size.X x the component's scale.X (V 0 and 1), U stepping 2 /
+/// the trail's triangle count from 0 (so 0 to 1 along it), the point's colour. The up is the point's own (source or
+/// world up), or for Trails_CameraUp the normalized cross of the point's direction from the view and its tangent (the
+/// direction to the next point here; the payload's tangent PLACEHOLDER). Points with two or more interpolation steps
+/// would be tessellated (Hermite between neighbours); the knife's trail has no tessellation (its step size and
+/// tangent scalar 0), so it isn't ported.
+fn ribbon_mesh(e: &EmitterState, ribbon: &f13_data::particles::Ribbon, scale: Vec3, origin: Vec3, cam_pos: Vec3, meshes: &mut Assets<Mesh>) {
+    let points: Vec<&Particle> = e.particles.iter().rev().collect();
+    let n = points.len();
+    let mut positions = Vec::with_capacity(n * 2);
+    let mut uvs = Vec::with_capacity(n * 2);
+    let mut colors = Vec::with_capacity(n * 2);
+    let mut dynamic = Vec::with_capacity(n * 2);
+    let mut indices = Vec::with_capacity(n * 6);
+    let step = if n > 1 { 1.0 / (n - 1) as f32 } else { 0.0 };
+    for (i, p) in points.iter().enumerate() {
+        let at = to_bevy(p.location);
+        let up = match ribbon.render_axis {
+            1 => to_bevy_dir(p.ribbon_up),
+            2 => Vec3::Y,
+            _ => {
+                let next = points.get(i + 1).or_else(|| i.checked_sub(1).and_then(|j| points.get(j))).map_or(at, |q| to_bevy(q.location));
+                let tangent = (next - at).normalize_or_zero();
+                (at - cam_pos).normalize_or_zero().cross(tangent).normalize_or_zero()
+            }
+        };
+        let half = up * p.size.x * scale.x * 0.01;
+        let u = i as f32 * step;
+        for (v, pos) in [(0.0, at + half), (1.0, at - half)] {
+            positions.push((pos - origin).to_array());
+            uvs.push([u, v]);
+            colors.push(p.color.to_array());
+            dynamic.push(p.dynamic);
+        }
+        if i + 1 < n {
+            let b = (i * 2) as u32;
+            indices.extend_from_slice(&[b, b + 2, b + 1, b + 1, b + 2, b + 3]);
+        }
+    }
+    if let Some(mut mesh) = meshes.get_mut(&e.mesh) {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+        mesh.insert_attribute(ATTRIBUTE_DYNAMIC, dynamic);
+        mesh.insert_indices(Indices::U32(indices));
+    }
+}
+
+/// An Unreal direction (Z up) in Bevy's axes (Y up).
+fn to_bevy_dir(v: Vec3) -> Vec3 {
+    Vec3::new(v.x, v.z, v.y)
 }
 
 /// Whether a system's particles' box (Bevy space) meets the view's frustum.

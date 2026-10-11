@@ -56,7 +56,7 @@ static class ParticleExporter
                 if (s.GetOrDefault<FPackageIndex?>("ParameterValue")?.Load() is CUE4Parse.UE4.Assets.Exports.Texture.UTexture t) queue(t);
             if (o.Owner is { } pkg)
                 foreach (var e in pkg.GetExports())
-                    if ((e.ExportType.StartsWith("MaterialExpressionTextureSampleParameter") || e.ExportType == "MaterialExpressionTextureObjectParameter")
+                    if ((e.ExportType.StartsWith("MaterialExpressionTextureSampleParameter") || e.ExportType == "MaterialExpressionTextureObjectParameter" || e.ExportType == "MaterialExpressionSpriteTextureSampler")
                         && e.GetOrDefault<FPackageIndex?>("Texture")?.Load() is CUE4Parse.UE4.Assets.Exports.Texture.UTexture t)
                         queue(t);
         }

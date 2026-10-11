@@ -1005,6 +1005,8 @@ static void ResolveParameters(UObject mat, MaterialInfo info)
             foreach (var e in m.GetOrDefault<FPackageIndex[]>("Expressions", []).Select(x => x.Load()).OfType<UObject>())
             {
                 var name = e.GetOrDefault<FName>("ParameterName").Text;
+                // Paper2D's sprite sampler keeps its constructor's name ("SpriteTexture") out of the package.
+                if ((string.IsNullOrEmpty(name) || name == "None") && e.ExportType == "MaterialExpressionSpriteTextureSampler") name = "SpriteTexture";
                 if (string.IsNullOrEmpty(name) || name == "None") continue;
                 switch (e.ExportType)
                 {
@@ -1018,7 +1020,7 @@ static void ResolveParameters(UObject mat, MaterialInfo info)
                     case "MaterialExpressionStaticSwitchParameter":
                         info.Switches.TryAdd(name, e.GetOrDefault("DefaultValue", false));
                         break;
-                    case var t when t.StartsWith("MaterialExpressionTextureSampleParameter") || t == "MaterialExpressionTextureObjectParameter":
+                    case var t when t.StartsWith("MaterialExpressionTextureSampleParameter") || t == "MaterialExpressionTextureObjectParameter" || t == "MaterialExpressionSpriteTextureSampler":
                         if (TexPath(e.GetOrDefault<FPackageIndex?>("Texture")) is { } tp) info.Textures.TryAdd(name, tp);
                         break;
                 }

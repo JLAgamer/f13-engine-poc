@@ -711,12 +711,50 @@ fn rain_distortion(in: VertexOutput) -> vec4<f32> {
     return distortion(in, vec3(k), (p[10].z - 1.0) * k * p[15].x, p[10].w);
 }
 
+// M_Jason_ThrowingKnife_Trail_02 (the knife's ribbon; its trail-vertex-factory passes s124 base, s120 distortion): uv'
+// = ((time x Basemap1_X_Speed_Multiply + u) x Basemap1_U_Coord_Multiply, v x Basemap1_V_Coord_Multiply); t0
+// Normal_Main, t1 SpriteTexture (the Paper2D sampler's default, P_ThrowingKnife_Trail_Tile_02), both at uv'; the edge
+// mask min(sin(pi u)^0_EdgeTransparencyMultiplier, 1) x min(sin(pi v)^that, 1). Base pass: emissive GlowColor x
+// SpriteTexture.rgb, opacity saturate(mask x SpriteTexture.a x OPACITY_Multiplier) (its lighting term x
+// DiffuseOverrideParameter: 0). Distortion: normal lerp((0, 0, 1), Normal_Main, NRM_MainTextureIntensity), refraction
+// (Index of Refraction - 1) x mask x SpriteTexture.a x that normal's x.
+fn trail_uv(in: VertexOutput) -> vec2<f32> {
+    let p = params.p;
+    return vec2((globals.time * p[4].x + in.uv.x) * p[4].y, in.uv.y * p[4].w);
+}
+
+fn trail_mask(in: VertexOutput) -> f32 {
+    let k = params.p[5].y;
+    let a = min(pow(max(sin(in.uv.x * 3.141593), 0.0), k), 1.0);
+    let b = min(pow(max(sin(in.uv.y * 3.141593), 0.0), k), 1.0);
+    return a * b;
+}
+
+fn knife_trail(in: VertexOutput) -> vec4<f32> {
+    let p = params.p;
+    let sprite = textureSample(t1, s, trail_uv(in));
+    let emissive = max(p[2].xyz * sprite.rgb + p[3].xyz, vec3(0.0));
+    return vec4(emissive, saturate(trail_mask(in) * sprite.a * p[5].z));
+}
+
+fn knife_trail_distortion(in: VertexOutput) -> vec4<f32> {
+    let p = params.p;
+    let uv = trail_uv(in);
+    let sprite = textureSample(t1, s, uv);
+    let nm = textureSample(t0, s, uv).xy * 2.0 - 1.0;
+    let n = mix(vec3(0.0, 0.0, 1.0), vec3(nm, sqrt(max(1.0 - dot(nm, nm), 0.0))), p[5].x);
+    return distortion(in, n, (p[5].w - 1.0) * trail_mask(in) * sprite.a * n.x, p[6].x);
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let mode = u32(params.mode.x);
     // The distortion passes: the scene's colour as it is (already exposed).
     if mode == 30u {
         return rain_distortion(in);
+    }
+    if mode == 32u {
+        return knife_trail_distortion(in);
     }
     var c: vec4<f32>;
     if mode == 1u {
@@ -745,6 +783,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         c = blood(in);
     } else if mode == 14u {
         c = blood_squirt(in);
+    } else if mode == 31u {
+        c = knife_trail(in);
     } else if mode == 4u {
         // Already exposed (apply_pbr_lighting).
         c = fly(in);
