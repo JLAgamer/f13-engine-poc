@@ -229,14 +229,22 @@ struct HeightFog {
     directional_exponent: f32,
 }
 
-/// A placed light that casts shadows (its CastShadows, Unreal's default on). Its shadows are the engine's stationary
-/// lights' (precomputed for the static world, dynamic for movers); here real-time shadow maps for the nearest few
-/// whose range reaches the camera ([`SHADOWED_LIGHTS`], [`shadow_budget`]): an approximation of the baked result.
+/// A placed light that casts dynamic shadows (its CastShadows and CastDynamicShadows: LightComponentBase's constructor
+/// 0x141350740 sets both, with bAffectsWorld and CastStaticShadows). The map has no built static lighting (its
+/// materials compile FNoLightMapPolicy; Enlighten gives the indirect light), and its lights are Movable (the Blueprint
+/// lamps' components: SceneComponent's constructor 0x141376820 sets Mobility 2) or Stationary without precomputed
+/// shadow maps (APointLight / ASpotLight's constructors 0x1414e0ab0 / 0x14173a030 set 1), so every one renders a
+/// whole-scene shadow map when it's seen ([`shadow_casters`]).
 #[derive(Component)]
 struct ShadowCaster;
 
-/// How many local lights render shadow maps at once. PLACEHOLDER: a budget, not the game's (its are baked).
-const SHADOWED_LIGHTS: usize = 4;
+/// r.Shadow.MinResolution (32; the cvar 0x14014f490, no ini override): a shadow whose unclamped resolution isn't over
+/// it fades to nothing (CalculateShadowFadeAlpha; r.Shadow.FadeResolution 64 the top of the fade).
+const SHADOW_MIN_RESOLUTION: f32 = 32.0;
+/// r.Shadow.TexelsPerPixelPointlight (1.27324) and ...Spotlight (2.54648): texels per screen pixel of the light's
+/// radius (the cvars 0x14014ff40 / 0x14014ffc0).
+const TEXELS_PER_PIXEL_POINT: f32 = 1.27324;
+const TEXELS_PER_PIXEL_SPOT: f32 = 2.54648;
 
 /// A placed light's distance fade: MaxDrawDistance and MaxDistanceFadeRange (m), and its full intensity.
 #[derive(Component)]
@@ -295,7 +303,7 @@ impl Plugin for LightingPlugin {
         app.add_systems(Startup, spawn_lights)
             .init_resource::<Cookies>()
             .add_systems(Update, light_cookies)
-            .add_systems(Update, (setup_cameras, update_fog, fade_lights, light_functions, shadow_budget, add_flashlight, toggle_flashlight, aim_flashlight).chain());
+            .add_systems(Update, (setup_cameras, update_fog, fade_lights, light_functions, shadow_casters, add_flashlight, toggle_flashlight, aim_flashlight).chain());
     }
 }
 
@@ -449,7 +457,7 @@ fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
                         ))
                         .id()
                 };
-                if l.flag("CastShadows", true) {
+                if l.flag("CastShadows", true) && l.flag("CastDynamicShadows", true) {
                     commands.entity(e).insert(ShadowCaster);
                 }
                 match l.props.get("LightFunctionMaterial").and_then(Value::as_str).and_then(|m| m.split('\'').nth(1)) {
@@ -626,32 +634,34 @@ fn light_functions(
     }
 }
 
-/// The nearest shadow-casting lights that are on and reach the camera get shadow maps; the others none.
+/// Which lights render shadow maps this frame, as the engine picks its whole-scene shadows: a shadow-casting light
+/// that's on, whose sphere meets the view's frustum, and whose shadow would be over r.Shadow.MinResolution: texels per
+/// pixel x max(width / 2 x P[0][0], height / 2 x P[1][1]) x its radius / max(its distance, 1 cm) (the shadow fade's
+/// resolution, FUN_140b571d0). PLACEHOLDER: the fade between 32 and 64 texels (a shadow here is on or off) and the
+/// shadow map's own resolution (Bevy's one size for all; the game's clamps that resolution to r.Shadow.MaxResolution).
 #[allow(clippy::type_complexity)]
-fn shadow_budget(
-    cameras: Query<&GlobalTransform, (With<Lit>, With<Camera3d>)>,
-    mut points: Query<(Entity, &mut PointLight, &GlobalTransform, &InheritedVisibility), (With<ShadowCaster>, Without<SpotLight>)>,
-    mut spots: Query<(Entity, &mut SpotLight, &GlobalTransform, &InheritedVisibility), (With<ShadowCaster>, Without<PointLight>)>,
+fn shadow_casters(
+    cameras: Query<(&GlobalTransform, &Projection, &bevy::camera::primitives::Frustum, &Camera), (With<Lit>, With<Camera3d>)>,
+    mut points: Query<(&mut PointLight, &GlobalTransform, &InheritedVisibility), (With<ShadowCaster>, Without<SpotLight>)>,
+    mut spots: Query<(&mut SpotLight, &GlobalTransform, &InheritedVisibility), (With<ShadowCaster>, Without<PointLight>)>,
 ) {
-    let Some(cam) = cameras.iter().next().map(GlobalTransform::translation) else { return };
-    let mut near: Vec<(f32, Entity)> = points
-        .iter()
-        .filter(|(_, l, _, v)| v.get() && l.intensity > 0.0)
-        .map(|(e, l, g, _)| (g.translation().distance(cam), l.range, e))
-        .chain(spots.iter().filter(|(_, l, _, v)| v.get() && l.intensity > 0.0).map(|(e, l, g, _)| (g.translation().distance(cam), l.range, e)))
-        .filter(|(d, range, _)| d < range)
-        .map(|(d, _, e)| (d, e))
-        .collect();
-    near.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let chosen: Vec<Entity> = near.iter().take(SHADOWED_LIGHTS).map(|(_, e)| *e).collect();
-    for (e, mut l, _, _) in &mut points {
-        let on = chosen.contains(&e);
+    let Some((cam, projection, frustum, camera)) = cameras.iter().find(|c| c.3.is_active) else { return };
+    let clip = projection.get_clip_from_view();
+    let size = camera.logical_viewport_size().unwrap_or(Vec2::new(1920.0, 1080.0));
+    let screen = (0.5 * size.x * clip.x_axis.x).max(0.5 * size.y * clip.y_axis.y);
+    let eye = cam.translation();
+    let shadowed = |at: Vec3, range: f32, texels: f32| {
+        let seen = frustum.intersects_sphere(&bevy::camera::primitives::Sphere { center: at.into(), radius: range }, true);
+        seen && texels * screen * range / at.distance(eye).max(0.01) > SHADOW_MIN_RESOLUTION
+    };
+    for (mut l, g, v) in &mut points {
+        let on = v.get() && l.intensity > 0.0 && shadowed(g.translation(), l.range, TEXELS_PER_PIXEL_POINT);
         if l.shadow_maps_enabled != on {
             l.shadow_maps_enabled = on;
         }
     }
-    for (e, mut l, _, _) in &mut spots {
-        let on = chosen.contains(&e);
+    for (mut l, g, v) in &mut spots {
+        let on = v.get() && l.intensity > 0.0 && shadowed(g.translation(), l.range, TEXELS_PER_PIXEL_SPOT);
         if l.shadow_maps_enabled != on {
             l.shadow_maps_enabled = on;
         }

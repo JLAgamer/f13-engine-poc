@@ -41,10 +41,11 @@ Moved from Milestone 1 (not tied to gameplay):
 - [ ] Counselor model, remaining: the eye look against a capture of the game (it rolls the eyes 90 degrees from their bind: MODLOG
       "The eyes' look")
       (MODLOG "The counselor's face")
-- [ ] Lighting, remaining: Enlighten GI, local light shadows (a real-time budget of the 4 nearest for now, unverified
-      visually and for cost), the falling rain's cost (49 CPU-simulated systems,
-      drawn as one batch now; about 4 ms of CPU a frame, 60 fps against 100 without rain here; the game's are GPU
-      sprites: MODLOG "Rain")
+- [ ] Lighting, remaining: Enlighten GI (the map's indirect light: its precomputed systems and probe sets are
+      Geomerics' runtime data, undocumented; the solver is in the exe), the local lights' shadow caching and fade
+      (which lights cast is the game's now: MODLOG "Local lights' shadows"; re-rendering them costs about 5 ms at the
+      spawn view), the falling rain's cost (49 CPU-simulated systems, drawn as one batch now; about 4 ms of CPU a
+      frame; the game's are GPU sprites: MODLOG "Rain")
 - [ ] Read the stock pak directly, so users don't need to extract it first (with the host CLI's first-run setup).
       Its footer is known (an encrypted-index flag, magics 'Atae' and 'kcid', version 5, index offset and size,
       hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold
