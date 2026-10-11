@@ -167,8 +167,9 @@ pub struct Door {
 /// defaults; density PhysicalMaterial Density 1 x 0.001 kg/cm³ from DestructibleComponent's p3BodyDescTemplate.density
 /// 0x141e43f08). Then each chunk is a PhysX rigid body (f13-core debris_px: PhysX3_x64.dll's step, linear damping
 /// 0.01 and angular 0 from FBodyInstance, friction 0.7 and restitution 0.3) against the static world, in UE's substeps.
-/// PLACEHOLDER: the contact generation (debris_px's), no chunk-chunk contacts, the chunk's convex hull from its render
-/// vertices (APEX's cooked hulls aren't exported) and the impulse's centroid the hull bounds' centre.
+/// The chunks of one piece collide with each other and with the world (PhysX's legacy contact generation: debris_px).
+/// PLACEHOLDER: the chunk's convex hull from its render vertices (APEX's cooked hulls aren't exported) and the impulse's
+/// centroid the hull bounds' centre; chunks of different pieces don't meet.
 #[derive(Event, Clone, Copy, Debug)]
 pub struct BreakApart {
     pub piece: Entity,
@@ -241,7 +242,7 @@ pub fn chunk_shapes(path: &std::path::Path) -> HashMap<String, ChunkShape> {
         .zip(points)
         .filter(|(_, p)| p.len() >= 4)
         .map(|(name, p)| {
-            let hull = f13_core::collision::convex_hull(&p);
+            let hull = f13_core::collision::convex_hull(&f13_core::debris_px::hull_points(&p));
             let volume = hull.iter().map(|t| t.a.dot(t.b.cross(t.c))).sum::<f32>().abs() / 6.0;
             let (min, max) = p.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
             (name, ChunkShape { points: p, min, max, volume_cm3: volume * 1.0e6 })
@@ -365,18 +366,25 @@ fn fly(
             }
             continue;
         }
-        for c in children.iter_descendants(e) {
-            let Ok((mut xf, Some(mut ch))) = chunks.get_mut(c) else { continue };
-            if ch.body.asleep {
-                continue;
-            }
+        // The piece's chunks stepped together (their contacts with each other and with the world).
+        let ids: Vec<Entity> = children.iter_descendants(e).filter(|c| chunks.get(*c).is_ok_and(|(_, ch)| ch.is_some())).collect();
+        let parent_of: Vec<bevy::math::Affine3A> = ids.iter().map(|c| parents.get(*c).ok().and_then(|p| globals.get(p.parent()).ok()).map_or(bevy::math::Affine3A::IDENTITY, |pg| pg.affine())).collect();
+        let mut bodies: Vec<f13_core::debris_px::Body> = ids.iter().filter_map(|c| chunks.get(*c).ok().and_then(|(_, ch)| ch.map(|ch| ch.body.clone()))).collect();
+        if bodies.iter().all(|b| b.asleep) {
+            continue;
+        }
+        {
+            let mut refs: Vec<&mut f13_core::debris_px::Body> = bodies.iter_mut().collect();
             for _ in 0..n {
-                f13_core::debris_px::step(&mut ch.body, &world, &params, used / n as f32);
+                f13_core::debris_px::step_all(&mut refs, &world, &params, used / n as f32);
             }
+        }
+        for ((c, body), parent) in ids.iter().zip(bodies).zip(&parent_of) {
+            let Ok((mut xf, Some(mut ch))) = chunks.get_mut(*c) else { continue };
+            ch.body = body;
             // The joint's world pose: mesh points x scale about the centre of mass, turned and placed as the body.
             let m = Mat3::from_quat(ch.body.rot) * Mat3::from_diagonal(ch.scale);
             let wanted = bevy::math::Affine3A::from_mat3_translation(m, ch.body.pos - Mat3::from_quat(ch.body.rot) * ch.com);
-            let parent = parents.get(c).ok().and_then(|p| globals.get(p.parent()).ok()).map_or(bevy::math::Affine3A::IDENTITY, |pg| pg.affine());
             *xf = Transform::from_matrix((parent.inverse() * wanted).into());
         }
     }
@@ -555,9 +563,44 @@ mod tests {
             if fast {
                 continue;
             }
-            let lowest = body.points.iter().map(|q| (body.pos + body.rot * *q).y).fold(f32::MAX, f32::min);
+            let lowest = body.hull.verts.iter().map(|q| (body.pos + body.rot * *q).y).fold(f32::MAX, f32::min);
             assert!(lowest > -0.05 && lowest < 0.05, "lowest point {lowest} at {:?}", body.pos);
             assert!(body.asleep || body.v.length() < 0.1, "still moving {:?}", body.v);
+        }
+    }
+
+    /// The whole door broken at once, its chunks stepped together (their contacts with each other too): stable, and
+    /// cheap enough for a frame.
+    #[test]
+    fn door_breaks_together() {
+        let Some(root) = std::env::var_os("F13_EXPORT").map(std::path::PathBuf::from) else { return };
+        for file in ["SummerCamp/Content/Props/Manmade/Door/S_Door_HigginsHaven_Door_01_b_DM.glb", "SummerCamp/Content/Structures/Components/Doors/Static/S_Door_Cabin_Door_01_BasicInt_b_DM.glb"] {
+        let path = root.join(file);
+        if !path.exists() {
+            continue;
+        }
+        use f13_core::collision::{Tri, TriList};
+        let (a, b, c, d) = (Vec3::new(-500.0, 0.0, -500.0), Vec3::new(500.0, 0.0, -500.0), Vec3::new(500.0, 0.0, 500.0), Vec3::new(-500.0, 0.0, 500.0));
+        let floor = TriList::new(vec![Tri::new(a, d, c).unwrap(), Tri::new(a, c, b).unwrap()]);
+        let params = f13_core::debris_px::Params::default();
+        let origin = Vec3::new(0.0, 1.0, -0.05);
+        let shapes = chunk_shapes(&path);
+        let mut bodies: Vec<f13_core::debris_px::Body> = shapes
+            .values()
+            .filter_map(|shape| {
+                let (mut body, _) = f13_core::debris_px::Body::new(&shape.points, chunk_mass(shape.volume_cm3), Vec3::ZERO, Quat::IDENTITY)?;
+                body.v = chunk_velocity(shape.centre(), shape.radius(), shape.volume_cm3, origin, 30.0, 5000.0);
+                Some(body)
+            })
+            .collect();
+        let started = std::time::Instant::now();
+        for _ in 0..300 {
+            let mut refs: Vec<&mut f13_core::debris_px::Body> = bodies.iter_mut().collect();
+            f13_core::debris_px::step_all(&mut refs, &floor, &params, 1.0 / 60.0);
+        }
+        let per_step = started.elapsed().as_secs_f32() / 300.0;
+        assert!(bodies.iter().all(|b| b.pos.is_finite() && b.v.is_finite()));
+        assert!(per_step < 0.004, "{file}: {:.2} ms a step", per_step * 1e3);
         }
     }
 

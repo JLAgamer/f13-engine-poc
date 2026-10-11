@@ -36,6 +36,9 @@ Moved from Milestone 1 (not tied to gameplay):
 - [ ] Counselor model, remaining: the eye look against a capture of the game (it rolls the eyes 90 degrees from their bind: MODLOG
       "The eyes' look")
       (MODLOG "The counselor's face")
+- [ ] The debris chunks' remaining physics stand-ins: PhysX's contact reduction (ContactReductionAllIn,
+      Dy::ContactReduction<6>) and friction anchors, the world meshes' cooked active-edge flags, and contacts between
+      chunks of different broken pieces (MODLOG "PhysX's legacy contact generation for the debris")
 - [ ] Lighting, remaining: Enlighten GI (the map's indirect light: its precomputed systems and probe sets are
       Geomerics' runtime data, undocumented; the solver is in the exe), the local lights' shadow caching and fade
       (which lights qualify is the game's; without the caching only the four highest resolutions render: MODLOG
@@ -46,9 +49,6 @@ Moved from Milestone 1 (not tied to gameplay):
       Its footer is known (an encrypted-index flag, magics 'Atae' and 'kcid', version 5, index offset and size,
       hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold
       for a decision on that
-- [ ] The door and wall chunks' contact generation: APEX's break and PhysX's step are ported (MODLOG "Door and wall
-      debris from APEX", "PhysX's rigid-body step for the debris"); PhysX's legacy convex-mesh contacts and chunk-chunk
-      contacts aren't (the hull's vertices against the world's triangles stand in)
 - [ ] Post-processing, remaining: compare against the game's own screenshots. (Bloom's fast blur: ported, ComputeOutputDesc's half-width X pass)
 
 ## Milestone 3: Networking

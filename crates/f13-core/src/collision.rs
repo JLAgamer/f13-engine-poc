@@ -100,85 +100,136 @@ impl Tri {
 }
 
 /// Outward-facing triangles of the convex hull of `points` (incremental hull). Flat or degenerate point sets are
-/// given a sliver of thickness so they still block.
+/// given a sliver of thickness so they still block. Computed in f64 on points jittered by a millionth of the set's
+/// size (a deterministic jitter): many coplanar points (a door's flat faces) otherwise fold the hull where a point
+/// sits within rounding of a face's plane; the triangles keep the original points.
 pub fn convex_hull(points: &[Vec3]) -> Vec<Tri> {
+    use glam::DVec3;
     let mut pts: Vec<Vec3> = Vec::with_capacity(points.len());
     let extent = points.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
     let scale = (extent.1 - extent.0).max_element().max(1e-3);
-    let eps = scale * 1e-5;
+    let weld = scale * 1e-5;
     for p in points {
-        if p.is_finite() && !pts.iter().any(|q| q.distance_squared(*p) < eps * eps) {
+        if p.is_finite() && !pts.iter().any(|q| q.distance_squared(*p) < weld * weld) {
             pts.push(*p);
         }
     }
     if pts.len() < 3 {
         return Vec::new();
     }
+    let scale = scale as f64;
+    let eps = scale * 1e-9;
+    let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut jitter = || {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((seed >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0) * scale * 1e-6
+    };
+    let q: Vec<DVec3> = pts.iter().map(|p| p.as_dvec3() + DVec3::new(jitter(), jitter(), jitter())).collect();
     // Initial tetrahedron: two far-apart points, the farthest from their line, the farthest from their plane.
     let i0 = 0;
-    let i1 = (0..pts.len()).max_by(|&a, &b| pts[a].distance_squared(pts[i0]).total_cmp(&pts[b].distance_squared(pts[i0]))).unwrap();
-    let line = (pts[i1] - pts[i0]).normalize_or_zero();
-    let off_line = |p: Vec3| (p - pts[i0]).reject_from_normalized(line).length_squared();
-    let i2 = (0..pts.len()).max_by(|&a, &b| off_line(pts[a]).total_cmp(&off_line(pts[b]))).unwrap();
-    if off_line(pts[i2]) < eps * eps {
+    let i1 = (0..q.len()).max_by(|&a, &b| q[a].distance_squared(q[i0]).total_cmp(&q[b].distance_squared(q[i0]))).unwrap();
+    let line = (q[i1] - q[i0]).normalize_or_zero();
+    let off_line = |p: DVec3| (p - q[i0]).reject_from_normalized(line).length_squared();
+    let i2 = (0..q.len()).max_by(|&a, &b| off_line(q[a]).total_cmp(&off_line(q[b]))).unwrap();
+    if off_line(q[i2]) < (scale * 1e-5).powi(2) {
         return Vec::new(); // collinear
     }
-    let plane_n = (pts[i1] - pts[i0]).cross(pts[i2] - pts[i0]).normalize();
-    let off_plane = |p: Vec3| (p - pts[i0]).dot(plane_n);
-    let i3 = (0..pts.len()).max_by(|&a, &b| off_plane(pts[a]).abs().total_cmp(&off_plane(pts[b]).abs())).unwrap();
-    if off_plane(pts[i3]).abs() < scale * 1e-3 {
+    let plane_n = (q[i1] - q[i0]).cross(q[i2] - q[i0]).normalize();
+    let off_plane = |p: DVec3| (p - q[i0]).dot(plane_n);
+    let i3 = (0..q.len()).max_by(|&a, &b| off_plane(q[a]).abs().total_cmp(&off_plane(q[b]).abs())).unwrap();
+    if off_plane(q[i3]).abs() < scale * 1e-3 {
         // Flat: thicken along the plane normal and hull again.
-        let t = (scale * 1e-3).max(1e-3);
-        let thick: Vec<Vec3> = pts.iter().flat_map(|p| [*p + plane_n * t, *p - plane_n * t]).collect();
+        let t = (scale as f32 * 1e-3).max(1e-3);
+        let n = plane_n.as_vec3();
+        let thick: Vec<Vec3> = pts.iter().flat_map(|p| [*p + n * t, *p - n * t]).collect();
         return convex_hull(&thick);
     }
 
     struct Face {
         v: [usize; 3],
-        n: Vec3,
-        d: f32,
+        n: DVec3,
+        d: f64,
         alive: bool,
     }
-    let make = |pts: &[Vec3], v: [usize; 3]| {
-        let n = (pts[v[1]] - pts[v[0]]).cross(pts[v[2]] - pts[v[0]]).normalize_or_zero();
-        Face { v, n, d: n.dot(pts[v[0]]), alive: true }
+    let make = |v: [usize; 3]| {
+        let n = (q[v[1]] - q[v[0]]).cross(q[v[2]] - q[v[0]]).normalize_or_zero();
+        Face { v, n, d: n.dot(q[v[0]]), alive: true }
     };
-    let centroid = (pts[i0] + pts[i1] + pts[i2] + pts[i3]) / 4.0;
+    let centroid = (q[i0] + q[i1] + q[i2] + q[i3]) / 4.0;
     let mut faces: Vec<Face> = Vec::new();
     for v in [[i0, i1, i2], [i0, i1, i3], [i0, i2, i3], [i1, i2, i3]] {
-        let mut f = make(&pts, v);
+        let mut f = make(v);
         if f.n.dot(centroid) - f.d > 0.0 {
-            f = make(&pts, [v[0], v[2], v[1]]);
+            f = make([v[0], v[2], v[1]]);
         }
         faces.push(f);
     }
-    for (pi, &p) in pts.iter().enumerate() {
-        if [i0, i1, i2, i3].contains(&pi) {
-            continue;
-        }
-        let visible: Vec<usize> = (0..faces.len()).filter(|&f| faces[f].alive && faces[f].n.dot(p) - faces[f].d > eps).collect();
-        if visible.is_empty() {
-            continue;
-        }
-        let mut edges: HashMap<(usize, usize), ()> = HashMap::new();
-        for &f in &visible {
-            let v = faces[f].v;
-            for k in 0..3 {
-                edges.insert((v[k], v[(k + 1) % 3]), ());
-            }
-        }
-        let horizon: Vec<(usize, usize)> = edges.keys().filter(|(a, b)| !edges.contains_key(&(*b, *a))).copied().collect();
-        for &f in &visible {
-            faces[f].alive = false;
-        }
-        for (a, b) in horizon {
-            faces.push(make(&pts, [a, b, pi]));
+    // Each directed edge's face, to walk the hull's surface.
+    let mut by_edge: HashMap<(usize, usize), usize> = HashMap::new();
+    for (fi, f) in faces.iter().enumerate() {
+        for k in 0..3 {
+            by_edge.insert((f.v[k], f.v[(k + 1) % 3]), fi);
         }
     }
+    // The farthest points first (from the tetrahedron's centre): the nearer ones then mostly fall inside.
+    let mut order: Vec<usize> = (0..q.len()).filter(|pi| ![i0, i1, i2, i3].contains(pi)).collect();
+    order.sort_by(|a, b| q[*b].distance_squared(centroid).total_cmp(&q[*a].distance_squared(centroid)));
+    for pi in order {
+        let p = q[pi];
+        // The face it is most in front of, then the faces it sees connected to that one; the horizon is that region's
+        // boundary.
+        let Some(seed) = (0..faces.len()).filter(|&f| faces[f].alive).max_by(|&a, &b| (faces[a].n.dot(p) - faces[a].d).total_cmp(&(faces[b].n.dot(p) - faces[b].d))) else { break };
+        if faces[seed].n.dot(p) - faces[seed].d <= eps {
+            continue;
+        }
+        let mut visible = vec![seed];
+        let mut seen = std::collections::HashSet::from([seed]);
+        let mut k = 0;
+        while k < visible.len() {
+            let f = visible[k];
+            k += 1;
+            for e in 0..3 {
+                let (a, b) = (faces[f].v[e], faces[f].v[(e + 1) % 3]);
+                if let Some(&g) = by_edge.get(&(b, a)) {
+                    if faces[g].alive && !seen.contains(&g) && faces[g].n.dot(p) - faces[g].d > eps {
+                        seen.insert(g);
+                        visible.push(g);
+                    }
+                }
+            }
+        }
+        let mut horizon: Vec<(usize, usize)> = vec![];
+        for &f in &visible {
+            for e in 0..3 {
+                let (a, b) = (faces[f].v[e], faces[f].v[(e + 1) % 3]);
+                if !by_edge.get(&(b, a)).is_some_and(|g| seen.contains(g)) {
+                    horizon.push((a, b));
+                }
+            }
+        }
+        for &f in &visible {
+            faces[f].alive = false;
+            for e in 0..3 {
+                let key = (faces[f].v[e], faces[f].v[(e + 1) % 3]);
+                if by_edge.get(&key) == Some(&f) {
+                    by_edge.remove(&key);
+                }
+            }
+        }
+        for (a, b) in horizon {
+            let fi = faces.len();
+            faces.push(make([a, b, pi]));
+            by_edge.insert((a, b), fi);
+            by_edge.insert((b, pi), fi);
+            by_edge.insert((pi, a), fi);
+        }
+    }
+    // On the original points, each with its face's normal as the hull found it (a sliver's own, from the unjittered
+    // points, can point either way).
     faces
         .iter()
-        .filter(|f| f.alive)
-        .filter_map(|f| Tri::new(pts[f.v[0]], pts[f.v[1]], pts[f.v[2]]))
+        .filter(|f| f.alive && f.n != DVec3::ZERO)
+        .map(|f| Tri { a: pts[f.v[0]], b: pts[f.v[1]], c: pts[f.v[2]], n: f.n.as_vec3(), surface: 0 })
         .collect()
 }
 
@@ -702,6 +753,27 @@ pub fn spawn_floor(world: &(impl TriSource + ?Sized), at: Vec3, above: f32, head
 
 #[cfg(test)]
 mod tests {
+    /// A box sampled densely over its faces (thousands of coplanar points, like a door's chunk): the hull keeps every
+    /// point inside it (none of its faces folded or turned inward) and the box's volume.
+    #[test]
+    fn hull_of_many_coplanar_points() {
+        let mut pts = vec![];
+        for i in 0..=20 {
+            for j in 0..=20 {
+                let (u, v) = (i as f32 / 20.0, j as f32 / 20.0);
+                for p in [Vec3::new(u, v, 0.0), Vec3::new(u, v, 0.04), Vec3::new(u, 0.0, v * 0.04), Vec3::new(u, 1.0, v * 0.04), Vec3::new(0.0, u, v * 0.04), Vec3::new(1.0, u, v * 0.04)] {
+                    pts.push(p);
+                }
+            }
+        }
+        let tris = convex_hull(&pts);
+        for t in &tris {
+            assert!(pts.iter().all(|p| t.n.dot(*p - t.a) < 1e-5), "a point outside a face");
+        }
+        let volume: f32 = tris.iter().map(|t| t.a.dot(t.b.cross(t.c))).sum::<f32>() / 6.0;
+        assert!((volume - 0.04).abs() < 1e-4, "volume {volume}");
+    }
+
     use super::*;
 
     fn cube(center: Vec3, half: Vec3) -> Vec<Tri> {
