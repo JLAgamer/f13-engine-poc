@@ -772,12 +772,8 @@ fn tick_action(
                             if stun { "stun" } else { "no stun" }
                         );
                         commands.entity(je).insert(HitJason { stun: stun.then_some(Stun::Weapon { left }), from: xf.translation });
-                        // Her weapon's ImpactEffect (Counselor_ImpactEffect_Base's JasonFX for a hit on him). PLACEHOLDER: the
-                        // trace's ImpactPoint and ImpactNormal: his chest, facing her. And whether a melee hit spawns it at
-                        // all: SCWeapon::SpawnHitEffect (0x1404558e0, the path to the spawn) has no caller in the binary or
-                        // the packages (MODLOG "A gun's pellets and their impacts").
-                        let toward = (xf.translation - jxf.translation).with_y(0.0).normalize_or(Vec3::Z);
-                        commands.write_message(crate::particles::SpawnParticles::impact("P_Hit_Blood_Jason_Default_01", jxf.translation + Vec3::Y * 1.4 + toward * 0.25, toward));
+                        // No impact effect: a melee hit's path to it, SCWeapon::SpawnHitEffect (0x1404558e0), is never
+                        // called in this build (MODLOG "Melee hits spawn no impact effects").
                         let name = items.get(a.item).map_or("weapon".to_string(), |i| i.name.clone());
                         wear_weapon(&mut commands, &mut wear, &mut inv, a.item, stats.durability, stats.attacking_wear, &name);
                     }
