@@ -23,7 +23,7 @@ use bevy::asset::{embedded_asset, RenderAssetUsages};
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::mesh::{Indices, MeshVertexAttribute, MeshVertexBufferLayoutRef, PrimitiveTopology, VertexFormat};
-use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey};
+use bevy::pbr::{ExtendedMaterial, Material, MaterialExtension, MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
 use bevy::shader::ShaderRef;
@@ -37,7 +37,9 @@ pub struct ParticlesPlugin;
 impl Plugin for ParticlesPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shaders/particles.wgsl");
-        app.add_plugins(MaterialPlugin::<ParticleMaterial>::default())
+        embedded_asset!(app, "shaders/mesh_particles.wgsl");
+        embedded_asset!(app, "shaders/mesh_particles_prepass.wgsl");
+        app.add_plugins((MaterialPlugin::<ParticleMaterial>::default(), MaterialPlugin::<MeshParticleMaterial>::default()))
             .add_message::<ParticleActivation>()
             .add_message::<SpawnParticles>()
             .add_systems(Startup, spawn_level_particles)
@@ -54,6 +56,80 @@ pub struct ParticleActivation {
     /// Activate(bReset): from the start. Without it (SetActive(true, false)) an inactive system's spawning resumes
     /// and its particles are kept (PLACEHOLDER: UParticleSystemComponent::ActivateSystem's bReset false path unread).
     pub reset: bool,
+}
+
+/// A mesh emitter's override material, ported: M_Firecracker_Debris_01 (the grass impact's flying chunks). The
+/// particle's colour and dynamic parameters (the mesh-particle vertex factory's instance attributes: Color, its
+/// DynamicParameter) go into the StandardMaterial per particle; the extension's shaders add the mask's dither and clip
+/// (shaders/mesh_particles.wgsl, its prepass).
+pub(crate) type MeshParticleMaterial = ExtendedMaterial<StandardMaterial, MeshParticleExt>;
+
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
+pub(crate) struct MeshParticleExt {
+    /// x: the opacity mask's clip value.
+    #[uniform(100)]
+    clip: Vec4,
+}
+
+impl MaterialExtension for MeshParticleExt {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://f13_game/shaders/mesh_particles.wgsl".into()
+    }
+
+    fn prepass_fragment_shader() -> ShaderRef {
+        "embedded://f13_game/shaders/mesh_particles_prepass.wgsl".into()
+    }
+}
+
+/// M_Firecracker_Debris_01's parameters (uniexpr.py: cb1[0] SelectionColor, [2] (EmissiveMultiplier, MetalnessMult,
+/// Spec, RoughnessMult), [3].x OpacityMultiplier).
+#[derive(Clone, Copy, Debug)]
+struct DebrisParams {
+    selection: Vec3,
+    emissive_multiplier: f32,
+    metalness: f32,
+    spec: f32,
+    roughness: f32,
+    opacity: f32,
+}
+
+impl DebrisParams {
+    /// Its compiled mesh-particle base pass (s049): Add_0 = Color.rgb x EmissiveMultiplier + DynamicParameter.y; base
+    /// colour saturate(Add_0), emissive Add_0 + SelectionColor (clamped at 0), metallic saturate(MetalnessMult),
+    /// specular saturate(Spec), roughness saturate(RoughnessMult); the opacity mask Color.a x OpacityMultiplier x
+    /// DynamicParameter.x, clipped at 0.8333 after the dither (the shader). Two-sided; the mesh's own normal.
+    fn material(&self, color: Vec4, dynamic: [f32; 4]) -> StandardMaterial {
+        let add = color.truncate() * self.emissive_multiplier + Vec3::splat(dynamic[1]);
+        let base = add.clamp(Vec3::ZERO, Vec3::ONE);
+        let emissive = (add + self.selection).max(Vec3::ZERO);
+        StandardMaterial {
+            base_color: LinearRgba::new(base.x, base.y, base.z, color.w * self.opacity * dynamic[0]).into(),
+            emissive: LinearRgba::rgb(emissive.x, emissive.y, emissive.z),
+            metallic: self.metalness.clamp(0.0, 1.0),
+            perceptual_roughness: self.roughness.clamp(0.0, 1.0),
+            // UE's specular s: F0 = 0.08 s = 0.16 reflectance^2.
+            reflectance: (0.5 * self.spec.clamp(0.0, 1.0)).sqrt(),
+            double_sided: true,
+            cull_mode: None,
+            alpha_mode: AlphaMode::Mask(DEBRIS_CLIP),
+            ..default()
+        }
+    }
+}
+
+/// M_Firecracker_Debris_01's OpacityMaskClipValue (the compiled clip: mask + dither - 0.8333 < 0 discards).
+const DEBRIS_CLIP: f32 = 0.8333;
+
+/// A mesh emitter drawn with its ported override material: the mesh cut into the chunks its material's World Position
+/// Offset selects (M_Firecracker_Debris_01's vertex shader: a vertex whose ceil(TexCoord[2].x) isn't
+/// ceil(DynamicParameter.z x 4), the particle's ChunkRandom, moves to the particle's origin, so each particle shows one
+/// of the mesh's four shards), one mesh per chunk index 1..4 with the other chunks' vertices at the origin; per drawn
+/// particle a slot entity and its own material.
+struct ChunkedMesh {
+    chunks: Arc<Vec<Handle<Mesh>>>,
+    params: DebrisParams,
+    cap: usize,
+    materials: Vec<Handle<MeshParticleMaterial>>,
 }
 
 /// The particle's dynamic parameter (Float32x4), for the material's DynamicParameter.
@@ -235,6 +311,8 @@ struct EmitterState {
     /// scene each, spawned as particles first need them (an idle emitter holds none).
     mesh_scene: Option<(Handle<WorldAsset>, usize)>,
     slots: Vec<Entity>,
+    /// Or its mesh drawn with its override material ([`ChunkedMesh`]), into `slots` likewise.
+    chunked: Option<ChunkedMesh>,
     /// A ParticleModuleLight emitter's simple lights (MaxDrawCount of them, at most 16).
     lights: Vec<Entity>,
     /// Drawn (an emitter kept only as another's attractor, its material unported or DefaultParticle, isn't).
@@ -386,6 +464,24 @@ impl Materials {
         });
         self.built.insert(name.to_string(), built.clone());
         built
+    }
+
+    /// A mesh emitter's override material, if ported ([`DebrisParams`]).
+    fn mesh_particle(&self, name: &str) -> Option<DebrisParams> {
+        let e = self.entries.get(name).or_else(|| self.entries.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v))?;
+        if !e.master.eq_ignore_ascii_case("M_Firecracker_Debris_01") {
+            return None;
+        }
+        let s = |n: &str, d: f32| e.scalars.get(n).copied().unwrap_or(d);
+        let sel = e.vectors.get("SelectionColor").copied().unwrap_or([0.0; 4]);
+        Some(DebrisParams {
+            selection: Vec3::new(sel[0], sel[1], sel[2]),
+            emissive_multiplier: s("EmissiveMultiplier", 0.3),
+            metalness: s("MetalnessMult", 1.0),
+            spec: s("Spec", 0.1),
+            roughness: s("RoughnessMult", 0.3),
+            opacity: s("OpacityMultiplier", 1.0),
+        })
     }
 
     /// The distortion pass of a material [`Materials::get`] built.
@@ -735,9 +831,40 @@ pub(crate) struct ParticleAssets {
     systems: Systems,
     mats: Materials,
     seed: u64,
+    /// [`ChunkedMesh`]es' chunk meshes by mesh file (None when it can't be read).
+    chunk_meshes: HashMap<String, Option<Arc<Vec<Handle<Mesh>>>>>,
 }
 
 impl ParticleAssets {
+    /// A mesh's chunk meshes for [`ChunkedMesh`]: chunk k (1..4) keeps the vertices whose ceil(TexCoord[2].x) is k and
+    /// moves the others to the origin, as the material's World Position Offset does.
+    fn chunks(&mut self, file: &str, meshes: &mut Assets<Mesh>) -> Option<Arc<Vec<Handle<Mesh>>>> {
+        let root = self.root.clone();
+        self.chunk_meshes
+            .entry(file.to_string())
+            .or_insert_with(|| {
+                let prims = f13_data::glb::read_primitives(&root.join(file))?;
+                let p = prims.into_iter().next()?;
+                let ids = p.uvs.get(2)?;
+                let made = (1..=4)
+                    .map(|k| {
+                        let positions: Vec<[f32; 3]> = p.positions.iter().zip(ids).map(|(v, uv)| if uv[0].ceil() as i32 == k { *v } else { [0.0; 3] }).collect();
+                        let mut m = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default()).with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+                        if p.normals.len() == p.positions.len() {
+                            m.insert_attribute(Mesh::ATTRIBUTE_NORMAL, p.normals.clone());
+                        }
+                        if let Some(uv) = p.uvs.first() {
+                            m.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv.clone());
+                        }
+                        m.insert_indices(Indices::U32(p.indices.clone()));
+                        meshes.add(m)
+                    })
+                    .collect();
+                Some(Arc::new(made))
+            })
+            .clone()
+    }
+
     /// A running system named `name` at an Unreal-space transform (cm, Z up), its emitters' entities spawned.
     #[allow(clippy::too_many_arguments)]
     fn instance(
@@ -761,6 +888,17 @@ impl ParticleAssets {
                 // FDynamicMeshEmitterData: the mesh's own materials (bOverrideMaterial off); UE's default transform
                 // only (CalculateParticleTransform without camera facing, axis lock or velocity alignment).
                 let aligned = matches!(def.screen_alignment.as_str(), "PSA_Velocity" | "PSA_AwayFromCenter" | "PSA_TypeSpecific");
+                // Its override material (bOverrideMaterial: the emitter's RequiredModule material), when ported.
+                let ported = md.override_material && !(md.camera_facing || md.axis_lock != "EPAL_NONE" || aligned);
+                if let Some(params) = def.material.as_deref().and_then(|m| self.mats.mesh_particle(m)).filter(|_| ported) {
+                    if let Some(chunks) = self.chunks(&md.file, meshes) {
+                        let cap = def.max_draw_count.unwrap_or(500).min(32) as usize;
+                        let entity = commands.spawn((Transform::default(), Visibility::Hidden)).id();
+                        let chunked = Some(ChunkedMesh { chunks, params, cap, materials: vec![] });
+                        emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: None, slots: vec![], lights: vec![], drawn: true, attractor_last: [0; 2], collision_check: 0, last_source: None, unit_fraction: 0.0, material: None, distortion: None, chunked });
+                        continue;
+                    }
+                }
                 if md.override_material || md.camera_facing || md.axis_lock != "EPAL_NONE" || aligned || !self.root.join(&md.file).exists() {
                     info!("particles: {name}.{}: mesh emitter {} not drawn (override material, facing, axis lock or alignment, or not exported)", def.name, md.file);
                     continue;
@@ -768,7 +906,7 @@ impl ParticleAssets {
                 let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(md.file.clone()));
                 let n = def.max_draw_count.unwrap_or(500).min(32) as usize;
                 let entity = commands.spawn((Transform::default(), Visibility::Hidden)).id();
-                emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: Some((scene, n)), slots: vec![], lights: vec![], drawn: true, attractor_last: [0; 2], collision_check: 0, last_source: None, unit_fraction: 0.0, material: None, distortion: None });
+                emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: Some((scene, n)), slots: vec![], lights: vec![], drawn: true, attractor_last: [0; 2], collision_check: 0, last_source: None, unit_fraction: 0.0, material: None, distortion: None, chunked: None });
                 continue;
             }
             let Some((material, mode)) = def.material.as_deref().and_then(|m| self.mats.get(m, &self.root, assets, materials)) else {
@@ -778,7 +916,7 @@ impl ParticleAssets {
                 let sends = def.modules.iter().any(|m| matches!(m, Module::EventGenerator(_) | Module::Light { .. }));
                 if named || sends {
                     let entity = commands.spawn((Transform::default(), Visibility::Hidden)).id();
-                    emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: None, slots: vec![], lights: light_pool(commands, def, name), drawn: false, attractor_last: [0; 2], collision_check: 0, last_source: None, unit_fraction: 0.0, material: None, distortion: None });
+                    emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: None, slots: vec![], lights: light_pool(commands, def, name), drawn: false, attractor_last: [0; 2], collision_check: 0, last_source: None, unit_fraction: 0.0, material: None, distortion: None, chunked: None });
                 }
                 continue;
             };
@@ -808,7 +946,7 @@ impl ParticleAssets {
                 commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(d.clone()), Transform::default(), Visibility::Inherited, NoFrustumCulling, NotShadowCaster, NotShadowReceiver, ChildOf(entity), Name::new(format!("{name}.{} distortion", def.name))));
             }
             let pivot = def.modules.iter().find_map(|m| if let Module::PivotOffset(p) = m { Some(Vec2::from(*p)) } else { None }).unwrap_or(Vec2::ZERO) + Vec2::splat(-0.5);
-            emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: mode == 4, mesh_scene: None, slots: vec![], lights: light_pool(commands, def, name), drawn: true, attractor_last: [0; 2], collision_check: 0, last_source: None, unit_fraction: 0.0, material: Some(material), distortion });
+            emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: mode == 4, mesh_scene: None, slots: vec![], lights: light_pool(commands, def, name), drawn: true, attractor_last: [0; 2], collision_check: 0, last_source: None, unit_fraction: 0.0, material: Some(material), distortion, chunked: None });
         }
         if emitters.is_empty() {
             return None;
@@ -925,7 +1063,7 @@ fn spawn_level_particles(
 ) {
     let root = export.0.clone();
     let entries: HashMap<String, MaterialEntry> = std::fs::read_to_string(root.join("materials.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-    let mut pa = ParticleAssets { root, systems: Systems::default(), mats: Materials { entries, built: HashMap::new(), distortions: HashMap::new() }, seed: 0x9e37_79b9_7f4a_7c15 };
+    let mut pa = ParticleAssets { root, systems: Systems::default(), mats: Materials { entries, built: HashMap::new(), distortions: HashMap::new() }, seed: 0x9e37_79b9_7f4a_7c15, chunk_meshes: HashMap::new() };
     let mut n = 0;
     for a in level.iter().flat_map(|l| &l.layouts).flat_map(|l| &l.actors) {
         for c in &a.components {
@@ -1842,6 +1980,22 @@ fn spawn(def: &Emitter, spawn_time: f32, emitter_time: f32, location: Vec3, rota
 }
 
 /// The emitters' quads, facing the camera.
+/// A mesh particle's transform (Bevy space) at FDynamicMeshEmitterData::CalculateParticleTransform's default
+/// (FUN_1415be6e0): v x PreRot(MakeFromEuler(InitialOrientation)) x Scale(Size) x Rot(MakeFromEuler(Rotation x 180 /
+/// pi on every axis) + MakeFromEuler(payload Rotation)) + its location, then the component's rotation for local-space
+/// emitters (Unreal row vectors).
+fn mesh_particle_transform(p: &Particle, local_space: bool, rotation: Quat, scale: Vec3) -> bevy::math::Affine3A {
+    let euler = |v: Vec3| Vec3::new(v.y, v.z, v.x);
+    let pre = Mat3::from_quat(f13_core::camera_spline::quaternion(euler(p.mesh_orientation)));
+    let rotator = euler(Vec3::splat(p.rotation.to_degrees())) + euler(p.mesh_rotation);
+    let rot = Mat3::from_quat(f13_core::camera_spline::quaternion(rotator));
+    let local = if local_space { Mat3::from_quat(rotation) } else { Mat3::IDENTITY };
+    let lin = local * rot * Mat3::from_diagonal(p.size * scale) * pre;
+    // Unreal to Bevy: the export's basis change (x, z, y) on both sides; the mesh is already in metres.
+    let swap = Mat3::from_cols(Vec3::X, Vec3::Z, Vec3::Y);
+    bevy::math::Affine3A::from_mat3_translation(swap * lin * swap, to_bevy(p.location))
+}
+
 fn draw(
     mut commands: Commands,
     camera: Query<(&GlobalTransform, &bevy::camera::primitives::Frustum), (With<Camera3d>, With<crate::lighting::Lit>)>,
@@ -1852,6 +2006,8 @@ fn draw(
     mut slot_xf: Query<&mut Transform>,
     mut point_lights: Query<&mut PointLight>,
     mut batch_entities: Local<HashMap<AssetId<ParticleMaterial>, (Entity, Handle<Mesh>)>>,
+    mut mesh_materials: ResMut<Assets<MeshParticleMaterial>>,
+    mut slot_meshes: Query<&mut Mesh3d>,
 ) {
     let Some((cam, frustum)) = camera.iter().next() else { return };
     let cam_pos = cam.translation();
@@ -1877,17 +2033,52 @@ fn draw(
             s.last_render = virtual_time.elapsed_secs();
         }
         for e in s.emitters.iter_mut() {
+            if let Some(c) = &mut e.chunked {
+                // An override-material mesh emitter: as below, each drawn particle its chunk's mesh and its material.
+                let want = if near { e.particles.len().min(c.cap) } else { 0 };
+                while e.slots.len() < want {
+                    let m = mesh_materials.add(MeshParticleMaterial { base: c.params.material(Vec4::ONE, [1.0; 4]), extension: MeshParticleExt { clip: Vec4::new(DEBRIS_CLIP, 0.0, 0.0, 0.0) } });
+                    let slot = commands.spawn((Mesh3d(c.chunks[0].clone()), MeshMaterial3d(m.clone()), Transform::default(), Visibility::Hidden, NotShadowCaster, Name::new(format!("{} {}", e.def.name, e.slots.len())))).id();
+                    e.slots.push(slot);
+                    c.materials.push(m);
+                }
+                for (i, &slot) in e.slots.iter().enumerate() {
+                    // ceil(ChunkRandom x 4) (round_pi): 0 only for a draw of exactly 0, every vertex then at the origin.
+                    let shown = e.particles.get(i).filter(|_| near).map(|p| (p, (p.dynamic[2] * 4.0).ceil() as i32)).filter(|(_, k)| (1..=4).contains(k));
+                    let Some((p, k)) = shown else {
+                        if let Ok(mut v) = vis.get_mut(slot) {
+                            v.set_if_neq(Visibility::Hidden);
+                        }
+                        continue;
+                    };
+                    if let Ok(mut m) = slot_meshes.get_mut(slot) {
+                        let chunk = &c.chunks[k as usize - 1];
+                        if m.0 != *chunk {
+                            m.0 = chunk.clone();
+                        }
+                    }
+                    if let Some(mut m) = mesh_materials.get_mut(&c.materials[i]) {
+                        m.base = c.params.material(p.color, p.dynamic);
+                    }
+                    if let Ok(mut xf) = slot_xf.get_mut(slot) {
+                        *xf = Transform::from_matrix(mesh_particle_transform(p, e.def.local_space, s.rotation, s.scale).into());
+                    }
+                    if let Ok(mut v) = vis.get_mut(slot) {
+                        v.set_if_neq(Visibility::Inherited);
+                    }
+                }
+                continue;
+            }
             if let Some((scene, cap)) = &e.mesh_scene {
-                // A mesh emitter: its first MaxDrawCount particles, each its mesh at FDynamicMeshEmitterData::
-                // CalculateParticleTransform's default (FUN_1415be6e0): v x PreRot(MakeFromEuler(InitialOrientation)) x
-                // Scale(Size) x Rot(MakeFromEuler(Rotation x 180 / pi on every axis) + MakeFromEuler(payload Rotation))
-                // + its location, then the component's rotation for local-space emitters (Unreal row vectors).
-                let euler = |v: Vec3| Vec3::new(v.y, v.z, v.x);
+                // A mesh emitter: its first MaxDrawCount particles, each its mesh ([`mesh_particle_transform`]).
                 // Scenes for the particles drawn now (kept for the emitter's life once spawned).
                 let want = if near { e.particles.len().min(*cap) } else { 0 };
                 let name = e.def.name.clone();
                 let more: Vec<Entity> = (e.slots.len()..want)
-                    .map(|i| commands.spawn((bevy::world_serialization::WorldAssetRoot(scene.clone()), Transform::default(), Visibility::Hidden, Name::new(format!("{name} {i}")))).id())
+                    // Unshadowed: a particle component casts none (UPrimitiveComponent's constructor 0x141350d70 clears
+                    // CastShadow; UParticleSystemComponent's doesn't set it), applied to the scene's meshes as a
+                    // placement's (main.rs apply_placed).
+                    .map(|i| commands.spawn((bevy::world_serialization::WorldAssetRoot(scene.clone()), Transform::default(), Visibility::Hidden, crate::Placed { cast_shadow: false, cull_m: 0.0 }, Name::new(format!("{name} {i}")))).id())
                     .collect();
                 if !more.is_empty() {
                     debug!("particles: {name}: {} mesh slots", e.slots.len() + more.len());
@@ -1900,16 +2091,8 @@ fn draw(
                         }
                         continue;
                     };
-                    let pre = Mat3::from_quat(f13_core::camera_spline::quaternion(euler(p.mesh_orientation)));
-                    let rotator = euler(Vec3::splat(p.rotation.to_degrees())) + euler(p.mesh_rotation);
-                    let rot = Mat3::from_quat(f13_core::camera_spline::quaternion(rotator));
-                    let local = if e.def.local_space { Mat3::from_quat(s.rotation) } else { Mat3::IDENTITY };
-                    let lin = local * rot * Mat3::from_diagonal(p.size * s.scale) * pre;
-                    // Unreal to Bevy: the export's basis change (x, z, y) on both sides; the mesh is already in metres.
-                    let swap = Mat3::from_cols(Vec3::X, Vec3::Z, Vec3::Y);
-                    let affine = bevy::math::Affine3A::from_mat3_translation(swap * lin * swap, to_bevy(p.location));
                     if let Ok(mut xf) = slot_xf.get_mut(slot) {
-                        *xf = Transform::from_matrix(affine.into());
+                        *xf = Transform::from_matrix(mesh_particle_transform(p, e.def.local_space, s.rotation, s.scale).into());
                     }
                     if let Ok(mut v) = vis.get_mut(slot) {
                         v.set_if_neq(Visibility::Inherited);
