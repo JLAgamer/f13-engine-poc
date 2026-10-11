@@ -40,7 +40,7 @@ Moved from Milestone 1 (not tied to gameplay):
       lighting volume the lit ones read (a stand-in now: MODLOG "Particle materials"), particle lights' high-quality (shadowed) variant,
       collision's view-distance cull and physics impulses, the thrown knife's ribbon trail
       (TracerTrail: its base pass is a glow at 0.025 opacity, the rest is refraction, which no material has yet),
-      the impact effects' decals (the shotgun pellets' FX and sounds by surface are in), the GPU emitters' modules (CollisionGPU, the event generator and receiver)
+      the GPU emitters' modules (CollisionGPU, the event generator and receiver)
 - [ ] Counselor model, remaining: the eye look against a capture of the game (it rolls the eyes 90 degrees from their bind: MODLOG
       "The eyes' look")
       (MODLOG "The counselor's face")

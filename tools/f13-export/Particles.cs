@@ -48,7 +48,7 @@ static class ParticleExporter
 
     /// The textures a material draws with, its instances' parameters and its master's texture parameter defaults up the
     /// Parent chain (the material export only writes those it maps to its own slots).
-    static void QueueTextures(UObject material, Action<UObject> queue)
+    public static void QueueTextures(UObject material, Action<UObject> queue)
     {
         for (var o = material; o != null; o = o.GetOrDefault<FPackageIndex?>("Parent")?.Load())
         {

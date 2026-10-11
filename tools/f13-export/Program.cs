@@ -874,6 +874,21 @@ switch (rest[0])
             // PlayerCameraManager_BP's RainParticleSystem (a soft reference: the camera's rain grid, f13-game particles.rs).
             if (rest.Count == 1) names.Add("P_Rain_Environmental_01A_GPU");
             Console.WriteLine($"particles: {ParticleExporter.Write(provider, outDir, names, Queue)} systems written");
+            // The impact effects' decal materials (their <surface>Decal's DecalMaterial and SplashDecals' Decals) and textures.
+            if (rest.Count == 1 && File.Exists(classesJson))
+            {
+                var decals = System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(classesJson), @"""(?:DecalMaterial""\s*:\s*|Decals""\s*:\s*\[)[^\]}]*")
+                    .SelectMany(m => System.Text.RegularExpressions.Regex.Matches(m.Value, @"Material(?:InstanceConstant)?'([A-Za-z0-9_]+)'").Select(x => x.Groups[1].Value))
+                    .Distinct().ToList();
+                foreach (var d in decals)
+                {
+                    var file = provider.Files.Keys.FirstOrDefault(k => k.EndsWith("/" + d + ".uasset", StringComparison.OrdinalIgnoreCase));
+                    if (file == null || provider.LoadPackage(file[..^".uasset".Length]).GetExports().FirstOrDefault(e => e.Name == d) is not { } m) continue;
+                    Queue(m);
+                    ParticleExporter.QueueTextures(m, Queue);
+                }
+                Console.WriteLine($"particles: {decals.Count} decal materials");
+            }
         }
         break;
     case "dds":

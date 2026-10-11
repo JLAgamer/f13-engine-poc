@@ -70,7 +70,7 @@ pub enum ItemKind {
     Weapon(WeaponStats),
     /// SCGun: the flare gun (a projectile) or the shotgun (pellets); `melee`: it has attack montages (NeutralAttack:
     /// the shotgun swings as a two-handed weapon in combat stance, loaded or not; the flare gun's are None).
-    Gun { stats: WeaponStats, projectile: bool, pellets: u32, spread_deg: f32, velocity: f32, melee: bool, impacts: Vec<Option<String>>, impact_sounds: Vec<Option<String>> },
+    Gun { stats: WeaponStats, projectile: bool, pellets: u32, spread_deg: f32, velocity: f32, melee: bool, impacts: Vec<Option<String>>, impact_sounds: Vec<Option<String>>, impact_decals: Vec<Option<crate::decals::ImpactDecal>> },
     /// SCTrap: placed on the ground.
     Trap,
     FirstAid,
@@ -140,6 +140,11 @@ impl ItemKind {
                         .chain(IMPACT_FX[3..].iter().map(|f| f.replace("FX", "Sound")))
                         .map(|f| classes.prop(t, &f)["AssetPathName"].as_str().and_then(|a| a.rsplit('.').next()).map(String::from))
                         .collect()
+                }),
+                // And its decals (GetImpactDecal FUN_1403413b0): DefaultDecal 0x868, CounselorDecal, JasonDecal, then
+                // surface types 1..22 (0x910 + 0x38 (n - 1)).
+                impact_decals: p("PelletImpactTemplate").as_str().map_or_else(Vec::new, |t| {
+                    IMPACT_FX.iter().map(|f| crate::decals::ImpactDecal::from_json(classes.prop(t, &f.replace("FX", "Decal")))).collect()
                 }),
             }
         } else if is("SCWeapon") {

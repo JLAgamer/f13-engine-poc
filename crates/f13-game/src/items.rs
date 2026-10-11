@@ -134,9 +134,9 @@ impl Plugin for ItemsPlugin {
     }
 }
 
-/// Testing (--aim): right mouse held, the camera at this pitch (degrees).
+/// Testing (--aim): right mouse held, the camera at this pitch (degrees), and the left clicked once at this time (s).
 #[derive(Resource)]
-pub struct AimHold(pub f32);
+pub struct AimHold(pub f32, pub Option<f32>);
 
 /// Testing (--circle): W held, the camera turning at this rate (degrees per second): she runs a circle.
 #[derive(Resource)]
@@ -148,11 +148,18 @@ fn circle_run(run: Option<Res<CircleRun>>, time: Res<Time>, mut keys: ResMut<But
     camera.yaw += run.0.to_radians() * time.delta_secs();
 }
 
-fn hold_aim(hold: Option<Res<AimHold>>, mut mouse: ResMut<ButtonInput<MouseButton>>, mut camera: Single<&mut PlayerCamera>) {
+fn hold_aim(hold: Option<Res<AimHold>>, time: Res<Time>, mut mouse: ResMut<ButtonInput<MouseButton>>, mut camera: Single<&mut PlayerCamera>, mut fired: Local<bool>) {
     let Some(hold) = hold else { return };
     mouse.release(MouseButton::Right);
     mouse.press(MouseButton::Right);
     camera.pitch = hold.0.to_radians();
+    // And a click at this time, once (--aim pitch:seconds).
+    if !*fired && hold.1.is_some_and(|t| time.elapsed_secs() >= t) {
+        *fired = true;
+        mouse.press(MouseButton::Left);
+    } else if *fired {
+        mouse.release(MouseButton::Left);
+    }
 }
 
 /// Testing (--give): item classes the counselor starts with, taken from the match's spawned items.
@@ -781,7 +788,7 @@ fn tick_action(
                     a.done = true; // missed
                 }
             }
-            Use::Fire { kind: ItemKind::Gun { projectile, pellets, spread_deg, velocity, impacts, impact_sounds, .. } } => {
+            Use::Fire { kind: ItemKind::Gun { projectile, pellets, spread_deg, velocity, impacts, impact_sounds, impact_decals, .. } } => {
                 a.done = true;
                 // At what the middle of the screen shows: Jason if the camera's ray passes through him, else far out.
                 let (eye, look) = (camera.1.translation(), camera.1.forward().as_vec3());
@@ -840,6 +847,14 @@ fn tick_action(
                                 let cue = if (1..=22).contains(&surface) { impact_sounds.get(surface as usize).cloned().flatten() } else { impact_sounds.first().cloned().flatten() };
                                 if let Some(cue) = cue {
                                     commands.trigger(crate::audio::PlaySound { cue, at: Some(at) });
+                                }
+                                // GetImpactDecal: the surface's, DefaultDecal if it has none (or no surface type).
+                                let decal = (1..=22).contains(&surface).then(|| impact_decals.get(2 + surface as usize).cloned().flatten()).flatten().or_else(|| impact_decals.first().cloned().flatten());
+                                if let Some(decal) = decal {
+                                    let n = if n.dot(dir) > 0.0 { -n } else { n };
+                                    crate::decals::spawn_impact(&mut commands, &decal, at, n, facing, &mut r, |a, b| {
+                                        f13_core::collision::segment_hit_tri(&world, a, b, 2.0).map(|(t, n, _)| (a + (b - a) * t, n))
+                                    });
                                 }
                             }
                             _ => {}

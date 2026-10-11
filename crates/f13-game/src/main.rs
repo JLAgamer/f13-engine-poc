@@ -7,7 +7,7 @@
 //!       [--bot-abilities]  (Jason, every ability ready and told where she is, Morphs, Stalks and Shifts to her)
 //!       [--particles System]  (that particle system 1.5 m ahead every 0.3 s (testing))
 //!       [--circle DegPerSec]  (hold W, the camera turning: she runs a circle (testing))
-//!       [--aim PitchDeg]  (hold right mouse, the camera at this pitch: aim the gun given (testing))
+//!       [--aim PitchDeg[:FireS]]  (hold right mouse, the camera at this pitch: aim the gun given, and fire it at FireS (testing))
 //!       [--give Class,Class...] [--bot-fight]  (start with these items (testing); a bot that uses them on Jason)
 //!       [--map-open]  (her objectives and map screen open from the start (testing))
 //!       [--bot-block]  (block Jason's swings with the weapon given)
@@ -40,6 +40,7 @@ mod counselor_camera;
 mod screen_effects;
 mod sense_view;
 mod circle_dof;
+mod decals;
 mod dof;
 mod face;
 mod hair;
@@ -129,7 +130,7 @@ struct Args {
     /// Take the host's commands on this localhost port (host.rs, `f13-host`).
     host: Option<u16>,
     give: Vec<String>,
-    aim: Option<f32>,
+    aim: Option<(f32, Option<f32>)>,
     circle: Option<f32>,
     particles: Option<String>,
     /// Her map screen open from the start (testing).
@@ -276,7 +277,12 @@ fn parse_args() -> Args {
             "--host-port" => host = it.next().and_then(|v| v.parse().ok()).or(host),
             "--particles" => particles = it.next(),
             "--circle" => circle = it.next().and_then(|v| v.parse().ok()),
-            "--aim" => aim = it.next().and_then(|v| v.parse().ok()),
+            "--aim" => {
+                aim = it.next().and_then(|v| {
+                    let mut p = v.split(':');
+                    Some((p.next()?.parse().ok()?, p.next().and_then(|t| t.parse().ok())))
+                })
+            }
             "--give" => give = it.next().map(|v| v.split(',').map(String::from).collect()).unwrap_or_default(),
             "--map-open" => map_open = true,
             "--no-jason" => no_jason = true,
@@ -529,8 +535,8 @@ fn main() {
         if let Some(rate) = args.circle {
             app.insert_resource(items::CircleRun(rate));
         }
-        if let Some(pitch) = args.aim {
-            app.insert_resource(items::AimHold(pitch));
+        if let Some((pitch, fire)) = args.aim {
+            app.insert_resource(items::AimHold(pitch, fire));
         }
         if !args.give.is_empty() {
             app.insert_resource(items::Give(args.give.clone()));
@@ -565,7 +571,7 @@ fn main() {
         )
         .add_plugins((FreeCameraPlugin, bevy::diagnostic::FrameTimeDiagnosticsPlugin::default()))
         .insert_resource(Level { layouts, grass: args.grass, foliage: args.foliage, aerial: args.aerial, fly: args.fly || args.aerial, camera: args.camera, scenes: vec![] })
-        .add_plugins((materials::MaterialsPlugin { export: args.export.clone() }, mipmaps::MipmapsPlugin, tonemap::TonemapPlugin, bloom::BloomPlugin, screen_effects::ScreenEffectsPlugin, sense_view::SenseViewPlugin, dof::DofPlugin, circle_dof::CircleDofPlugin, face::FacePlugin, ssao::SsaoPlugin, killer_fade::KillerFadePlugin, spline_meshes::SplineMeshPlugin, particles::ParticlesPlugin))
+        .add_plugins((materials::MaterialsPlugin { export: args.export.clone() }, mipmaps::MipmapsPlugin, tonemap::TonemapPlugin, bloom::BloomPlugin, screen_effects::ScreenEffectsPlugin, sense_view::SenseViewPlugin, dof::DofPlugin, circle_dof::CircleDofPlugin, face::FacePlugin, ssao::SsaoPlugin, killer_fade::KillerFadePlugin, spline_meshes::SplineMeshPlugin, particles::ParticlesPlugin, decals::DecalPlugin))
         .insert_resource(ExportRoot(args.export.clone()))
         .add_plugins(props::PropsPlugin { seed, near_car: args.near_car && !(args.fly || args.aerial) })
         .add_plugins(lighting::LightingPlugin { flashlight: args.flashlight, unlit: args.unlit })
