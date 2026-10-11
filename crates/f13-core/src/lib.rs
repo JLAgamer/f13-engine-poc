@@ -8,6 +8,7 @@ pub mod color_grading;
 pub mod combat;
 pub mod counselor;
 pub mod curve;
+pub mod debris_px;
 pub mod dodge;
 pub mod dynamic_camera;
 pub mod fear;

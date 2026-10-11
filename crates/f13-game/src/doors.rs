@@ -165,10 +165,10 @@ pub struct Door {
 /// applied at the point on its bounding sphere toward the origin (fractureChunk: so no spin). Its mass:
 /// (hull volume x density)^0.5 (DestructibleScene::tasked_beforeTick: massScale 1, scaledMassExponent 0.5, the module's
 /// defaults; density PhysicalMaterial Density 1 x 0.001 kg/cm³ from DestructibleComponent's p3BodyDescTemplate.density
-/// 0x141e43f08). Then PhysX: gravity, linear damping 0.01 (FBodyInstance's), angular 0. PLACEHOLDER: PhysX's contact
-/// solver (a chunk's centroid traced against the static world, bouncing with the default material's restitution 0.3
-/// and friction 0.7 taken off its sliding speed), the chunk's convex hull from its render vertices (APEX's cooked hulls
-/// aren't exported) and its centroid the hull bounds' centre.
+/// 0x141e43f08). Then each chunk is a PhysX rigid body (f13-core debris_px: PhysX3_x64.dll's step, linear damping
+/// 0.01 and angular 0 from FBodyInstance, friction 0.7 and restitution 0.3) against the static world, in UE's substeps.
+/// PLACEHOLDER: the contact generation (debris_px's), no chunk-chunk contacts, the chunk's convex hull from its render
+/// vertices (APEX's cooked hulls aren't exported) and the impulse's centroid the hull bounds' centre.
 #[derive(Event, Clone, Copy, Debug)]
 pub struct BreakApart {
     pub piece: Entity,
@@ -196,16 +196,19 @@ struct Debris {
     lifespan: f32,
 }
 
-/// One freed chunk: its velocity (world, m/s) and where its centroid is (world).
+/// One freed chunk: its rigid body (f13-core debris_px, PhysX's step) and its centre of mass in its mesh's space
+/// (scaled to the world's size).
 #[derive(Component)]
 struct Chunk {
-    velocity: Vec3,
-    centroid: Vec3,
+    body: f13_core::debris_px::Body,
+    com: Vec3,
+    scale: Vec3,
 }
 
-/// A chunk's shape in its mesh's space (m): its hull bounds and volume (cm³).
-#[derive(Clone, Copy, Debug)]
+/// A chunk's shape in its mesh's space (m): its points, hull bounds and volume (cm³).
+#[derive(Clone, Debug)]
 pub struct ChunkShape {
+    pub points: Vec<Vec3>,
     pub min: Vec3,
     pub max: Vec3,
     pub volume_cm3: f32,
@@ -241,7 +244,7 @@ pub fn chunk_shapes(path: &std::path::Path) -> HashMap<String, ChunkShape> {
             let hull = f13_core::collision::convex_hull(&p);
             let volume = hull.iter().map(|t| t.a.dot(t.b.cross(t.c))).sum::<f32>().abs() / 6.0;
             let (min, max) = p.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
-            (name, ChunkShape { min, max, volume_cm3: volume * 1.0e6 })
+            (name, ChunkShape { points: p, min, max, volume_cm3: volume * 1.0e6 })
         })
         .collect()
 }
@@ -250,15 +253,18 @@ pub fn chunk_shapes(path: &std::path::Path) -> HashMap<String, ChunkShape> {
 #[derive(Resource, Default)]
 struct ChunkShapes(HashMap<String, std::sync::Arc<HashMap<String, ChunkShape>>>);
 
-/// UE's default gravity (cm/s² / 100) and the chunks' linear damping (FBodyInstance's LinearDamping 0.01, constructor
-/// 0x1415ee0ad).
-const GRAVITY: f32 = 9.8;
-const LINEAR_DAMPING: f32 = 0.01;
-/// The default physical material's (UPhysicalMaterial's constructor 0x1416148b0): Restitution 0.3, Friction 0.7,
-/// Density 1 (g/cm³; x 0.001 kg/cm³ for APEX).
-const RESTITUTION: f32 = 0.3;
-const FRICTION: f32 = 0.7;
+/// The default physical material's (UPhysicalMaterial's constructor 0x1416148b0) Density 1 g/cm³: x 0.001 kg/cm³ for
+/// APEX. (Its Friction 0.7 and Restitution 0.3, averaged with the world's, and the chunks' damping are the step's:
+/// f13-core debris_px Params.)
 const DENSITY_KG_PER_CM3: f32 = 0.001;
+/// UE's substeps (DefaultEngine.ini PhysicsSettings: MaxSubstepDeltaTime 0.05, MaxSubsteps 4).
+const SUBSTEP_DT: f32 = 0.05;
+const MAX_SUBSTEPS: u32 = 4;
+
+/// A chunk's APEX mass (kg): (hull volume x density)^0.5 (see [`BreakApart`]).
+fn chunk_mass(volume_cm3: f32) -> f32 {
+    (volume_cm3 * DENSITY_KG_PER_CM3).max(1e-6).sqrt()
+}
 
 pub struct DebrisPlugin;
 
@@ -274,7 +280,7 @@ pub fn chunk_velocity(centroid: Vec3, reach: f32, volume_cm3: f32, origin: Vec3,
     // damageChunk: the chunk's distance from the origin (to its bounding sphere), the fraction (R - d) / R.
     let d = (centroid.distance(origin) - reach).max(0.0);
     let fraction = if radius > 0.0 { ((radius - d) / radius).clamp(0.0, 1.0) } else { 1.0 };
-    let mass = (volume_cm3 * DENSITY_KG_PER_CM3).max(1e-6).sqrt();
+    let mass = chunk_mass(volume_cm3);
     // Impulse in kg cm/s over kg: cm/s; to m/s.
     (centroid - origin).normalize_or_zero() * fraction * force / mass / 100.0
 }
@@ -330,21 +336,28 @@ fn fly(
 ) {
     let dt = time.delta_secs();
     let (world, _) = collision.with(&dynamic);
+    let params = f13_core::debris_px::Params::default();
+    // UE's substepping: the frame's time (at most four substeps' worth) in equal substeps of at most 0.05 s.
+    let used = dt.min(MAX_SUBSTEPS as f32 * SUBSTEP_DT);
+    let n = ((used / SUBSTEP_DT).ceil() as u32).clamp(1, MAX_SUBSTEPS);
     for (e, mut d, g, pending) in &mut debris {
         d.t += dt;
         if d.t > d.lifespan {
             commands.entity(e).despawn();
             continue;
         }
-        // Free the chunks once the scene has them: each its velocity from the blow.
+        // Free the chunks once the scene has them: each a body with its velocity from the blow.
         if let Some(p) = pending {
             let mut freed = 0;
+            let (scale, rot, _) = g.to_scale_rotation_translation();
             for c in children.iter_descendants(e) {
                 let Some(shape) = names.get(c).ok().and_then(|n| p.chunks.get(n.as_str())) else { continue };
                 let centroid = g.transform_point(shape.centre());
-                let reach = shape.radius() * g.scale().max_element();
-                let velocity = chunk_velocity(centroid, reach, shape.volume_cm3, p.origin, p.radius, p.force);
-                commands.entity(c).insert(Chunk { velocity, centroid });
+                let reach = shape.radius() * scale.max_element();
+                let points: Vec<Vec3> = shape.points.iter().map(|q| *q * scale).collect();
+                let Some((mut body, com)) = f13_core::debris_px::Body::new(&points, chunk_mass(shape.volume_cm3), g.translation(), rot) else { continue };
+                body.v = chunk_velocity(centroid, reach, shape.volume_cm3, p.origin, p.radius, p.force);
+                commands.entity(c).insert(Chunk { body, com, scale });
                 freed += 1;
             }
             if freed > 0 {
@@ -354,22 +367,17 @@ fn fly(
         }
         for c in children.iter_descendants(e) {
             let Ok((mut xf, Some(mut ch))) = chunks.get_mut(c) else { continue };
-            // Gravity and PhysX's linear damping, then the move, stopped and bounced at the static world.
-            ch.velocity += Vec3::NEG_Y * GRAVITY * dt;
-            ch.velocity *= (1.0 - LINEAR_DAMPING * dt).max(0.0);
-            let from = ch.centroid;
-            let mut to = from + ch.velocity * dt;
-            if let Some((t, n)) = f13_core::collision::segment_hit_normal(&world, from, to, 0.25).filter(|(_, n)| n.dot(ch.velocity) < 0.0) {
-                to = from + (to - from) * t + n * 0.005;
-                let vn = n * ch.velocity.dot(n);
-                let vt = ch.velocity - vn;
-                ch.velocity = vt * (1.0 - FRICTION).max(0.0) - vn * RESTITUTION;
+            if ch.body.asleep {
+                continue;
             }
-            let moved = to - from;
-            ch.centroid = to;
-            // Into the joint's parent's space.
-            let local = parents.get(c).ok().and_then(|p| globals.get(p.parent()).ok()).map_or(moved, |pg| pg.affine().inverse().transform_vector3(moved));
-            xf.translation += local;
+            for _ in 0..n {
+                f13_core::debris_px::step(&mut ch.body, &world, &params, used / n as f32);
+            }
+            // The joint's world pose: mesh points x scale about the centre of mass, turned and placed as the body.
+            let m = Mat3::from_quat(ch.body.rot) * Mat3::from_diagonal(ch.scale);
+            let wanted = bevy::math::Affine3A::from_mat3_translation(m, ch.body.pos - Mat3::from_quat(ch.body.rot) * ch.com);
+            let parent = parents.get(c).ok().and_then(|p| globals.get(p.parent()).ok()).map_or(bevy::math::Affine3A::IDENTITY, |pg| pg.affine());
+            *xf = Transform::from_matrix((parent.inverse() * wanted).into());
         }
     }
 }
@@ -520,6 +528,38 @@ pub fn swing_doors(time: Res<Time>, mut doors: Query<&mut Door>, mut pivots: Que
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The door broken onto a floor: every chunk flies, lands and settles on it (none through it, none still moving).
+    #[test]
+    fn door_chunks_settle() {
+        let Some(root) = std::env::var_os("F13_EXPORT").map(std::path::PathBuf::from) else { return };
+        let path = root.join("SummerCamp/Content/Props/Manmade/Door/S_Door_HigginsHaven_Door_01_b_DM.glb");
+        if !path.exists() {
+            return;
+        }
+        use f13_core::collision::{Tri, TriList};
+        let (a, b, c, d) = (Vec3::new(-500.0, 0.0, -500.0), Vec3::new(500.0, 0.0, -500.0), Vec3::new(500.0, 0.0, 500.0), Vec3::new(-500.0, 0.0, 500.0));
+        let floor = TriList::new(vec![Tri::new(a, d, c).unwrap(), Tri::new(a, c, b).unwrap()]);
+        let params = f13_core::debris_px::Params::default();
+        let origin = Vec3::new(0.0, 1.0, -0.05);
+        for shape in chunk_shapes(&path).values() {
+            let (mut body, _) = f13_core::debris_px::Body::new(&shape.points, chunk_mass(shape.volume_cm3), Vec3::ZERO, Quat::IDENTITY).unwrap();
+            body.v = chunk_velocity(shape.centre(), shape.radius(), shape.volume_cm3, origin, 30.0, 5000.0);
+            // APEX's square-root mass scaling sends the small splinters off at well over 100 m/s (their mass a tenth
+            // of a kilogram); without CCD (bUseCCD off) PhysX lets those pass through a thin floor too. The rest land.
+            let fast = body.v.length() > 40.0;
+            for _ in 0..1200 {
+                f13_core::debris_px::step(&mut body, &floor, &params, 1.0 / 60.0);
+            }
+            assert!(body.pos.is_finite() && body.v.is_finite(), "{:?} {:?}", body.pos, body.v);
+            if fast {
+                continue;
+            }
+            let lowest = body.points.iter().map(|q| (body.pos + body.rot * *q).y).fold(f32::MAX, f32::min);
+            assert!(lowest > -0.05 && lowest < 0.05, "lowest point {lowest} at {:?}", body.pos);
+            assert!(body.asleep || body.v.length() < 0.1, "still moving {:?}", body.v);
+        }
+    }
 
     /// The Higgins Haven door's heavy destruction mesh, when `F13_EXPORT` points at an export (skipped otherwise):
     /// fourteen chunks (Part00..13, the Root joint has no vertices), and the break's speeds.
