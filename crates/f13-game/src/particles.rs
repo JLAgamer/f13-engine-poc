@@ -329,6 +329,62 @@ struct EmitterState {
     distortion: Option<Handle<ParticleMaterial>>,
 }
 
+/// The view a sprite faces: the camera's place and axes (Bevy space).
+struct SpriteView {
+    pos: Vec3,
+    right: Vec3,
+    up: Vec3,
+    fwd: Vec3,
+}
+
+/// A sprite particle's quad (world space): its centre (with its orbit), size x the component's scale, the emitter's
+/// screen alignment (PSA_Velocity along its velocity; EPAL_ROTATE_Z axis lock upright, turned to the camera; else
+/// facing the view), its rotation, its sub-image's cell, colour and dynamic parameter.
+fn sprite_quad(e: &EmitterState, p: &Particle, scale: Vec3, view: &SpriteView, lock_z: bool) -> Quad {
+    let def = &e.def;
+    let [cols, rows] = [def.sub_images[0].max(1), def.sub_images[1].max(1)];
+    let orbit = if p.orbit_offset != Vec3::ZERO {
+        let r = p.orbit_rotation * TAU;
+        Quat::from_euler(EulerRot::ZYX, r.z, r.y, r.x) * p.orbit_offset
+    } else {
+        Vec3::ZERO
+    };
+    let center = to_bevy(p.location + orbit);
+    let size = Vec2::new(p.size.x * scale.x, p.size.y * scale.y) * 0.01;
+    let (right, up) = match def.screen_alignment.as_str() {
+        "PSA_Velocity" => {
+            let v = to_bevy(p.velocity).normalize_or(view.up);
+            let r = v.cross(view.pos - center).normalize_or(view.right);
+            (r, v)
+        }
+        _ if lock_z => {
+            // EPAL_ROTATE_Z: upright, turned about the world's up to face the camera.
+            let up = Vec3::Y;
+            let r = (view.pos - center).cross(up).normalize_or(view.right);
+            (r, up)
+        }
+        _ => (view.right, view.up),
+    };
+    let (sin, cos) = p.rotation.sin_cos();
+    let (r, u) = (right * cos + up * sin, up * cos - right * sin);
+    let image = p.sub_image.max(0.0).floor() as u32 % (cols * rows);
+    let cell = Vec2::new((image % cols) as f32, (image / cols) as f32);
+    let grid = Vec2::new(cols as f32, rows as f32);
+    let corners = [Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0), Vec2::new(0.0, 1.0)];
+    // ParticlePositionAndSize: the centre and half the larger side.
+    let dyn_value = if e.sphere { center.extend(0.5 * size.max_element()).to_array() } else { p.dynamic };
+    Quad {
+        positions: corners.map(|c| {
+            let o = c + e.pivot;
+            (center + r * (o.x * size.x) - u * (o.y * size.y)).to_array()
+        }),
+        uvs: corners.map(|c| ((cell + c) / grid).to_array()),
+        colors: [p.color.to_array(); 4],
+        dynamic: [dyn_value; 4],
+        depth: (center - view.pos).dot(view.fwd),
+    }
+}
+
 /// One camera-facing quad, world space (Bevy), and its distance along the view.
 struct Quad {
     positions: [[f32; 3]; 4],
@@ -342,7 +398,6 @@ struct Quad {
 struct Batch {
     material: Handle<ParticleMaterial>,
     distortion: Option<Handle<ParticleMaterial>>,
-    quads: Vec<Quad>,
 }
 
 /// A placed ParticleSystemComponent.
@@ -2022,6 +2077,22 @@ fn draw(
             }
         }
     }
+    // The batched emitters' quads (world space), built in parallel across the systems.
+    let view = SpriteView { pos: cam_pos, right: cam_right, up: cam_up, fwd: cam_fwd };
+    let mut built: bevy::utils::Parallel<Vec<(AssetId<ParticleMaterial>, Quad)>> = bevy::utils::Parallel::default();
+    systems.par_iter().for_each(|s| {
+        let origin = to_bevy(s.location);
+        if s.hidden || (s.max_draw > 0.0 && origin.distance(cam_pos) > s.max_draw) {
+            return;
+        }
+        let mut out = built.borrow_local_mut();
+        for e in s.emitters.iter().filter(|e| e.drawn && e.mesh_scene.is_none() && e.chunked.is_none() && e.def.ribbon.is_none()) {
+            let Some(m) = e.material.as_ref().filter(|m| users.get(&m.id()).copied().unwrap_or(0) > 1) else { continue };
+            let lock_z = e.def.modules.iter().any(|m| matches!(m, Module::AxisLock(a) if a == "EPAL_ROTATE_Z"));
+            let count = e.particles.len().min(e.def.max_draw_count.map_or(usize::MAX, |m| m as usize));
+            out.extend(e.particles[..count].iter().map(|p| (m.id(), sprite_quad(e, p, s.scale, &view, lock_z))));
+        }
+    });
     let mut batches: HashMap<AssetId<ParticleMaterial>, Batch> = HashMap::new();
     for mut s in &mut systems {
         let s = &mut *s;
@@ -2150,77 +2221,32 @@ fn draw(
                 ribbon_mesh(e, ribbon, s.scale, origin, cam_pos, &mut meshes);
                 continue;
             }
-            // MaxDrawCount: the first so many.
-            let mut order: Vec<usize> = (0..e.particles.len().min(def.max_draw_count.map_or(usize::MAX, |m| m as usize))).collect();
-            // Translucent sprites back to front (PSORTMODE_ViewProjDepth / DistanceToView).
-            order.sort_by(|&a, &b| {
-                let da = (to_bevy(e.particles[a].location) - cam_pos).dot(cam_fwd);
-                let db = (to_bevy(e.particles[b].location) - cam_pos).dot(cam_fwd);
-                db.total_cmp(&da)
-            });
-            let n = order.len();
+            // A batched emitter's quads were built by the parallel pass above; its batch is made here.
+            if let Some(m) = e.material.as_ref().filter(|_| batched) {
+                batches.entry(m.id()).or_insert_with(|| Batch { material: m.clone(), distortion: e.distortion.clone() });
+                continue;
+            }
+            // MaxDrawCount: the first so many, translucent sprites back to front (PSORTMODE_ViewProjDepth /
+            // DistanceToView).
+            let count = e.particles.len().min(def.max_draw_count.map_or(usize::MAX, |m| m as usize));
+            let mut keyed: Vec<(f32, usize)> = (0..count).map(|i| ((to_bevy(e.particles[i].location) - cam_pos).dot(cam_fwd), i)).collect();
+            keyed.sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
+            let n = keyed.len();
             let mut positions = Vec::with_capacity(n * 4);
             let mut uvs = Vec::with_capacity(n * 4);
             let mut colors = Vec::with_capacity(n * 4);
             let mut dynamic = Vec::with_capacity(n * 4);
             let mut indices = Vec::with_capacity(n * 6);
-            let [cols, rows] = [def.sub_images[0].max(1), def.sub_images[1].max(1)];
+            let view = SpriteView { pos: cam_pos, right: cam_right, up: cam_up, fwd: cam_fwd };
             let lock_z = def.modules.iter().any(|m| matches!(m, Module::AxisLock(a) if a == "EPAL_ROTATE_Z"));
-            for i in order {
-                let p = &e.particles[i];
-                let orbit = if p.orbit_offset != Vec3::ZERO {
-                    let r = p.orbit_rotation * TAU;
-                    Quat::from_euler(EulerRot::ZYX, r.z, r.y, r.x) * p.orbit_offset
-                } else {
-                    Vec3::ZERO
-                };
-                let center = to_bevy(p.location + orbit);
-                let size = Vec2::new(p.size.x * s.scale.x, p.size.y * s.scale.y) * 0.01;
-                let (right, up) = match def.screen_alignment.as_str() {
-                    "PSA_Velocity" => {
-                        let v = to_bevy(p.velocity).normalize_or(cam_up);
-                        let r = v.cross(cam_pos - center).normalize_or(cam_right);
-                        (r, v)
-                    }
-                    _ if lock_z => {
-                        // EPAL_ROTATE_Z: upright, turned about the world's up to face the camera.
-                        let up = Vec3::Y;
-                        let r = (cam_pos - center).cross(up).normalize_or(cam_right);
-                        (r, up)
-                    }
-                    _ => (cam_right, cam_up),
-                };
-                let (sin, cos) = p.rotation.sin_cos();
-                let (r, u) = (right * cos + up * sin, up * cos - right * sin);
-                let image = p.sub_image.max(0.0).floor() as u32 % (cols * rows);
-                let cell = Vec2::new((image % cols) as f32, (image / cols) as f32);
+            for (_, i) in keyed {
+                let q = sprite_quad(e, &e.particles[i], s.scale, &view, lock_z);
                 let base = positions.len() as u32;
-                for corner in [Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0), Vec2::new(0.0, 1.0)] {
-                    let o = corner + e.pivot;
-                    let pos = center + r * (o.x * size.x) - u * (o.y * size.y);
-                    positions.push((pos - origin).to_array());
-                    uvs.push(((cell + corner) / Vec2::new(cols as f32, rows as f32)).to_array());
-                    colors.push(p.color.to_array());
-                    // ParticlePositionAndSize: the centre and half the larger side.
-                    dynamic.push(if e.sphere { center.extend(0.5 * size.max_element()).to_array() } else { p.dynamic });
-                }
+                positions.extend(q.positions.map(|c| (Vec3::from(c) - origin).to_array()));
+                uvs.extend_from_slice(&q.uvs);
+                colors.extend_from_slice(&q.colors);
+                dynamic.extend_from_slice(&q.dynamic);
                 indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
-            }
-            if let Some(m) = e.material.as_ref().filter(|_| batched) {
-                let b = batches.entry(m.id()).or_insert_with(|| Batch { material: m.clone(), distortion: e.distortion.clone(), quads: vec![] });
-                for q in 0..positions.len() / 4 {
-                    let at = |i: usize| Vec3::from(positions[q * 4 + i]) + origin;
-                    let corners = [at(0), at(1), at(2), at(3)];
-                    let centre = (corners[0] + corners[2]) * 0.5;
-                    b.quads.push(Quad {
-                        positions: corners.map(|c| c.to_array()),
-                        uvs: [uvs[q * 4], uvs[q * 4 + 1], uvs[q * 4 + 2], uvs[q * 4 + 3]],
-                        colors: [colors[q * 4], colors[q * 4 + 1], colors[q * 4 + 2], colors[q * 4 + 3]],
-                        dynamic: [dynamic[q * 4], dynamic[q * 4 + 1], dynamic[q * 4 + 2], dynamic[q * 4 + 3]],
-                        depth: (centre - cam_pos).dot(cam_fwd),
-                    });
-                }
-                continue;
             }
             if let Some(mut mesh) = meshes.get_mut(&e.mesh) {
                 mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
@@ -2231,13 +2257,30 @@ fn draw(
             }
         }
     }
+    // Each batch's quads by (depth, thread, index) into the threads' lists, gathered after the sort (no copy of the
+    // quads themselves).
+    let locals: Vec<Vec<(AssetId<ParticleMaterial>, Quad)>> = built.iter_mut().map(std::mem::take).collect();
+    let mut keys: Vec<(AssetId<ParticleMaterial>, Vec<(f32, u32, u32)>)> = vec![];
+    for (t, list) in locals.iter().enumerate() {
+        for (i, (id, q)) in list.iter().enumerate() {
+            let k = match keys.iter().position(|k| k.0 == *id) {
+                Some(k) => k,
+                None => {
+                    keys.push((*id, vec![]));
+                    keys.len() - 1
+                }
+            };
+            keys[k].1.push((q.depth, t as u32, i as u32));
+        }
+    }
     // The batches, back to front; a batch with nothing to draw this frame hidden.
     let live: Vec<AssetId<ParticleMaterial>> = batches.keys().copied().collect();
-    for (id, mut b) in batches {
-        b.quads.sort_by(|a, c| c.depth.total_cmp(&a.depth));
-        let n = b.quads.len();
+    for (id, b) in batches {
+        let mut keyed = keys.iter_mut().find(|k| k.0 == id).map(|k| std::mem::take(&mut k.1)).unwrap_or_default();
+        keyed.sort_unstable_by(|a, c| c.0.total_cmp(&a.0));
+        let n = keyed.len();
         let (mut positions, mut uvs, mut colors, mut dynamic, mut indices) = (Vec::with_capacity(n * 4), Vec::with_capacity(n * 4), Vec::with_capacity(n * 4), Vec::with_capacity(n * 4), Vec::with_capacity(n * 6));
-        for (i, q) in b.quads.iter().enumerate() {
+        for (i, q) in keyed.iter().map(|k| &locals[k.1 as usize][k.2 as usize].1).enumerate() {
             let base = (i * 4) as u32;
             positions.extend_from_slice(&q.positions);
             uvs.extend_from_slice(&q.uvs);
