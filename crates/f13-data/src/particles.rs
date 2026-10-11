@@ -182,7 +182,9 @@ pub enum Module {
     /// MaxCollisions, CollisionCompletionOption (0 kill, 1 freeze, 2 halt collisions, 3 freeze translation, 4 freeze
     /// rotation, 5 freeze movement), DelayAmount, bOnlyVerticalNormalsDecrementCount, VerticalFudgeFactor and DirScalar
     /// (constructor 0x1415b95f0: 0.1 and 3.5).
-    Collision { damping: Dist, damping_rotation: Dist, max_collisions: Dist, completion: u8, delay: Dist, only_vertical: bool, vertical_fudge: f32, dir_scalar: f32 },
+    /// bDropDetail, bCollideOnlyIfVisible (the constructor 0x1415b95f0 sets both and bIgnoreSourceActor), MaxCollisionDistance
+    /// (1000).
+    Collision { damping: Dist, damping_rotation: Dist, max_collisions: Dist, completion: u8, delay: Dist, only_vertical: bool, vertical_fudge: f32, dir_scalar: f32, drop_detail: bool, only_if_visible: bool, max_distance: f32 },
     /// A module with no CPU effect (ParticleModuleAttractorPointGravity overrides only its GPU compile, vt +0x230).
     GpuOnly,
     /// A module f13-game doesn't run (its type).
@@ -456,6 +458,9 @@ impl System {
                         only_vertical: p["bOnlyVerticalNormalsDecrementCount"].as_bool().unwrap_or(false),
                         vertical_fudge: num(&p["VerticalFudgeFactor"], 0.1),
                         dir_scalar: num(&p["DirScalar"], 3.5),
+                        drop_detail: p["bDropDetail"].as_bool().unwrap_or(true),
+                        only_if_visible: p["bCollideOnlyIfVisible"].as_bool().unwrap_or(true),
+                        max_distance: num(&p["MaxCollisionDistance"], 1000.0),
                     },
                     "ParticleModuleMeshRotationRate" => Module::MeshRotationRate(dist(&p["StartRotationRate"], 3)),
                     "ParticleModuleSpawnPerUnit" => {

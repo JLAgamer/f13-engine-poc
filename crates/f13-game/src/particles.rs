@@ -124,6 +124,18 @@ const DELAY_COLLISIONS: u32 = 16;
 /// A line trace in Unreal space (cm): the hit's fraction of the way and its normal.
 type Trace<'a> = &'a dyn Fn(Vec3, Vec3) -> Option<(f32, Vec3)>;
 
+/// What ParticleModuleCollision's update reads besides its traces (Unreal space, cm): the players' view locations
+/// (the component's PlayerLocations; their LOD distance factors taken as 1, PLACEHOLDER), the world's bDropDetail,
+/// whether the system went unrendered for over 0.1 s (World time - LastRenderTime > 0x142dd3420), and the system's
+/// bounds (its particles' box, as the component's dynamic Bounds).
+struct Collider<'a> {
+    trace: Trace<'a>,
+    views: &'a [Vec3],
+    drop_detail: bool,
+    unrendered: bool,
+    bounds: Option<(Vec3, Vec3)>,
+}
+
 #[derive(Clone, Default)]
 struct Particle {
     /// Its state flags (FBaseParticle::Flags): STATE_Particle_Freeze, IgnoreCollisions, FreezeTranslation,
@@ -194,6 +206,8 @@ struct EmitterState {
     drawn: bool,
     /// Each ParticleModuleAttractorParticle's LastSelIndex (the module's own, in module order).
     attractor_last: [i32; 2],
+    /// ParticleModuleCollision's instance byte: the bounds check runs when it is 0, counting 0..30.
+    collision_check: u8,
 }
 
 /// A placed ParticleSystemComponent.
@@ -222,6 +236,8 @@ pub struct ParticleSystemInstance {
     hidden: bool,
     /// The transform it was last ticked at: local-space emitters (bUseLocalSpace) carry their particles with it.
     ticked_at: Option<(Vec3, Quat)>,
+    /// When it was last drawn in the view (game seconds: the component's LastRenderTime, -1000 until drawn).
+    last_render: f32,
 }
 
 fn rand(state: &mut u64) -> f32 {
@@ -646,7 +662,7 @@ impl ParticleAssets {
                 let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(md.file.clone()));
                 let n = def.max_draw_count.unwrap_or(500).min(32) as usize;
                 let entity = commands.spawn((Transform::default(), Visibility::Hidden)).id();
-                emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: Some((scene, n)), slots: vec![], lights: vec![], drawn: true, attractor_last: [0; 2] });
+                emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: Some((scene, n)), slots: vec![], lights: vec![], drawn: true, attractor_last: [0; 2], collision_check: 0 });
                 continue;
             }
             let Some((material, mode)) = def.material.as_deref().and_then(|m| self.mats.get(m, &self.root, assets, materials)) else {
@@ -654,7 +670,7 @@ impl ParticleAssets {
                 let named = system.emitters.iter().flat_map(|o| &o.modules).any(|m| matches!(m, Module::AttractorParticle { emitter, .. } if *emitter == def.name));
                 if named {
                     let entity = commands.spawn((Transform::default(), Visibility::Hidden)).id();
-                    emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: None, slots: vec![], lights: vec![], drawn: false, attractor_last: [0; 2] });
+                    emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: None, slots: vec![], lights: vec![], drawn: false, attractor_last: [0; 2], collision_check: 0 });
                 }
                 continue;
             };
@@ -680,12 +696,12 @@ impl ParticleAssets {
                 ))
                 .id();
             let pivot = def.modules.iter().find_map(|m| if let Module::PivotOffset(p) = m { Some(Vec2::from(*p)) } else { None }).unwrap_or(Vec2::ZERO) + Vec2::splat(-0.5);
-            emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: mode == 4, mesh_scene: None, slots: vec![], lights: light_pool(commands, def, name), drawn: true, attractor_last: [0; 2] });
+            emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: mode == 4, mesh_scene: None, slots: vec![], lights: light_pool(commands, def, name), drawn: true, attractor_last: [0; 2], collision_check: 0 });
         }
         if emitters.is_empty() {
             return None;
         }
-        let mut inst = ParticleSystemInstance { emitters, location, rotation, scale, max_draw, rng: self.seed, active, actor: actor.to_string(), level: String::new(), parent: None, follow: None, auto_destroy: false, hidden: false, ticked_at: None };
+        let mut inst = ParticleSystemInstance { emitters, location, rotation, scale, max_draw, rng: self.seed, active, actor: actor.to_string(), level: String::new(), parent: None, follow: None, auto_destroy: false, hidden: false, ticked_at: None, last_render: -1000.0 };
         // WarmupTime: ticked in 0.032 s steps (UParticleSystemComponent's default warmup step).
         let warmup = warmup.unwrap_or(system.warmup);
         let mut t = 0.0;
@@ -1052,6 +1068,7 @@ fn simulate(
     mut systems: Query<&mut ParticleSystemInstance>,
     collision: Option<Res<crate::collision::WorldCollision>>,
     dynamic: Option<Res<crate::collision::DynamicColliders>>,
+    cameras: Query<&GlobalTransform, (With<Camera3d>, With<crate::lighting::Lit>)>,
 ) {
     let dt = (time.delta_secs() * virtual_time.relative_speed()).min(0.1);
     if dt <= 0.0 {
@@ -1064,12 +1081,23 @@ fn simulate(
         let (t, n) = f13_core::collision::segment_hit_normal(w, to_bevy(from), to_bevy(to), 2.0)?;
         Some((t, Vec3::new(n.x, n.z, n.y)))
     };
+    // The players' view locations, and the world's bDropDetail: PLACEHOLDER, UE 4.18 UWorld::Tick's rule (DeltaSeconds
+    // > 1 / clamp(MinDesiredFrameRate, 1, 100); BaseEngine.ini 35), not traced in the binary.
+    let views: Vec<Vec3> = cameras.iter().map(|c| to_unreal_point(c.translation())).collect();
+    let drop_detail = dt > 1.0 / 35.0;
+    let now = virtual_time.elapsed_secs();
     for mut s in &mut systems {
-        tick(&mut s, dt, Some(&trace));
+        let unrendered = now - s.last_render > 0.1;
+        tick(&mut s, dt, Some((&trace, views.as_slice(), drop_detail, unrendered)));
     }
 }
 
-fn tick(s: &mut ParticleSystemInstance, dt: f32, trace: Option<Trace>) {
+/// A Bevy point to Unreal's space (cm).
+fn to_unreal_point(p: Vec3) -> Vec3 {
+    Vec3::new(p.x, p.z, p.y) * 100.0
+}
+
+fn tick(s: &mut ParticleSystemInstance, dt: f32, world: Option<(Trace, &[Vec3], bool, bool)>) {
     let (location, rotation, scale, active) = (s.location, s.rotation, s.scale, s.active);
     // The component's move since its last tick (ParticleModuleSourceMovement).
     let moved = s.ticked_at.map_or(Vec3::ZERO, |(l, _)| location - l);
@@ -1097,9 +1125,11 @@ fn tick(s: &mut ParticleSystemInstance, dt: f32, trace: Option<Trace>) {
         }
     }
     s.ticked_at = Some((location, rotation));
+    let bounds = s.emitters.iter().flat_map(|e| e.particles.iter()).fold(None, |b: Option<(Vec3, Vec3)>, p| Some(b.map_or((p.location, p.location), |(lo, hi)| (lo.min(p.location), hi.max(p.location)))));
+    let collider = world.map(|(trace, views, drop_detail, unrendered)| Collider { trace, views, drop_detail, unrendered, bounds });
     let mut rng = s.rng;
     for e in &mut s.emitters {
-        tick_emitter(e, dt, location, rotation, scale, active, &mut rng, &sources, moved, trace);
+        tick_emitter(e, dt, location, rotation, scale, active, &mut rng, &sources, moved, collider.as_ref());
     }
     s.rng = rng;
 }
@@ -1115,7 +1145,7 @@ fn tick_emitter(
     rng: &mut u64,
     sources: &HashMap<String, Vec<(Vec3, Vec3, f32)>>,
     moved: Vec3,
-    trace: Option<Trace>,
+    collider: Option<&Collider>,
 ) {
     let def = &e.def;
     // Tick_EmitterTimeSetup.
@@ -1168,11 +1198,30 @@ fn tick_emitter(
                     attract_particle(p, k, src, range, strength, *by_distance, *affect_base, *inherit, dt);
                 }
             }
-            Module::Collision { completion, only_vertical, vertical_fudge, dir_scalar, .. } => {
-                if let Some(trace) = trace {
-                    for p in &mut e.particles {
-                        collide(p, dt, scale, *completion, *only_vertical, *vertical_fudge, *dir_scalar, trace);
+            Module::Collision { completion, only_vertical, vertical_fudge, dir_scalar, drop_detail, only_if_visible, max_distance, .. } => {
+                // UParticleModuleCollision::Update (0x1415e4920)'s culls: none with bDropDetail on a dropping world; with
+                // bCollideOnlyIfVisible on a system unrendered for 0.1 s, or (a MaxCollisionDistance under 2097152 and 8
+                // or more particles, every 31st update) bounds no view comes within MaxCollisionDistance x 1.075 of,
+                // every particle not frozen stops colliding for good (IgnoreCollisions).
+                let Some(c) = collider.filter(|c| !(*drop_detail && c.drop_detail)) else { continue };
+                let culls = *max_distance < 2_097_152.0;
+                let mut ignore = *only_if_visible && c.unrendered;
+                if !ignore && culls && e.particles.len() > 7 {
+                    if e.collision_check == 0 {
+                        let r = Vec3::splat(*max_distance * 1.075);
+                        ignore = c.bounds.is_some_and(|(lo, hi)| !c.views.iter().any(|v| v.cmpgt(lo - r).all() && v.cmplt(hi + r).all()));
                     }
+                    e.collision_check = if e.collision_check >= 30 { 0 } else { e.collision_check + 1 };
+                }
+                if ignore {
+                    for p in e.particles.iter_mut().filter(|p| p.state & FREEZE == 0) {
+                        p.state |= IGNORE_COLLISIONS;
+                    }
+                    continue;
+                }
+                let views = culls.then_some((c.views, *max_distance));
+                for p in &mut e.particles {
+                    collide(p, dt, scale, *completion, *only_vertical, *vertical_fudge, *dir_scalar, c.trace, views);
                 }
             }
             _ => {
@@ -1265,10 +1314,12 @@ fn tick_emitter(
 /// bOnlyVerticalNormalsDecrementCount, only hits on a normal within VerticalFudgeFactor of vertical); out of them it
 /// takes the completion option there (killed, frozen, collisions halted, translation, rotation or both frozen); else
 /// its velocity and base velocity mirror on the normal x the damping factor (per axis) and its rotation rate scales by
-/// the rotation damping's X, at the hit. The view-distance cull (MaxCollisionDistance with eight or more particles)
-/// and the physics impulses (ParticleMass) aren't run.
+/// the rotation damping's X, at the hit. With `views` (MaxCollisionDistance under 2097152), a particle whose trace end
+/// is no view's MaxCollisionDistance away (x the view's LOD distance factor, 1 here) stops colliding for good instead.
+/// The physics impulses (bApplyPhysics: ParticleMass at its RelativeTime along -its velocity, on a hit component that
+/// simulates) have nothing to act on: the traces here hit only the static world.
 #[allow(clippy::too_many_arguments)]
-fn collide(p: &mut Particle, dt: f32, scale: Vec3, completion: u8, only_vertical: bool, vertical_fudge: f32, dir_scalar: f32, trace: Trace) {
+fn collide(p: &mut Particle, dt: f32, scale: Vec3, completion: u8, only_vertical: bool, vertical_fudge: f32, dir_scalar: f32, trace: Trace, views: Option<(&[Vec3], f32)>) {
     if p.state & (FREEZE | IGNORE_COLLISIONS | FREEZE_TRANSLATION | FREEZE_ROTATION) != 0 {
         return;
     }
@@ -1282,6 +1333,12 @@ fn collide(p: &mut Particle, dt: f32, scale: Vec3, completion: u8, only_vertical
     let to = from + p.velocity * dt;
     let dir = (to - from).normalize_or_zero();
     let end = to + dir * (scale * p.size) / dir_scalar.max(1e-3);
+    if let Some((views, max)) = views {
+        if !views.iter().any(|v| v.distance_squared(end) < max * max) {
+            p.state |= IGNORE_COLLISIONS;
+            return;
+        }
+    }
     let Some((t, n)) = trace(from, end) else { return };
     let hit = from + (end - from) * t;
     let vertical = n.abs().max_element() <= 1e-4 || n.z.abs() + vertical_fudge >= 1.0;
@@ -1592,20 +1649,26 @@ fn spawn(def: &Emitter, spawn_time: f32, emitter_time: f32, location: Vec3, rota
 /// The emitters' quads, facing the camera.
 fn draw(
     mut commands: Commands,
-    camera: Query<&GlobalTransform, (With<Camera3d>, With<crate::lighting::Lit>)>,
+    camera: Query<(&GlobalTransform, &bevy::camera::primitives::Frustum), (With<Camera3d>, With<crate::lighting::Lit>)>,
+    virtual_time: Res<Time<Virtual>>,
     mut systems: Query<&mut ParticleSystemInstance>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut vis: Query<&mut Visibility>,
     mut slot_xf: Query<&mut Transform>,
     mut point_lights: Query<&mut PointLight>,
 ) {
-    let Some(cam) = camera.iter().next() else { return };
+    let Some((cam, frustum)) = camera.iter().next() else { return };
     let cam_pos = cam.translation();
     let (cam_right, cam_up, cam_fwd) = (cam.right().as_vec3(), cam.up().as_vec3(), cam.forward().as_vec3());
     for mut s in &mut systems {
         let s = &mut *s;
         let origin = to_bevy(s.location);
         let near = !s.hidden && (s.max_draw <= 0.0 || origin.distance(cam_pos) <= s.max_draw);
+        // Its LastRenderTime (ParticleModuleCollision's bCollideOnlyIfVisible): drawn this frame, within its draw
+        // distance and its particles' box in the view's frustum (the engine's occlusion culling not modelled).
+        if near && in_frustum(s, frustum) {
+            s.last_render = virtual_time.elapsed_secs();
+        }
         for e in s.emitters.iter_mut() {
             if let Some((scene, cap)) = &e.mesh_scene {
                 // A mesh emitter: its first MaxDrawCount particles, each its mesh at FDynamicMeshEmitterData::
@@ -1757,4 +1820,13 @@ fn draw(
             }
         }
     }
+}
+
+/// Whether a system's particles' box (Bevy space) meets the view's frustum.
+fn in_frustum(s: &ParticleSystemInstance, frustum: &bevy::camera::primitives::Frustum) -> bool {
+    let mut points = s.emitters.iter().filter(|e| e.drawn).flat_map(|e| e.particles.iter()).map(|p| to_bevy(p.location));
+    let Some(first) = points.next() else { return false };
+    let (lo, hi) = points.fold((first, first), |(lo, hi), p| (lo.min(p), hi.max(p)));
+    let aabb = bevy::camera::primitives::Aabb::from_min_max(lo, hi);
+    frustum.intersects_obb(&aabb, &bevy::math::Affine3A::IDENTITY, true, true)
 }

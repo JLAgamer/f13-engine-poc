@@ -38,7 +38,7 @@ Moved from Milestone 1 (not tied to gameplay):
       intro's Savini embers and eye glows).
       Remaining: the translucency
       lighting volume the lit ones read (a stand-in now: MODLOG "Particle materials"), particle lights' high-quality (shadowed) variant,
-      collision's view-distance cull and physics impulses, the thrown knife's ribbon trail
+      the thrown knife's ribbon trail
       (TracerTrail: its base pass is a glow at 0.025 opacity, the rest is refraction, which no material has yet),
       the GPU emitters' modules (CollisionGPU, the event generator and receiver)
 - [ ] Counselor model, remaining: the eye look against a capture of the game (it rolls the eyes 90 degrees from their bind: MODLOG
