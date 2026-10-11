@@ -9,7 +9,7 @@
     pbr_functions::{apply_pbr_lighting, calculate_view},
     mesh_functions::get_world_from_local,
     view_transformations::{position_world_to_clip, depth_ndc_to_view_z, position_world_to_view},
-    mesh_view_bindings::{globals, view},
+    mesh_view_bindings::{globals, view, view_transmission_texture, view_transmission_sampler},
     mesh_view_bindings as view_bindings,
     mesh_view_types,
     clustered_forward as clustering,
@@ -652,9 +652,72 @@ fn blood_at(in: VertexOutput, fuv: vec2<f32>) -> vec4<f32> {
     return vec4(emissive + volume_lit(in, diffuse), saturate(shape * p[12].z));
 }
 
+// The distortion pass (refraction): TDistortionMeshPS<FDistortMeshAccumulatePolicy> (each refracting material's own,
+// F13-decomp MODLOG "Particle refraction") writes its offset, TDistortionApplyScreenPS reads the scene colour there.
+// From the material's tangent-space normal and its refraction (IoR - 1, x its mask): the normal into view space
+// (the quad's tangent frame: +U, +V, facing), offset = view normal.xy x refraction x (P[0][0], P[0][0] x aspect) x
+// the view's size x 0.00023 x (1, -1) (DistortionParams: PLACEHOLDER, UE 4.18's (P[0][0], aspect, width, height):
+// the setter wasn't found in the binary), none where |view normal.xy x refraction|^2 < 1e-5; x saturate((the scene's
+// depth at the offset - the pixel's) / clamp(|RefractionDepthBias / 2|, 1, 50) - RefractionDepthBias) (cm); the
+// apply keeps the pixel where the offset leaves the view. Drawn in Bevy's transmissive pass (the opaque scene's
+// colour), each refracting particle on its own rather than summed into one offset buffer.
+fn distortion(in: VertexOutput, n: vec3<f32>, refraction: f32, depth_bias: f32) -> vec4<f32> {
+    let dpx = dpdx(in.world_position);
+    let dpy = dpdy(in.world_position);
+    let duvx = dpdx(in.uv);
+    let duvy = dpdy(in.uv);
+    let det = duvx.x * duvy.y - duvx.y * duvy.x;
+    let dpdu = (dpx * duvy.y - dpy * duvx.y) / det;
+    let dpdv = (dpy * duvx.x - dpx * duvy.x) / det;
+    let t = normalize(dpdu);
+    let b = normalize(dpdv);
+    var nrm = normalize(cross(b, t));
+    if dot(nrm, view.world_position - in.world_position) < 0.0 {
+        nrm = -nrm;
+    }
+    let wn = normalize(t * n.x + b * n.y + nrm * n.z);
+    let vn = normalize((view.view_from_world * vec4(wn, 0.0)).xyz);
+    let d = vn.xy * refraction;
+    if dot(d, d) - 0.00001 < 0.0 {
+        discard;
+    }
+    let size = view.viewport.zw;
+    let p00 = view.clip_from_view[0][0];
+    var off = d * vec2(p00, p00 * size.x / size.y) * size * vec2(0.00023, -0.00023);
+    let uv = (in.clip.xy - view.viewport.xy) / size;
+#ifdef DEPTH_PREPASS
+    let at = (uv + off) * size + view.viewport.xy;
+    let scene = -depth_ndc_to_view_z(prepass_depth(vec4(at, 0.0, 0.0), 0u)) * 100.0;
+    let pixel = -position_world_to_view(in.world_position).z * 100.0;
+    off = off * saturate((scene - pixel) / clamp(abs(depth_bias * -0.5), 1.0, 50.0) - depth_bias);
+#endif
+    var uv2 = uv + off;
+    if any(uv2 < vec2(0.0)) || any(uv2 > vec2(1.0)) {
+        uv2 = uv;
+    }
+    return vec4(textureSampleLevel(view_transmission_texture, view_transmission_sampler, uv2, 0.0).rgb, 1.0);
+}
+
+// M_Rain_Master's distortion pass (sprite s090): a = Normal1 (t0) .r at time x ScrollSpeed - uv x UV_MasterScale, b
+// at time x ScrollSpeed + uv x UV_MasterScale; k = (a + b - 1) x colour.a x NRM_Intensity; tangent normal (k, k, k);
+// refraction (IoR - 1) x k x Rain_MPC Rain.
+fn rain_distortion(in: VertexOutput) -> vec4<f32> {
+    let p = params.p;
+    let time = globals.time;
+    let base_uv = in.uv * p[6].z;
+    let a = textureSample(t0, s, time * p[6].y - base_uv).x;
+    let b = textureSample(t0, s, time * p[6].y + base_uv).x;
+    let k = (a + b - 1.0) * in.color.a * p[6].w;
+    return distortion(in, vec3(k), (p[10].z - 1.0) * k * p[15].x, p[10].w);
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let mode = u32(params.mode.x);
+    // The distortion passes: the scene's colour as it is (already exposed).
+    if mode == 30u {
+        return rain_distortion(in);
+    }
     var c: vec4<f32>;
     if mode == 1u {
         c = fire_01(in);

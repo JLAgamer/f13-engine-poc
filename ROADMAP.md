@@ -37,13 +37,14 @@ Moved from Milestone 1 (not tied to gameplay):
       campfire's and fireplace's flames, sparks and smoke, the candles, the lamps' flies, dust specks, the low fog, the
       intro's Savini embers and eye glows).
       Remaining: the thrown knife's ribbon trail
-      (TracerTrail: its base pass is a glow at 0.025 opacity, the rest is refraction, which no material has yet),
+      (TracerTrail: Cascade's ribbon emitter, not simulated here; its material's glow and refraction are read: MODLOG
+      "Particle refraction"),
       the GPU emitters' modules (CollisionGPU, the event generator and receiver)
 - [ ] Counselor model, remaining: the eye look against a capture of the game (it rolls the eyes 90 degrees from their bind: MODLOG
       "The eyes' look")
       (MODLOG "The counselor's face")
 - [ ] Lighting, remaining: Enlighten GI, local light shadows (a real-time budget of the 4 nearest for now, unverified
-      visually and for cost), the rain material's refraction, the falling rain's cost (49 CPU-simulated systems,
+      visually and for cost), the falling rain's cost (49 CPU-simulated systems,
       about 3 ms a frame; the game's are GPU sprites: MODLOG "Rain")
 - [ ] Read the stock pak directly, so users don't need to extract it first (with the host CLI's first-run setup).
       Its footer is known (an encrypted-index flag, magics 'Atae' and 'kcid', version 5, index offset and size,

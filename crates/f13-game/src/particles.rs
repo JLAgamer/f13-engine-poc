@@ -66,8 +66,9 @@ struct ParticleParams {
 }
 
 /// A particle material: the master's port (`mode`), its uniform buffer as the compiled shader lays it out, and its
-/// textures in the shader's order.
+/// textures in the shader's order. `distort`: its distortion pass (refraction), drawn in Bevy's transmissive pass.
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
+#[bind_group_data(ParticleKey)]
 pub struct ParticleMaterial {
     #[uniform(0)]
     params: ParticleParams,
@@ -81,6 +82,18 @@ pub struct ParticleMaterial {
     #[texture(5)]
     t3: Handle<Image>,
     alpha: AlphaMode,
+    distort: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ParticleKey {
+    distort: bool,
+}
+
+impl From<&ParticleMaterial> for ParticleKey {
+    fn from(m: &ParticleMaterial) -> Self {
+        ParticleKey { distort: m.distort }
+    }
 }
 
 impl Material for ParticleMaterial {
@@ -93,13 +106,22 @@ impl Material for ParticleMaterial {
     fn alpha_mode(&self) -> AlphaMode {
         self.alpha
     }
+    fn reads_view_transmission_texture(&self) -> bool {
+        self.distort
+    }
     fn enable_prepass() -> bool {
         false
     }
     fn enable_shadows() -> bool {
         false
     }
-    fn specialize(_: &MaterialPipeline, descriptor: &mut RenderPipelineDescriptor, layout: &MeshVertexBufferLayoutRef, _: MaterialPipelineKey<Self>) -> Result<(), SpecializedMeshPipelineError> {
+    fn specialize(_: &MaterialPipeline, descriptor: &mut RenderPipelineDescriptor, layout: &MeshVertexBufferLayoutRef, key: MaterialPipelineKey<Self>) -> Result<(), SpecializedMeshPipelineError> {
+        // The distortion pass: an opaque draw over the scene that leaves its depth alone.
+        if key.bind_group_data.distort {
+            if let Some(ds) = descriptor.depth_stencil.as_mut() {
+                ds.depth_write_enabled = Some(false);
+            }
+        }
         let l = layout.0.get_layout(&[
             Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
             Mesh::ATTRIBUTE_UV_0.at_shader_location(1),
@@ -303,6 +325,8 @@ struct Materials {
     entries: HashMap<String, MaterialEntry>,
     /// Each material and its master's port (`ParticleParams::mode`).
     built: HashMap<String, Option<(Handle<ParticleMaterial>, u32)>>,
+    /// Each material's distortion pass, if it refracts.
+    distortions: HashMap<String, Option<Handle<ParticleMaterial>>>,
 }
 
 impl Materials {
@@ -312,10 +336,18 @@ impl Materials {
         }
         let built = self.build(name, root, assets).map(|m| {
             let mode = m.params.mode.x as u32;
+            // A master with its distortion pass ported (the Refraction input's graph): M_Rain_Master's (mode 30).
+            let distortion = (mode == 7).then(|| ParticleMaterial { params: ParticleParams { mode: Vec4::new(30.0, 0.0, 0.0, 0.0), ..m.params }, alpha: AlphaMode::Opaque, distort: true, ..m.clone() });
+            self.distortions.insert(name.to_string(), distortion.map(|d| materials.add(d)));
             (materials.add(m), mode)
         });
         self.built.insert(name.to_string(), built.clone());
         built
+    }
+
+    /// The distortion pass of a material [`Materials::get`] built.
+    fn distortion(&self, name: &str) -> Option<Handle<ParticleMaterial>> {
+        self.distortions.get(name).cloned().flatten()
     }
 
     fn build(&self, name: &str, root: &std::path::Path, assets: &AssetServer) -> Option<ParticleMaterial> {
@@ -618,6 +650,7 @@ impl Materials {
             t3: t3.unwrap_or_else(|| t0.clone()),
             t0,
             alpha,
+            distort: false,
         })
     }
 }
@@ -695,6 +728,9 @@ impl ParticleAssets {
                     Name::new(format!("{name}.{}", def.name)),
                 ))
                 .id();
+            if let Some(distortion) = def.material.as_deref().and_then(|m| self.mats.distortion(m)) {
+                commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(distortion), Transform::default(), Visibility::Inherited, NoFrustumCulling, NotShadowCaster, NotShadowReceiver, ChildOf(entity), Name::new(format!("{name}.{} distortion", def.name))));
+            }
             let pivot = def.modules.iter().find_map(|m| if let Module::PivotOffset(p) = m { Some(Vec2::from(*p)) } else { None }).unwrap_or(Vec2::ZERO) + Vec2::splat(-0.5);
             emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: mode == 4, mesh_scene: None, slots: vec![], lights: light_pool(commands, def, name), drawn: true, attractor_last: [0; 2], collision_check: 0 });
         }
@@ -813,7 +849,7 @@ fn spawn_level_particles(
 ) {
     let root = export.0.clone();
     let entries: HashMap<String, MaterialEntry> = std::fs::read_to_string(root.join("materials.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-    let mut pa = ParticleAssets { root, systems: Systems::default(), mats: Materials { entries, built: HashMap::new() }, seed: 0x9e37_79b9_7f4a_7c15 };
+    let mut pa = ParticleAssets { root, systems: Systems::default(), mats: Materials { entries, built: HashMap::new(), distortions: HashMap::new() }, seed: 0x9e37_79b9_7f4a_7c15 };
     let mut n = 0;
     for a in level.iter().flat_map(|l| &l.layouts).flat_map(|l| &l.actors) {
         for c in &a.components {
@@ -1028,7 +1064,7 @@ fn rain_grid(
 fn rain_mpc_materials(mpc: Option<Res<crate::weather::RainMpc>>, mut materials: ResMut<Assets<ParticleMaterial>>) {
     // Each rain material as it's made too (they come after the weather's first write).
     let Some(mpc) = mpc else { return };
-    let rain: Vec<_> = materials.iter().filter(|(_, m)| m.params.mode.x == 7.0 && m.params.p[15].x != mpc.rain).map(|(id, _)| id).collect();
+    let rain: Vec<_> = materials.iter().filter(|(_, m)| (m.params.mode.x == 7.0 || m.params.mode.x == 30.0) && m.params.p[15].x != mpc.rain).map(|(id, _)| id).collect();
     for id in rain {
         if let Some(mut m) = materials.get_mut(id) {
             m.params.p[15].x = mpc.rain;
