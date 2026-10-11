@@ -33,6 +33,18 @@ const MAX_FILTER_FREQUENCY: f32 = 20000.0;
 /// The XAudio2 device's sample rate (the mastering voice's format, 44100).
 const DEVICE_SAMPLE_RATE: f32 = 44100.0;
 
+/// The source voice's filter Frequency for an LPF (FXAudio2SoundSource 0x141957900: clamp(2 x LPF / the device's
+/// rate, 0, 1)). A voice starts at MAX_FILTER_FREQUENCY with its last LPF FLT_MAX (0x141955d90), so even an
+/// unfiltered voice is set to 2 x 20000 / 44100, which XAudio2 doesn't bypass.
+pub(crate) fn voice_filter(lpf: f32) -> f32 {
+    (2.0 * lpf / DEVICE_SAMPLE_RATE).clamp(0.0, 1.0)
+}
+
+/// [`voice_filter`] for a voice with no LPF of its own.
+pub(crate) fn default_voice_filter() -> f32 {
+    voice_filter(MAX_FILTER_FREQUENCY)
+}
+
 /// FInteriorSettings (its constructor 0x1412c86f0 gives the defaults).
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct InteriorSettings {
@@ -257,7 +269,6 @@ fn voice_interiors(
             trace!("audio volume: {:?} in {} at volume {volume:.2}, LPF {lpf:.0}", class.0, s.id);
         }
         commands.entity(e).insert(InteriorGain(volume));
-        // PLACEHOLDER: the game sets the voice filter at 2 x 20000 / 44100 too (nearly flat); none here at the maximum.
-        pan.0.set_filter(if lpf < MAX_FILTER_FREQUENCY { (2.0 * lpf / DEVICE_SAMPLE_RATE).clamp(0.0, 1.0) } else { 0.0 });
+        pan.0.set_filter(voice_filter(lpf));
     }
 }

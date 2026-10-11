@@ -111,15 +111,17 @@ impl Iterator for PanDecoder {
             }
         };
         // The source voice's filter (created with XAUDIO2_VOICE_USEFILTER: FXAudio2SoundSource 0x1419529b9) on the
-        // mono signal before the output matrix: XAudio2's state-variable low-pass at Frequency f, OneOverQ
-        // LowPassFilterResonance (BaseEngine.ini 0.9). PLACEHOLDER: XAudio2's own filter (XAudio2_7.dll, not the game)
-        // isn't read: a Chamberlin state-variable filter, one pass a sample.
+        // mono signal before the output matrix: XAudio2_7.dll's state-variable filter (FUN_180044940, one channel;
+        // its LowPassFilter output) at Frequency f, OneOverQ LowPassFilterResonance (BaseEngine.ini 0.9): high = in -
+        // low - q x band, band += f x high, low += f x band. XAudio2 bypasses only a low-pass at 0 and a high-pass at 1
+        // (FUN_180038918), so the game's 2 x 20000 / 44100 filters too. PLACEHOLDER: it runs at the clip's own rate
+        // here (XAudio2's after the voice's rate conversion).
         let f = self.gains.filter();
         let s = if f > 0.0 {
             let (low, band) = &mut self.filter;
-            *low += f * *band;
             let high = s as f32 - *low - LOW_PASS_ONE_OVER_Q * *band;
             *band += f * high;
+            *low += f * *band;
             *low as bevy::audio::Sample
         } else {
             s
@@ -173,7 +175,8 @@ fn to_panned(
         }
         let Some(clip) = clips.get(&player.0) else { continue };
         let gains = std::sync::Arc::new(PanGains::default());
-        gains.set(std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2);
+        gains.set(0.5, 0.5);
+        gains.set_filter(crate::audio_volumes::default_voice_filter());
         let handle = panned.add(Panned { clip: clip.clone(), gains: gains.clone() });
         commands
             .entity(e)
@@ -182,20 +185,70 @@ fn to_panned(
     }
 }
 
+/// X3DAudio's speaker pan (X3DAudio1_7.dll FUN_00402360) for a stereo device (speaker mask 3: left at -pi/2, right at
+/// +pi/2 azimuth): of the differences azimuth - speaker (wrapped to [-pi, pi]) the smallest d+ >= 0 and the d- < 0
+/// nearest zero pick the two speakers either side; t = tan(|d-| x pi/2 / (d+ + |d-|)), the d- speaker gets 1 / (1 + t)
+/// and the d+ one t / (1 + t) (an amplitude pan: the gains sum to one), all to one of them when its difference is
+/// under 1.19e-7. At the listener (a horizontal distance at most 1.19e-7) the gain splits equally over the speakers.
+pub(crate) fn x3d_stereo(azimuth: f32, at_listener: bool) -> (f32, f32) {
+    use std::f32::consts::{FRAC_PI_2, PI, TAU};
+    if at_listener {
+        return (0.5, 0.5);
+    }
+    const SPEAKERS: [f32; 2] = [-FRAC_PI_2, FRAC_PI_2];
+    let (mut plus, mut plus_d, mut minus, mut minus_d) = (None, 4.0f32, None, -4.0f32);
+    for (i, s) in SPEAKERS.iter().enumerate() {
+        let mut d = azimuth - s;
+        if d > PI {
+            d -= TAU;
+        } else if d < -PI {
+            d += TAU;
+        }
+        if d <= 0.0 && d > minus_d {
+            minus = Some(i);
+            minus_d = d;
+        }
+        if d >= 0.0 && d < plus_d {
+            plus = Some(i);
+            plus_d = d;
+        }
+    }
+    let (Some(neg), Some(pos)) = (minus, plus) else { return (1.0, 0.0) };
+    let (dn, dp) = (-minus_d, plus_d);
+    let mut g = [0.0f32; 2];
+    if dn >= f32::EPSILON {
+        if dp >= f32::EPSILON {
+            let t = (dn * FRAC_PI_2 / (dp + dn)).tan();
+            g[neg] += 1.0 / (t + 1.0);
+            g[pos] += t / (t + 1.0);
+        } else {
+            g[pos] += 1.0;
+        }
+    } else {
+        g[neg] += 1.0;
+    }
+    (g[0], g[1])
+}
+
 /// The game's XAudio2 device (WindowsEngine.ini: AudioDeviceModuleName=XAudio2) pans a 3D sound with X3DAudio
-/// (XAudio2Source GetMonoChannelVolumes 0x1419539c0: X3DAudioCalculate, MATRIX | REVERB, into the 5.1 speakers, then
-/// down to the output). PLACEHOLDER: X3DAudio1_7.dll's own panning matrix isn't read (it's Microsoft's library, not
-/// the game); this pans equal-power by the side the sound is on in the listener's view (centre -3 dB each, as a 5.1
-/// centre channel downmixed), front and back alike.
+/// (XAudio2Source GetMonoChannelVolumes 0x1419539c0: X3DAudioCalculate, MATRIX | REVERB, its volume curve flat at 1,
+/// InnerRadius 0) over the device's speakers (FUN_1419546b0: X3DAudioInitialize with the device's channel mask), the
+/// azimuth atan2(v . right, v . front) on the listener's plane ([`x3d_stereo`]). The centre channel is then
+/// max(volume x VoiceCenterChannelVolume, X3DAudio's centre) (the sound classes leave it 0) and, on a six-channel
+/// device only, LFE and the front pair's pull toward the centre; the 6-channel submixes go to the device through
+/// FUN_141953d50's matrix (stereo: L = FL + 0.7 FC + 1.25 BL, R = FR + 0.7 FC + 1.25 BR), so a stereo output hears
+/// X3DAudio's pair as it is. PLACEHOLDER: f13-rs plays to a stereo device only (the game's 5.1 / 7.1 speaker layouts
+/// aren't used).
 fn pan(listener: Query<&GlobalTransform, With<SpatialListener>>, voices: Query<(&Pan, &GlobalTransform)>) {
     let Some(ear) = listener.iter().next() else { return };
     let to_listener = ear.affine().inverse();
     for (p, g) in &voices {
         let local = to_listener.transform_point3(g.translation());
-        let flat = Vec2::new(local.x, local.z);
-        let side = if flat.length_squared() > 1e-6 { flat.x / flat.length() } else { 0.0 };
-        let angle = (side + 1.0) * std::f32::consts::FRAC_PI_4;
-        p.0.set(angle.cos(), angle.sin());
+        // Bevy's listener space: right +x, front -z.
+        let (right, front) = (local.x, -local.z);
+        let at = right.hypot(front) <= f32::EPSILON;
+        let (l, r) = x3d_stereo(right.atan2(front), at);
+        p.0.set(l, r);
     }
 }
 
@@ -1564,5 +1617,28 @@ fn footstep(
     if let Some(cue) = tables.cue("female", gait, surface) {
         trace!("footstep: surface {surface}, {cue}");
         commands.trigger(PlaySound { cue: cue.to_string(), at: Some(at) });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::x3d_stereo;
+    use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, FRAC_PI_8, PI};
+
+    #[test]
+    fn x3d_stereo_pan() {
+        let near = |a: (f32, f32), b: (f32, f32)| (a.0 - b.0).abs() < 1e-5 && (a.1 - b.1).abs() < 1e-5;
+        // Ahead and behind: half each (an amplitude pan, -6 dB a side).
+        assert!(near(x3d_stereo(0.0, false), (0.5, 0.5)));
+        assert!(near(x3d_stereo(PI, false), (0.5, 0.5)));
+        // On a speaker: all to it.
+        assert!(near(x3d_stereo(FRAC_PI_2, false), (0.0, 1.0)));
+        assert!(near(x3d_stereo(-FRAC_PI_2, false), (1.0, 0.0)));
+        // Front right: t = tan(pi/8).
+        let t = FRAC_PI_8.tan();
+        assert!(near(x3d_stereo(FRAC_PI_4, false), (t / (1.0 + t), 1.0 / (1.0 + t))));
+        // Back right mirrors front right.
+        assert!(near(x3d_stereo(3.0 * FRAC_PI_4, false), x3d_stereo(FRAC_PI_4, false)));
+        assert!(near(x3d_stereo(1.0, true), (0.5, 0.5)));
     }
 }
