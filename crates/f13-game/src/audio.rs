@@ -1518,11 +1518,11 @@ fn reloop(
     assets: Res<AssetServer>,
     sounds: Option<ResMut<Sounds>>,
     mut rng: ResMut<AudioRng>,
-    voices: Query<(Entity, &Reloop, Option<&AudioSink>, Option<&SpatialAudioSink>), Without<StartAfter>>,
+    voices: Query<(Entity, &Reloop, &PlaybackSettings, Option<&AudioSink>, Option<&SpatialAudioSink>, Option<&Pan>), Without<StartAfter>>,
 ) {
     use bevy::audio::AudioSinkPlayback;
     let Some(mut sounds) = sounds else { return };
-    for (e, r, sink, spatial) in &voices {
+    for (e, r, settings, sink, spatial, pan) in &voices {
         let ended = sink.map(|s| s.empty()).or(spatial.map(|s| s.empty())).unwrap_or(false);
         if !ended {
             continue;
@@ -1530,7 +1530,13 @@ fn reloop(
         let Some((played, _)) = sounds.play(&r.0, &mut || rng.0.frand()) else { continue };
         let Some(v) = played.into_iter().find(|v| v.reloop) else { continue };
         trace!("reloop {} with {}", r.0, v.file);
-        commands.entity(e).remove::<(AudioSink, SpatialAudioSink)>().insert(AudioPlayer::new(assets.load(format!("sounds/{}", v.file))));
+        // A panned voice ([`to_panned`]) drops its panned player (left on, it played its first take again each time
+        // round) and is panned again with the new take.
+        let mut ec = commands.entity(e);
+        ec.remove::<(AudioSink, SpatialAudioSink)>().insert(AudioPlayer::new(assets.load(format!("sounds/{}", v.file))));
+        if pan.is_some() {
+            ec.remove::<(AudioPlayer<Panned>, Pan)>().insert(PlaybackSettings { spatial: true, ..*settings });
+        }
     }
 }
 

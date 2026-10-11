@@ -29,6 +29,8 @@ Bugs:
       Choke takes for as long as he holds her; the hold ends at her struggle's TotalStunTime (15 s, less with her
       stats), a kill or a drop, and traces show Choke stopping at each. Playing Jason, his E no longer counts as her
       wiggle. Needs a retest to say what still sounds wrong
+- [ ] Intro cinematic: some actors have no heads; Jason has no mask as he reaches out of the water; in the following
+      shots Jason's face shows through the mask; trees pop in and out during it
 
 Moved from Milestone 1 (not tied to gameplay):
 - [ ] Materials, remaining: foliage subsurface (its transmission is the deferred light pass's, whose code isn't
@@ -41,7 +43,7 @@ Moved from Milestone 1 (not tied to gameplay):
       chunks of different broken pieces (MODLOG "PhysX's legacy contact generation for the debris")
 - [ ] Lighting, remaining: Enlighten GI (the map's indirect light: its precomputed systems and probe sets are
       Geomerics' runtime data, undocumented; the solver is in the exe), the local lights' shadow caching and fade
-      (which lights qualify is the game's; without the caching only the four highest resolutions render: MODLOG
+      (which lights qualify is the game's; without the caching only the four nearest whose range reaches the camera render: MODLOG
       "Local lights' shadows"), the falling rain's cost (49 CPU-simulated systems, about 23k sprites, drawn as one sorted batch built
       in parallel: draw 5.6 ms and simulate 2.9 ms of the main world a frame, under the render world's ~27; the game's
       are GPU sprites: MODLOG "Rain")

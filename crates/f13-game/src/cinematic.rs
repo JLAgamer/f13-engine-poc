@@ -490,6 +490,13 @@ fn start(
         let mesh = if name.starts_with("Jason_TS") { killer_body.clone().or(mesh) } else if name.starts_with("Jts_Mask") { killer_mask.clone().or(mesh) } else { mesh };
         if let Some(m) = mesh {
             e.insert(scene(&m));
+            // Its other shown meshes (Base_Cinematic_Face_Prep's Hair on its CharacterMesh0), where the level has them.
+            let at = crate::to_transform(&xf);
+            for c in comps.iter().filter(|c| c["Mesh"].is_string() && c["Hidden"] != true).skip(1) {
+                let (Some(file), Ok(w)) = (c["Mesh"].as_str(), serde_json::from_value::<Xform>(c["World"].clone())) else { continue };
+                let rel = Transform::from_matrix(at.to_matrix().inverse() * crate::to_transform(&w).to_matrix());
+                e.with_child((scene(file), rel, Visibility::default(), Name::new(format!("cinematic {name}.{}", c["Name"].as_str().unwrap_or("")))));
+            }
         } else if let Some(list) = placements.get(&name) {
             if let Some((file, _)) = list.first() {
                 e.insert(scene(file));
@@ -593,9 +600,13 @@ fn start(
     commands.insert_resource(Playing { cinematic: c, sequences, t: 0.0, started: false, base, actors, takes, lengths, face_floats: HashMap::new(), cameras, frames_waited: 0, found_at: None, hud });
 }
 
-/// Starts once the staged meshes are in (their attached actors' offsets taken at the bind pose).
+/// Starts once the staged meshes are in: their scenes loaded with their meshes and textures (the game loads the
+/// intro level whole before playing it), and their attached actors' offsets taken at the bind pose.
+#[allow(clippy::too_many_arguments)]
 fn ready(
     mut playing: Option<ResMut<Playing>>,
+    assets: Res<AssetServer>,
+    scenes: Query<&WorldAssetRoot, With<Staged>>,
     staged: Query<(Entity, &Staged)>,
     mut attached: Query<(&Staged, &mut Attached, &GlobalTransform)>,
     children: Query<&Children>,
@@ -607,6 +618,11 @@ fn ready(
         return;
     }
     p.frames_waited += 1;
+    // Every staged scene loaded (or failed: nothing to wait for).
+    let loading = scenes.iter().filter(|r| !assets.is_loaded_with_dependencies(&r.0) && !assets.load_state(&r.0).is_failed()).count();
+    if loading > 0 && p.frames_waited <= 1800 {
+        return;
+    }
     // Every attachment's bone there (the scenes spawned)...
     let mut missing = vec![];
     for (s, a, _) in &attached {
@@ -620,7 +636,7 @@ fn ready(
     }
     // ...and their world transforms propagated (a frame or two after they spawn): the offsets from the bind pose.
     let settled = p.found_at.is_some_and(|f| p.frames_waited >= f + 3);
-    if !settled && p.frames_waited <= 600 {
+    if !settled && p.frames_waited <= 2400 {
         return;
     }
     if !missing.is_empty() {
