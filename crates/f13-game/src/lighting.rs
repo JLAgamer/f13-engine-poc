@@ -245,6 +245,11 @@ const SHADOW_MIN_RESOLUTION: f32 = 32.0;
 /// radius (the cvars 0x14014ff40 / 0x14014ffc0).
 const TEXELS_PER_PIXEL_POINT: f32 = 1.27324;
 const TEXELS_PER_PIXEL_SPOT: f32 = 2.54648;
+/// How many of those render shadow maps at once, the highest resolutions first. PLACEHOLDER: the game caches its
+/// whole-scene shadows (r.Shadow.CacheWholeSceneShadows 1: a light's static casters drawn once, only movers each
+/// frame); Bevy re-renders every shadow map each frame, and the ten or so a cabin's lamps qualify for (six cube faces
+/// each) cost seconds a frame, so a budget stands in for that caching.
+const SHADOW_BUDGET: usize = 4;
 
 /// A placed light's distance fade: MaxDrawDistance and MaxDistanceFadeRange (m), and its full intensity.
 #[derive(Component)]
@@ -637,33 +642,48 @@ fn light_functions(
 /// Which lights render shadow maps this frame, as the engine picks its whole-scene shadows: a shadow-casting light
 /// that's on, whose sphere meets the view's frustum, and whose shadow would be over r.Shadow.MinResolution: texels per
 /// pixel x max(width / 2 x P[0][0], height / 2 x P[1][1]) x its radius / max(its distance, 1 cm) (the shadow fade's
-/// resolution, FUN_140b571d0). PLACEHOLDER: the fade between 32 and 64 texels (a shadow here is on or off) and the
+/// resolution, FUN_140b571d0), at most [`SHADOW_BUDGET`] of them. PLACEHOLDER: the fade between 32 and 64 texels (a shadow here is on or off) and the
 /// shadow map's own resolution (Bevy's one size for all; the game's clamps that resolution to r.Shadow.MaxResolution).
 #[allow(clippy::type_complexity)]
 fn shadow_casters(
     cameras: Query<(&GlobalTransform, &Projection, &bevy::camera::primitives::Frustum, &Camera), (With<Lit>, With<Camera3d>)>,
-    mut points: Query<(&mut PointLight, &GlobalTransform, &InheritedVisibility), (With<ShadowCaster>, Without<SpotLight>)>,
-    mut spots: Query<(&mut SpotLight, &GlobalTransform, &InheritedVisibility), (With<ShadowCaster>, Without<PointLight>)>,
+    mut points: Query<(Entity, &mut PointLight, &GlobalTransform, &InheritedVisibility), (With<ShadowCaster>, Without<SpotLight>)>,
+    mut spots: Query<(Entity, &mut SpotLight, &GlobalTransform, &InheritedVisibility), (With<ShadowCaster>, Without<PointLight>)>,
 ) {
     let Some((cam, projection, frustum, camera)) = cameras.iter().find(|c| c.3.is_active) else { return };
     let clip = projection.get_clip_from_view();
     let size = camera.logical_viewport_size().unwrap_or(Vec2::new(1920.0, 1080.0));
     let screen = (0.5 * size.x * clip.x_axis.x).max(0.5 * size.y * clip.y_axis.y);
     let eye = cam.translation();
-    let shadowed = |at: Vec3, range: f32, texels: f32| {
+    // The shadow's unclamped resolution when the light's sphere meets the frustum and it's over MinResolution.
+    let resolution = |at: Vec3, range: f32, texels: f32| {
         let seen = frustum.intersects_sphere(&bevy::camera::primitives::Sphere { center: at.into(), radius: range }, true);
-        seen && texels * screen * range / at.distance(eye).max(0.01) > SHADOW_MIN_RESOLUTION
+        let r = texels * screen * range / at.distance(eye).max(0.01);
+        (seen && r > SHADOW_MIN_RESOLUTION).then_some(r)
     };
-    for (mut l, g, v) in &mut points {
-        let on = v.get() && l.intensity > 0.0 && shadowed(g.translation(), l.range, TEXELS_PER_PIXEL_POINT);
-        if l.shadow_maps_enabled != on {
-            l.shadow_maps_enabled = on;
+    let mut wanted: Vec<(f32, Entity)> = vec![];
+    for (e, l, g, v) in &points {
+        if let Some(r) = resolution(g.translation(), l.range, TEXELS_PER_PIXEL_POINT).filter(|_| v.get() && l.intensity > 0.0) {
+            wanted.push((r, e));
         }
     }
-    for (mut l, g, v) in &mut spots {
-        let on = v.get() && l.intensity > 0.0 && shadowed(g.translation(), l.range, TEXELS_PER_PIXEL_SPOT);
-        if l.shadow_maps_enabled != on {
-            l.shadow_maps_enabled = on;
+    for (e, l, g, v) in &spots {
+        if let Some(r) = resolution(g.translation(), l.range, TEXELS_PER_PIXEL_SPOT).filter(|_| v.get() && l.intensity > 0.0) {
+            wanted.push((r, e));
+        }
+    }
+    wanted.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let on: Vec<Entity> = wanted.iter().take(SHADOW_BUDGET).map(|w| w.1).collect();
+    for (e, mut l, _, _) in &mut points {
+        let want = on.contains(&e);
+        if l.shadow_maps_enabled != want {
+            l.shadow_maps_enabled = want;
+        }
+    }
+    for (e, mut l, _, _) in &mut spots {
+        let want = on.contains(&e);
+        if l.shadow_maps_enabled != want {
+            l.shadow_maps_enabled = want;
         }
     }
 }

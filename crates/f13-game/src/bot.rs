@@ -871,7 +871,10 @@ fn run_bot(
                 if bot.timer < 0.5 {
                     return;
                 }
-                if bot.timer < 3.0 {
+                // Until she's 2 m past the doorway (not for a fixed time: a hitch frame can carry the timer past it
+                // before she has taken a step), at most 8 s.
+                let through = if inwards { past_door < -2.0 } else { past_door > 2.0 };
+                if !through && bot.timer < 8.0 {
                     keys.press(KeyCode::KeyW);
                     return;
                 }
@@ -920,7 +923,9 @@ fn run_bot(
             // Done with any move (a climb's take carries her over before it leaves her on the other side), and 2 s
             // after the press (a loading hitch at speed can carry the timer past 2.5 s in the frame after it; a door's
             // open state flips as its move ends, ~1.8 s on).
-            if bot.timer < 2.5 || bot.timer - bot.pressed_at < 2.0 || !moving.is_empty() {
+            // Nor in the frame the tap is let go: the bot runs before the interaction reads the release, and after a
+            // hitch that one frame can carry the 2 s.
+            if bot.timer < 2.5 || bot.timer - bot.pressed_at < 2.0 || !moving.is_empty() || keys.just_released(KeyCode::KeyE) {
                 return;
             }
             keys.release(KeyCode::ShiftLeft);

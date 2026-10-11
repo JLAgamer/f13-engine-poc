@@ -38,8 +38,8 @@ Moved from Milestone 1 (not tied to gameplay):
       (MODLOG "The counselor's face")
 - [ ] Lighting, remaining: Enlighten GI (the map's indirect light: its precomputed systems and probe sets are
       Geomerics' runtime data, undocumented; the solver is in the exe), the local lights' shadow caching and fade
-      (which lights cast is the game's now: MODLOG "Local lights' shadows"; re-rendering them costs about 5 ms at the
-      spawn view), the falling rain's cost (49 CPU-simulated systems, drawn as one batch now; about 4 ms of CPU a
+      (which lights qualify is the game's; without the caching only the four highest resolutions render: MODLOG
+      "Local lights' shadows"), the falling rain's cost (49 CPU-simulated systems, drawn as one batch now; about 4 ms of CPU a
       frame; the game's are GPU sprites: MODLOG "Rain")
 - [ ] Read the stock pak directly, so users don't need to extract it first (with the host CLI's first-run setup).
       Its footer is known (an encrypted-index flag, magics 'Atae' and 'kcid', version 5, index offset and size,
