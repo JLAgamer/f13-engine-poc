@@ -246,6 +246,25 @@ struct EmitterState {
     /// ParticleModuleSpawnPerUnit: the source's place last tick (Unreal space) and the travel left over.
     last_source: Option<Vec3>,
     unit_fraction: f32,
+    /// A sprite emitter's material and its distortion pass (to draw it in a shared batch).
+    material: Option<Handle<ParticleMaterial>>,
+    distortion: Option<Handle<ParticleMaterial>>,
+}
+
+/// One camera-facing quad, world space (Bevy), and its distance along the view.
+struct Quad {
+    positions: [[f32; 3]; 4],
+    uvs: [[f32; 2]; 4],
+    colors: [[f32; 4]; 4],
+    dynamic: [[f32; 4]; 4],
+    depth: f32,
+}
+
+/// The quads of every sprite emitter that draws with one material (the rain grid's many systems), drawn as one mesh.
+struct Batch {
+    material: Handle<ParticleMaterial>,
+    distortion: Option<Handle<ParticleMaterial>>,
+    quads: Vec<Quad>,
 }
 
 /// A placed ParticleSystemComponent.
@@ -749,7 +768,7 @@ impl ParticleAssets {
                 let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(md.file.clone()));
                 let n = def.max_draw_count.unwrap_or(500).min(32) as usize;
                 let entity = commands.spawn((Transform::default(), Visibility::Hidden)).id();
-                emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: Some((scene, n)), slots: vec![], lights: vec![], drawn: true, attractor_last: [0; 2], collision_check: 0, last_source: None, unit_fraction: 0.0 });
+                emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: Some((scene, n)), slots: vec![], lights: vec![], drawn: true, attractor_last: [0; 2], collision_check: 0, last_source: None, unit_fraction: 0.0, material: None, distortion: None });
                 continue;
             }
             let Some((material, mode)) = def.material.as_deref().and_then(|m| self.mats.get(m, &self.root, assets, materials)) else {
@@ -759,7 +778,7 @@ impl ParticleAssets {
                 let sends = def.modules.iter().any(|m| matches!(m, Module::EventGenerator(_) | Module::Light { .. }));
                 if named || sends {
                     let entity = commands.spawn((Transform::default(), Visibility::Hidden)).id();
-                    emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: None, slots: vec![], lights: light_pool(commands, def, name), drawn: false, attractor_last: [0; 2], collision_check: 0, last_source: None, unit_fraction: 0.0 });
+                    emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: None, slots: vec![], lights: light_pool(commands, def, name), drawn: false, attractor_last: [0; 2], collision_check: 0, last_source: None, unit_fraction: 0.0, material: None, distortion: None });
                 }
                 continue;
             };
@@ -775,7 +794,7 @@ impl ParticleAssets {
             let entity = commands
                 .spawn((
                     Mesh3d(mesh.clone()),
-                    MeshMaterial3d(material),
+                    MeshMaterial3d(material.clone()),
                     Transform::from_translation(to_bevy(location)),
                     Visibility::Hidden,
                     NoFrustumCulling,
@@ -784,11 +803,12 @@ impl ParticleAssets {
                     Name::new(format!("{name}.{}", def.name)),
                 ))
                 .id();
-            if let Some(distortion) = def.material.as_deref().and_then(|m| self.mats.distortion(m)) {
-                commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(distortion), Transform::default(), Visibility::Inherited, NoFrustumCulling, NotShadowCaster, NotShadowReceiver, ChildOf(entity), Name::new(format!("{name}.{} distortion", def.name))));
+            let distortion = def.material.as_deref().and_then(|m| self.mats.distortion(m));
+            if let Some(d) = &distortion {
+                commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(d.clone()), Transform::default(), Visibility::Inherited, NoFrustumCulling, NotShadowCaster, NotShadowReceiver, ChildOf(entity), Name::new(format!("{name}.{} distortion", def.name))));
             }
             let pivot = def.modules.iter().find_map(|m| if let Module::PivotOffset(p) = m { Some(Vec2::from(*p)) } else { None }).unwrap_or(Vec2::ZERO) + Vec2::splat(-0.5);
-            emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: mode == 4, mesh_scene: None, slots: vec![], lights: light_pool(commands, def, name), drawn: true, attractor_last: [0; 2], collision_check: 0, last_source: None, unit_fraction: 0.0 });
+            emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh, pivot, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: mode == 4, mesh_scene: None, slots: vec![], lights: light_pool(commands, def, name), drawn: true, attractor_last: [0; 2], collision_check: 0, last_source: None, unit_fraction: 0.0, material: Some(material), distortion });
         }
         if emitters.is_empty() {
             return None;
@@ -1831,10 +1851,22 @@ fn draw(
     mut vis: Query<&mut Visibility>,
     mut slot_xf: Query<&mut Transform>,
     mut point_lights: Query<&mut PointLight>,
+    mut batch_entities: Local<HashMap<AssetId<ParticleMaterial>, (Entity, Handle<Mesh>)>>,
 ) {
     let Some((cam, frustum)) = camera.iter().next() else { return };
     let cam_pos = cam.translation();
     let (cam_right, cam_up, cam_fwd) = (cam.right().as_vec3(), cam.up().as_vec3(), cam.forward().as_vec3());
+    // Sprite emitters sharing a material across the live systems (the rain grid's cells) draw as one mesh per
+    // material: each emitter's own mesh is a draw (and an upload) of its own, and the rain has a hundred.
+    let mut users: HashMap<AssetId<ParticleMaterial>, u32> = HashMap::new();
+    for s in systems.iter() {
+        for e in s.emitters.iter().filter(|e| e.mesh_scene.is_none() && e.def.ribbon.is_none() && e.drawn) {
+            if let Some(m) = &e.material {
+                *users.entry(m.id()).or_default() += 1;
+            }
+        }
+    }
+    let mut batches: HashMap<AssetId<ParticleMaterial>, Batch> = HashMap::new();
     for mut s in &mut systems {
         let s = &mut *s;
         let origin = to_bevy(s.location);
@@ -1923,8 +1955,9 @@ fn draw(
                 }
             }
             let shown = near && e.drawn && !e.particles.is_empty();
+            let batched = e.mesh_scene.is_none() && e.def.ribbon.is_none() && e.material.as_ref().is_some_and(|m| users.get(&m.id()).copied().unwrap_or(0) > 1);
             if let Ok(mut v) = vis.get_mut(e.entity) {
-                v.set_if_neq(if shown { Visibility::Inherited } else { Visibility::Hidden });
+                v.set_if_neq(if shown && !batched { Visibility::Inherited } else { Visibility::Hidden });
             }
             if !shown {
                 continue;
@@ -1990,12 +2023,78 @@ fn draw(
                 }
                 indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
             }
+            if let Some(m) = e.material.as_ref().filter(|_| batched) {
+                let b = batches.entry(m.id()).or_insert_with(|| Batch { material: m.clone(), distortion: e.distortion.clone(), quads: vec![] });
+                for q in 0..positions.len() / 4 {
+                    let at = |i: usize| Vec3::from(positions[q * 4 + i]) + origin;
+                    let corners = [at(0), at(1), at(2), at(3)];
+                    let centre = (corners[0] + corners[2]) * 0.5;
+                    b.quads.push(Quad {
+                        positions: corners.map(|c| c.to_array()),
+                        uvs: [uvs[q * 4], uvs[q * 4 + 1], uvs[q * 4 + 2], uvs[q * 4 + 3]],
+                        colors: [colors[q * 4], colors[q * 4 + 1], colors[q * 4 + 2], colors[q * 4 + 3]],
+                        dynamic: [dynamic[q * 4], dynamic[q * 4 + 1], dynamic[q * 4 + 2], dynamic[q * 4 + 3]],
+                        depth: (centre - cam_pos).dot(cam_fwd),
+                    });
+                }
+                continue;
+            }
             if let Some(mut mesh) = meshes.get_mut(&e.mesh) {
                 mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
                 mesh.insert_attribute(ATTRIBUTE_DYNAMIC, dynamic);
                 mesh.insert_indices(Indices::U32(indices));
+            }
+        }
+    }
+    // The batches, back to front; a batch with nothing to draw this frame hidden.
+    let live: Vec<AssetId<ParticleMaterial>> = batches.keys().copied().collect();
+    for (id, mut b) in batches {
+        b.quads.sort_by(|a, c| c.depth.total_cmp(&a.depth));
+        let n = b.quads.len();
+        let (mut positions, mut uvs, mut colors, mut dynamic, mut indices) = (Vec::with_capacity(n * 4), Vec::with_capacity(n * 4), Vec::with_capacity(n * 4), Vec::with_capacity(n * 4), Vec::with_capacity(n * 6));
+        for (i, q) in b.quads.iter().enumerate() {
+            let base = (i * 4) as u32;
+            positions.extend_from_slice(&q.positions);
+            uvs.extend_from_slice(&q.uvs);
+            colors.extend_from_slice(&q.colors);
+            dynamic.extend_from_slice(&q.dynamic);
+            indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+        }
+        let (entity, mesh) = batch_entities
+            .entry(id)
+            .or_insert_with(|| {
+                let mesh = meshes.add(
+                    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+                        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 4])
+                        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32; 2]; 4])
+                        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; 4])
+                        .with_inserted_attribute(ATTRIBUTE_DYNAMIC, vec![[0.0f32; 4]; 4])
+                        .with_inserted_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3])),
+                );
+                let entity = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(b.material.clone()), Transform::IDENTITY, Visibility::Inherited, NoFrustumCulling, NotShadowCaster, NotShadowReceiver, Name::new("particles batch"))).id();
+                if let Some(d) = &b.distortion {
+                    commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(d.clone()), Transform::default(), Visibility::Inherited, NoFrustumCulling, NotShadowCaster, NotShadowReceiver, ChildOf(entity), Name::new("particles batch distortion")));
+                }
+                (entity, mesh)
+            })
+            .clone();
+        if let Some(mut m) = meshes.get_mut(&mesh) {
+            m.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+            m.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+            m.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+            m.insert_attribute(ATTRIBUTE_DYNAMIC, dynamic);
+            m.insert_indices(Indices::U32(indices));
+        }
+        if let Ok(mut v) = vis.get_mut(entity) {
+            v.set_if_neq(Visibility::Inherited);
+        }
+    }
+    for (id, (entity, _)) in batch_entities.iter() {
+        if !live.contains(id) {
+            if let Ok(mut v) = vis.get_mut(*entity) {
+                v.set_if_neq(Visibility::Hidden);
             }
         }
     }

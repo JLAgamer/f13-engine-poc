@@ -43,7 +43,8 @@ Moved from Milestone 1 (not tied to gameplay):
       (MODLOG "The counselor's face")
 - [ ] Lighting, remaining: Enlighten GI, local light shadows (a real-time budget of the 4 nearest for now, unverified
       visually and for cost), the falling rain's cost (49 CPU-simulated systems,
-      about 3 ms a frame; the game's are GPU sprites: MODLOG "Rain")
+      drawn as one batch now; about 4 ms of CPU a frame, 60 fps against 100 without rain here; the game's are GPU
+      sprites: MODLOG "Rain")
 - [ ] Read the stock pak directly, so users don't need to extract it first (with the host CLI's first-run setup).
       Its footer is known (an encrypted-index flag, magics 'Atae' and 'kcid', version 5, index offset and size,
       hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold
