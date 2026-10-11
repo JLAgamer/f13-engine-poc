@@ -33,8 +33,8 @@ static class AnimSounds
         void Add(string name, List<(float Time, string Cue)> found)
         {
             if (found.Count == 0 || json.ContainsKey(name)) return;
-            cues.AddRange(found.Select(n => n.Cue));
-            json[name] = new JArray(found.Distinct().OrderBy(n => n.Time).Select(n => new JArray(n.Time, n.Cue.Split('.')[^1].Split('/')[^1])));
+            cues.AddRange(found.Select(n => n.Cue.StartsWith("VO:") ? n.Cue[3..] : n.Cue).Where(c => c.Contains('/')));
+            json[name] = new JArray(found.Distinct().OrderBy(n => n.Time).Select(n => new JArray(n.Time, (n.Cue.StartsWith("VO:") ? "VO:" : "") + n.Cue.Split('.')[^1].Split('/')[^1].Replace("VO:", ""))));
         }
         if (Environment.GetEnvironmentVariable("F13_ANIM_SOUNDS_DEBUG") is { } q)
             foreach (var k in segments.Keys.Where(k => k.Contains(q))) Console.WriteLine($"segment {k}: {string.Join(", ", segments[k])}");
@@ -66,14 +66,27 @@ static class AnimSounds
     /// Without its take number (`_01`, `_02`: a female take and the montage's male one are numbered apart).
     static string Unnumbered(string name) => Regex.Replace(Bare(name), @"_\d\d$", "");
 
-    /// An object's PlaySound notifies: (its time, the cue's path).
+    /// An object's PlaySound notifies: (its time, the cue's path); its SCAnimNotify_PlayCounselorVO notifies as
+    /// "VO:<VoiceOverEvent>" (her voice object's line), and SCAnimNotify_PlayCounselorVOBySoundCue's cue as
+    /// "VO:<cue path>".
     static IEnumerable<(float Time, string Cue)> Sounds(UObject obj)
     {
         foreach (var n in obj.GetOrDefault<FStructFallback[]>("Notifies", []))
         {
-            if (n.GetOrDefault<FPackageIndex>("Notify")?.Load() is not { ExportType: "AnimNotify_PlaySound" } notify) continue;
-            if (notify.GetOrDefault<FPackageIndex>("Sound")?.ResolvedObject?.GetPathName() is { } sound)
-                yield return (n.GetOrDefault<float>("LinkValue"), sound);
+            var notify = n.GetOrDefault<FPackageIndex>("Notify")?.Load();
+            var time = n.GetOrDefault<float>("LinkValue");
+            switch (notify?.ExportType)
+            {
+                case "AnimNotify_PlaySound":
+                    if (notify.GetOrDefault<FPackageIndex>("Sound")?.ResolvedObject?.GetPathName() is { } sound) yield return (time, sound);
+                    break;
+                case "SCAnimNotify_PlayCounselorVO":
+                    if (notify.GetOrDefault<FName>("VoiceOverEvent").Text is { } line && line != "None") yield return (time, "VO:" + line);
+                    break;
+                case "SCAnimNotify_PlayCounselorVOBySoundCue":
+                    if (notify.GetOrDefault<FPackageIndex>("VoiceOverSoundCue")?.ResolvedObject?.GetPathName() is { } cue) yield return (time, "VO:" + cue);
+                    break;
+            }
         }
     }
 

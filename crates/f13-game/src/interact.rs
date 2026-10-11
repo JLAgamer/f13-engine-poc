@@ -1042,8 +1042,9 @@ fn act(
             vehicle.repairs[i].done = true;
             end_repair_anim(&mut commands, player_entity, vehicle.repairs[i].anim.as_ref(), true);
             info!("{}: {} installed", vehicle.class, vehicle.repairs[i].name);
-            let last = vehicle.repairs.iter().all(|r| r.done);
-            commands.trigger(crate::audio::ActorSound { actor: player_entity, prop: if last { "VO:AppliedLastPart" } else { "VO:AppliedPart" } });
+            // SCDriveableVehicle::Repair (0x14043e4e0): AppliedPart for each part fitted while it isn't repaired yet (the
+            // last too; AppliedLastPart is StartVehicle's: vehicle.rs).
+            commands.trigger(crate::audio::ActorSound { actor: player_entity, prop: "VO:AppliedPart" });
             commands.trigger(ClassScore::new(&vehicle.class, "PartRepairedScoreEvent"));
             if vehicle.repairs.iter().all(|r| r.done) {
                 commands.trigger(ClassScore::new(&vehicle.class, "VehicleRepairedScoreEvent"));
@@ -1124,7 +1125,6 @@ fn act(
             crate::police::repair_phone_box(&mut pb, &mut phones);
             end_repair_anim(&mut commands, player_entity, Some(&crate::police::PHONE_BOX_TAKE.to_string()), true);
             info!("phone box {}: the phone works", if fixing { "repaired" } else { "fused" });
-            commands.trigger(crate::audio::ActorSound { actor: player_entity, prop: "VO:AppliedLastPart" });
             commands.trigger(ClassScore::new(&pb.class, "RepairScoreEvent"));
             interaction.hold = None;
             interaction.target = None;

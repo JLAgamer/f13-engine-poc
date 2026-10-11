@@ -3183,7 +3183,7 @@ fn animate_jason(
             let span = rig.action_span(dt);
             let keyed = montage.zip(span).map(|(m, (take, from, to))| (format!("{}/{take}", m.0), from, to));
             let span = keyed.as_ref().map(|(k, from, to)| (k.as_str(), *from, *to)).or(span);
-            crate::audio::play_anim_sounds(&mut commands, anim_sounds.as_deref(), span, at.translation);
+            crate::audio::play_anim_sounds(&mut commands, anim_sounds.as_deref(), span, at.translation, None, false);
         }
         // BS_Jason_Normal_Move's SpeedState: 0 idle, 1 walk, 2 fast walk, 3 run.
         let speed = j.velocity.length();

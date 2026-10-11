@@ -251,11 +251,34 @@ impl AnimSounds {
 }
 
 /// Plays the cues a character's action passed this frame, where it stands.
-pub fn play_anim_sounds(commands: &mut Commands, sounds: Option<&AnimSounds>, span: Option<(&str, f32, f32)>, at: Vec3) {
+/// Its SCAnimNotify_PlayCounselorVO notifies ("VO:<line>") are said by `actor`'s voice (PlayVoiceOver); the other
+/// cues play unless `voice_only` (a paired take, whose sounds come from the other side).
+pub fn play_anim_sounds(commands: &mut Commands, sounds: Option<&AnimSounds>, span: Option<(&str, f32, f32)>, at: Vec3, actor: Option<Entity>, voice_only: bool) {
     let (Some(sounds), Some((take, from, to))) = (sounds, span) else { return };
     for cue in sounds.passed(take, from, to) {
+        if cue.starts_with("VO:") {
+            if let Some(actor) = actor {
+                commands.trigger(ActorSound { actor, prop: intern(cue) });
+            }
+            continue;
+        }
+        if voice_only {
+            continue;
+        }
         commands.trigger(PlaySound { cue: cue.to_string(), at: Some(at) });
     }
+}
+
+/// A line's name as the `&'static str` [`ActorSound`] takes (the notifies' few names, kept once each).
+fn intern(name: &str) -> &'static str {
+    static NAMES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<&'static str>>> = std::sync::OnceLock::new();
+    let mut names = NAMES.get_or_init(Default::default).lock().unwrap();
+    if let Some(n) = names.get(name) {
+        return n;
+    }
+    let n: &'static str = Box::leak(name.to_string().into_boxed_str());
+    names.insert(n);
+    n
 }
 
 /// The cues an actor's class names: property name -> cue.
@@ -473,11 +496,16 @@ fn actor_sounds(
     barricade_moves: Query<&crate::interact::BarricadeMove, Added<crate::interact::BarricadeMove>>,
     barricades: Query<(Entity, &crate::windows::Barricade), With<ClassSounds>>,
     (windows, mut broken): (Query<(Entity, &crate::windows::Window, &GlobalTransform)>, Local<HashMap<Entity, bool>>),
+    working: Query<(Entity, &crate::interact::WindowMove)>,
 ) {
-    // Cabin_Window_BP's OnWindowDestroyed: WindowBreak where the window is.
+    // Cabin_Window_BP's OnWindowDestroyed: WindowBreak where the window is, and its InteractingCounselor's Impact line
+    // (PlayVoiceOver: her diving through it).
     for (e, w, g) in &windows {
         if w.destroyed && !broken.insert(e, true).unwrap_or(false) {
             commands.trigger(PlaySound { cue: "WindowBreak".into(), at: Some(g.translation()) });
+            for (counselor, _) in working.iter().filter(|(_, m)| m.window == e) {
+                commands.trigger(ActorSound { actor: counselor, prop: "VO:Impact" });
+            }
         }
     }
     let mut play = |actor: Entity, prop: &'static str| commands.trigger(ActorSound { actor, prop });
@@ -519,7 +547,7 @@ fn spawn_2d(commands: &mut Commands, assets: &AssetServer, sounds: &mut Sounds, 
     Some((e, v.volume))
 }
 
-/// The line her voice object says as an action starts (its take): swings, windows, the kills.
+/// The line a take of hers says (its SCAnimNotify_PlayCounselorVO; here only to tell her kill takes apart).
 fn action_line(take: &str) -> Option<&'static str> {
     Some(match take {
         t if t.contains("_melee_heavy") => "VO:WeaponSwingHeavy",
@@ -538,13 +566,13 @@ fn action_line(take: &str) -> Option<&'static str> {
     })
 }
 
-/// Her voice lines (her VoiceOverObjectClass's, as her class sounds) on what happens to her: Impact when she's hurt,
-/// Wounded as she becomes wounded, Stumble, Died (a death outside a kill), and each action's line as it starts (swings,
-/// windows, kills: [`action_line`]). Choke as Base_Counselor's graph says it: a second after she's grabbed
+/// Her voice lines (her VoiceOverObjectClass's, as her class sounds) on what happens to her: Wounded as she becomes
+/// wounded, Died (a death outside a kill); her takes' own (swings, dodges, windows, stumbles, kills, the phone, the
+/// trap) are their SCAnimNotify_PlayCounselorVO notifies ([`play_anim_sounds`]), Impact the window's
+/// ([`actor_sounds`]). Choke as Base_Counselor's graph says it: a second after she's grabbed
 /// (BP_OnGrabbed's Delay, which a second grab while it waits doesn't restart), stopped when Jason drops her
 /// (BP_OnDropped) or while she's in a special move (its tick: a kill, its take or its camera running). Her lines only while she's alive (PlayVoiceOver).
-/// PLACEHOLDER: the game's voice component picks the others on its own events, not read; the hiding lines are
-/// hiding.rs's.
+/// The hiding lines are hiding.rs's.
 #[allow(clippy::type_complexity)]
 fn voices(
     mut commands: Commands,
@@ -562,7 +590,7 @@ fn voices(
     let Ok((pe, p, action, held)) = players.single() else { return };
     let c = &p.counselor;
     let now = (c.health, c.wounded, held, action.map(|a| a.0.clone()), p.montage.clone(), c.alive());
-    let Some((health, wounded, was_held, was_action, was_montage, was_alive)) = last.replace(now.clone()) else { return };
+    let Some((_, wounded, was_held, was_action, _, was_alive)) = last.replace(now.clone()) else { return };
     let alive = now.5;
     let mut say = |line: &'static str| {
         if alive || line == "VO:Died" {
@@ -583,8 +611,6 @@ fn voices(
     }
     if !now.5 && was_alive && !in_kill {
         say("VO:Died");
-    } else if now.0 < health && now.5 {
-        say("VO:Impact");
     }
     // MULTICAST_PlayWoundedVO (FUN_1403bf8a0): WoundedScreams, then Wounded queued after it.
     if now.1 && !wounded && now.5 {
@@ -609,20 +635,11 @@ fn voices(
         *match_said = true;
         say("VO:MatchStartVO");
     }
-    if now.4.as_deref().is_some_and(|m| m.contains("stumble")) && now.4 != was_montage {
-        say("VO:Stumble");
-    }
-    // A new line (the kill's) cuts Choke off itself.
-    let mut said = false;
-    if now.3 != was_action {
-        if let Some(line) = now.3.as_deref().and_then(action_line) {
-            say(line);
-            said = true;
-        }
-    }
+    // (Her takes' own lines, the swings', dodges', windows', stumbles' and kills', are their notifies':
+    // SCAnimNotify_PlayCounselorVO through play_anim_sounds.)
     if was_held && !held {
         commands.trigger(StopVoiceOver { actor: pe });
-    } else if !said && (kill(&now.3) || !kills.is_empty()) && saying(&saying_now, pe, "VO:Choke") {
+    } else if (kill(&now.3) || !kills.is_empty()) && saying(&saying_now, pe, "VO:Choke") {
         commands.trigger(StopVoiceOver { actor: pe });
     }
 }

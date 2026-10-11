@@ -287,7 +287,7 @@ pub fn break_phone_box(b: &mut PhoneBox, phones: &mut Query<&mut Phone>) {
 }
 
 /// The call went through: the police are on their way.
-pub fn call_police(commands: &mut Commands, phone: &mut Phone, game: Option<&mut crate::match_flow::GameMatch>, tuning: Option<&crate::match_flow::MatchTuning>, player: Entity) {
+pub fn call_police(commands: &mut Commands, phone: &mut Phone, game: Option<&mut crate::match_flow::GameMatch>, tuning: Option<&crate::match_flow::MatchTuning>, _player: Entity) {
     phone.called = true;
     phone.enabled = false;
     if let (Some(g), Some(t)) = (game, tuning) {
@@ -295,7 +295,7 @@ pub fn call_police(commands: &mut Commands, phone: &mut Phone, game: Option<&mut
         info!("police called: they arrive in {} s", g.state.police_time_remaining);
     }
     commands.trigger(crate::audio::PlaySound { cue: "PoliceCalled".into(), at: None });
-    commands.trigger(crate::audio::ActorSound { actor: player, prop: "VO:CallPolice" });
+    // (Her CallPolice line is her phone take's own notify.)
     commands.trigger(crate::match_flow::ClassScore::new(&phone.class, "CallPoliceScoreEvent"));
 }
 

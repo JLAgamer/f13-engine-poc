@@ -97,7 +97,7 @@ fn drive(
     escaped: Option<Res<Escaped>>,
     tuning: Res<PlayerTuning>,
     mut rng: ResMut<crate::GameRng>,
-    mut player: Single<(&mut Driving, &mut Inventory, &Player)>,
+    mut player: Single<(Entity, &mut Driving, &mut Inventory, &Player)>,
     items: Query<&Item>,
     mut vehicles: Query<(&mut Vehicle, &mut Transform)>,
     mut ray_cast: MeshRayCast,
@@ -108,7 +108,7 @@ fn drive(
     (no_vehicle, not_vehicle): (Query<(), With<crate::collision::NoVehicle>>, Option<Res<crate::collision::NotVehicle>>),
 ) {
     let dt = time.delta_secs();
-    let (ref mut player, ref mut inv, p) = *player;
+    let (driver, ref mut player, ref mut inv, p) = *player;
     if player.seat_move.is_some() {
         return;
     }
@@ -134,6 +134,8 @@ fn drive(
             info!("{} started after holding {:.1}s", v.class, hold.timer);
             // The key turning, then the engine running (EngineStartCue, EngineCue).
             commands.trigger(crate::audio::ActorSound { actor: player.vehicle, prop: "EngineStartCue" });
+            // SCDriveableVehicle::StartVehicle (0x140446ad0): the starter's AppliedLastPart line.
+            commands.trigger(crate::audio::ActorSound { actor: driver, prop: "VO:AppliedLastPart" });
             commands.trigger(crate::audio::ActorLoop { actor: player.vehicle, prop: "EngineCue" });
         }
         return;

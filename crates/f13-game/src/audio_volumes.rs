@@ -14,7 +14,7 @@
 
 use bevy::audio::SpatialListener;
 use bevy::prelude::*;
-use f13_core::collision::{convex_hull, Tri};
+use f13_core::collision::Tri;
 
 use crate::audio::{Pan, SoundMixes, VoiceClass};
 
