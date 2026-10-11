@@ -10,6 +10,11 @@
     mesh_functions::get_world_from_local,
     view_transformations::{position_world_to_clip, depth_ndc_to_view_z, position_world_to_view},
     mesh_view_bindings::{globals, view},
+    mesh_view_bindings as view_bindings,
+    mesh_view_types,
+    clustered_forward as clustering,
+    shadows,
+    lighting,
 }
 #ifdef DEPTH_PREPASS
 #import bevy_pbr::prepass_utils::prepass_depth
@@ -219,25 +224,61 @@ fn fly(in: VertexOutput) -> vec4<f32> {
     return vec4(apply_pbr_lighting(pbr).rgb, 1.0);
 }
 
-// The translucency lighting volume (TLM_VolumetricNonDirectional: x 0.886228, the SH band 0 of the injected light)
-// on a diffuse colour. PLACEHOLDER: f13-rs has no such volume; Bevy's lighting at the pixel, averaged over facing the
-// camera and away from it, stands in for its non-directional light.
+// The translucency lighting volume (TLM_VolumetricNonDirectional) on a diffuse colour: the material reads the volume's
+// ambient (SH band 0) x 0.886228, and each light's injection (TTranslucentLightingInjectPS, the light function
+// materials' shader maps: DefaultLightFunctionMaterial s000-s011) writes LightColor x its attenuation x spot x shadow
+// x 0.089794 there, so a light adds diffuse x E / (4 pi), E its light at the point: for point and spot lights
+// 1 / (d^2 + 1) x saturate(1 - (d^2 / R^2)^2)^2 (inverse squared) x saturate((cos - cos outer) / range)^2 (as Bevy's
+// own attenuation), for the directional light its colour; each x its shadow where it casts one. Evaluated here at the
+// pixel rather than stored: the volume's voxels, its blur, its two cascades and their fades and the injection's
+// half-voxel step toward the light aren't modelled (PLACEHOLDER). The ambient cubemap's injection adds its mean x
+// 0.886228.
 fn volume_lit(in: VertexOutput, diffuse: vec3<f32>) -> vec3<f32> {
-    var pbr = pbr_types::pbr_input_new();
-    pbr.material.base_color = vec4(diffuse, 1.0);
-    pbr.material.metallic = 0.0;
-    pbr.material.reflectance = vec3(0.0);
-    pbr.material.perceptual_roughness = 1.0;
-    pbr.frag_coord = in.clip;
-    pbr.world_position = vec4(in.world_position, 1.0);
-    pbr.V = calculate_view(pbr.world_position, false);
-    pbr.N = pbr.V;
-    pbr.world_normal = pbr.V;
-    let front = apply_pbr_lighting(pbr).rgb;
-    pbr.N = -pbr.V;
-    pbr.world_normal = -pbr.V;
-    let back = apply_pbr_lighting(pbr).rgb;
-    return (front + back) * 0.5 / view.exposure;
+    let p = vec4(in.world_position, 1.0);
+    let view_z = dot(vec4(view.view_from_world[0].z, view.view_from_world[1].z, view.view_from_world[2].z, view.view_from_world[3].z), p);
+    let ranges = clustering::unpack_clusterable_object_index_ranges(clustering::view_fragment_cluster_index(in.clip.xy, view_z, false));
+    var e = vec3(0.0);
+    for (var i: u32 = ranges.first_point_light_index_offset; i < ranges.first_reflection_probe_index_offset; i = i + 1u) {
+        let id = clustering::get_clusterable_object_id(i);
+        let light = &view_bindings::clustered_lights.data[id];
+        let to_light = (*light).position_radius.xyz - p.xyz;
+        let d2 = dot(to_light, to_light);
+        var a = lighting::getDistanceAttenuation(d2, (*light).color_inverse_square_range.w);
+        let l = to_light * inverseSqrt(max(d2, 1e-8));
+        let spot = i >= ranges.first_spot_light_index_offset;
+        if spot {
+            var dir = vec3((*light).light_custom_data.x, 0.0, (*light).light_custom_data.y);
+            dir.y = sqrt(max(0.0, 1.0 - dir.x * dir.x - dir.z * dir.z));
+            if ((*light).flags & mesh_view_types::POINT_LIGHT_FLAGS_SPOT_LIGHT_Y_NEGATIVE) != 0u {
+                dir.y = -dir.y;
+            }
+            let c = saturate(dot(dir, l) * (*light).light_custom_data.z + (*light).light_custom_data.w);
+            a = a * c * c;
+        }
+        if a <= 0.0 {
+            continue;
+        }
+        var shadow = 1.0;
+        if ((*light).flags & mesh_view_types::POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u {
+            if spot {
+                shadow = shadows::fetch_spot_shadow(id, p, l, (*light).shadow_map_near_z, in.clip.xy);
+            } else {
+                shadow = shadows::fetch_point_shadow(id, p, l, in.clip.xy);
+            }
+        }
+        e = e + (*light).color_inverse_square_range.rgb * a * shadow;
+    }
+    for (var i: u32 = 0u; i < view_bindings::lights.n_directional_lights; i = i + 1u) {
+        let light = &view_bindings::lights.directional_lights[i];
+        var shadow = 1.0;
+        if ((*light).flags & mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u {
+            shadow = shadows::fetch_directional_shadow(i, p, (*light).direction_to_light, view_z, in.clip.xy);
+        }
+        e = e + (*light).color.rgb * shadow;
+    }
+    // FInjectAmbientCubemapPS: the ambient cubemap's last mip x AmbientCubemapIntensity x tint into the ambient volume
+    // (the level's: lighting.rs's ambient light, its mean), read x 0.886228.
+    return diffuse * (e * 0.0795775 + view_bindings::lights.ambient_color.rgb * 0.886228);
 }
 
 // M_MasterParticle_Diffuse_nearFade (the dust specks, the wispy fog; lit translucency, s090): diffuse =
@@ -301,8 +342,8 @@ fn smoke_05(in: VertexOutput) -> vec4<f32> {
     return vec4(emissive + volume_lit(in, saturate(diffuse)), alpha);
 }
 
-// M_Rain_Master (the roof drips; lit translucency, s094): t0 Normal1 (its lighting normal, which the volume stand-in
-// doesn't take), t1 EmissiveTexture1, t2 ScrollTexture1. Emissive EmissiveTexture1 at (uv x UV_EmissiveScale +
+// M_Rain_Master (the roof drips; lit translucency, s094): t0 Normal1 (its lighting normal, which the volume
+// evaluation here doesn't take: PLACEHOLDER), t1 EmissiveTexture1, t2 ScrollTexture1. Emissive EmissiveTexture1 at (uv x UV_EmissiveScale +
 // (z_U, z_V)_Emissive_OFFSET) + time x ScrollSpeed_Emissive1, x colour x EmissiveLevel x EmissiveColor; diffuse
 // saturate(colour x BaseColor) under the lighting volume; opacity ScrollTexture1 at uv x UV_MasterScale +/- time x
 // ScrollSpeed_Texture1 (both), x a sphere mask, saturate(x 0.45) x 0_Alpha_Contrast_Opacity_MASTER x colour.a x
@@ -333,7 +374,7 @@ fn rain_master(in: VertexOutput) -> vec4<f32> {
 // colour x 0_EmissiveMasterLevel. Opacity: the sum / 3 contrasted by DynamicParameter.x, x colour.a, x a sphere mask
 // (the distorted uv x SphereMaskGlobalDistortionLevel; radius SphereMask_Radius - 0.2 x the distortion), x 0.985,
 // contrasted by 0_MasterAlphaContrast, x 0_Alpha_Contrast_Opacity_MASTER, at most 0.9; x the depth fades x colour.a x
-// 0_Opacity_MASTER. M_Procedural_Dust_01_self-shadow's sprite pass (s004; per-pixel lit: the stand-in here too) is
+// 0_Opacity_MASTER. M_Procedural_Dust_01_self-shadow's sprite pass (s004; per-pixel lit: the volume evaluation here too, PLACEHOLDER) is
 // the same graph but its shape isn't x colour.a and the alpha is x 0_BaseContrastLevel: p[15] = (the shape's colour.a
 // weight, the alpha's multiplier).
 fn tire_dust(in: VertexOutput) -> vec4<f32> {
