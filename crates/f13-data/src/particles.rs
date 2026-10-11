@@ -187,6 +187,12 @@ pub enum Module {
     Collision { damping: Dist, damping_rotation: Dist, max_collisions: Dist, completion: u8, delay: Dist, only_vertical: bool, vertical_fudge: f32, dir_scalar: f32, drop_detail: bool, only_if_visible: bool, max_distance: f32 },
     /// A module with no CPU effect (ParticleModuleAttractorPointGravity overrides only its GPU compile, vt +0x230).
     GpuOnly,
+    /// ParticleModuleEventGenerator: its events (EPET type: 1 spawn, 2 death, 3 collision, 4 burst; CustomName).
+    EventGenerator(Vec<(u8, String)>),
+    /// ParticleModuleEventReceiverSpawn: on a matching event (EventName, EventGeneratorType or any), SpawnCount
+    /// particles at the event (or the system: bUsePSysLocation), inheriting its velocity x InheritVelocityScale
+    /// (bInheritVelocity), the count at the particle's time for a death event with bUseParticleTime.
+    EventReceiverSpawn { kind: u8, name: String, count: Dist, particle_time: bool, psys_location: bool, inherit: bool, inherit_scale: Dist },
     /// A module f13-game doesn't run (its type).
     Unported(String),
 }
@@ -227,7 +233,25 @@ pub struct Emitter {
     pub mesh: Option<MeshData>,
     /// ParticleModuleTypeDataRibbon: its particles are a trail's points.
     pub ribbon: Option<Ribbon>,
+    /// A GPU emitter with an enabled ParticleModuleCollisionGPU: its simulation's collision constants.
+    pub gpu_collision: Option<GpuCollision>,
     pub modules: Vec<Module>,
+}
+
+/// A GPU emitter's collision (TParticleSimulationPS<PCM_DepthBuffer>), as ParticleModuleTypeDataGpu's cooked
+/// ResourceData holds it (UParticleModuleCollisionGPU::CompileModule 0x1415c16f0 feeds it: Friction, Resilience,
+/// RandomSpread / Distribution, RadiusScale / Bias, Response; a property it leaves at zero isn't in the package).
+#[derive(Clone, Debug)]
+pub struct GpuCollision {
+    pub radius_scale: f32,
+    pub radius_bias: f32,
+    pub one_minus_friction: f32,
+    /// ResilienceBias (the Resilience curve's constant part; no emitter here scales it over life).
+    pub resilience: f32,
+    /// Added to the relative time on a collision (Response Kill: 1.1).
+    pub time_bias: f32,
+    pub random_spread: f32,
+    pub random_distribution: f32,
 }
 
 /// A ribbon emitter's ParticleModuleTypeDataRibbon (the constructor 0x1415ee8f0's defaults: MaxTessellationBetweenParticles
@@ -270,6 +294,18 @@ fn num(v: &Value, d: f32) -> f32 {
 
 fn vec3(v: &Value) -> Vec3 {
     Vec3::new(num(&v["X"], 0.0), num(&v["Y"], 0.0), num(&v["Z"], 0.0))
+}
+
+/// EParticleEventType: EPET_Any 0, EPET_Spawn 1, EPET_Death 2, EPET_Collision 3, EPET_Burst 4, EPET_Blueprint 5.
+fn event_type(v: &serde_json::Value) -> u8 {
+    match v.as_str().unwrap_or("") {
+        "EPET_Spawn" => 1,
+        "EPET_Death" => 2,
+        "EPET_Collision" => 3,
+        "EPET_Burst" => 4,
+        "EPET_Blueprint" => 5,
+        _ => 0,
+    }
 }
 
 impl System {
@@ -399,6 +435,18 @@ impl System {
                         offset_life: p["OffsetOptions"]["bProcessDuringUpdate"].as_bool().unwrap_or(false),
                     },
                     "ParticleModuleSubUV" => Module::SubUV(dist(&p["SubImageIndex"], 1)),
+                    "ParticleModuleEventGenerator" => Module::EventGenerator(
+                        p["Events"].as_array().map_or_else(Vec::new, |a| a.iter().map(|ev| (event_type(&ev["Type"]), ev["CustomName"].as_str().unwrap_or("").to_string())).collect()),
+                    ),
+                    "ParticleModuleEventReceiverSpawn" => Module::EventReceiverSpawn {
+                        kind: event_type(&p["EventGeneratorType"]),
+                        name: p["EventName"].as_str().unwrap_or("").to_string(),
+                        count: dist(&p["SpawnCount"], 1),
+                        particle_time: p["bUseParticleTime"].as_bool().unwrap_or(false),
+                        psys_location: p["bUsePSysLocation"].as_bool().unwrap_or(false),
+                        inherit: p["bInheritVelocity"].as_bool().unwrap_or(false),
+                        inherit_scale: dist(&p["InheritVelocityScale"], 3),
+                    },
                     "ParticleModuleParameterDynamic" => {
                         let mut d: [Option<(Dist, bool, bool)>; 4] = Default::default();
                         for (i, x) in p["DynamicParams"].as_array().into_iter().flatten().take(4).enumerate() {
@@ -455,6 +503,8 @@ impl System {
                     },
                     "ParticleModuleSourceMovement" => Module::SourceMovement(dist(&p["SourceMovementScale"], 3)),
                     "ParticleModuleAttractorPointGravity" => Module::GpuOnly,
+                    // Its constants come from the GPU type data's ResourceData (Emitter::gpu_collision).
+                    "ParticleModuleCollisionGPU" => Module::GpuOnly,
                     "ParticleModuleCollision" => Module::Collision {
                         damping: dist(&p["DampingFactor"], 3),
                         damping_rotation: dist(&p["DampingFactorRotation"], 3),
@@ -526,6 +576,24 @@ impl System {
                         spin: tp["bApplyParticleRotationAsSpin"].as_bool().unwrap_or(false),
                     })
                 }),
+                gpu_collision: get(&lp["TypeDataModule"])
+                    .filter(|t| t["Type"] == "ParticleModuleTypeDataGpu")
+                    .filter(|_| {
+                        lp["Modules"].as_array().is_some_and(|ms| ms.iter().filter_map(get).any(|m| m["Type"] == "ParticleModuleCollisionGPU" && m["Props"]["bEnabled"].as_bool() != Some(false)))
+                    })
+                    .map(|t| {
+                        let rd = &t["Props"]["ResourceData"];
+                        let f = |k: &str| rd[k].as_f64().unwrap_or(0.0) as f32;
+                        GpuCollision {
+                            radius_scale: f("CollisionRadiusScale"),
+                            radius_bias: f("CollisionRadiusBias"),
+                            one_minus_friction: f("OneMinusFriction"),
+                            resilience: f("ResilienceBias"),
+                            time_bias: f("CollisionTimeBias"),
+                            random_spread: f("CollisionRandomSpread"),
+                            random_distribution: f("CollisionRandomDistribution"),
+                        }
+                    }),
                 ribbon: get(&lp["TypeDataModule"]).filter(|t| t["Type"] == "ParticleModuleTypeDataRibbon").map(|t| {
                     let tp = &t["Props"];
                     Ribbon {
@@ -575,6 +643,28 @@ mod tests {
                 let e = s.emitters.iter().find(|e| e.name == "FlamesBase1").unwrap();
                 assert_eq!((e.rate.eval(0.0, 0.0), e.rate.eval(0.0, 1.0)), (10.0, 20.0));
                 assert!(e.modules.iter().any(|m| matches!(m, Module::Lifetime(d) if d.eval(0.0, 0.0) == 0.75 && d.eval(0.0, 1.0) == 1.0)));
+            }
+            // The roof drips' collision kills them (Response Kill: CollisionTimeBias 1.1); the radio's sparks bounce.
+            if s.name == "P_Roof_Edge_Rain_Drips_GPU_01" {
+                let c = s.emitters.iter().find_map(|e| e.gpu_collision.clone()).unwrap();
+                assert_eq!((c.time_bias, c.radius_bias, c.radius_scale), (1.1, 1.0, 0.0));
+            }
+            if s.name == "P_Radio_Destroyed_01" {
+                let c = s.emitters.iter().find_map(|e| e.gpu_collision.clone()).unwrap();
+                assert_eq!((c.one_minus_friction, c.resilience, c.radius_bias), (0.7, 0.4, 0.5));
+            }
+            // Jason's underwater bubbles: the rising ones pop into ten on death.
+            if s.name == "P_Underwater_Jason_Bubbles_01" {
+                let e = s.emitters.iter().find(|e| e.name == "BubblesPopping").unwrap();
+                assert!(e.modules.iter().any(|m| matches!(m, Module::EventReceiverSpawn { kind: 2, name, count, .. } if name == "bubblepop" && count.eval(0.0, 0.0) == 10.0)));
+                let g = s.emitters.iter().find(|e| e.name == "BubblesRising").unwrap();
+                assert!(g.modules.iter().any(|m| matches!(m, Module::EventGenerator(evs) if evs.iter().any(|e| e.0 == 2 && e.1 == "bubblepop"))));
+            }
+            // The knife's trail: a ribbon along the source's up.
+            if s.name == "P_Jason_ThrowingKnife_01" {
+                let e = s.emitters.iter().find(|e| e.name == "TracerTrail").unwrap();
+                assert_eq!(e.ribbon.as_ref().map(|r| (r.render_axis, r.max_particles)), Some((1, 1000)));
+                assert!(e.spawn_per_unit.is_some());
             }
         }
     }

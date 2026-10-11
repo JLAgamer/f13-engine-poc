@@ -146,6 +146,17 @@ const DELAY_COLLISIONS: u32 = 16;
 /// A line trace in Unreal space (cm): the hit's fraction of the way and its normal.
 type Trace<'a> = &'a dyn Fn(Vec3, Vec3) -> Option<(f32, Vec3)>;
 
+/// A particle event (UParticleSystemComponent's SpawnEvents / DeathEvents): its type, name, where, the particle's
+/// velocity, the emitter's time and the particle's.
+struct ParticleEvent {
+    kind: u8,
+    name: String,
+    location: Vec3,
+    velocity: Vec3,
+    emitter_time: f32,
+    particle_time: f32,
+}
+
 /// What ParticleModuleCollision's update reads besides its traces (Unreal space, cm): the players' view locations
 /// (the component's PlayerLocations; their LOD distance factors taken as 1, PLACEHOLDER), the world's bDropDetail,
 /// whether the system went unrendered for over 0.1 s (World time - LastRenderTime > 0x142dd3420), and the system's
@@ -346,6 +357,8 @@ impl Materials {
             let pass = match mode {
                 7 => Some(30.0),
                 31 => Some(32.0),
+                33 => Some(34.0),
+                35 => Some(36.0),
                 _ => None,
             };
             let distortion = pass.map(|d| ParticleMaterial { params: ParticleParams { mode: Vec4::new(d, 0.0, 0.0, 0.0), ..m.params }, alpha: AlphaMode::Opaque, distort: true, ..m.clone() });
@@ -614,6 +627,26 @@ impl Materials {
                     (13.0, [tex("DIFF"), None, None, None])
                 }
             }
+            "M_Water_Splash_03_masked-blend" | "M_Water_Splash_02_masked-blend_separate-transparency_off" => {
+                // uniexpr.py M_Water_Splash_03_masked-blend (its _02_..._separate-transparency_off sibling's set is
+                // the same): cb1[1] SelectionColor.rgb (0), [2..5].
+                p[2] = Vec4::new(s("NRM_Intensity", 1.0), s("DiffuseFresnel", 2.0), s("DiffuseMultiplier", 0.5), s("EmissiveBaseLevel", 0.05));
+                p[3] = Vec4::new(s("EmissiveScroll_UV_Multiplier", 0.2), s("EmissiveScrollLevel", 0.025), s("MET", 0.03), s("SPEC", 0.1));
+                p[4] = Vec4::new(s("ROUGH", 0.02), s("FadeDistance", 3.0), s("FadeDistance", 3.0).max(1e-5), s("0_PixelDepthDistance", 0.0));
+                p[5] = Vec4::new(s("OpacityMultiplier", 1.0), s("Index of Refraction", 1.333), s("RefractionDepthBias", 0.0), 0.0);
+                (33.0, [tex("normal"), tex("CloudMask"), tex("mask"), None])
+            }
+            "M_Water_Splash_02_masked-blend" => {
+                // uniexpr.py M_Water_Splash_02_masked-blend: cb1[3] SelectionColor.rgb (0), [4..9].
+                let c = s("EmissiveScroll_Contrast", 0.5);
+                p[4] = Vec4::new(s("NRM_Intensity", 1.0), s("DiffuseFresnel", 2.0), s("DiffuseMultiplier", 0.5), s("EmissiveMasterLevel", 0.1));
+                p[5] = Vec4::new(c, -c, s("EmissiveScroll_Time_Multiplier", 1.0), s("EmissiveScroll_UV_Multiplier", 0.5));
+                p[6] = Vec4::new(1.0 + c, s("EmissiveScrollBrightnessLevel", 0.05), s("MET", 0.03), s("SPEC", 0.1));
+                p[7] = Vec4::new(s("ROUGH", 0.02), s("0_GradMask_Multiplier", 1.0), s("0_GradMask_Multiplier", 1.0), s("FadeDistance", 20.0));
+                p[8] = Vec4::new(s("FadeDistance", 20.0).max(1e-5), s("0_PixelDepthDistance", 0.0), s("OpacityMultiplier", 1.0), s("Index of Refraction", 1.333));
+                p[9] = Vec4::new(s("RefractionDepthBias", 0.0), 0.0, 0.0, 0.0);
+                (35.0, [tex("normal"), tex("CloudMask"), tex("mask"), None])
+            }
             "M_Jason_ThrowingKnife_Trail_02" => {
                 // uniexpr.py M_Jason_ThrowingKnife_Trail_02: cb1[2] GlowColor.rgb, [3] SelectionColor.rgb (0), [4..6].
                 let vec = |n: &str, d: [f32; 4]| e.vectors.get(n).or_else(|| master.and_then(|m| m.vectors.get(n))).copied().unwrap_or(d);
@@ -720,11 +753,13 @@ impl ParticleAssets {
                 continue;
             }
             let Some((material, mode)) = def.material.as_deref().and_then(|m| self.mats.get(m, &self.root, assets, materials)) else {
-                // Not drawn, but still simulated when another emitter's ParticleModuleAttractorParticle names it.
+                // Not drawn, but still simulated when another emitter's ParticleModuleAttractorParticle names it, when it
+                // sends events (an EventGenerator), or for its lights (a ParticleModuleLight).
                 let named = system.emitters.iter().flat_map(|o| &o.modules).any(|m| matches!(m, Module::AttractorParticle { emitter, .. } if *emitter == def.name));
-                if named {
+                let sends = def.modules.iter().any(|m| matches!(m, Module::EventGenerator(_) | Module::Light { .. }));
+                if named || sends {
                     let entity = commands.spawn((Transform::default(), Visibility::Hidden)).id();
-                    emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: None, slots: vec![], lights: vec![], drawn: false, attractor_last: [0; 2], collision_check: 0, last_source: None, unit_fraction: 0.0 });
+                    emitters.push(EmitterState { def: def.clone(), seconds: 0.0, spawn_fraction: 0.0, particles: vec![], entity, mesh: Handle::default(), pivot: Vec2::ZERO, bursts_fired: vec![false; def.bursts.len()], loops_done: 0, sphere: false, mesh_scene: None, slots: vec![], lights: light_pool(commands, def, name), drawn: false, attractor_last: [0; 2], collision_check: 0, last_source: None, unit_fraction: 0.0 });
                 }
                 continue;
             };
@@ -1185,8 +1220,33 @@ fn tick(s: &mut ParticleSystemInstance, dt: f32, world: Option<(Trace, &[Vec3], 
     let bounds = s.emitters.iter().flat_map(|e| e.particles.iter()).fold(None, |b: Option<(Vec3, Vec3)>, p| Some(b.map_or((p.location, p.location), |(lo, hi)| (lo.min(p.location), hi.max(p.location)))));
     let collider = world.map(|(trace, views, drop_detail, unrendered)| Collider { trace, views, drop_detail, unrendered, bounds });
     let mut rng = s.rng;
+    let mut events = vec![];
     for e in &mut s.emitters {
-        tick_emitter(e, dt, location, rotation, scale, active, &mut rng, &sources, moved, collider.as_ref());
+        tick_emitter(e, dt, location, rotation, scale, active, &mut rng, &sources, moved, collider.as_ref(), &mut events);
+    }
+    // The events, once every emitter has ticked: each receiver module's (UParticleModuleEventReceiverSpawn::
+    // ProcessParticleEvent 0x1415da050) ForceSpawn of round(SpawnCount) at the event (or the system), with the
+    // event's velocity x InheritVelocityScale when bInheritVelocity; the count at the emitter's time, or the
+    // particle's for a death event with bUseParticleTime.
+    if !events.is_empty() {
+        for e in &mut s.emitters {
+            let def = e.def.clone();
+            for m in &def.modules {
+                let Module::EventReceiverSpawn { kind, name, count, particle_time, psys_location, inherit, inherit_scale } = m else { continue };
+                for ev in events.iter().filter(|ev| ev.name == *name && (*kind == 0 || *kind == ev.kind)) {
+                    let at_time = if ev.kind == 2 && *particle_time { ev.particle_time } else { ev.emitter_time };
+                    let n = count.eval(at_time, rand(&mut rng)).round().max(0.0) as u32;
+                    let velocity = if *inherit { inherit_scale.eval3(at_time, rand3(&mut rng)) * ev.velocity } else { Vec3::ZERO };
+                    let at = if *psys_location { location } else { ev.location };
+                    for _ in 0..n {
+                        let mut p = spawn(&def, 0.0, e.seconds, at, rotation, scale, &mut rng);
+                        p.velocity += velocity;
+                        p.base_velocity += velocity;
+                        e.particles.push(p);
+                    }
+                }
+            }
+        }
     }
     s.rng = rng;
 }
@@ -1203,6 +1263,7 @@ fn tick_emitter(
     sources: &HashMap<String, Vec<(Vec3, Vec3, f32)>>,
     moved: Vec3,
     collider: Option<&Collider>,
+    events: &mut Vec<ParticleEvent>,
 ) {
     let def = &e.def;
     // Tick_EmitterTimeSetup.
@@ -1211,18 +1272,34 @@ fn tick_emitter(
     let duration = def.duration.max(0.0);
     let mut emitter_time = e.seconds;
     let _ = old_seconds;
-    if duration > 0.0 {
-        let loops = (e.seconds / duration).floor() as u32;
-        if loops > e.loops_done {
-            e.loops_done = loops;
+    // SetupEmitterDuration (0x1415aaa40): a loop lasts EmitterDuration + the delay (EmitterDelay; less the delay after
+    // the first loop with bDelayFirstLoopOnly on a looping emitter); the emitter's time is the time into the loop less
+    // the delay (none after the first loop with bDelayFirstLoopOnly).
+    let delay_once = def.delay_first_loop_only && def.loops != 1;
+    let looped = |n: u32| duration + if delay_once && n >= 1 { 0.0 } else { def.delay };
+    let length = looped(e.loops_done);
+    if length > 1e-4 {
+        // Tick_EmitterTimeSetup: the time modulo the loop's length; a loop counted (once a tick) when the time since
+        // creation passes length x the loops so far.
+        emitter_time = e.seconds % length;
+        if e.seconds - length * e.loops_done as f32 >= length {
+            e.loops_done += 1;
             e.bursts_fired.iter_mut().for_each(|b| *b = false);
         }
-        emitter_time = e.seconds - loops as f32 * duration;
     }
     let finished = !active || (def.loops > 0 && duration > 0.0 && e.loops_done >= def.loops);
     let delay = if def.delay_first_loop_only && e.loops_done > 0 { 0.0 } else { def.delay };
     emitter_time -= delay;
-    // KillParticles.
+    // KillParticles (an EventGenerator's death events for each: UParticleModuleEventGenerator::HandleParticleKilled;
+    // every Frequency-th, 1 in every emitter here).
+    let deaths: Vec<&String> = def.modules.iter().flat_map(|m| if let Module::EventGenerator(evs) = m { evs.iter().filter(|e| e.0 == 2).map(|e| &e.1).collect() } else { vec![] }).collect();
+    if !deaths.is_empty() {
+        for p in e.particles.iter().filter(|p| p.relative_time > 1.0) {
+            for name in &deaths {
+                events.push(ParticleEvent { kind: 2, name: (*name).clone(), location: p.location, velocity: p.velocity, emitter_time: e.seconds, particle_time: p.relative_time });
+            }
+        }
+    }
     e.particles.retain(|p| p.relative_time <= 1.0);
     // ResetParticleParameters.
     for p in &mut e.particles {
@@ -1290,6 +1367,7 @@ fn tick_emitter(
         }
     }
     // Spawn.
+    let alive_before = e.particles.len();
     if !finished && emitter_time >= 0.0 {
         let rate = def.rate.eval(emitter_time, rand(rng)) * def.rate_scale.eval(emitter_time, rand(rng)).max(0.0);
         let mut count = 0;
@@ -1363,6 +1441,15 @@ fn tick_emitter(
             e.particles.push(p);
         }
     }
+    // Spawn events for the particles spawned this tick (HandleParticleSpawned: each one, Frequency 1 here).
+    let spawns: Vec<&String> = def.modules.iter().flat_map(|m| if let Module::EventGenerator(evs) = m { evs.iter().filter(|e| e.0 == 1).map(|e| &e.1).collect() } else { vec![] }).collect();
+    if !spawns.is_empty() {
+        for p in e.particles.iter().skip(alive_before) {
+            for name in &spawns {
+                events.push(ParticleEvent { kind: 1, name: (*name).clone(), location: p.location, velocity: p.velocity, emitter_time: e.seconds, particle_time: p.relative_time });
+            }
+        }
+    }
     // The FinalUpdate modules: ParticleModuleSourceMovement (0x14159bc20) moves each particle older than two ticks by
     // its scale (at its relative time) times the component's move since the last tick.
     for m in &def.modules {
@@ -1372,6 +1459,12 @@ fn tick_emitter(
                     p.location += d.eval3(p.relative_time, [0.0; 3]) * moved;
                 }
             }
+        }
+    }
+    // A GPU emitter's collision (its simulation pass's, before it integrates).
+    if let (Some(gc), Some(c)) = (&def.gpu_collision, collider) {
+        for p in e.particles.iter_mut().filter(|p| p.state & FREEZE == 0) {
+            gpu_collide(p, dt, scale, gc, c.trace);
         }
     }
     // UpdateBoundingBox: the linear integrator.
@@ -1905,6 +1998,41 @@ fn draw(
                 mesh.insert_indices(Indices::U32(indices));
             }
         }
+    }
+}
+
+/// TParticleSimulationPS<PCM_DepthBuffer>'s collision (global shader cache), for one particle this tick: radius
+/// min(|size.x|, |size.y|) x the component's scale x CollisionRadiusScale + CollisionRadiusBias; probe the move's end
+/// pushed on by the radius; against the surface found there (point S, normal N; d = N.S): in = radius + N.position - d,
+/// out = N.(position + velocity dt) - radius - d. With in >= 0, out <= 0 and the move into the surface: velocity =
+/// OneMinusFriction x its part along the surface - Resilience x its part along N, position + (N.position - radius - d)
+/// x N, then a tenth of the new move, and the relative time + CollisionTimeBias (Response Kill: 1.1, so it dies);
+/// with both below 0 (behind the surface) the relative time is 1.1. PLACEHOLDER: the game finds the surface in the
+/// scene depth buffer and its normal in the G-buffer (within CollisionDepthBounds of the probe); the world collision
+/// stands in. CollisionRandomSpread's cone isn't ported (no emitter here sets it).
+fn gpu_collide(p: &mut Particle, dt: f32, scale: Vec3, gc: &f13_data::particles::GpuCollision, trace: Trace) {
+    let v = p.velocity;
+    let delta = v * dt;
+    if delta.length_squared() < 1e-12 {
+        return;
+    }
+    let radius = (p.size.x * scale.x).abs().min((p.size.y * scale.y).abs()) * gc.radius_scale + gc.radius_bias;
+    let from = p.location;
+    let end = from + delta + delta.normalize() * radius;
+    let Some((t, n)) = trace(from, end) else { return };
+    let d = n.dot(from + (end - from) * t);
+    let in_d = radius + n.dot(from) - d;
+    let out_d = n.dot(from + delta) - radius - d;
+    if in_d >= 0.0 && out_d <= 0.0 && n.dot(delta) < 0.0 {
+        let vn = v.dot(n) * n;
+        let v2 = gc.one_minus_friction * (v - vn) - gc.resilience * vn;
+        p.velocity = v2;
+        p.base_velocity = v2;
+        // The integrator adds v2 x dt after this: leave a tenth of it.
+        p.location = from + (n.dot(from) - radius - d) * n + v2 * dt * 0.1 - v2 * dt;
+        p.relative_time += gc.time_bias;
+    } else if in_d < 0.0 && out_d < 0.0 {
+        p.relative_time = 1.1;
     }
 }
 

@@ -35,8 +35,9 @@ Moved from Milestone 1 (not tied to gameplay):
       in the shipped global shader cache: MODLOG "Foliage subsurface: blocked")
 - [ ] Particle effects (Cascade): the level's systems simulate (particles.rs) and the fire masters are ported (the
       campfire's and fireplace's flames, sparks and smoke, the candles, the lamps' flies, dust specks, the low fog, the
-      intro's Savini embers and eye glows).
-      Remaining: the GPU emitters' modules (CollisionGPU, the event generator and receiver)
+      intro's Savini embers and eye glows, the water splashes and bubbles). Remaining: the grass impact's debris (a mesh
+      emitter that overrides its mesh's material with M_Firecracker_Debris_01; f13-rs draws mesh emitters with their
+      meshes' own materials only)
 - [ ] Counselor model, remaining: the eye look against a capture of the game (it rolls the eyes 90 degrees from their bind: MODLOG
       "The eyes' look")
       (MODLOG "The counselor's face")

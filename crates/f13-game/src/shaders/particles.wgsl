@@ -661,21 +661,33 @@ fn blood_at(in: VertexOutput, fuv: vec2<f32>) -> vec4<f32> {
 // depth at the offset - the pixel's) / clamp(|RefractionDepthBias / 2|, 1, 50) - RefractionDepthBias) (cm); the
 // apply keeps the pixel where the offset leaves the view. Drawn in Bevy's transmissive pass (the opaque scene's
 // colour), each refracting particle on its own rather than summed into one offset buffer.
-fn distortion(in: VertexOutput, n: vec3<f32>, refraction: f32, depth_bias: f32) -> vec4<f32> {
+// The quad's tangent frame (+U, +V and its facing normal) from the screen derivatives of its position and uv.
+fn quad_frame(in: VertexOutput) -> mat3x3<f32> {
     let dpx = dpdx(in.world_position);
     let dpy = dpdy(in.world_position);
     let duvx = dpdx(in.uv);
     let duvy = dpdy(in.uv);
     let det = duvx.x * duvy.y - duvx.y * duvy.x;
-    let dpdu = (dpx * duvy.y - dpy * duvx.y) / det;
-    let dpdv = (dpy * duvx.x - dpx * duvy.x) / det;
-    let t = normalize(dpdu);
-    let b = normalize(dpdv);
+    let t = normalize((dpx * duvy.y - dpy * duvx.y) / det);
+    let b = normalize((dpy * duvx.x - dpx * duvy.x) / det);
     var nrm = normalize(cross(b, t));
     if dot(nrm, view.world_position - in.world_position) < 0.0 {
         nrm = -nrm;
     }
-    let wn = normalize(t * n.x + b * n.y + nrm * n.z);
+    return mat3x3(t, b, nrm);
+}
+
+// Unreal's world axes (Z up) to Bevy's (Y up).
+fn from_ue(v: vec3<f32>) -> vec3<f32> {
+    return vec3(v.x, v.z, v.y);
+}
+
+fn distortion(in: VertexOutput, n: vec3<f32>, refraction: f32, depth_bias: f32) -> vec4<f32> {
+    return distortion_world(in, normalize(quad_frame(in) * n), refraction, depth_bias);
+}
+
+// The same from a world-space normal (Bevy axes): materials without tangent-space normals.
+fn distortion_world(in: VertexOutput, wn: vec3<f32>, refraction: f32, depth_bias: f32) -> vec4<f32> {
     let vn = normalize((view.view_from_world * vec4(wn, 0.0)).xyz);
     let d = vn.xy * refraction;
     if dot(d, d) - 0.00001 < 0.0 {
@@ -746,6 +758,86 @@ fn knife_trail_distortion(in: VertexOutput) -> vec4<f32> {
     return distortion(in, n, (p[5].w - 1.0) * trail_mask(in) * sprite.a * n.x, p[6].x);
 }
 
+// The water splash masters (forward-lit translucency, lit per pixel by every light: TLM_Surface). Their tangent
+// normal nt = Normal (t0) unpacked; k = colour.a x NRM_Intensity; the lighting normal lerp((0, 0, 1), nt, k); the
+// Fresnel 0.04 + 0.96 |1 - max(nt . V, 0)|^DiffuseFresnel (the unpacked map against the world view vector, as the
+// graph has it); d = that x colour x DiffuseMultiplier, the base colour saturate(d); metallic saturate(MET),
+// specular saturate(SPEC), roughness saturate(ROUGH); opacity saturate(mask (t2) x the depth fade (FadeDistance)) x
+// the pixel depth fade x colour.a x OpacityMultiplier, saturated. Refraction (IoR - 1) x the lighting normal's x.
+// M_Water_Splash_03_masked-blend (s147 base, s141 distortion; and the _02_..._separate-transparency_off master,
+// whose uniforms are its): the normal through the quad's tangent frame; emissive saturate(CloudMask (t1) at (0, 0)
+// x 2 - 0.5) x colour x EmissiveScrollLevel + d x EmissiveBaseLevel.
+// M_Water_Splash_02_masked-blend (s082, s024; Jason's bubbles): the normal taken as a world-space one (no tangent
+// frame); emissive saturate(lerp(-EmissiveScroll_Contrast, 1 + it, CloudMask at time x Time_Multiplier x
+// UV_Multiplier x (0.5, 1))) x colour x EmissiveScrollBrightnessLevel + d x EmissiveMasterLevel.
+fn splash_normal(in: VertexOutput, k: f32) -> array<vec3<f32>, 2> {
+    let nm = textureSample(t0, s, in.uv).xy * 2.0 - 1.0;
+    let nt = vec3(nm, sqrt(max(1.0 - dot(nm, nm), 0.0)));
+    return array(nt, mix(vec3(0.0, 0.0, 1.0), nt, k));
+}
+
+fn splash_fresnel(in: VertexOutput, nt: vec3<f32>, power: f32) -> f32 {
+    let v = normalize(view.world_position - in.world_position);
+    let v_ue = vec3(v.x, v.z, v.y);
+    return 0.04 + 0.96 * pow(abs(1.0 - max(dot(nt, v_ue), 0.0)), power);
+}
+
+fn splash_lit(in: VertexOutput, n_world: vec3<f32>, base: vec3<f32>, metallic: f32, specular: f32, roughness: f32) -> vec3<f32> {
+    var pbr = pbr_types::pbr_input_new();
+    pbr.material.base_color = vec4(base, 1.0);
+    pbr.material.metallic = metallic;
+    pbr.material.reflectance = vec3(sqrt(0.5 * specular));
+    pbr.material.perceptual_roughness = roughness;
+    pbr.frag_coord = in.clip;
+    pbr.world_position = vec4(in.world_position, 1.0);
+    pbr.world_normal = n_world;
+    pbr.N = n_world;
+    pbr.V = calculate_view(pbr.world_position, false);
+    return apply_pbr_lighting(pbr).rgb / view.exposure;
+}
+
+fn splash_opacity(in: VertexOutput, mask: f32, fade: f32, pixel_fade: f32, multiplier: f32) -> f32 {
+    let fades = depth_fades(in, fade, pixel_fade);
+    return saturate(saturate(mask * fades.x) * fades.y * in.color.a * multiplier);
+}
+
+fn splash_03(in: VertexOutput) -> vec4<f32> {
+    let p = params.p;
+    let n = splash_normal(in, in.color.a * p[2].x);
+    let d = splash_fresnel(in, vec3(n[0].xy, n[0].z), p[2].y) * in.color.rgb * p[2].z;
+    let cloud = textureSample(t1, s, vec2(0.0)).x;
+    let emissive = saturate(cloud * 2.0 - 0.5) * in.color.rgb * p[3].y + d * p[2].w + p[1].xyz;
+    let wn = normalize(quad_frame(in) * normalize(n[1]));
+    let lit = splash_lit(in, wn, saturate(d), saturate(p[3].z), saturate(p[3].w), saturate(p[4].x));
+    let mask = textureSample(t2, s, in.uv).x;
+    return vec4(lit + emissive, splash_opacity(in, mask, p[4].z, p[4].w, p[5].x));
+}
+
+fn splash_03_distortion(in: VertexOutput) -> vec4<f32> {
+    let p = params.p;
+    let n = splash_normal(in, in.color.a * p[2].x)[1];
+    return distortion(in, n, (p[5].y - 1.0) * n.x, p[5].z);
+}
+
+fn splash_02(in: VertexOutput) -> vec4<f32> {
+    let p = params.p;
+    let n = splash_normal(in, in.color.a * p[4].x);
+    let d = splash_fresnel(in, n[0], p[4].y) * in.color.rgb * p[4].z;
+    let speed = globals.time * p[5].z * p[5].w;
+    let cloud = textureSample(t1, s, vec2(speed * 0.5, speed)).x;
+    let e = saturate(mix(-p[5].x, p[6].x, cloud));
+    let emissive = e * in.color.rgb * p[6].y + d * p[4].w + p[3].xyz;
+    let lit = splash_lit(in, normalize(from_ue(normalize(n[1]))), saturate(d), saturate(p[6].z), saturate(p[6].w), saturate(p[7].x));
+    let mask = textureSample(t2, s, in.uv).x * p[7].z;
+    return vec4(lit + emissive, splash_opacity(in, mask, p[8].x, p[8].y, p[8].z));
+}
+
+fn splash_02_distortion(in: VertexOutput) -> vec4<f32> {
+    let p = params.p;
+    let n = splash_normal(in, in.color.a * p[4].x)[1];
+    return distortion_world(in, normalize(from_ue(normalize(n))), (p[8].w - 1.0) * n.x, p[9].x);
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let mode = u32(params.mode.x);
@@ -755,6 +847,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     if mode == 32u {
         return knife_trail_distortion(in);
+    }
+    if mode == 34u {
+        return splash_03_distortion(in);
+    }
+    if mode == 36u {
+        return splash_02_distortion(in);
     }
     var c: vec4<f32>;
     if mode == 1u {
@@ -785,6 +883,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         c = blood_squirt(in);
     } else if mode == 31u {
         c = knife_trail(in);
+    } else if mode == 33u {
+        c = splash_03(in);
+    } else if mode == 35u {
+        c = splash_02(in);
     } else if mode == 4u {
         // Already exposed (apply_pbr_lighting).
         c = fly(in);
