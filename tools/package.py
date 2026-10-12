@@ -4,8 +4,8 @@
 
 Needs cargo-about (`cargo install cargo-about --features cli`) for THIRD-PARTY-NOTICES.md.
 
-It holds lakeside-setup.exe, lakeside.exe and lakeside-host.exe (f13-installer, f13-game and f13-host, cargo, release:
-renamed for players) and the exporter published self-contained as tools/lakeside-export/ (no .NET install needed). No game files: the installer builds the
+It holds lakeside-setup.exe and lakeside.exe (f13-installer and f13-game, cargo, release: renamed for players; the
+developers' f13-host isn't shipped) and the exporter published self-contained as tools/lakeside-export/ (no .NET install needed). No game files: the installer builds the
 export from the player's own copy.
 """
 import argparse, os, shutil, subprocess, sys, zipfile
@@ -37,13 +37,13 @@ def main():
     ap.add_argument("--dotnet", default=shutil.which("dotnet") or "dotnet")
     args = ap.parse_args()
 
-    run(["cargo", "build", "--release", "-p", "f13-game", "-p", "f13-host", "-p", "f13-installer"])
+    run(["cargo", "build", "--release", "-p", "f13-game", "-p", "f13-installer"])
     if os.path.isdir(STAGE):
         shutil.rmtree(STAGE)
     os.makedirs(os.path.join(STAGE, "tools"))
     run([args.dotnet, "publish", os.path.join("tools", "f13-export"), "-c", "Release", "-r", "win-x64", "--self-contained", "true",
          "-p:AssemblyName=lakeside-export", "-o", os.path.join(STAGE, "tools", "lakeside-export")])
-    for built, shipped in [("f13-installer.exe", "lakeside-setup.exe"), ("f13-game.exe", "lakeside.exe"), ("f13-host.exe", "lakeside-host.exe")]:
+    for built, shipped in [("f13-installer.exe", "lakeside-setup.exe"), ("f13-game.exe", "lakeside.exe")]:
         shutil.copy2(os.path.join(ROOT, "target", "release", built), os.path.join(STAGE, shipped))
     # Every bundled library's licence (cargo-about for the crates; the NuGet cache for the exporter's packages).
     run([sys.executable, os.path.join("tools", "notices.py"), os.path.join(STAGE, "tools", "lakeside-export"), os.path.join(STAGE, "THIRD-PARTY-NOTICES.md")])

@@ -9,7 +9,7 @@
 //! Play starts the game. The folder picked is kept in `installer.json` beside the executable.
 //!
 //! The release zip names the programs for players (tools/package.py): lakeside.exe (f13-game), lakeside-setup.exe
-//! (this), lakeside-host.exe, tools/lakeside-export/lakeside-export.exe; a source checkout keeps the f13- names.
+//! (this), tools/lakeside-export/lakeside-export.exe; a source checkout keeps the f13- names.
 //!
 //! In the release zip the exporter sits in `tools/` next to this executable; run from a source checkout
 //! (`target/release`), the exporter's own Release build is used.

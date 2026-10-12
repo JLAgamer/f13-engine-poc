@@ -34,8 +34,8 @@ Multiplayer is between Lakeside players only (see Playing together); it never co
 
 Developers build the same pieces by hand (below), and `python tools/package.py [--dotnet <dotnet.exe>]` builds the
 release zip into `dist/` (the Rust binaries in release, the exporter published self-contained). The zip names them
-for players: f13-game is `lakeside.exe`, f13-installer `lakeside-setup.exe`, f13-host `lakeside-host.exe`, the
-exporter `tools/lakeside-export/lakeside-export.exe`.
+for players: f13-game is `lakeside.exe`, f13-installer `lakeside-setup.exe`, the exporter
+`tools/lakeside-export/lakeside-export.exe` (f13-host, a developers' tool, isn't shipped).
 
 ### Crates
 - `f13-core`: engine-independent rules (no Bevy dependency), unit-tested
