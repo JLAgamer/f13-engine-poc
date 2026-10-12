@@ -1579,19 +1579,19 @@ fn update_prompt(
     tuning: Res<PlayerTuning>,
     doors: Query<(&Door, &GlobalTransform)>,
     (windows, barricades): (Query<&Window>, Query<&Barricade>),
-    player: Single<(&Inventory, Has<Driving>, &Transform, Option<&UsingItem>, &Player, Option<&crate::hiding::Hiding>, &Interaction), With<crate::controls::LocalPlayer>>,
+    player: Option<Single<(&Inventory, Has<Driving>, &Transform, Option<&UsingItem>, &Player, Option<&crate::hiding::Hiding>, &Interaction), With<crate::controls::LocalPlayer>>>,
     items: Query<&Item>,
     (vehicles, phone_boxes, cabinets): (Query<&Vehicle>, Query<&crate::police::PhoneBox>, Query<&Cabinet>),
     mut text: Single<&mut Text, With<PromptText>>,
     play: Option<Res<crate::jason_player::PlayJason>>,
 ) {
-    // Her prompts are hers: none on Jason's screen.
-    if play.is_some() {
+    // Her prompts are hers: none on Jason's screen, nor without her (a host playing Jason has no counselor here).
+    let Some(player) = player.filter(|_| play.is_none()) else {
         if !text.0.is_empty() {
             text.0.clear();
         }
         return;
-    }
+    };
     let (inv, driving, _, using, p, hiding, interaction) = *player;
     let name = |e: Entity| items.get(e).map_or("?".to_string(), |i| i.name.clone());
     let mut lines = vec![format!(
