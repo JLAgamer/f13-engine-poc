@@ -959,7 +959,16 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     var rgb = c.rgb * view.exposure;
     var out = vec4(rgb, c.a);
 #ifdef DISTANCE_FOG
-    out = apply_fog(fog, out, in.world_position, view.world_position, in.clip.xy);
+    if params.mode.y > 0.0 {
+        // Additive: UE's base pass scales it by the fog's transmittance only (Color x Fogging.a, no in-scatter, which
+        // would light the sprite's black corners as a square). apply_fog is linear in the colour, so its fog-only
+        // part (on black) is taken back out.
+        let fogged = apply_fog(fog, out, in.world_position, view.world_position, in.clip.xy);
+        let inscatter = apply_fog(fog, vec4(0.0, 0.0, 0.0, out.a), in.world_position, view.world_position, in.clip.xy);
+        out = vec4(fogged.rgb - inscatter.rgb, out.a);
+    } else {
+        out = apply_fog(fog, out, in.world_position, view.world_position, in.clip.xy);
+    }
 #endif
     if params.mode.y > 0.0 {
         // Additive (UE: One, One of colour x opacity), drawn with Bevy's premultiplied AlphaMode::Add.
