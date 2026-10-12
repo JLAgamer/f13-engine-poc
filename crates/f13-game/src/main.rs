@@ -90,6 +90,8 @@ const LAYOUTS: u32 = 4;
 struct Args {
     /// The netcode role (--server <port>, --connect <host:port>).
     net: Option<net::Role>,
+    /// --bot-net: as a client, the network test bot (net.rs).
+    bot_net: bool,
     /// Counselors in the match (--counselors n): the local one and n - 1 others at the next starts (testing).
     counselors: usize,
     export: PathBuf,
@@ -185,6 +187,7 @@ fn parse_args() -> Args {
     let mut bot_escape4 = false;
     let mut bot_heal = false;
     let mut bot_drop = false;
+    let mut bot_net = false;
     let mut bot_dodge = false;
     let mut bot_door = false;
     let mut bot_jason = false;
@@ -249,6 +252,7 @@ fn parse_args() -> Args {
             "--bot-escape4" => (bot_escape, bot_escape4) = (true, true),
             "--bot-heal" => bot_heal = true,
             "--bot-drop" => bot_drop = true,
+            "--bot-net" => bot_net = true,
             "--bot-dodge" => bot_dodge = true,
             "--bot-door" => bot_door = true,
             "--bot-jason" => bot_jason = true,
@@ -343,7 +347,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { net, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, camera, round_time, flashlight, rain }
+    Args { net, bot_net, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, camera, round_time, flashlight, rain }
 }
 
 #[derive(Resource)]
@@ -557,8 +561,7 @@ fn main() {
         // The counselor bots test her alone; --bot-jason tests him.
         let bot_alone = args.bot_escape || args.bot_heal || args.bot_drop || args.bot_dodge || args.bot_door || args.bot_trap;
         // A client gets Jason from the server.
-        let client = matches!(args.net, Some(net::Role::Client(_)));
-        if !args.no_jason && !bot_alone && !client {
+        if !args.no_jason && !bot_alone {
             app.add_plugins(jason::JasonPlugin { delay: args.jason_delay, kill: args.kill });
         }
     }
@@ -602,7 +605,7 @@ fn main() {
         app.add_plugins(jason_player::PlayJasonPlugin { active: args.play_jason, demo: args.play_jason_demo });
     }
     if let Some(role) = args.net {
-        app.add_plugins(net::NetPlugin(role));
+        app.add_plugins(net::NetPlugin { role, bot: args.bot_net });
     }
     if let Some(port) = args.host.filter(|_| !(args.fly || args.aerial)) {
         app.add_plugins(host::HostPlugin { port });

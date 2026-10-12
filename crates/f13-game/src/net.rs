@@ -6,12 +6,21 @@
 //! body ([`NetBody`]: where it is and which way it faces) goes out to all players. A client sends its input and shows
 //! the characters it receives; its own counselor follows the server's.
 //!
-//! PLACEHOLDER: the development key and protocol id (no matchmaking backend issues tokens yet); the client still
-//! simulates the match itself apart from its counselor's movement (the split of simulation from presentation is the
-//! next step), and only bodies replicate (no animation state, health, items or the world's doors and windows yet).
+//! A client doesn't simulate the match ([`simulating`] gates the gameplay systems off): every character it receives
+//! has a local twin (its own counselor, the local Jason, a counselor spawned for each other player), and the
+//! twin takes the server's state each frame. That state is the body, what the animation reads ([`NetCounselor`],
+//! [`NetJason`]) and the full-body action ([`NetAction`]). Then the twin's own animation, sounds and camera run as
+//! they do on the server.
+//!
+//! PLACEHOLDERS:
+//! - the development key and protocol id (no matchmaking backend issues tokens yet);
+//! - twins smooth toward the newest body rather than interpolating between snapshots;
+//! - the world's doors, windows, items and cars don't replicate yet.
 
+use crate::character::{PlayAction, RestartAction, SeekAction};
 use crate::controls::{Controls, LocalPlayer};
 use crate::player::Player;
+use f13_core::counselor::Stance;
 use bevy::prelude::*;
 use core::time::Duration;
 use lightyear::prelude::*;
@@ -64,6 +73,56 @@ pub enum BodyKind {
     Jason,
 }
 
+/// What a counselor's animation, HUD and sounds read of her state (the server's [`Player`]).
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct NetCounselor {
+    pub stance: u8,
+    pub wounded: bool,
+    pub health: f32,
+    pub stamina: f32,
+    pub sprinting: bool,
+    pub running: bool,
+    /// cm/s, Bevy's XZ.
+    pub velocity: [f32; 2],
+    pub fear: f32,
+    pub montage: Option<String>,
+    pub root_motion: bool,
+    pub hidden: bool,
+    pub grounded: bool,
+}
+
+/// What Jason's animation reads of his state.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct NetJason {
+    pub velocity: [f32; 2],
+    pub combat: bool,
+    pub blocking: bool,
+    pub done: bool,
+}
+
+/// A character's full-body action ([`PlayAction`]), how often it restarted ([`RestartAction`]), its last seek
+/// ([`SeekAction`]: a count and where to), and whether she blocks.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct NetAction {
+    pub take: Option<String>,
+    pub restarts: u32,
+    pub seek: (u32, f32),
+    pub blocking: bool,
+}
+
+/// On a client: the local entity that shows this replicated character, and the restarts and seeks it has taken.
+#[derive(Component)]
+struct Twin {
+    local: Entity,
+    restarts: u32,
+    seeks: u32,
+}
+
+/// Whether this process runs the match (not a client). The gameplay systems run only if so.
+pub fn simulating(client: Option<Res<NetClient>>) -> bool {
+    client.is_none()
+}
+
 /// On the server: the link of the player who plays this counselor.
 #[derive(Component)]
 struct PlayedBy(Entity);
@@ -72,11 +131,15 @@ struct PlayedBy(Entity);
 #[derive(Resource, Default)]
 pub struct FreeStarts(pub Vec<Vec3>);
 
-pub struct NetPlugin(pub Role);
+pub struct NetPlugin {
+    pub role: Role,
+    /// A client: the network test bot ([`net_bot`]).
+    pub bot: bool,
+}
 
 impl Plugin for NetPlugin {
     fn build(&self, app: &mut App) {
-        match self.0 {
+        match self.role {
             Role::Server(port) => {
                 app.add_plugins(server::ServerPlugins { tick_duration: TICK });
                 protocol(app);
@@ -85,8 +148,19 @@ impl Plugin for NetPlugin {
                     .add_systems(Startup, start_server)
                     .add_observer(new_link)
                     .add_observer(player_joined)
+                    .add_observer(player_left)
+                    .add_observer(|add: On<Add, RestartAction>, mut actions: Query<&mut NetAction>| {
+                        if let Ok(mut a) = actions.get_mut(add.entity) {
+                            a.restarts += 1;
+                        }
+                    })
+                    .add_observer(|insert: On<Insert, SeekAction>, seeks: Query<&SeekAction>, mut actions: Query<&mut NetAction>| {
+                        if let (Ok(s), Ok(mut a)) = (seeks.get(insert.entity), actions.get_mut(insert.entity)) {
+                            a.seek = (a.seek.0 + 1, s.0);
+                        }
+                    })
                     .add_systems(Update, apply_inputs)
-                    .add_systems(PostUpdate, (replicate_bodies, update_bodies).chain());
+                    .add_systems(PostUpdate, (replicate_bodies, update_bodies).chain().before(ReplicationSystems::Send));
             }
             Role::Client(addr) => {
                 app.add_plugins(client::ClientPlugins { tick_duration: TICK });
@@ -94,7 +168,11 @@ impl Plugin for NetPlugin {
                 app.insert_resource(NetClient)
                     .insert_resource(ServerAddr(addr))
                     .add_systems(Update, connect)
-                    .add_systems(Update, (send_input, show_bodies, follow_own_body));
+                    .add_observer(body_gone)
+                    .add_systems(Update, (send_input, (make_twins, mirror).chain().before(crate::character::animate)));
+                if self.bot {
+                    app.init_resource::<NetBot>().add_systems(Update, net_bot.before(send_input));
+                }
             }
         }
     }
@@ -105,6 +183,9 @@ fn protocol(app: &mut App) {
     app.add_channel::<InputChannel>(ChannelSettings { mode: ChannelMode::SequencedUnreliable, ..default() }).add_direction(NetworkDirection::ClientToServer);
     app.register_message::<InputMsg>().add_direction(NetworkDirection::ClientToServer);
     app.component::<NetBody>().replicate();
+    app.component::<NetCounselor>().replicate();
+    app.component::<NetJason>().replicate();
+    app.component::<NetAction>().replicate();
 }
 
 #[derive(Resource)]
@@ -154,6 +235,17 @@ fn player_joined(
     info!("net: player {:?} joined: counselor {counselor} at {at}", id.0);
 }
 
+/// A player gone: her counselor with her (her start free again).
+fn player_left(left: On<Remove, Connected>, counselors: Query<(Entity, &PlayedBy, &Transform)>, mut commands: Commands, mut starts: ResMut<FreeStarts>) {
+    for (e, by, xf) in &counselors {
+        if by.0 == left.entity {
+            info!("net: player left: counselor {e} gone");
+            starts.0.push(xf.translation);
+            commands.entity(e).despawn();
+        }
+    }
+}
+
 /// Each player's newest input into her counselor's controls.
 fn apply_inputs(mut links: Query<(Entity, &mut MessageReceiver<InputMsg>)>, mut counselors: Query<(&PlayedBy, &mut Controls)>) {
     for (link, mut receiver) in &mut links {
@@ -172,19 +264,59 @@ fn replicate_bodies(
     counselors: Query<Entity, (With<Player>, Without<NetBody>)>,
     jasons: Query<Entity, (With<crate::jason::Jason>, Without<NetBody>)>,
 ) {
-    for (e, kind) in counselors.iter().map(|e| (e, BodyKind::Counselor)).chain(jasons.iter().map(|e| (e, BodyKind::Jason))) {
-        commands.entity(e).insert((NetBody { pos: [0.0; 3], yaw: 0.0, kind }, Replicate::to_clients(NetworkTarget::All)));
+    for e in &counselors {
+        commands.entity(e).insert((NetBody { pos: [0.0; 3], yaw: 0.0, kind: BodyKind::Counselor }, NetCounselor::default(), NetAction::default(), Replicate::to_clients(NetworkTarget::All)));
+    }
+    for e in &jasons {
+        commands.entity(e).insert((NetBody { pos: [0.0; 3], yaw: 0.0, kind: BodyKind::Jason }, NetJason::default(), NetAction::default(), Replicate::to_clients(NetworkTarget::All)));
     }
 }
 
-fn update_bodies(mut bodies: Query<(&mut NetBody, &GlobalTransform)>) {
-    for (mut b, g) in &mut bodies {
-        let pos = g.translation().to_array();
-        let yaw = g.rotation().to_euler(EulerRot::YXZ).0;
+/// Writes `v` only if it changed (an unchanged component doesn't go out again).
+fn set<T: PartialEq>(mut c: Mut<T>, v: T) {
+    if *c != v {
+        *c = v;
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn update_bodies(
+    mut bodies: Query<(&mut NetBody, &Transform, &mut NetAction, Option<&PlayAction>, Has<crate::items::Blocking>)>,
+    mut counselors: Query<(&mut NetCounselor, &Player)>,
+    mut jasons: Query<(&mut NetJason, &crate::jason::Jason)>,
+) {
+    for (mut b, xf, mut a, action, blocking) in &mut bodies {
+        let pos = xf.translation.to_array();
+        let yaw = xf.rotation.to_euler(EulerRot::YXZ).0;
         if b.pos != pos || b.yaw != yaw {
             b.pos = pos;
             b.yaw = yaw;
         }
+        let take = action.map(|p| p.0.clone());
+        if a.take != take || a.blocking != blocking {
+            a.take = take;
+            a.blocking = blocking;
+        }
+    }
+    for (n, p) in &mut counselors {
+        let c = &p.counselor;
+        set(n, NetCounselor {
+            stance: c.stance as u8,
+            wounded: c.wounded,
+            health: c.health,
+            stamina: c.stamina,
+            sprinting: c.sprinting,
+            running: c.running,
+            velocity: p.velocity.to_array(),
+            fear: p.fear,
+            montage: p.montage.clone(),
+            root_motion: p.root_motion.is_some(),
+            hidden: p.hidden,
+            grounded: p.grounded,
+        });
+    }
+    for (n, j) in &mut jasons {
+        set(n, NetJason { velocity: j.velocity.to_array(), combat: j.combat, blocking: j.blocking, done: j.state == crate::jason::JasonState::Done });
     }
 }
 
@@ -226,42 +358,222 @@ fn send_input(local: Query<&Controls, With<LocalPlayer>>, mut senders: Query<&mu
     }
 }
 
-/// The characters received: their models, placed where the server has them.
-#[allow(clippy::type_complexity)]
-fn show_bodies(
+/// Each character received gets its twin: her own counselor is the local one, Jason the local Jason, another
+/// player's counselor one spawned for her.
+#[allow(clippy::too_many_arguments)]
+fn make_twins(
     mut commands: Commands,
     assets: Res<AssetServer>,
     counselor: Option<Res<crate::character::CounselorCharacter>>,
-    killer: Option<Res<crate::character::KillerCharacter>>,
-    added: Query<(Entity, &NetBody, Has<Controlled>), Added<NetBody>>,
-    mut bodies: Query<(&NetBody, &mut Transform), Without<Controlled>>,
+    tuning: Res<crate::player::PlayerTuning>,
+    bodies: Query<(Entity, &NetBody, Has<Controlled>), Without<Twin>>,
+    local: Query<Entity, (With<LocalPlayer>, With<Player>)>,
+    jason: Query<Entity, With<crate::jason::Jason>>,
 ) {
-    for (e, b, own) in &added {
-        info!("net: received {:?} {e} at {:?}{}", b.kind, b.pos, if own { " (hers)" } else { "" });
-        if own {
-            continue; // her own counselor is the local one (follow_own_body)
+    for (e, b, own) in &bodies {
+        let at = Vec3::from_array(b.pos);
+        let twin = match (b.kind, own) {
+            (BodyKind::Counselor, true) => local.single().ok(),
+            (BodyKind::Counselor, false) => Some(crate::player::spawn_counselor(&mut commands, &assets, counselor.as_deref(), &tuning, at)),
+            (BodyKind::Jason, _) => jason.single().ok(),
+        };
+        let Some(twin) = twin else { continue };
+        info!("net: received {:?} {e} at {at}{}: twin {twin}", b.kind, if own { " (hers)" } else { "" });
+        commands.entity(e).insert(Twin { local: twin, restarts: 0, seeks: 0 });
+    }
+}
+
+/// A character gone from the server: a spawned twin goes with it.
+fn body_gone(gone: On<Remove, NetBody>, twins: Query<(&NetBody, &Twin, Has<Controlled>)>, mut commands: Commands) {
+    if let Ok((b, t, own)) = twins.get(gone.entity) {
+        if b.kind == BodyKind::Counselor && !own {
+            commands.entity(t.local).despawn();
         }
-        commands.entity(e).insert((Transform::from_translation(Vec3::from_array(b.pos)), Visibility::default()));
-        match (b.kind, counselor.as_deref(), killer.as_deref()) {
-            (BodyKind::Counselor, Some(c), _) => {
-                crate::character::spawn_model(&mut commands, &assets, c, crate::character::Model::Counselor, e, ());
+    }
+}
+
+fn stance(n: u8) -> Stance {
+    match n {
+        1 => Stance::Prone,
+        2 => Stance::Crouching,
+        3 => Stance::Swimming,
+        4 => Stance::Driving,
+        5 => Stance::Combat,
+        6 => Stance::Finished,
+        7 => Stance::Grabbed,
+        8 => Stance::Trapped,
+        _ => Stance::Standing,
+    }
+}
+
+/// How fast a twin closes on the newest body (1/s; PLACEHOLDER for interpolating between snapshots), and how far
+/// off it snaps instead (m).
+const FOLLOW_RATE: f32 = 25.0;
+const SNAP_M: f32 = 3.0;
+
+/// Each twin takes its character's state.
+#[allow(clippy::type_complexity)]
+fn mirror(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut bodies: Query<(&NetBody, &NetAction, Option<&NetCounselor>, Option<&NetJason>, &mut Twin)>,
+    mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>)>,
+) {
+    let k = 1.0 - (-FOLLOW_RATE * time.delta_secs()).exp();
+    for (b, a, nc, nj, mut twin) in &mut bodies {
+        let Ok((mut xf, player, jason, action, blocking)) = twins.get_mut(twin.local) else { continue };
+        let to = Vec3::from_array(b.pos);
+        let rot = Quat::from_rotation_y(b.yaw);
+        if xf.translation.distance(to) > SNAP_M {
+            xf.translation = to;
+            xf.rotation = rot;
+        } else {
+            xf.translation = xf.translation.lerp(to, k);
+            xf.rotation = xf.rotation.slerp(rot, k);
+        }
+        if let (Some(mut p), Some(n)) = (player, nc) {
+            let c = &mut p.counselor;
+            c.stance = stance(n.stance);
+            c.wounded = n.wounded;
+            c.health = n.health;
+            c.stamina = n.stamina;
+            c.sprinting = n.sprinting;
+            c.running = n.running;
+            p.velocity = Vec2::from_array(n.velocity);
+            p.fear = n.fear;
+            p.montage = n.montage.clone();
+            p.root_motion = n.root_motion.then_some((Vec2::ZERO, 0.0));
+            p.hidden = n.hidden;
+            p.grounded = n.grounded;
+        }
+        if let (Some(mut j), Some(n)) = (jason, nj) {
+            j.velocity = Vec2::from_array(n.velocity);
+            j.combat = n.combat;
+            j.blocking = n.blocking;
+            if n.done {
+                j.state = crate::jason::JasonState::Done;
             }
-            (BodyKind::Jason, _, Some(k)) => {
-                crate::character::spawn_model(&mut commands, &assets, k, crate::character::Model::Killer, e, ());
+        }
+        let mut e = commands.entity(twin.local);
+        match (&a.take, action) {
+            (Some(t), Some(have)) if *t == have.0 => {}
+            (Some(t), _) => {
+                e.insert(PlayAction(t.clone()));
+            }
+            (None, Some(_)) => {
+                e.remove::<PlayAction>();
+            }
+            (None, None) => {}
+        }
+        if a.restarts != twin.restarts {
+            twin.restarts = a.restarts;
+            e.insert(RestartAction);
+        }
+        if a.seek.0 != twin.seeks {
+            twin.seeks = a.seek.0;
+            e.insert(SeekAction(a.seek.1));
+        }
+        match (a.blocking, blocking) {
+            (true, false) => {
+                e.insert(crate::items::Blocking);
+            }
+            (false, true) => {
+                e.remove::<crate::items::Blocking>();
             }
             _ => {}
         }
     }
-    for (b, mut xf) in &mut bodies {
-        xf.translation = Vec3::from_array(b.pos);
-        xf.rotation = Quat::from_rotation_y(b.yaw);
+}
+
+/// The network test bot's state (`--bot-net` on a client).
+#[derive(Resource, Default)]
+struct NetBot {
+    step: u8,
+    t: f32,
+    from: Vec3,
+    jason_from: Option<Vec3>,
+    failed: Vec<&'static str>,
+}
+
+/// How long the bot waits for the server (real seconds) before giving up.
+const NET_BOT_CONNECT_S: f32 = 120.0;
+
+/// `--bot-net`: plays as a client only through its input, and checks what comes back. Its counselor walks (W, 3 s)
+/// and must move on the server; she goes into combat stance (C) and must be in it there; and Jason, whom the server
+/// runs, must move.
+fn net_bot(
+    mut bot: ResMut<NetBot>,
+    time: Res<Time>,
+    real: Res<Time<Real>>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+    own: Query<(&NetBody, &NetCounselor), With<Controlled>>,
+    jason: Query<&NetBody, With<NetJason>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    bot.t += time.delta_secs();
+    for k in [KeyCode::KeyW, KeyCode::KeyC] {
+        keys.release(k);
+    }
+    let Ok((body, counselor)) = own.single() else {
+        if real.elapsed_secs() > NET_BOT_CONNECT_S {
+            error!("bot: no counselor from the server");
+            exit.write(AppExit::error());
+        }
+        return;
+    };
+    let at = Vec3::from_array(body.pos);
+    if bot.jason_from.is_none() {
+        bot.jason_from = jason.single().ok().map(|b| Vec3::from_array(b.pos));
+    }
+    let next = |bot: &mut NetBot| {
+        bot.step += 1;
+        bot.t = 0.0;
+    };
+    match bot.step {
+        // Settled on the floor.
+        0 if bot.t > 3.0 => {
+            bot.from = at;
+            info!("bot: net: her counselor at {at}");
+            next(&mut bot);
+        }
+        1 if bot.t < 3.0 => keys.press(KeyCode::KeyW),
+        1 => next(&mut bot),
+        2 if bot.t > 1.0 => {
+            let moved = (at - bot.from).with_y(0.0).length();
+            info!("bot: net: walked {moved:.1} m on the server");
+            if moved < 1.5 {
+                bot.failed.push("walk");
+            }
+            next(&mut bot);
+        }
+        3 if bot.t < 0.3 => keys.press(KeyCode::KeyC),
+        3 if bot.t > 1.5 => {
+            info!("bot: net: stance {} on the server", counselor.stance);
+            if counselor.stance != Stance::Combat as u8 {
+                bot.failed.push("combat stance");
+            }
+            next(&mut bot);
+        }
+        4 if bot.t < 0.3 => keys.press(KeyCode::KeyC),
+        4 if bot.t > 1.5 => next(&mut bot),
+        // Jason moves on the server (it hunts from the start with --jason-delay 0).
+        5 => {
+            let moved = jason.single().ok().zip(bot.jason_from).map(|(b, from)| Vec3::from_array(b.pos).distance(from));
+            if moved.is_some_and(|m| m > 2.0) || bot.t > 30.0 {
+                info!("bot: net: Jason moved {:.1} m", moved.unwrap_or(0.0));
+                if !moved.is_some_and(|m| m > 2.0) {
+                    bot.failed.push("Jason");
+                }
+                if bot.failed.is_empty() {
+                    info!("bot: net: passed");
+                    exit.write(AppExit::Success);
+                } else {
+                    error!("bot: net: failed {:?}", bot.failed);
+                    exit.write(AppExit::error());
+                }
+                next(&mut bot);
+            }
+        }
+        _ => {}
     }
 }
-
-/// Her own counselor where the server has her.
-fn follow_own_body(own: Query<&NetBody, With<Controlled>>, mut local: Query<&mut Transform, (With<LocalPlayer>, With<Player>)>) {
-    let (Ok(b), Ok(mut xf)) = (own.single(), local.single_mut()) else { return };
-    xf.translation = Vec3::from_array(b.pos);
-    xf.rotation = Quat::from_rotation_y(b.yaw);
-}
-

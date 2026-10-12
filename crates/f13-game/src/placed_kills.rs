@@ -38,7 +38,7 @@ pub struct PlacedKillsPlugin;
 impl Plugin for PlacedKillsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_placed_kills)
-            .add_systems(FixedUpdate, orient_toward_killer.before(crate::jason::update_jason))
+            .add_systems(FixedUpdate, orient_toward_killer.before(crate::jason::update_jason).run_if(crate::net::simulating))
             .add_systems(Update, prompts);
     }
 }

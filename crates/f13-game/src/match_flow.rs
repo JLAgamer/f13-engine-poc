@@ -168,7 +168,7 @@ impl Plugin for MatchPlugin {
         app.init_resource::<GameMatch>()
             .insert_resource(Leave(self.leave))
             .add_systems(Startup, (load_classes, spawn_hud))
-            .add_systems(FixedUpdate, run_match)
+            .add_systems(FixedUpdate, run_match.run_if(crate::net::simulating))
             .add_systems(Update, update_hud)
             .add_observer(on_score)
             .add_observer(on_class_score)

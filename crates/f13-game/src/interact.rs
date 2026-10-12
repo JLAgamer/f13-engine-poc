@@ -698,7 +698,7 @@ impl Plugin for InteractPlugin {
             .add_systems(Startup, (spawn_prompt, load_special_moves))
             .add_systems(
             Update,
-            (add_inventory, crate::windows::link_barricades, choose_target, act, crate::cabinets::cabinet_uses, crate::cabinets::follow_items, moves_to_spots, door_moves, window_moves, barricade_moves, repair_anims, small_items, dropping, use_item, update_prompt)
+            (add_inventory, crate::windows::link_barricades, choose_target, act.run_if(crate::net::simulating), crate::cabinets::cabinet_uses.run_if(crate::net::simulating), crate::cabinets::follow_items, moves_to_spots.run_if(crate::net::simulating), door_moves.run_if(crate::net::simulating), window_moves.run_if(crate::net::simulating), barricade_moves.run_if(crate::net::simulating), repair_anims.run_if(crate::net::simulating), small_items.run_if(crate::net::simulating), dropping.run_if(crate::net::simulating), use_item.run_if(crate::net::simulating), update_prompt)
                 .chain()
                 .before(crate::doors::swing_doors),
         )

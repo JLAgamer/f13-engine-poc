@@ -108,7 +108,7 @@ impl Plugin for FearEventsPlugin {
         app.insert_resource(LockedFear(self.locked))
             .add_systems(Startup, load_surroundings)
             .add_systems(Update, setup)
-            .add_systems(FixedUpdate, push_events.before(crate::player::move_player));
+            .add_systems(FixedUpdate, push_events.before(crate::player::move_player).run_if(crate::net::simulating));
     }
 }
 

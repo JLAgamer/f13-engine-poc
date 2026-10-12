@@ -124,13 +124,13 @@ impl Plugin for ItemsPlugin {
     fn build(&self, app: &mut App) {
         // The wiggle axis, for her grab struggle (jason.rs) and trap struggle.
         app.init_resource::<crate::jason::Struggle>()
-            .add_systems(PreUpdate, (crate::jason::read_struggle, hold_aim, circle_run).after(bevy::input::InputSystems))
-            .add_systems(PostUpdate, give_items)
+            .add_systems(PreUpdate, (crate::jason::read_struggle, hold_aim, circle_run).after(bevy::input::InputSystems).run_if(crate::net::simulating))
+            .add_systems(PostUpdate, give_items.run_if(crate::net::simulating))
             .init_resource::<MapScreen>()
-            .add_systems(Update, (hold_in_hand, shotgun_hold, aim, start_action, block, toggle_map).chain())
+            .add_systems(Update, (hold_in_hand, shotgun_hold, aim.run_if(crate::net::simulating), start_action.run_if(crate::net::simulating), block.run_if(crate::net::simulating), toggle_map).chain())
             .add_observer(wear_on_block)
             .add_observer(set_killer_trap)
-            .add_systems(FixedUpdate, (tick_action, fly, spring_traps, struggle_in_trap).chain().after(crate::player::move_player));
+            .add_systems(FixedUpdate, (tick_action, fly, spring_traps, struggle_in_trap).chain().after(crate::player::move_player).run_if(crate::net::simulating));
     }
 }
 

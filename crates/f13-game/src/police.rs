@@ -50,7 +50,7 @@ pub struct PolicePlugin;
 
 impl Plugin for PolicePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_phones).add_systems(Update, (arrive, turn_back_jason, escape_with_police, turn_lights, report_car, box_look).chain());
+        app.add_systems(Startup, spawn_phones).add_systems(Update, (arrive, turn_back_jason, escape_with_police, turn_lights, report_car, box_look).chain().run_if(crate::net::simulating));
     }
 }
 

@@ -46,12 +46,15 @@ Moved from Milestone 1 (not tied to gameplay):
 Server-authoritative netcode, tested with bots, then an 8-player lobby.
 
 Steps (lightyear 0.30 for the netcode):
-- [ ] The server/client split: clients stop simulating the match (they only present it); the server replicates the
-      characters' animation, health and fear, the doors, windows, items and cars, and clients interpolate them
-      (bodies and input already go over the network: `--server <port>`, `--connect <host:port>`)
+- [ ] The world over the network: the server replicates the doors, windows, barricades, items (held, dropped,
+      in cabinets), cars, power, police, traps, knives and the match's state and score; clients interpolate the
+      characters between snapshots (they smooth toward the newest now)
+- [ ] Jason's presentation on clients: his stalk, shift and morph effects, the kills' paired takes and cameras, his
+      held items
 - [ ] The game's choice of counselor start (starts are handed out in order; PLACEHOLDER), voice lines and the match
       record per counselor (still the local one's)
-- [ ] Bot clients for tests: headless clients connecting to a local server and playing the bot scenarios
+- [ ] Bot clients for the scenarios: the bots that set up their scene (teleports, locks) need a server-side hook
+      (the net bot plays through its input only)
 - [ ] The 8-player lobby: Jason and counselor picks, ready, start; the match-end lobby with its badges
 
 Moved from Milestone 2 (they need more than one counselor):

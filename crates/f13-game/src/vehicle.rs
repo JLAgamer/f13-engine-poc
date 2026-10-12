@@ -86,7 +86,7 @@ pub struct VehiclePlugin;
 
 impl Plugin for VehiclePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (drive, follow_vehicle, exit_vehicle, check_escape, show_escape).chain());
+        app.add_systems(Update, (drive.run_if(crate::net::simulating), follow_vehicle, exit_vehicle.run_if(crate::net::simulating), check_escape.run_if(crate::net::simulating), show_escape).chain());
     }
 }
 

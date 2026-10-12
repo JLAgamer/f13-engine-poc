@@ -156,7 +156,7 @@ impl Plugin for PlayerPlugin {
             // that runs several fixed steps (low frame rate, --speed) doesn't repeat a key press.
             .add_systems(RunFixedMainLoop, read_intent.in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop))
             // A network client's counselors move on the server (net.rs).
-            .add_systems(FixedUpdate, (update_counselor, move_player).chain().run_if(not(resource_exists::<crate::net::NetClient>)))
+            .add_systems(FixedUpdate, (update_counselor, move_player).chain().run_if(crate::net::simulating))
             .add_systems(Update, (
                     tag_player_parts,
                     grab_cursor,
