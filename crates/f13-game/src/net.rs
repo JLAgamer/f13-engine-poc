@@ -152,6 +152,25 @@ pub struct NetJason {
     pub combat: bool,
     pub blocking: bool,
     pub done: bool,
+    pub shifting: bool,
+    pub stalking: bool,
+    pub holding: bool,
+    pub knife_aim: bool,
+    pub hidden: bool,
+    pub underwater: bool,
+    /// The door he's opening or breaking down (its world id) and how.
+    pub door: Option<(u32, crate::jason::DoorMove)>,
+    pub knives: u32,
+    pub traps: u32,
+    /// His state's name (a Jason player's HUD).
+    pub state: String,
+    /// His abilities (f13-core KillerAbilities): unlocked, recharge timers, the unlock timer, rage.
+    pub unlocked: [bool; 4],
+    pub recharge: [f32; 4],
+    pub unlock_timer: f32,
+    pub rage: (bool, f32),
+    /// The kill camera running (kill_camera.rs): its kill, origin (translation, rotation) and whether at the root.
+    pub kill_cam: Option<(String, [f32; 7], bool)>,
 }
 
 /// A character's full-body action ([`PlayAction`]), how often it restarted ([`RestartAction`]), its last seek
@@ -170,6 +189,8 @@ struct Twin {
     local: Entity,
     restarts: u32,
     seeks: u32,
+    /// The kill camera started for it (one ending here before the server's doesn't start again).
+    kill: Option<String>,
 }
 
 /// On a client: each character's twin, by the server's name for it ([`NetBody::id`]).
@@ -380,7 +401,8 @@ fn set<T: PartialEq>(mut c: Mut<T>, v: T) {
 fn update_bodies(
     mut bodies: Query<(&mut NetBody, &Transform, &mut NetAction, Option<&PlayAction>, Has<crate::items::Blocking>)>,
     mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>)>,
-    mut jasons: Query<(&mut NetJason, &crate::jason::Jason)>,
+    mut jasons: Query<(&mut NetJason, &crate::jason::Jason, Option<&crate::senses::Knowledge>, Option<&crate::kill_camera::KillCam>)>,
+    world_ids: Query<&crate::net_world::WorldId>,
 ) {
     for (mut b, xf, mut a, action, blocking) in &mut bodies {
         let pos = xf.translation.to_array();
@@ -414,8 +436,33 @@ fn update_bodies(
             look: controls.map_or([0.0; 2], |c| [c.yaw, c.pitch]),
         });
     }
-    for (n, j) in &mut jasons {
-        set(n, NetJason { velocity: j.velocity.to_array(), combat: j.combat, blocking: j.blocking, done: j.state == crate::jason::JasonState::Done });
+    for (n, j, know, cam) in &mut jasons {
+        let a = know.map(|k| &k.abilities);
+        set(n, NetJason {
+            velocity: j.velocity.to_array(),
+            combat: j.combat,
+            blocking: j.blocking,
+            done: j.state == crate::jason::JasonState::Done,
+            shifting: j.shifting(),
+            stalking: j.stalking(),
+            holding: j.holding(),
+            knife_aim: j.aiming_knife(),
+            hidden: j.hidden(),
+            underwater: j.underwater,
+            door: j.door_move().and_then(|(d, m)| Some((world_ids.get(d).ok()?.0, m))),
+            knives: j.knives,
+            traps: j.traps,
+            state: j.state_name(),
+            unlocked: a.map_or([false; 4], |a| a.unlocked),
+            recharge: a.map_or([0.0; 4], |a| a.recharge_timer),
+            unlock_timer: a.map_or(0.0, |a| a.unlock_timer),
+            rage: a.map_or((false, 0.0), |a| (a.rage_active, a.rage_timer)),
+            kill_cam: cam.map(|c| {
+                let (k, o, root) = c.parts();
+                let (p, r) = (o.translation, o.rotation);
+                (k.to_string(), [p.x, p.y, p.z, r.x, r.y, r.z, r.w], root)
+            }),
+        });
     }
 }
 
@@ -485,15 +532,17 @@ fn make_twins(
         };
         let Some(twin) = twin else { continue };
         info!("net: received {:?} {e} at {at}{}: twin {twin}", b.kind, if own { " (hers)" } else { "" });
-        commands.entity(e).insert(Twin { local: twin, restarts: 0, seeks: 0 });
+        commands.entity(e).insert(Twin { local: twin, restarts: 0, seeks: 0, kill: None });
         index.0.insert(b.id, twin);
     }
 }
 
-/// The local Jason shows only as the server's Jason's twin (the server may have none: `--no-jason`).
-fn hide_jason(twins: Res<Twins>, mut jasons: Query<(Entity, &mut Visibility), With<crate::jason::Jason>>) {
-    for (e, mut v) in &mut jasons {
-        v.set_if_neq(if twins.0.values().any(|t| *t == e) { Visibility::Inherited } else { Visibility::Hidden });
+/// The local Jason shows only as the server's Jason's twin (the server may have none: `--no-jason`), and not while the
+/// server has him faded out or under the water.
+fn hide_jason(twins: Res<Twins>, mut jasons: Query<(Entity, &mut Visibility, &crate::jason::Jason)>) {
+    for (e, mut v, j) in &mut jasons {
+        let shown = twins.0.values().any(|t| *t == e) && !j.hidden();
+        v.set_if_neq(if shown { Visibility::Inherited } else { Visibility::Hidden });
     }
 }
 
@@ -531,11 +580,13 @@ fn mirror(
     mut commands: Commands,
     time: Res<Time>,
     mut bodies: Query<(&NetBody, &NetAction, Option<&NetCounselor>, Option<&NetJason>, &mut Twin)>,
-    mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>, (Option<&Name>, Option<&mut Controls>, Has<LocalPlayer>))>,
+    mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>, (Option<&Name>, Option<&mut Controls>, Has<LocalPlayer>, Option<&mut crate::senses::Knowledge>))>,
+    actors: Res<crate::net_world::Actors>,
+    cams: Query<&crate::kill_camera::KillCam>,
 ) {
     let k = 1.0 - (-FOLLOW_RATE * time.delta_secs()).exp();
     for (b, a, nc, nj, mut twin) in &mut bodies {
-        let Ok((mut xf, player, jason, action, blocking, (name, controls, local))) = twins.get_mut(twin.local) else { continue };
+        let Ok((mut xf, player, jason, action, blocking, (name, controls, local, know))) = twins.get_mut(twin.local) else { continue };
         let to = Vec3::from_array(b.pos);
         let rot = Quat::from_rotation_y(b.yaw);
         if xf.translation.distance(to) > SNAP_M {
@@ -574,6 +625,39 @@ fn mirror(
             j.blocking = n.blocking;
             if n.done {
                 j.state = crate::jason::JasonState::Done;
+            }
+            j.underwater = n.underwater;
+            j.knives = n.knives;
+            j.traps = n.traps;
+            j.remote = Some(crate::jason::RemoteView {
+                shifting: n.shifting,
+                stalking: n.stalking,
+                holding: n.holding,
+                knife_aim: n.knife_aim,
+                hidden: n.hidden,
+                door: n.door.and_then(|(id, m)| Some((actors.get(id)?, m))),
+            });
+            j.remote_state = n.state.clone();
+            let key = n.kill_cam.as_ref().map(|(k, ..)| k.clone());
+            if key != twin.kill {
+                match &n.kill_cam {
+                    Some((k, o, root)) => {
+                        let origin = Transform::from_xyz(o[0], o[1], o[2]).with_rotation(Quat::from_xyzw(o[3], o[4], o[5], o[6]));
+                        commands.entity(twin.local).insert(crate::kill_camera::KillCam::remote(k, origin, *root));
+                    }
+                    None if cams.contains(twin.local) => {
+                        commands.entity(twin.local).remove::<crate::kill_camera::KillCam>();
+                    }
+                    None => {}
+                }
+                twin.kill = key;
+            }
+            if let Some(mut k) = know {
+                let a = &mut k.abilities;
+                a.unlocked = n.unlocked;
+                a.recharge_timer = n.recharge;
+                a.unlock_timer = n.unlock_timer;
+                (a.rage_active, a.rage_timer) = n.rage;
             }
         }
         let mut e = commands.entity(twin.local);
@@ -867,8 +951,16 @@ fn net_bot_lobby(mut bot: ResMut<NetBot>, mut keys: ResMut<ButtonInput<KeyCode>>
     }
 }
 
-/// The net bot as Jason: he walks (W, 3 s) through his remote controls and must move on the server.
-fn net_bot_jason(mut bot: ResMut<NetBot>, time: Res<Time>, mut controls: ResMut<crate::jason_player::JasonControls>, own: Query<&NetBody, (With<NetJason>, With<Controlled>)>, mut exit: MessageWriter<AppExit>) {
+/// The net bot as Jason: he walks (W, 3 s) through his remote controls and must move on the server; his abilities
+/// (the server's) must show unlocked here.
+fn net_bot_jason(
+    mut bot: ResMut<NetBot>,
+    time: Res<Time>,
+    mut controls: ResMut<crate::jason_player::JasonControls>,
+    own: Query<&NetBody, (With<NetJason>, With<Controlled>)>,
+    know: Query<&crate::senses::Knowledge, With<crate::jason::Jason>>,
+    mut exit: MessageWriter<AppExit>,
+) {
     bot.t += time.delta_secs();
     let Ok(body) = own.single() else { return };
     let at = Vec3::from_array(body.pos);
@@ -889,7 +981,12 @@ fn net_bot_jason(mut bot: ResMut<NetBot>, time: Res<Time>, mut controls: ResMut<
         2 if bot.t > 1.0 => {
             let moved = (at - bot.from).with_y(0.0).length();
             info!("bot: net: Jason walked {moved:.1} m on the server");
-            if moved < 1.5 {
+            let unlocked = know.iter().next().map_or(0, |k| k.abilities.unlocked.iter().filter(|u| **u).count());
+            info!("bot: net: {unlocked} of his abilities unlocked here");
+            if unlocked == 0 {
+                error!("bot: net: failed [\"abilities\"]");
+                exit.write(AppExit::error());
+            } else if moved < 1.5 {
                 error!("bot: net: failed [\"Jason walk\"]");
                 exit.write(AppExit::error());
             } else {

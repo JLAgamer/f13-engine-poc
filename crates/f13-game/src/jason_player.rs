@@ -701,8 +701,8 @@ fn hud(
         .map(|(_, n)| *n)
         .collect();
     let s = format!(
-        "Jason: {:?}{}\nknives {} [MMB]  traps {} [R]  ready: {}\nLMB attack  RMB grab  C combat  Shift fast walk",
-        j.state,
+        "Jason: {}{}\nknives {} [MMB]  traps {} [R]  ready: {}\nLMB attack  RMB grab  C combat  Shift fast walk",
+        if j.remote.is_some() { j.remote_state.clone() } else { j.state_name() },
         if j.combat { " (combat)" } else { "" },
         j.knives,
         j.traps,

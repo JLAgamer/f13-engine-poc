@@ -46,11 +46,8 @@ Moved from Milestone 1 (not tied to gameplay):
 Server-authoritative netcode, tested with bots, then an 8-player lobby.
 
 Steps (lightyear 0.30 for the netcode):
-- [ ] The rest of the world over the network: the cabinets' drawers, the police car, armed traps, thrown knives
-      and firecrackers; clients interpolate the characters between snapshots
-      (they smooth toward the newest now)
-- [ ] Jason's presentation on clients: his stalk, shift and morph effects, the kills' paired takes and cameras, his
-      held items, his abilities on a Jason player's HUD; no Jason shown when the server has none
+- [ ] Clients interpolate the characters between snapshots (they smooth toward the newest now); the car's
+      OnVehicleHit impacts (its light and heavy cues, the heavy one's stall)
 - [ ] The game's choice of counselor start (starts are handed out in order; PLACEHOLDER); the chase (its music and
       ChaseStart line) per counselor
 - [ ] Bot clients for the scenarios: the bots that set up their scene (teleports, locks) need a server-side hook

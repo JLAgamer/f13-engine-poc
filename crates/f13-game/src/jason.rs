@@ -607,6 +607,10 @@ pub struct Jason {
     /// Just arrived from a Morph (the AI Stalks from there).
     morphed: bool,
     pub stalk: Option<Stalk>,
+    /// On a client: what the server's Jason is doing, for his looks (net.rs mirrors it; his own state isn't run).
+    pub remote: Option<RemoteView>,
+    /// The server's state's name (a client's HUD).
+    pub remote_state: String,
     pub fade: TeleportFade,
     /// Knives and traps left; the knife cooldown; where his traps are.
     pub knives: u32,
@@ -653,7 +657,12 @@ impl Jason {
     }
 
     pub fn stalking(&self) -> bool {
-        self.stalk.is_some()
+        self.remote.map_or(self.stalk.is_some(), |r| r.stalking)
+    }
+
+    /// Aiming a knife he hasn't thrown yet.
+    pub fn aiming_knife(&self) -> bool {
+        self.remote.map_or(matches!(self.state, JasonState::Throwing { thrown: false, .. }), |r| r.knife_aim)
     }
 
     /// The closed door the played Jason has as his best interactable.
@@ -665,7 +674,7 @@ impl Jason {
     }
 
     pub fn shifting(&self) -> bool {
-        matches!(self.state, JasonState::Shifting { .. })
+        self.remote.map_or(matches!(self.state, JasonState::Shifting { .. }), |r| r.shifting)
     }
 
     pub fn stunned(&self) -> bool {
@@ -679,7 +688,7 @@ impl Jason {
 
     /// Holding her in his grab (she can struggle), not killing her.
     pub fn holding(&self) -> bool {
-        matches!(self.state, JasonState::Holding { .. })
+        self.remote.map_or(matches!(self.state, JasonState::Holding { .. }), |r| r.holding)
     }
 
     /// IsInSpecialMove for his anim instance (Jason_AnimBP's look-at switch): the moves the game plays through an
@@ -923,7 +932,7 @@ fn knife_velocity(from: Vec3, to: Vec3, speed: f32) -> Vec3 {
 /// The knife's Blueprint turns it to pitch 270 and hides it as the ProjectileMovement activates (the throw: the
 /// particle trail shows instead) and shows it when the projectile stops; in his hand it's at its own place.
 #[derive(Resource)]
-struct KnifeLook(Handle<WorldAsset>, Transform, Transform);
+pub(crate) struct KnifeLook(Handle<WorldAsset>, Transform, Transform);
 
 /// The knife in his hand while he aims (SERVER_SpawnKnife 0x1404051d0: a ThrowingKnifeClass actor, CurrentThrowable,
 /// attached to his Mesh at KnifeAttachSocket, SnapToTargetNotIncludingScale; the constructor's KnifeAttachSocket is
@@ -1018,7 +1027,7 @@ fn held_knife(
     mut held: Query<(Entity, &mut Transform), With<HeldKnife>>,
 ) {
     let (Some(look), Some(killer)) = (look, killer) else { return };
-    let aiming = jasons.iter().any(|j| matches!(j.state, JasonState::Throwing { thrown: false, .. }));
+    let aiming = jasons.iter().any(|j| j.aiming_knife());
     let hand = rigs.iter().find(|r| matches!(r.model, crate::character::Model::Killer)).and_then(|r| r.socket(&killer.info, HAND_GRAB_SOCKET, &globals));
     match (aiming.then_some(hand).flatten(), held.single_mut()) {
         (Some(hand), Ok((_, mut xf))) => *xf = hand,
@@ -1033,8 +1042,13 @@ fn held_knife(
 
 fn spawn_knife(ev: On<ThrowKnife>, mut commands: Commands, look: Option<Res<KnifeLook>>) {
     let knife = commands.spawn((Transform::from_translation(ev.from).with_rotation(knife_rotation(ev.vel)), Visibility::default())).id();
+    let dart = knife_look(&mut commands, look.as_deref(), knife);
+    commands.entity(knife).insert((Knife { vel: ev.vel, age: 0.0, damage: ev.damage, stuck: false, dart }, crate::net_world::NetVisual::Knife { stuck: false }));
+}
+
+/// A thrown knife's looks on `knife`: its dart (hidden while it flies) and its particles. Returns the dart.
+pub(crate) fn knife_look(commands: &mut Commands, look: Option<&KnifeLook>, knife: Entity) -> Option<Entity> {
     let dart = look.map(|l| commands.spawn((WorldAssetRoot(l.0.clone()), l.1, Visibility::Hidden, ChildOf(knife))).id());
-    commands.entity(knife).insert(Knife { vel: ev.vel, age: 0.0, damage: ev.damage, stuck: false, dart });
     // MULTICAST_Use (0x1403f7170) activates its ParticleSystem (P_Jason_ThrowingKnife_01 on its root): the spinning
     // dart (a mesh emitter) while it flies, and its ribbon trail (TracerTrail).
     commands.write_message(crate::particles::SpawnParticles {
@@ -1044,6 +1058,7 @@ fn spawn_knife(ev: On<ThrowKnife>, mut commands: Commands, look: Option<Res<Knif
         actor: String::new(),
         active: true,
     });
+    dart
 }
 
 /// Knives fly (ProjectileGravityScale 8), hit her (its damage, a hit reaction) or stick in what they hit, and go after
@@ -1103,6 +1118,7 @@ fn fly_knives(
             if let Some(d) = k.dart {
                 commands.entity(d).insert(Visibility::Inherited);
             }
+            commands.entity(ke).insert(crate::net_world::NetVisual::Knife { stuck: true });
             continue;
         }
         xf.translation = to;
@@ -1176,6 +1192,49 @@ fn distortion(
         commands.trigger(crate::audio::PlaySound { cue: TELEPORT_HEARD_CUE.into(), at: None });
         commands.trigger(crate::audio::PushMix("TeleportCounselorHearsSoundMix"));
         commands.insert_resource(TeleportEffect { left: t.teleport_screen_time, total: t.teleport_screen_time });
+    }
+}
+
+/// What a client shows of the server's Jason (net.rs): the states his looks, sounds and cameras follow.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RemoteView {
+    pub shifting: bool,
+    pub stalking: bool,
+    pub holding: bool,
+    pub knife_aim: bool,
+    /// Faded out (a Shift or Morph) or hidden under the water.
+    pub hidden: bool,
+    /// The door he's opening or breaking down (its entity here).
+    pub door: Option<(Entity, DoorMove)>,
+}
+
+/// What he's doing at a door.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DoorMove {
+    OpenInside,
+    OpenOutside,
+    Break,
+}
+
+impl Jason {
+    /// The door move under way, for a client's camera.
+    pub fn door_move(&self) -> Option<(Entity, DoorMove)> {
+        match self.state {
+            JasonState::OpeningDoor { door, anim, .. } => Some((door, if anim == DOOR_OPEN_INSIDE { DoorMove::OpenInside } else { DoorMove::OpenOutside })),
+            JasonState::BreakingDoor { door, .. } => Some((door, DoorMove::Break)),
+            _ => None,
+        }
+    }
+
+    /// Faded out (a Shift or Morph) or hidden under the water (his visibility, as his tick sets it).
+    pub fn hidden(&self) -> bool {
+        self.remote.map_or(self.faded || self.under_hidden, |r| r.hidden)
+    }
+
+    /// His state's name (for a client's HUD).
+    pub fn state_name(&self) -> String {
+        let s = format!("{:?}", self.state);
+        s.split([' ', '(', '{']).next().unwrap_or("").to_string()
     }
 }
 
@@ -1303,6 +1362,8 @@ fn spawn_jason(
                 stun_done: None,
                 next_wiggle: (-1.0, 0.0),
                 underwater: false,
+                remote: None,
+                remote_state: String::new(),
                 underwater_speed: None,
                 under_hidden: false,
                 kill_holds: true,
@@ -3179,11 +3240,20 @@ fn jason_door_camera(
     }
     let Some((j, xf)) = jasons.iter().next() else { return };
     let inside = |d: Entity| doors.get(d).is_ok_and(|g| crate::doors::Door::is_inside(g, xf.translation));
-    let now = match j.state {
-        JasonState::OpeningDoor { door, anim, .. } => {
+    let now = match (j.remote.and_then(|r| r.door), &j.state) {
+        (Some((door, kind)), _) => Some((
+            door,
+            match kind {
+                DoorMove::OpenInside => "KillerOpenDoorInside_SpecialMoveHandler",
+                DoorMove::OpenOutside => "KillerOpenDoorOutside_SpecialMoveHandler",
+                DoorMove::Break if inside(door) => "BreakDownFromInside_SpecialMoveHandler",
+                DoorMove::Break => "BreakDownFromOutside_SpecialMoveHandler",
+            },
+        )),
+        (_, &JasonState::OpeningDoor { door, anim, .. }) => {
             Some((door, if anim == DOOR_OPEN_INSIDE { "KillerOpenDoorInside_SpecialMoveHandler" } else { "KillerOpenDoorOutside_SpecialMoveHandler" }))
         }
-        JasonState::BreakingDoor { door, .. } => Some((door, if inside(door) { "BreakDownFromInside_SpecialMoveHandler" } else { "BreakDownFromOutside_SpecialMoveHandler" })),
+        (_, &JasonState::BreakingDoor { door, .. }) => Some((door, if inside(door) { "BreakDownFromInside_SpecialMoveHandler" } else { "BreakDownFromOutside_SpecialMoveHandler" })),
         _ => None,
     };
     // A move's handler is chosen as it starts (a door found locked mid-open goes on to the break down's).

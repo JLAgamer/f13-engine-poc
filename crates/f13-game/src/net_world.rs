@@ -11,10 +11,13 @@
 //! What the server's simulation does at once (a sound it plays, an item it drops, a door it breaks apart) goes out
 //! as a [`Heard`] message ([`shout`]); a client plays it on its own actors.
 //!
-//! PLACEHOLDERS: the client must be started with the server's `--layout` and `--seed` (the lobby will hand them out);
-//! the cabinets' drawers, the police car and the armed traps don't replicate yet.
+//! What the simulation spawns as it goes (a thrown knife, a firecracker, a flare, Jason's trap, the police car) carries a
+//! [`NetVisual`] (its kind) and goes out with its place ([`NetXf`]) and its prop animation ([`NetPropAnim`]); a client
+//! gives its copy the same looks.
+//!
+//! PLACEHOLDER: the client builds the server's world from its seed, layout and weather (net.rs `query_world`).
 
-use crate::net::{NetBody, NetClient};
+use crate::net::NetBody;
 use bevy::prelude::*;
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -74,6 +77,8 @@ pub struct NetItem {
     pub visible: bool,
     pub cabinet: Option<(u32, u8)>,
     pub spent: bool,
+    /// Set as a bear trap, and its prop animation then.
+    pub trap: Option<String>,
 }
 
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
@@ -86,6 +91,32 @@ pub struct NetVehicle {
     pub steer: f32,
     pub repairs: Vec<bool>,
 }
+
+/// A cabinet: its drawers' places (local transforms) and whether each is open.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct NetCabinet {
+    pub drawers: Vec<([f32; 7], bool)>,
+}
+
+/// What the simulation spawned, for a client to show.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum NetVisual {
+    /// A thrown knife; stuck in what it hit (its dart shows).
+    Knife { stuck: bool },
+    Firecracker,
+    Flare,
+    /// Jason's bear trap.
+    KillerTrap,
+    PoliceCar { class: String },
+}
+
+/// Where a spawned thing is (translation, rotation).
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+pub struct NetXf(pub [f32; 7]);
+
+/// The prop animation it plays (a bear trap's: armed, sprung, escaped).
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct NetPropAnim(pub Option<String>);
 
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct NetFuseBox {
@@ -167,14 +198,18 @@ pub(crate) fn protocol(app: &mut App) {
     app.component::<NetFuseBox>().replicate();
     app.component::<NetPhoneBox>().replicate();
     app.component::<NetPhone>().replicate();
+    app.component::<NetCabinet>().replicate();
+    app.component::<NetVisual>().replicate();
+    app.component::<NetXf>().replicate();
+    app.component::<NetPropAnim>().replicate();
 }
 
 pub(crate) fn server(app: &mut App) {
-    app.add_observer(send_heard).add_systems(PostUpdate, (make_proxies, (send_fixtures, send_items, send_vehicles)).chain().before(ReplicationSystems::Send));
+    app.add_observer(send_heard).add_systems(PostUpdate, (make_proxies, tag_visuals, (send_fixtures, send_items, send_vehicles, send_cabinets, send_visuals)).chain().before(ReplicationSystems::Send));
 }
 
 pub(crate) fn client(app: &mut App) {
-    app.init_resource::<Actors>().add_systems(Update, (index_actors, (apply_fixtures, apply_vehicles, apply_items, hear)).chain().after(crate::net::Mirrored));
+    app.init_resource::<Actors>().add_systems(Update, (index_actors, (apply_fixtures, apply_vehicles, apply_items, apply_traps, apply_cabinets, show_visuals, hear)).chain().after(crate::net::Mirrored));
 }
 
 fn xf_array(t: &Transform) -> [f32; 7] {
@@ -198,12 +233,12 @@ fn set<T: PartialEq>(mut c: Mut<T>, v: T) {
 fn make_proxies(
     mut commands: Commands,
     actors: Query<
-        (Entity, &WorldId, (Has<crate::doors::Door>, Has<crate::windows::Window>, Has<crate::windows::Barricade>, Has<crate::props::Item>), (Has<crate::props::Vehicle>, Has<crate::power::FuseBox>, Has<crate::police::PhoneBox>, Has<crate::police::Phone>)),
+        (Entity, &WorldId, (Has<crate::doors::Door>, Has<crate::windows::Window>, Has<crate::windows::Barricade>, Has<crate::props::Item>), (Has<crate::props::Vehicle>, Has<crate::power::FuseBox>, Has<crate::police::PhoneBox>, Has<crate::police::Phone>), Has<crate::cabinets::Cabinet>),
         Without<ProxyLink>,
     >,
 ) {
-    for (e, id, (door, window, barricade, item), (vehicle, fuse, phone_box, phone)) in &actors {
-        if !(door || window || barricade || item || vehicle || fuse || phone_box || phone) {
+    for (e, id, (door, window, barricade, item), (vehicle, fuse, phone_box, phone), cabinet) in &actors {
+        if !(door || window || barricade || item || vehicle || fuse || phone_box || phone || cabinet) {
             continue;
         }
         let mut p = commands.spawn((ProxyOf(id.0), Replicate::to_clients(NetworkTarget::All)));
@@ -230,6 +265,9 @@ fn make_proxies(
         }
         if phone {
             p.insert(NetPhone::default());
+        }
+        if cabinet {
+            p.insert(NetCabinet::default());
         }
         let p = p.id();
         commands.entity(e).insert(ProxyLink(p));
@@ -271,7 +309,7 @@ fn send_fixtures(
 #[allow(clippy::type_complexity)]
 fn send_items(
     carriers: Query<(&NetBody, &crate::interact::Inventory)>,
-    items: Query<(Entity, &ProxyLink, &GlobalTransform, Option<&Visibility>, Option<&crate::props::InCabinet>, Has<crate::items::Spent>), With<crate::props::Item>>,
+    items: Query<(Entity, &ProxyLink, &GlobalTransform, Option<&Visibility>, Option<&crate::props::InCabinet>, Has<crate::items::Spent>, (Has<crate::items::ArmedTrap>, Option<&crate::prop_anim::PropAnim>))>,
     cabinets: Query<&WorldId>,
     mut proxies: Query<&mut NetItem>,
 ) {
@@ -287,13 +325,15 @@ fn send_items(
             held.insert(s, (b.id, Slot::Special(i as u8)));
         }
     }
-    for (e, link, g, vis, cabinet, spent) in &items {
+    for (e, link, g, vis, cabinet, spent, (armed, anim)) in &items {
         let Ok(n) = proxies.get_mut(link.0) else { continue };
+        // Set as a trap (no longer an item): armed, or sprung (its animation since).
+        let trap = (armed || n.trap.is_some()).then(|| anim.map_or(String::new(), |a| a.name.to_string()));
         let holder = held.get(&e).copied();
         // Where it lies (not while carried: then it hangs off her hand or is nowhere).
         let at = if holder.is_some() { n.at } else { xf_array(&g.compute_transform()) };
         let cabinet = cabinet.and_then(|c| Some((cabinets.get(c.0).ok()?.0, c.1 as u8)));
-        set(n, NetItem { holder, at, visible: vis.is_none_or(|v| *v != Visibility::Hidden), cabinet, spent });
+        set(n, NetItem { holder, at, visible: vis.is_none_or(|v| *v != Visibility::Hidden), cabinet, spent, trap });
     }
 }
 
@@ -367,7 +407,13 @@ fn send_heard(
 
 /// On a client: its actors by id.
 #[derive(Resource, Default)]
-struct Actors(HashMap<u32, Entity>);
+pub(crate) struct Actors(HashMap<u32, Entity>);
+
+impl Actors {
+    pub(crate) fn get(&self, id: u32) -> Option<Entity> {
+        self.0.get(&id).copied()
+    }
+}
 
 fn index_actors(mut actors: ResMut<Actors>, added: Query<(Entity, &WorldId), Added<WorldId>>) {
     for (e, id) in &added {
@@ -576,3 +622,109 @@ fn hear(mut commands: Commands, actors: Res<Actors>, twins: Res<crate::net::Twin
         }
     }
 }
+
+fn send_cabinets(cabinets: Query<(&ProxyLink, &crate::cabinets::Cabinet)>, drawers: Query<&Transform>, mut proxies: Query<&mut NetCabinet>) {
+    for (link, c) in &cabinets {
+        let Ok(n) = proxies.get_mut(link.0) else { continue };
+        let d = c.slots.iter().map(|s| (s.drawer.and_then(|d| drawers.get(d).ok()).map_or([0.0; 7], xf_array), s.open)).collect();
+        set(n, NetCabinet { drawers: d });
+    }
+}
+
+/// What the simulation spawned goes out to the clients.
+fn tag_visuals(mut commands: Commands, added: Query<(Entity, &Transform), (Added<NetVisual>, Without<NetXf>)>) {
+    for (e, xf) in &added {
+        commands.entity(e).insert((NetXf(xf_array(xf)), NetPropAnim::default(), Replicate::to_clients(NetworkTarget::All)));
+    }
+}
+
+fn send_visuals(mut visuals: Query<(&Transform, &mut NetXf, &mut NetPropAnim, Option<&crate::prop_anim::PropAnim>), With<NetVisual>>) {
+    for (xf, x, a, anim) in &mut visuals {
+        set(x, NetXf(xf_array(xf)));
+        set(a, NetPropAnim(anim.map(|a| a.name.to_string())));
+    }
+}
+
+/// A prop animation's name as [`crate::prop_anim::PropAnim`] takes it (the bear trap's few).
+fn prop_anim(name: &str) -> Option<&'static str> {
+    use crate::prop_anim::*;
+    [TRAP_ARMED, TRAP_SPRUNG, TRAP_ESCAPED, TRAP_CLOSED].into_iter().find(|n| *n == name)
+}
+
+/// Bear traps the counselors set: no longer items here; their animations as the server plays them.
+fn apply_traps(mut commands: Commands, actors: Res<Actors>, proxies: Query<(&ProxyOf, &NetItem), Changed<NetItem>>, anims: Query<&crate::prop_anim::PropAnim>) {
+    for (of, n) in &proxies {
+        let (Some(&e), Some(trap)) = (actors.0.get(&of.0), &n.trap) else { continue };
+        let mut ec = commands.entity(e);
+        ec.remove::<(crate::props::Item, crate::interact::Carried, ChildOf, crate::items::InHand, crate::items::HeldAt)>().insert((array_xf(&n.at), Visibility::Inherited));
+        if let Some(name) = prop_anim(trap) {
+            if anims.get(e).map_or(true, |a| a.name != name) {
+                ec.insert(crate::prop_anim::PropAnim::new(name));
+            }
+        }
+    }
+}
+
+fn apply_cabinets(actors: Res<Actors>, proxies: Query<(&ProxyOf, &NetCabinet), Changed<NetCabinet>>, mut cabinets: Query<&mut crate::cabinets::Cabinet>, mut transforms: Query<&mut Transform>) {
+    for (of, n) in &proxies {
+        let Some(&e) = actors.0.get(&of.0) else { continue };
+        let Ok(mut c) = cabinets.get_mut(e) else { continue };
+        for (slot, (xf, open)) in c.slots.iter_mut().zip(&n.drawers) {
+            slot.open = *open;
+            if let Some(mut t) = slot.drawer.and_then(|d| transforms.get_mut(d).ok()) {
+                *t = array_xf(xf);
+            }
+        }
+    }
+}
+
+/// The server's spawned things here: their looks once, then their place and animation.
+#[allow(clippy::too_many_arguments)]
+fn show_visuals(
+    mut commands: Commands,
+    (assets, export, look): (Res<AssetServer>, Res<crate::ExportRoot>, Option<Res<crate::jason::KnifeLook>>),
+    (mut meshes, mut materials): (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>),
+    added: Query<(Entity, &NetVisual, &NetXf), Added<NetVisual>>,
+    mut moved: Query<(Entity, &NetVisual, Ref<NetXf>, &NetPropAnim, Option<&Shown>, Option<&mut Transform>)>,
+    anims: Query<&crate::prop_anim::PropAnim>,
+    mut visibility: Query<&mut Visibility>,
+) {
+    for (e, v, x) in &added {
+        let at = array_xf(&x.0);
+        info!("net: the server's {v:?} at {}", at.translation);
+        match v {
+            NetVisual::PoliceCar { class } => {
+                crate::police::spawn_car(&mut commands, &export, &assets, class, at);
+                commands.entity(e).insert(Shown(None));
+            }
+            NetVisual::Knife { .. } => {
+                commands.entity(e).insert((at, Visibility::default()));
+                let dart = crate::jason::knife_look(&mut commands, look.as_deref(), e);
+                commands.entity(e).insert(Shown(dart));
+            }
+            _ => {
+                commands.entity(e).insert((at, Visibility::default(), Shown(None)));
+                crate::items::projectile_look(&mut commands, &assets, &mut meshes, &mut materials, e, v);
+            }
+        }
+    }
+    for (e, v, x, a, shown, xf) in &mut moved {
+        if let (true, Some(mut xf)) = (x.is_changed(), xf) {
+            *xf = array_xf(&x.0);
+        }
+        if let (NetVisual::Knife { stuck: true }, Some(Shown(Some(dart)))) = (v, shown) {
+            if let Ok(mut vis) = visibility.get_mut(*dart) {
+                vis.set_if_neq(Visibility::Inherited);
+            }
+        }
+        if let Some(name) = a.0.as_deref().and_then(prop_anim) {
+            if anims.get(e).map_or(true, |p| p.name != name) {
+                commands.entity(e).insert(crate::prop_anim::PropAnim::new(name));
+            }
+        }
+    }
+}
+
+/// On a client: a spawned thing's looks are made (its knife's dart, if it has one).
+#[derive(Component)]
+struct Shown(Option<Entity>);

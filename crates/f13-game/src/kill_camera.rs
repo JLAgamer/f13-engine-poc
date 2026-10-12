@@ -76,6 +76,16 @@ pub struct KillCam {
 }
 
 impl KillCam {
+    /// The server's kill camera on a client (net.rs): its kill, origin and whether that's the kill's root.
+    pub fn remote(kill: &str, origin: Transform, at_root: bool) -> Self {
+        KillCam { at_root, ..Self::at(kill, origin) }
+    }
+
+    /// The parts net.rs sends.
+    pub fn parts(&self) -> (&str, Transform, bool) {
+        (&self.kill, self.origin, self.at_root)
+    }
+
     pub fn new(kill: &str, jason: Transform) -> Self {
         let origin = Transform::from_matrix(jason.to_matrix() * Transform::from_rotation(crate::character::FACING).to_matrix());
         KillCam { at_root: true, ..Self::at(kill, origin) }

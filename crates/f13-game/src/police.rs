@@ -344,14 +344,14 @@ fn arrive(
 }
 
 /// The police car (Police_C): its meshes, and its siren looping.
-fn spawn_car(commands: &mut Commands, export: &crate::ExportRoot, assets: &AssetServer, class: &str, at: Transform) {
+pub(crate) fn spawn_car(commands: &mut Commands, export: &crate::ExportRoot, assets: &AssetServer, class: &str, at: Transform) {
     let Ok(classes) = ClassDb::load(&export.0.join("classes.json")) else { return };
     let Some(info) = classes.get(class) else {
         warn!("police: no class {class} in the export");
         return;
     };
     let sounds = info.components.iter().filter(|c| c.kind == "AudioComponent").filter_map(|c| Some((c.name.clone(), crate::audio::cue_name(&c.props["Sound"])?))).collect();
-    let root = commands.spawn((at, Visibility::default(), Name::new(class.to_string()), crate::audio::ClassSounds(sounds), PoliceCar)).id();
+    let root = commands.spawn((at, Visibility::default(), Name::new(class.to_string()), crate::audio::ClassSounds(sounds), PoliceCar, crate::net_world::NetVisual::PoliceCar { class: class.to_string() })).id();
     if let Some(icon) = crate::ui::MapIcon::of(&classes, class) {
         commands.entity(root).insert(icon);
     }

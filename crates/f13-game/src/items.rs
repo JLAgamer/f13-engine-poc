@@ -523,7 +523,37 @@ fn set_killer_trap(ev: On<SetKillerTrap>, mut commands: Commands, assets: Res<As
         ev.0,
         Visibility::Inherited,
         bevy::world_serialization::WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(TRAP_MESH))),
+        crate::net_world::NetVisual::KillerTrap,
     ));
+}
+
+/// The looks of what's thrown and set (a client's copies of the server's: net_world.rs): a firecracker, a flare, Jason's
+/// trap.
+pub(crate) fn projectile_look(commands: &mut Commands, assets: &AssetServer, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, e: Entity, kind: &crate::net_world::NetVisual) {
+    use crate::net_world::NetVisual;
+    match kind {
+        NetVisual::Firecracker => {
+            commands.entity(e).insert((Mesh3d(meshes.add(Cuboid::new(0.06, 0.06, 0.14))), MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::srgb(0.7, 0.05, 0.05), ..default() }))));
+        }
+        NetVisual::Flare => {
+            commands.entity(e).insert((
+                Mesh3d(meshes.add(Sphere::new(0.05))),
+                MeshMaterial3d(materials.add(StandardMaterial { emissive: LinearRgba::rgb(40.0, 4.0, 2.0), ..default() })),
+                PointLight { color: Color::srgb(1.0, 0.2, 0.1), intensity: 400_000.0, range: 25.0, ..default() },
+            ));
+        }
+        NetVisual::KillerTrap => {
+            commands.entity(e).insert(bevy::world_serialization::WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(TRAP_MESH))));
+        }
+        _ => {}
+    }
+}
+
+impl ArmedTrap {
+    /// A client's copy of an armed trap (its looks; the server springs it).
+    pub fn shown() -> Self {
+        ArmedTrap { clear: true, by: None, killer: false }
+    }
 }
 
 /// The counselor is caught in a bear trap.
@@ -816,6 +846,7 @@ fn tick_action(
                         Transform::from_translation(chest + aim * 0.5),
                         PointLight { color: Color::srgb(1.0, 0.2, 0.1), intensity: 400_000.0, range: 25.0, ..default() },
                         Flare { by: pe, vel: aim * velocity / 100.0, age: 0.0, hit: false },
+                        crate::net_world::NetVisual::Flare,
                     ));
                     info!("flare fired");
                 } else {
@@ -895,7 +926,7 @@ fn tick_action(
                 let (mesh, mat) = (assets.0.add(Cuboid::new(0.06, 0.06, 0.14)), assets.1.add(StandardMaterial { base_color: Color::srgb(0.7, 0.05, 0.05), ..default() }));
                 let vel = look.with_y(0.0).normalize_or(facing.with_y(0.0).normalize_or_zero()) * THROW_SPEED;
                 let from = hand.map_or(chest + facing * 0.4, |h| h.translation);
-                commands.spawn((Mesh3d(mesh), MeshMaterial3d(mat), Transform::from_translation(from), Firecracker { by: pe, vel, age: 0.0, stunned: false }));
+                commands.spawn((Mesh3d(mesh), MeshMaterial3d(mat), Transform::from_translation(from), Firecracker { by: pe, vel, age: 0.0, stunned: false }, crate::net_world::NetVisual::Firecracker));
             }
             Use::PlaceTrap => {
                 a.done = true;
