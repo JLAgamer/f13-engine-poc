@@ -643,7 +643,8 @@ pub struct Jason {
     /// The played Jason's fast walk as SetRunning leaves it (0x1402e99f0): on as Left Shift is pressed (OnStartFastWalk,
     /// which first leaves combat stance; SetRunning refuses in it), off as it's let go (OnStopFastWalk) and as a grab
     /// takes her (FinishGrabCounselor 0x1403eb560: SetCombatStance(false), SetRunning(false)), so Shift held through
-    /// the grab doesn't run him; a new press does (his GrabInput binds KLR_FastWalk too).
+    /// the grab doesn't run him, and a new press doesn't either: his SetRunning override (0x140407400) refuses while
+    /// GrabbedCounselor is set (his GrabInput binds KLR_FastWalk, to no effect).
     pub fast_walk: bool,
 }
 
@@ -1959,7 +1960,10 @@ pub(crate) fn update_jason(
                         crate::net_world::shout(&mut commands, crate::net_world::Shout::Distortion(crate::jason::Distortion { at: xf.translation, dest: None }));
                     }
                     // KLR_FastWalk_PC: OnStartFastWalk leaves combat stance, then SetRunning; OnStopFastWalk clears it.
+                    // SCKillerCharacter's SetRunning (0x140407400) won't turn it on while he holds her (GrabbedCounselor).
+                    let holding = matches!(j.state, JasonState::Holding { .. } | JasonState::Killing { .. } | JasonState::PullingOut { .. });
                     match p.fast_walk {
+                        Some(true) if holding => {}
                         Some(true) => {
                             if j.combat {
                                 j.combat = false;

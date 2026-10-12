@@ -7,15 +7,13 @@ Base content (asset paths in the player's install; all gameplay values come from
 `Characters/Killers/Jason/J2`, the Chevettes (`Blueprints/Vehicles/DriveableVehicles/Cars/Chevette`), the police.
 
 ## Todo
-- [ ] Jason's fast walk while holding her: the user saw none in the game; check a fresh Shift press during the hold
-- [ ] The campfire kill's alignment (reported 2026-10-12; parked)
 - [ ] Bot clients for the scenarios: the bots that set up their scene (teleports, locks) need a server-side hook
       (the net bot plays through its input only)
 - [ ] The lobby's rest: the match-end lobby as its own screen (SCMatchEndLobbyWidget, its badges' icons and names:
       SCStatBadge; award sites and classes are read, MODLOG), back to the lobby after a match, the counselors'
       character picks, a full 8-player run (`--lobby` gathers, picks Jason and starts the match now)
 - [ ] The Tommy Jarvis timer, Tommy Jarvis, and Jason dying
-- [ ] Voice chat (cpal and Opus: waiting on permission to download)
+- [ ] Voice chat (cpal and Opus: download approved 2026-10-12)
 - [ ] Materials: foliage subsurface (its transmission is the deferred light pass's, whose code isn't in the shipped
       global shader cache: MODLOG "Foliage subsurface: blocked")
 - [ ] Counselor model: the eye look against a capture of the game (it rolls the eyes 90 degrees from their bind:
