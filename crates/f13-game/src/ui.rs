@@ -147,7 +147,7 @@ impl Plugin for UiPlugin {
             .init_resource::<Prompts>()
             .init_resource::<prompts::PromptUi>()
             .add_systems(Startup, load_hud)
-            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, (map_screen, counselor_map_icons).chain(), jason_hud, ability_popup, rage_hud, noise_meter, xp_lines, wiggle_state.pipe(wiggle_widget)), prompts::prompts, spectator_hud, widget_anims, fear_widgets, content_alpha, widget_colors, additive_brushes, hide_for_jason).chain().run_if(resource_exists::<Hud>));
+            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, (map_screen, counselor_map_icons).chain(), jason_hud, ability_popup, morph_cursor, rage_hud, noise_meter, xp_lines, wiggle_state.pipe(wiggle_widget)), prompts::prompts, spectator_hud, widget_anims, fear_widgets, content_alpha, widget_colors, additive_brushes, hide_for_jason).chain().run_if(resource_exists::<Hud>));
     }
 }
 
@@ -293,6 +293,8 @@ pub struct Hud {
     police_objective: Option<Widget>,
     /// His notice as an ability unlocks or rage starts (AbilityAvailable; [`ability_popup`]).
     ability_popup: Option<Widget>,
+    /// The Crosshairs software cursor (DefaultEngine.ini's CrosshairsCursor: Morph_Area_Cursor), his Morph map's.
+    morph_cursor: Option<Widget>,
     export: PathBuf,
     classes: ClassDb,
     /// Texture name -> PNG (ui/textures.json).
@@ -492,6 +494,7 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         car_objective: Widget::load(dir, "Objective_Car_Widget"),
         police_objective: Widget::load(dir, "Objective_Police_Widget"),
         ability_popup: Widget::load(dir, "AbilityAvailable"),
+        morph_cursor: Widget::load(dir, "Morph_Area_Cursor"),
         spectator: Widget::load(dir, "SpectatorHUDWidget").map(|mut w| {
             action_keys(&mut w);
             w
@@ -2286,6 +2289,55 @@ fn ability_popup(
             state.2 = None;
         }
         _ => {}
+    }
+}
+
+/// His Morph map's cursor: SetMapStatus shows the mouse cursor as Crosshairs (8) while the map's out for a Morph, and
+/// UserInterfaceSettings' CrosshairsCursor makes that the Morph_Area_Cursor widget (Image_0: 50 x 50, centred on its
+/// canvas, Morph_Cursor_02 on M_UI_MorphCursor_01, tinted EE3124) in place of the system's. PLACEHOLDER: the widget
+/// drawn centred on the mouse (where Slate puts a software cursor widget isn't read). The Hand cursor
+/// (Morph_Area_Bad_Cursor, AttemptMorph's refusal) isn't used: nothing is refused in this build.
+#[allow(clippy::type_complexity)]
+fn morph_cursor(
+    mut commands: Commands,
+    mut hud: ResMut<Hud>,
+    play: Option<Res<crate::jason_player::PlayJason>>,
+    morph_map: Option<Res<crate::jason_player::MorphMap>>,
+    (assets, mut materials): (Res<AssetServer>, ResMut<Assets<RadialFill>>),
+    (window, mut cursor): (Single<&Window, With<PrimaryWindow>>, Single<&mut bevy::window::CursorOptions>),
+    mut nodes: Query<(&mut Node, &mut Visibility)>,
+    mut spawned: Local<Option<Entity>>,
+) {
+    let (Some(root), Some(tree)) = (hud.root, hud.morph_cursor.clone()) else { return };
+    let out = play.is_some() && morph_map.is_some_and(|m| m.morph);
+    let at = window.cursor_position().filter(|_| out);
+    if out && cursor.visible {
+        cursor.visible = false;
+    }
+    let e = match *spawned {
+        Some(e) => e,
+        None if at.is_some() => {
+            let e = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden, Pickable::IGNORE, GlobalZIndex(i32::MAX), ChildOf(root))).id();
+            let none = Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 };
+            let scale = hud.scale;
+            let mut names = HashMap::new();
+            let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names };
+            b.spawn(&tree.layout(none), e, none, "Morph_Area_Cursor");
+            hud.names.extend(names);
+            *spawned = Some(e);
+            return;
+        }
+        None => return,
+    };
+    // Gone with a rebuilt HUD: spawned again.
+    let Ok((mut node, mut vis)) = nodes.get_mut(e) else {
+        *spawned = None;
+        return;
+    };
+    vis.set_if_neq(if at.is_some() { Visibility::Inherited } else { Visibility::Hidden });
+    if let Some(at) = at {
+        node.left = Val::Px(at.x);
+        node.top = Val::Px(at.y);
     }
 }
 

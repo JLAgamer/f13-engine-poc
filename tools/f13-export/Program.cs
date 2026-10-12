@@ -1358,6 +1358,9 @@ static class Mvp
         "/Game/UI/HUD/SC_WiggleMinigame_Widget",
         // Jason's, when he's played.
         "/Game/UI/HUD/Killer/KillerHUDWidget",
+        // The software cursors (DefaultEngine.ini UserInterfaceSettings): Crosshairs, his Morph map's; Hand, its refusal.
+        "/Game/UI/HUD/Minimap/Morph_Area_Cursor",
+        "/Game/UI/HUD/Minimap/Morph_Area_Bad_Cursor",
         // Hers once she's out (dead or escaped).
         "/Game/UI/HUD/Spectator/SpectatorHUDWidget",
         // Its key hints (an ActionMapWidget and a title).

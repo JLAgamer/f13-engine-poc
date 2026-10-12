@@ -37,8 +37,7 @@ Base content (asset paths in the player's install; all gameplay values come from
 - [ ] Knives for Jason to find across the map (their spawners and pickup)
 - [ ] Jason's prompt for destroying doors
 - [ ] Jason's ability unlock popup (AbilityAvailable) is too bright (cause not yet found)
-- [ ] Jason's red cursor on the Morph map
-- [ ] Jason sometimes swings when left-clicking the Morph map
+- [ ] Jason's red cursor on the Morph map: written (ui.rs morph_cursor, the game's Morph_Area_Cursor), not yet seen running
 - [ ] More content, one at a time: maps (with their boat and other escapes), Jasons, counselors, perks, skins,
       emotes, a main menu
 

@@ -100,7 +100,6 @@ Building needs CMake for libopus (voice chat): put it on the PATH, or point `CMA
 Tools ship one under `Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe`; a `.cargo/config.toml`
 `[env]` entry works).
 
-Voice chat is on in networked matches: open mic, from the default microphone, heard from each player's character.
 
 By default you play Vanessa, in her default outfit and animated (idle, walk/run/sprint, crouch, combat strafing,
 dodges, stumbles, first aid; `--capsule` for the old placeholder): WASD move (running by default), Shift sprint, X toggle walk, Ctrl crouch, C combat stance (double-tap
@@ -118,7 +117,10 @@ starts you hurt.
 The night is lit as the game lights it, from the export:
 - the moon, its height fog and the sky colour come from the clear-weather level (CLsm_RainOff);
 - the map's 162 lamps, porch and cabin lights;
-- the fixed exposure and ambient light of the map's post-process volume.
+- the fixed exposure and ambient light of the map's post-process volume;
+- the game's own tonemapper, colour grading and bloom;
+- shadows from the moon, the flashlight and the nearest lamps;
+- rain on some nights, as the game rolls it (`--rain on|off` picks).
 
 F turns your flashlight on and off (the game's settings: cone, range, colour, the way it turns with you). While it's
 on, darkness doesn't scare you. `--flashlight` starts with it on.
@@ -132,11 +134,7 @@ and the car aren't heard yet.
 
 Not yet:
 - Enlighten's bounce light;
-- shadows from lamps;
-- colour grading;
-- the sky's clouds and stars;
-- rain;
-- power cuts.
+- the lamps' shadow caching (the game's rules for which lamps keep a shadow).
 
 Jason (Part 2) starts at the layout's killer start and hunts you: he walks or runs (his own speeds), opens doors in
 his way (his own door-opening animations) and breaks down locked or barricaded ones with the game's break-down
@@ -179,7 +177,7 @@ then the game closes. The game would go back to the lobby here.
 XP comes from the game's score events, where the game awards them: picking up weapons and car parts, repairs,
 first aid, barricading, firecrackers, traps, hitting and stunning Jason, breaking his grab, escaping, and the match's
 own (time bonus, unscathed, match complete, team escaped). Each one shows on the right as it's scored.
-`--round-time s` shortens the match for testing; `--kill <name>` makes Jason use one grab kill (e.g. `curbstomp`; else one of the pickaxe's five at random); `--cut-power` starts every fuse box destroyed (hold E at one to repair it); `--spawn x,y,z` starts her there (metres, Bevy axes). The level intro and outro sequences aren't played.
+`--round-time s` shortens the match for testing; `--kill <name>` makes Jason use one grab kill (e.g. `curbstomp`; else one of the pickaxe's five at random); `--cut-power` starts every fuse box destroyed (hold E at one to repair it); `--spawn x,y,z` starts her there (metres, Bevy axes). The level's intro cinematic plays first and the characters appear once it ends (Jason's abilities count from then); the outro plays at the end while Jason lives. `--no-intro` skips both.
 
 Items, cabinets and cars spawn as in the game (`--seed n` repeats a match; the log lists where the cars and parts
 are). E picks up (preferring what the camera looks at), searches drawers and installs parts. The game's keys for
@@ -203,7 +201,10 @@ he comes within 2 m). In combat stance, hold right mouse to block with a weapon:
 damage (the game's BlockingDamageMod: a fifth, less with more Strength and Luck) and wears the weapon; a grab goes
 through a block (`--bot-block` checks it). Step into an armed bear trap (yours too) and it bites for 50 damage and holds you: mash A / D to open it, as the
 game's stun minigame runs (`--bot-trap`). A pocket knife frees you the moment he grabs you; otherwise mash A / D to struggle free. M opens
-the map (when you carry one). The walkie-talkie only matters with other players. A dead counselor goes limp (a
+the map (when you carry one). Radios: E turns one on or off, holding E changes the song; a played Jason smashes one with E (and sees a playing one's sound rings).
+Crystal Lake's cabins never spawn radios in a normal match, so `--override-spawning` forces them in (testing).
+Once you're dead or out, you spectate: the game's "You died" / "You survived" screen, then Space changes the view,
+clicks pick the next or previous player and H hides the HUD. A dead counselor goes limp (a
 ragdoll from her physics asset; in a kill, where the kill animation hands her over, as in the game). `--give Class,Class` starts with items (e.g. `--give BaseballBat_C,BP_PocketKnife_C`);
 `--bot-fight` uses them on Jason and passes once he's been stunned and recovers.
 `--perf` logs where a frame's time goes every 5 s (built with `--features profile`, also the costliest systems): the main world's schedules, the render world's system sets, GPU
@@ -214,7 +215,26 @@ x,y,z,tx,ty,tz` (eye and look-at, relative to her feet), `--pose <animation>@<se
 
 ## Playing as Jason
 
-`--play-jason` puts you in Jason's boots (the counselor stands idle unless a `--bot-*` plays her), with the game's keys: WASD walk, Left Shift fast walk, mouse look; left click attack (held in combat stance: the heavy attack), right click grab, middle click held aims a knife and letting go throws it (right click puts it away), C combat stance, R set a trap, 1 Morph (to the morph point nearest 30 m ahead), 2 Sense, 3 Shift, 4 Stalk, E destroy a fuse box (its grid's lights go out) or, holding her, use a placed kill; holding her, 1-4 (on release) pick a grab kill and a click does the default one. F3 shows a debug readout. Doors open or break, and destructible walls break, as you walk into them. `--play-jason-demo` scripts the input (testing).
+`--play-jason` puts you in Jason's boots (the counselor stands idle unless a `--bot-*` plays her), with the game's keys: WASD walk, Left Shift fast walk, mouse look; left click attack (held in combat stance: the heavy attack), right click grab, middle click held aims a knife and letting go throws it (right click puts it away), C combat stance, R set a trap, 1 Morph (his map comes out with a red cursor: click where to go and he Morphs to the morph point nearest it; 1 again puts it away), M his map, 2 Sense, 3 Shift, 4 Stalk, E destroy a fuse box (its grid's lights go out) or, holding her, use a placed kill; holding her, 1-4 (on release) pick a grab kill and a click does the default one. F3 shows a debug readout. Doors open or break, and destructible walls break, as you walk into them. Like the game's Jason, you see a ring on screen wherever a counselor makes enough noise (and where a firecracker or a playing radio is). `--play-jason-demo` scripts the input (testing).
+
+## Playing together
+
+One game hosts and the others join it:
+
+```bash
+cargo run -p f13-game --release -- --export "<export dir>" --server 5000 --lobby --name Host
+```
+
+```bash
+cargo run -p f13-game --release -- --export "<export dir>" --connect 127.0.0.1:5000 --name Guest
+```
+
+In the lobby, 1, 2 and 3 say whether you'd rather be a counselor, have no preference, or be Jason, and Enter readies
+you up; once everyone's ready, the game picks Jason as the game does and the match starts. `--prefer
+counselor|none|jason` sets your preference from the start, and `--dedicated` hosts without playing.
+
+Voice chat is on: open mic from your default microphone, heard from each player's character. `--no-voice` turns it off
+(handy for several games on one machine).
 
 ## Host commands
 

@@ -224,7 +224,9 @@ fn capture(
         if c.mouse.just_pressed(MouseButton::Left) {
             map.click = window.cursor_position();
         }
+        // MorphInput takes the button: no attack (release alone leaves just_pressed, which latch reads).
         c.mouse.release(MouseButton::Left);
+        c.mouse.clear_just_pressed(MouseButton::Left);
     }
     let locked = cursor.grab_mode == CursorGrabMode::Locked;
     if c.mouse.just_pressed(MouseButton::Left) && !locked && !map.morph {
