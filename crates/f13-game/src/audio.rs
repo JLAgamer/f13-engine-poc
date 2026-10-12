@@ -1553,9 +1553,16 @@ fn reloop(
     }
 }
 
-fn start_delayed(mut commands: Commands, time: Res<Time>, mut voices: Query<(Entity, &mut StartAfter, Option<&AudioSink>, Option<&SpatialAudioSink>)>) {
+fn start_delayed(
+    mut commands: Commands,
+    (time, real, virtual_time): (Res<Time>, Res<Time<Real>>, Res<Time<Virtual>>),
+    mut voices: Query<(Entity, &mut StartAfter, Option<&AudioSink>, Option<&SpatialAudioSink>)>,
+) {
+    // While a cinematic holds the match's clock, its cues' delays run on its own (real time at the game's speed): the
+    // outro's Outro_Random starts Pamela's lines 2.185 s and 10 s in, as the shots reach her.
+    let dt = if virtual_time.is_paused() { real.delta_secs() * virtual_time.relative_speed() } else { time.delta_secs() };
     for (e, mut s, sink, spatial) in &mut voices {
-        s.0 -= time.delta_secs();
+        s.0 -= dt;
         if s.0 > 0.0 {
             continue;
         }

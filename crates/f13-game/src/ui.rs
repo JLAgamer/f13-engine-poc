@@ -1984,7 +1984,8 @@ fn jason_hud(
         // OnAbilityUnlocked: the unlock bar hidden (its asset gives Morph's the Stalk material, which would otherwise
         // stay drawn over Morph), the bar and the bracket shown, the bracket opaque when the amount is full.
         let i = ability as usize;
-        if a.is_unlocked(ability) && !unlocked[i] {
+        // (Once its widgets are built: an ability unlocked from the start, Morph, comes before the HUD is.)
+        if a.is_unlocked(ability) && !unlocked[i] && hud.names.contains_key(&format!("KillerAbilityWidget.{n}UnlockBar")) {
             unlocked[i] = true;
             for (part, v) in [("UnlockBar", Visibility::Hidden), ("Bar", Visibility::Inherited)] {
                 if let Some(mut w) = hud.names.get(&format!("KillerAbilityWidget.{n}{part}")).and_then(|&e| vis.get_mut(e).ok()) {

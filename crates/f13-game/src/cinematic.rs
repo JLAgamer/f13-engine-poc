@@ -240,11 +240,13 @@ fn evaluate(seqs: &HashMap<String, Sequence>, name: &str, t: f32, base: &HashMap
             }
             Kind::Visibility => {
                 let (Some((actor, _)), Some(s)) = (target, section_at(&track.sections, t, true)) else { continue };
-                // A step curve of bHidden.
+                // A step curve of visibility: UE's visibility track keys whether it's shown (its template hides the actor
+                // on false), though its property is bHidden. (The trident is off while Jason drags the victim under and on
+                // as he walks out of the lake; J6's props come on as he first appears.)
                 let keys = s.props["BoolCurve"]["Keys"].as_array().cloned().unwrap_or_default();
                 let v = keys.iter().take_while(|k| k["Time"].as_f64().unwrap_or(0.0) as f32 <= t).last().or(keys.first()).and_then(|k| k["Value"].as_i64());
                 let v = v.or(s.props["BoolCurve"]["DefaultValue"].as_i64()).unwrap_or(0);
-                out.hidden.insert(actor, v != 0);
+                out.hidden.insert(actor, v == 0);
             }
             Kind::ComponentMaterial => {
                 // Its scalar parameters, by name (a curve without keys and the float max default leaves the material's).
@@ -515,6 +517,11 @@ fn start(
     let killer: Option<Value> = std::fs::read_to_string(root.join("killers").join("Jason_SackHead.json")).ok().and_then(|t| serde_json::from_str(&t).ok());
     let killer_body = killer.as_ref().and_then(|k| k["Body"].as_str().map(str::to_string));
     let killer_mask = killer.as_ref().and_then(|k| k["Parts"].as_array()?.iter().find(|p| p["Name"] == "Mask")?["File"].as_str().map(str::to_string));
+    // His weapon on the staged trident (Savini_Jason_Trident_LOD0_18 / _LOD1), for every killer: IntroStarted's sequence
+    // runs Label_2664 (the weapon) before the J6 / Savini checks (pseudo_CLsm_IntroCinematic.txt's pushes 2640, 2664,
+    // 2688, 2741; the outro's Label_80 likewise). GetPickedKillerWeapon (0x1403f23c0): no picked weapon, the killer
+    // class's default WeaponClass's static mesh (J2: the pickaxe, his Weapon part).
+    let killer_weapon = killer.as_ref().and_then(|k| k["Parts"].as_array()?.iter().find(|p| p["Name"] == "Weapon")?["File"].as_str().map(str::to_string));
 
     let mut base = HashMap::new();
     let mut actors = HashMap::new();
@@ -551,7 +558,8 @@ fn start(
             }
         } else if let Some(list) = placements.get(&name) {
             if let Some((file, _)) = list.first() {
-                e.insert(scene(file));
+                let weapon = killer_weapon.as_ref().filter(|_| name.starts_with("Savini_Jason_Trident"));
+                e.insert(scene(weapon.unwrap_or(file)));
             }
         }
         if matches!(class, "SpotLight" | "PointLight") {

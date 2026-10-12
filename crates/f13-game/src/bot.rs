@@ -561,7 +561,10 @@ fn run_bot(
                     return;
                 };
                 let near = |k: &crate::placed_kills::PlacedKill| k.interact.distance(jxf.translation);
-                let Some((e, k)) = placed_kills.iter().filter(|(_, k)| !k.used).min_by(|a, b| near(a.1).total_cmp(&near(b.1))) else {
+                // F13_BOT_PLACED_KILL=<part of its take's name> (cinematic_fireplace): that kind only.
+                let only = std::env::var("F13_BOT_PLACED_KILL").ok();
+                let kind = |k: &crate::placed_kills::PlacedKill| only.as_deref().is_none_or(|o| k.takes().2.contains(o));
+                let Some((e, k)) = placed_kills.iter().filter(|(_, k)| !k.used && kind(k)).min_by(|a, b| near(a.1).total_cmp(&near(b.1))) else {
                     error!("bot: no placed kill");
                     bot.step = Step::Done;
                     return;
