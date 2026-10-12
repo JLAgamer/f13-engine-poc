@@ -355,12 +355,14 @@ impl Occlusion<'_, '_> {
     }
 }
 
-/// A door's InteractComponent's prompt (SCInteractionDoorWidget with DoorInteractionIcons): SCDoor's constructor
-/// (0x140329a10) sets its bCanHighlight (+0x358) and HighlightDistance 300 (the Blueprints' 400 over it).
+/// An interactable's prompt for the played Jason: a door's InteractComponent (SCInteractionDoorWidget with
+/// DoorInteractionIcons: SCDoor's constructor 0x140329a10 sets its bCanHighlight (+0x358) and HighlightDistance 300,
+/// the Blueprints' 400 over it), a throwing knife pickup's Interactable (SCInteractionWidget with
+/// KnifePickupInteractionIcon: the Blueprint's bCanHighlight, HighlightDistance 2000).
 #[derive(Component, Debug, Clone)]
-pub struct DoorPrompt(pub KillPrompt);
+pub struct InteractPrompt(pub KillPrompt);
 
-/// The played Jason's door prompts. SCDoor's CanInteractWith (0x140339f10) gives the killer a closed door (not broken)
+/// The played Jason's door and throwing knife prompts. SCDoor's CanInteractWith (0x140339f10) gives the killer a closed door (not broken)
 /// while he isn't holding her; highlighted by the door's highlight test from his capsule's centre, occluded as the
 /// placed kills' are; the best his interactable manager's ([`crate::jason::Jason::focus_door`]). SCInteractionDoorWidget
 /// (its Blueprint's Get_ActionMapWidgetUse / Get_ActionMapWidgetAttack_Visibility_0, for a killer): the attack key
@@ -370,7 +372,13 @@ fn door_prompts(
     play: Option<Res<crate::jason_player::PlayJason>>,
     killer: Option<Res<crate::character::KillerCharacter>>,
     jasons: Query<(&crate::jason::Jason, &Transform, Option<&crate::senses::Knowledge>)>,
-    doors: Query<(Entity, &crate::doors::Door, &DoorPrompt, &GlobalTransform, Option<&Name>)>,
+    doors: Query<(Entity, &crate::doors::Door, &InteractPrompt, &GlobalTransform, Option<&Name>)>,
+    (knives, knife_prompts, limits, controls): (
+        Query<(Entity, &crate::props::KnifePickup, &GlobalTransform, Has<crate::props::PickedUp>)>,
+        Query<(&InteractPrompt, Option<&Name>)>,
+        Query<&crate::interact::InteractLimits>,
+        Option<Res<crate::jason_player::JasonControls>>,
+    ),
     barricades: Query<&crate::windows::Barricade>,
     mut list: ResMut<crate::ui::Prompts>,
     occlusion: Occlusion,
@@ -389,7 +397,7 @@ fn door_prompts(
     let eyes = center + Vec3::Y * JASON_EYE_HEIGHT_M;
     let rage = know.is_some_and(|k| k.abilities.rage_active);
     let best = j.focus_door();
-    let prompts: Vec<Prompt> = doors
+    let mut prompts: Vec<Prompt> = doors
         .iter()
         .filter(|(_, d, ..)| !d.open && !d.broken)
         .filter_map(|(e, d, p, g, name)| {
@@ -411,6 +419,21 @@ fn door_prompts(
             })
         })
         .collect();
+    // The throwing knife pickups: the best the one his E takes.
+    let look = controls.as_ref().map_or(xf.rotation * Vec3::Z, |c| Quat::from_euler(EulerRot::YXZ, c.yaw, c.pitch, 0.0) * Vec3::NEG_Z);
+    let best_knife = crate::jason::knife_pickup_at(&knives, &limits, center, look);
+    for (e, k, g, taken) in &knives {
+        if taken {
+            continue;
+        }
+        let Ok((p, name)) = knife_prompts.get(e) else { continue };
+        let at = g.transform_point(k.interact);
+        let highlighted = p.0.highlights(at, g.rotation() * Vec3::X, center) && !occlusion.blocked(&p.0, e, name, eyes, at);
+        let is_best = best_knife == Some(e);
+        if highlighted || is_best {
+            prompts.push(Prompt { source: PromptSource::Door, id: (e, 0), at, widget: p.0.widget.clone(), icon: p.0.icon.clone(), highlighted, best: is_best, shown: vec![] });
+        }
+    }
     list.set(PromptSource::Door, prompts);
 }
 

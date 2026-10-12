@@ -1852,6 +1852,8 @@ static class Mvp
         $"{JasonAnim}/Interaction/AM_Break_Phone_Box_Machete",
         // Breaking a radio (Jason_Radio_Destruction_Axe: his weapon isn't the machete).
         $"{JasonAnim}/Interaction/AM_Break_Radio_Axe",
+        // Picking up throwing knives (Jason_ThrowingKnifePickup's ContextMontage: its KnifePickup driver window).
+        $"{JasonAnim}/Interaction/AM_normal_stand_throwingknife_grab",
         // Pulling the driver out (DriverGrab's paired move); stopping a car dead.
         CarGrab[1],
         $"{JasonAnim}/Car/AM_normal_stand_car_stop_slam",

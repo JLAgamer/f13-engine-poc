@@ -880,10 +880,55 @@ impl Stun {
     }
 }
 
-/// Jason takes the throwing knives he passes within reach of (SCKillerCharacter::AddKnives: NumKnives += the pickup's
-/// StackSize, no cap). The game has him press to pick them up (a special move); here he takes them in passing, and
-/// the computer Jason doesn't go looking for them.
-fn pick_up_knives(mut commands: Commands, mut jasons: Query<(&mut Jason, &Transform)>, pickups: Query<(Entity, &crate::props::KnifePickup, &GlobalTransform)>) {
+/// Jason_ThrowingKnifePickup's ContextMontage (AM_normal_stand_throwingknife_grab): its KnifePickup driver window
+/// (0.89 s) calls PerformPickup.
+pub const KNIFE_PICKUP: &str = "normal_stand_throwingknife_grab";
+/// PerformPickup's SetLifeSpan (DAT_14207a218, s).
+const PICKUP_LIFESPAN_S: f32 = 5.0;
+
+/// The throwing knife pickup the played Jason's E takes: within its Interactable's DistanceLimit (+1 m, as the other
+/// interactables here) and its yaw limit (MaxYawOffset 70); SCThrowingKnifePickup's CanInteractWith (0x140375000)
+/// refuses him only while he holds her (he's hunting here). The nearest.
+pub(crate) fn knife_pickup_at(
+    pickups: &Query<(Entity, &crate::props::KnifePickup, &GlobalTransform, Has<crate::props::PickedUp>)>,
+    limits: &Query<&crate::interact::InteractLimits>,
+    centre: Vec3,
+    look: Vec3,
+) -> Option<Entity> {
+    pickups
+        .iter()
+        .filter(|(e, k, g, taken)| {
+            if *taken {
+                return false;
+            }
+            let at = g.transform_point(k.interact);
+            Vec2::new(at.x - centre.x, at.z - centre.z).length() * 100.0 <= k.reach + 100.0
+                && limits.get(*e).ok().and_then(|l| l.0.get("Interactable")).is_none_or(|l| l.facing(g, centre - at, look))
+        })
+        .min_by(|a, b| a.2.transform_point(a.1.interact).distance(centre).total_cmp(&b.2.transform_point(b.1.interact).distance(centre)))
+        .map(|(e, ..)| e)
+}
+
+/// The computer Jason takes the throwing knives he passes within reach of (SCKillerCharacter::AddKnives: NumKnives +=
+/// the pickup's StackSize, no cap): he doesn't go looking for them, nor play the pick-up move. A played Jason presses
+/// E at them (update_jason).
+fn pick_up_knives(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut jasons: Query<(&mut Jason, &Transform)>,
+    pickups: Query<(Entity, &crate::props::KnifePickup, &GlobalTransform), Without<crate::props::PickedUp>>,
+    mut taken: Query<(Entity, &mut crate::props::PickedUp)>,
+    controls: Option<Res<crate::jason_player::JasonControls>>,
+) {
+    for (e, mut t) in &mut taken {
+        t.0 -= time.delta_secs();
+        if t.0 <= 0.0 {
+            commands.entity(e).despawn();
+        }
+    }
+    if controls.is_some() {
+        return;
+    }
     for (mut j, xf) in &mut jasons {
         if !matches!(j.state, JasonState::Hunting) {
             continue;
@@ -1651,11 +1696,17 @@ pub(crate) fn update_jason(
         Option<ResMut<crate::jason_player::MorphMap>>,
         Res<GrabKillsAvailable>,
     ),
-    (inventories, items, mut fuse_boxes, (mut grids, mut phone_boxes, mut phones, mut radios), vehicles): (
+    (inventories, items, mut fuse_boxes, (mut grids, mut phone_boxes, mut phones, mut radios, knife_pickups), vehicles): (
         Query<&crate::interact::Inventory>,
         Query<&crate::props::Item>,
         Query<(Entity, &mut crate::power::FuseBox)>,
-        (Option<ResMut<crate::power::PowerGrids>>, Query<(Entity, &mut crate::police::PhoneBox)>, Query<&mut crate::police::Phone>, Query<(Entity, &mut crate::radio::Radio)>),
+        (
+            Option<ResMut<crate::power::PowerGrids>>,
+            Query<(Entity, &mut crate::police::PhoneBox)>,
+            Query<&mut crate::police::Phone>,
+            Query<(Entity, &mut crate::radio::Radio)>,
+            Query<(Entity, &crate::props::KnifePickup, &GlobalTransform, Has<crate::props::PickedUp>)>,
+        ),
         Query<(&crate::props::Vehicle, &GlobalTransform)>,
     ),
     mut players: Query<(Entity, &mut Player, &mut Transform, Option<&crate::vehicle::Driving>, Option<&mut crate::hiding::Hiding>, Has<crate::items::Blocking>), Without<Jason>>,
@@ -2031,6 +2082,19 @@ pub(crate) fn update_jason(
                             continue;
                         }
                         let near = |at: Vec3, reach: f32| Vec2::new(at.x - here.x, at.z - here.z).length() * 100.0 <= reach + 100.0;
+                        // Throwing knives lying there ([`knife_pickup_at`]): their AlignmentSpecialMove
+                        // (Jason_ThrowingKnifePickup) plays his take; PerformPickup at its KnifePickup driver window.
+                        if let Some(ke) = knife_pickup_at(&knife_pickups, &interact_limits, centre, i.look) {
+                            info!("Jason: picking up throwing knives");
+                            if let Ok((_, k, kg, _)) = knife_pickups.get(ke) {
+                                let to = kg.transform_point(k.interact) - xf.translation;
+                                xf.rotation = Quat::from_rotation_y(to.x.atan2(to.z));
+                            }
+                            j.state = JasonState::BreakingFuse { t: 0.0, fuse: ke, done: false };
+                            j.velocity = Vec2::ZERO;
+                            commands.entity(je).insert(PlayAction(KNIFE_PICKUP.into()));
+                            continue;
+                        }
                         // A radio (SCRadio::OnInteract: his Destroy_SpecialMoveHandler; CanInteractWith: not broken).
                         if let Some((re, r)) = radios.iter().find(|(_, r)| !r.broken && near(r.interact, r.reach)) {
                             info!("Jason: breaking a radio");
@@ -2467,9 +2531,16 @@ pub(crate) fn update_jason(
             JasonState::BreakingFuse { t: at, fuse, done } => {
                 let at = at + dt;
                 j.velocity = Vec2::ZERO;
-                // A radio's break take (its DestroyRadio driver window: OnBreakRadio), else the fuse box's.
+                // A radio's break take (its DestroyRadio driver window: OnBreakRadio), the knife pickup's (its
+                // KnifePickup window: PerformPickup), else the fuse box's.
                 let radio = radios.contains(fuse);
-                let (take, driver) = if radio { (crate::radio::BREAK_TAKE, "Driver: DestroyRadio") } else { (BREAK_FUSE, "Driver: DestroyGenerator") };
+                let (take, driver) = if radio {
+                    (crate::radio::BREAK_TAKE, "Driver: DestroyRadio")
+                } else if knife_pickups.contains(fuse) {
+                    (KNIFE_PICKUP, "Driver: KnifePickup")
+                } else {
+                    (BREAK_FUSE, "Driver: DestroyGenerator")
+                };
                 let window = killer.info.animations.get(take).and_then(|a| a.windows.iter().find(|w| w.name == driver)).map_or(1.0, |w| w.start);
                 let mut done = done;
                 if !done && at >= window {
@@ -2485,6 +2556,13 @@ pub(crate) fn update_jason(
                     if let Ok((_, mut r)) = radios.get_mut(fuse) {
                         crate::radio::break_radio(&mut r);
                         info!("Jason: broke a radio");
+                    }
+                    // PerformPickup (0x140390360): AddKnives(StackSize), MULTICAST_DisablePickup (hidden), its lifespan
+                    // 5 s (DAT_14207a218).
+                    if let Ok((_, k, _, _)) = knife_pickups.get(fuse) {
+                        j.knives += k.count;
+                        info!("Jason picked up {} throwing knife(s) ({} now)", k.count, j.knives);
+                        commands.entity(fuse).insert((crate::props::PickedUp(PICKUP_LIFESPAN_S), Visibility::Hidden));
                     }
                 }
                 if at >= killer.length(take).unwrap_or(2.0) {
@@ -3270,13 +3348,14 @@ fn teleport_mix(mut commands: Commands, time: Res<Time>, effect: Option<ResMut<T
 /// The played Jason's door moves take the view (their handlers' SCSplineCameras: interaction_camera.rs): opening one
 /// (KillerOpenDoorInside / Outside: 1 s in, 0.5 s back) or breaking one down (BreakDownFromInside / Outside, the
 /// handler's defaults: at once, 0.25 s back), handed back as the move ends. A raged burst's and the walls' handlers
-/// have no camera.
+/// have no camera. Picking up throwing knives the same: their AlignmentSpecialMove's camera.
 fn jason_door_camera(
     mut commands: Commands,
     play: Option<Res<crate::jason_player::PlayJason>>,
     jasons: Query<(&Jason, &Transform)>,
     doors: Query<&GlobalTransform, With<crate::doors::Door>>,
     mut playing: Local<Option<(Entity, &'static str)>>,
+    knives: Query<(), With<crate::props::KnifePickup>>,
 ) {
     if play.is_none() {
         return;
@@ -3297,6 +3376,7 @@ fn jason_door_camera(
             Some((door, if anim == DOOR_OPEN_INSIDE { "KillerOpenDoorInside_SpecialMoveHandler" } else { "KillerOpenDoorOutside_SpecialMoveHandler" }))
         }
         (_, &JasonState::BreakingDoor { door, .. }) => Some((door, if inside(door) { "BreakDownFromInside_SpecialMoveHandler" } else { "BreakDownFromOutside_SpecialMoveHandler" })),
+        (_, &JasonState::BreakingFuse { fuse, .. }) if knives.contains(fuse) => Some((fuse, "AlignmentSpecialMove")),
         _ => None,
     };
     // A move's handler is chosen as it starts (a door found locked mid-open goes on to the break down's).

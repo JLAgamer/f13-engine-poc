@@ -171,9 +171,15 @@ impl ItemKind {
 #[derive(Component)]
 pub struct KnifePickup {
     pub count: u32,
+    /// Its Interactable (actor space: on the knives, 2.2 m up their post): GetInteractionLocation.
+    pub interact: Vec3,
     /// Interaction range, cm.
     pub reach: f32,
 }
+
+/// A knife pickup taken (PerformPickup: MULTICAST_DisablePickup, SetLifeSpan 5 s): hidden, gone when this runs out (s).
+#[derive(Component)]
+pub struct PickedUp(pub f32);
 
 /// The item sits in this cabinet's drawer (`.1`: SCDoubleCabinet's second is 1); the cabinet hands it over
 /// (cabinets.rs).
@@ -576,7 +582,7 @@ fn spawn_props(
                 if c.props["HighlightDistance"].is_null() {
                     p.distance_m = 3.0;
                 }
-                commands.entity(root).insert(crate::placed_kills::DoorPrompt(p));
+                commands.entity(root).insert(crate::placed_kills::InteractPrompt(p));
             }
             commands.entity(root).insert(crate::doors::Door {
                 spots: info.components.iter().filter(|c| c.name.ends_with("_SpecialMoveHandler")).map(|c| (c.name.clone(), local(c))).collect(),
@@ -711,7 +717,10 @@ fn spawn_props(
             }
         } else if classes.is_child_of(&actor.class, "SCThrowingKnifePickup") {
             let count = classes.prop(&actor.class, "StackSize").as_f64().unwrap_or(1.0).max(1.0) as u32;
-            commands.entity(root).insert(KnifePickup { count, reach: interact.map_or(150.0, |c| reach(c, 150.0)) });
+            commands.entity(root).insert(KnifePickup { count, interact: interact.map_or(Vec3::ZERO, |c| local(c).translation), reach: interact.map_or(150.0, |c| reach(c, 150.0)) });
+            if let Some(c) = interact {
+                commands.entity(root).insert(crate::placed_kills::InteractPrompt(crate::placed_kills::KillPrompt::of(&classes, c)));
+            }
             *counts.entry("knife pickups").or_default() += 1;
             let p = to_transform(&actor.transform).translation;
             debug!("{} at ({:.1}, {:.1}, {:.1})", actor.class, p.x, p.y, p.z);

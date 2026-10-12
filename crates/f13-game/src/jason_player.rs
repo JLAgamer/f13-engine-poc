@@ -355,6 +355,7 @@ fn demo(
     (mut tried, doors, mut view): (Local<Option<Entity>>, Query<(Entity, &crate::doors::Door, &GlobalTransform)>, ResMut<DemoView>),
     (mut sense_shot, mut prompt_shot, bot): (Local<bool>, Local<bool>, Option<Res<crate::bot::Bot>>),
     mut door_shot: Local<(Option<f32>, bool)>,
+    (knives, limits, mut knife_tried): (Query<(Entity, &crate::props::KnifePickup, &GlobalTransform, Has<crate::props::PickedUp>)>, Query<&crate::interact::InteractLimits>, Local<bool>),
     placed_kills: Query<&crate::placed_kills::PlacedKill>,
 ) {
     let (Some((j, jxf)), Some(h)) = (jason.iter().next(), her.iter().next()) else { return };
@@ -430,6 +431,18 @@ fn demo(
             info!("jason demo: Morph map click at its centre");
         }
         _ => {}
+    }
+    // Throwing knives at hand: a screenshot (temp f13-demo-knives.png: their prompt), then E, once.
+    if !*knife_tried && matches!(j.state, crate::jason::JasonState::Hunting) {
+        let centre = jxf.translation + Vec3::Y * 0.88;
+        let look = Quat::from_euler(EulerRot::YXZ, camera.yaw, camera.pitch, 0.0) * Vec3::NEG_Z;
+        if crate::jason::knife_pickup_at(&knives, &limits, centre, look).is_some() {
+            *knife_tried = true;
+            let path = std::env::temp_dir().join("f13-demo-knives.png");
+            info!("jason demo: E at throwing knives; screenshot {}", path.display());
+            commands.spawn(bevy::render::view::screenshot::Screenshot::primary_window()).observe(bevy::render::view::screenshot::save_to_disk(path));
+            controls.latched.interact = true;
+        }
     }
     // A door his best interactable: a screenshot 0.6 s on (temp f13-demo-door.png: its prompt).
     if !door_shot.1 && j.focus_door().is_some() {

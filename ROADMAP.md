@@ -34,7 +34,6 @@ Base content (asset paths in the player's install; all gameplay values come from
       hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold
       for a decision on that
 - [ ] Optimize performance
-- [ ] Knives for Jason to find across the map (their spawners and pickup)
 - [ ] Blood effects as the game's (which of its blood the port lacks isn't surveyed yet)
 - [ ] More content, one at a time: maps (with their boat and other escapes), Jasons, counselors, perks, skins,
       emotes, a main menu
