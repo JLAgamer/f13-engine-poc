@@ -35,7 +35,7 @@ Base content (asset paths in the player's install; all gameplay values come from
       for a decision on that
 - [ ] Optimize performance
 - [ ] Knives for Jason to find across the map (their spawners and pickup)
-- [ ] Jason's ability unlock popup (AbilityAvailable) is too bright (cause not yet found)
+- [ ] Blood effects as the game's (which of its blood the port lacks isn't surveyed yet)
 - [ ] More content, one at a time: maps (with their boat and other escapes), Jasons, counselors, perks, skins,
       emotes, a main menu
 

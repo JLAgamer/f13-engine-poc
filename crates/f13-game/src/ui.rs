@@ -172,16 +172,29 @@ impl UiMaterial for RadialFill {
     }
 }
 
-/// A brush on M_UI_JasonHud_01 (Jason's ability and rage bars and frames): a BLEND_Additive UI material, its graph
-/// cooked away; drawn as its texture times the brush's tint and the instance's Brightness, added to what's under it
-/// (`shaders/additive.wgsl`). (Its Smoke and Grime layers, 0 on the ability bars, aren't drawn.)
+/// A brush on M_UI_JasonHud_01 (Jason's ability and rage bars and frames, his notices' icons, his Morph map's cursor): a
+/// BLEND_Additive UI material, its graph cooked away and ported from its compiled shader (`shaders/additive.wgsl`): the
+/// texture times the brush's tint (twice), its opacity through the Smoke and Grime layers (Brightness scales the smoke),
+/// added to what's under it.
 #[derive(AsBindGroup, Asset, TypePath, Debug, Clone)]
 pub struct Additive {
     #[uniform(0)]
     color: LinearRgba,
-    #[texture(1)]
-    #[sampler(2)]
+    /// Brightness, Smoke, Grime.
+    #[uniform(1)]
+    params: Vec4,
+    /// Strech X / Y, Offset X / Y.
+    #[uniform(2)]
+    coords: Vec4,
+    #[texture(3)]
+    #[sampler(4)]
     texture: Handle<Image>,
+    #[texture(5)]
+    #[sampler(6)]
+    smoke: Handle<Image>,
+    #[texture(7)]
+    #[sampler(8)]
+    grime: Handle<Image>,
 }
 
 impl UiMaterial for Additive {
@@ -200,34 +213,76 @@ impl UiMaterial for Additive {
     }
 }
 
-/// An additive brush to draw: its texture, its colour (tint, played colour) and Brightness.
+/// An additive brush to draw: its texture, its colour (tint, played colour) and the instance's parameters (uniexpr.py's
+/// defaults: Brightness 1, Smoke 0, Grime 0, Strech 1, Offset 0).
 #[derive(Component, Clone)]
 struct AdditiveBrush {
     texture: Handle<Image>,
     color: [f32; 4],
     brightness: f32,
+    smoke: f32,
+    grime: f32,
+    strech: [f32; 2],
+    offset: [f32; 2],
 }
 
-/// Gives each new additive brush its material, and keeps a changed one's colour.
+impl AdditiveBrush {
+    fn new(texture: Handle<Image>, color: [f32; 4], scalars: &serde_json::Value) -> Self {
+        let f = |k: &str, d: f32| scalars[k].as_f64().map_or(d, |v| v as f32);
+        AdditiveBrush {
+            texture,
+            color,
+            brightness: f("Brightness", 1.0),
+            smoke: f("Smoke", 0.0),
+            grime: f("Grime", 0.0),
+            strech: [f("Strech X", 1.0), f("Strech Y", 1.0)],
+            offset: [f("Offset X", 0.0), f("Offset Y", 0.0)],
+        }
+    }
+}
+
+/// Gives each new additive brush its material, and keeps a changed one's colour and parameters.
 fn additive_brushes(
     mut commands: Commands,
     mut materials: ResMut<Assets<Additive>>,
     brushes: Query<(Entity, Ref<AdditiveBrush>, Option<&MaterialNode<Additive>>)>,
+    assets: Res<AssetServer>,
+    mut layers: Local<Option<(Handle<Image>, Handle<Image>)>>,
 ) {
+    // The material's own samples (UI_Smoke, Grime): wrapped, as their textures' default address mode.
+    let (smoke, grime) = layers
+        .get_or_insert_with(|| {
+            let wrap = |s: &mut bevy::image::ImageLoaderSettings| {
+                use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
+                s.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+                    address_mode_u: ImageAddressMode::Repeat,
+                    address_mode_v: ImageAddressMode::Repeat,
+                    mag_filter: ImageFilterMode::Linear,
+                    min_filter: ImageFilterMode::Linear,
+                    ..default()
+                });
+            };
+            (assets.load_with_settings("SummerCamp/Content/UI/Materials/UI_Smoke.png", wrap), assets.load_with_settings("SummerCamp/Content/UI/Materials/Grime.png", wrap))
+        })
+        .clone();
     for (e, b, node) in &brushes {
         if !b.is_changed() && node.is_some() {
             continue;
         }
         let c = b.color;
-        let color = LinearRgba::new(c[0] * b.brightness, c[1] * b.brightness, c[2] * b.brightness, c[3]);
+        let color = LinearRgba::new(c[0], c[1], c[2], c[3]);
+        let params = Vec4::new(b.brightness, b.smoke, b.grime, 0.0);
+        let coords = Vec4::new(b.strech[0], b.strech[1], b.offset[0], b.offset[1]);
         match node {
             Some(n) => {
                 if let Some(mut m) = materials.get_mut(&n.0) {
                     m.color = color;
+                    m.params = params;
+                    m.coords = coords;
                 }
             }
             None => {
-                let m = materials.add(Additive { color, texture: b.texture.clone() });
+                let m = materials.add(Additive { color, params, coords, texture: b.texture.clone(), smoke: smoke.clone(), grime: grime.clone() });
                 commands.entity(e).insert(MaterialNode(m));
             }
         }
@@ -1256,8 +1311,7 @@ impl Builder<'_, '_, '_> {
             return;
         }
         if res["Parent"].as_str() == Some("M_UI_JasonHud_01") && !textures.is_empty() {
-            let brightness = res["Scalars"]["Brightness"].as_f64().unwrap_or(1.0) as f32;
-            self.commands.entity(e).insert(AdditiveBrush { texture: self.assets.load(textures[0].to_string()), color: c, brightness });
+            self.commands.entity(e).insert(AdditiveBrush::new(self.assets.load(textures[0].to_string()), c, &res["Scalars"]));
             return;
         }
         if textures.len() == 2 && res["Scalars"]["Alpha"].is_number() {
@@ -2345,8 +2399,7 @@ fn morph_cursor(
 /// the screen's red edge: pulsing over 5 s, then clear), calls KillerAbilityWidget's OnRageActive (FrameRage
 /// SelfHitTestInvisible, at its designed alpha 0; OnRageActiveAnim, the diamond's glow over 4 s; each ability bar's
 /// M_UI_JasonHud_01: background Smoke 0, Brightness 0, fill Smoke 1, Brightness 10) and RageWidget's ActivateRage
-/// (OnRageActive: its glow pulsing over 5 s, then lit). Its AbilityAvailable notice: [`ability_popup`]. (Smoke isn't
-/// drawn: see [`Additive`].)
+/// (OnRageActive: its glow pulsing over 5 s, then lit). Its AbilityAvailable notice: [`ability_popup`].
 #[allow(clippy::type_complexity)]
 fn rage_hud(
     time: Res<Time>,
@@ -2381,8 +2434,9 @@ fn rage_hud(
     }
     for ability in Ability::ALL {
         let Some(bar) = hud.names.get(&format!("KillerAbilityWidget.{ability:?}Bar")).and_then(|&e| bars.get(e).ok().map(|b| (e, b.image))) else { continue };
-        for (e, brightness) in [(bar.0, 0.0), (bar.1, 10.0)] {
+        for (e, smoke, brightness) in [(bar.0, 0.0, 0.0), (bar.1, 1.0, 10.0)] {
             if let Ok(mut b) = brushes.get_mut(e) {
+                b.smoke = smoke;
                 b.brightness = brightness;
             }
         }

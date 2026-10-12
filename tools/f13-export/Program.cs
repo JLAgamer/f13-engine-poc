@@ -778,6 +778,9 @@ switch (rest[0])
         var wx = new WidgetExporter(provider, outDir, Queue, ToFile);
         var n = 0;
         foreach (var w in rest.Count > 1 ? rest.Skip(1) : Mvp.Widgets) n += wx.Export(w);
+        // M_UI_JasonHud_01's own texture samples (its Smoke and Grime layers).
+        ExportAsset("/Game/UI/Materials/UI_Smoke");
+        ExportAsset("/Game/UI/Materials/Grime");
         Console.WriteLine($"ui: {n} widgets, {wx.ClassTextures()} class textures, {wx.Fonts(game!)} fonts");
         break;
     }
