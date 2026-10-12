@@ -217,6 +217,9 @@ pub struct Vehicle {
     pub seat_reach: f32,
     /// Where she sits driving (Bevy local): the driver's seat's AttachSocket on the car's mesh.
     pub sitting: Transform,
+    /// What a crash takes (SCDriveableVehicle::OnVehicleHit): MinLightImpactSpeed, MinHeavyImpactSpeed (cm/s),
+    /// MaxImpactAngle (degrees off its forward), LightImpactCue, HeavyImpactCue.
+    pub impact: (f32, f32, f32, Option<String>, Option<String>),
     /// Its passenger seats (the SCVehicleSeatComponents that aren't the driver's).
     pub passengers: Vec<Seat>,
     /// Where Jason stands to pull the driver out (its DriverGrab context kill, Bevy local).
@@ -762,6 +765,14 @@ fn spawn_props(
                 ignition,
                 driver_seat: seat.map_or(Vec3::ZERO, |c| local(c).translation),
                 seat_reach: seat.map_or(100.0, |c| reach(c, 100.0)),
+                // The constructor's 250 / 600 / 28 unless the Blueprint says (0x1404176d5..).
+                impact: (
+                    info.props["MinLightImpactSpeed"].as_f64().unwrap_or(250.0) as f32,
+                    info.props["MinHeavyImpactSpeed"].as_f64().unwrap_or(600.0) as f32,
+                    info.props["MaxImpactAngle"].as_f64().unwrap_or(28.0) as f32,
+                    crate::audio::cue_name(&info.props["LightImpactCue"]),
+                    crate::audio::cue_name(&info.props["HeavyImpactCue"]),
+                ),
                 passengers: info
                     .components
                     .iter()

@@ -95,6 +95,16 @@ pub const RIDE_TAKE: &str = "f_normal_sit_car_ride_idle";
 pub const DRIVE_TAKE: &str = "f_normal_sit_car_drive_forward";
 const STEER_TAKES: [&str; 2] = ["f_normal_sit_car_drive_forward_turnleft", "f_normal_sit_car_drive_forward_turnright"];
 
+/// OnVehicleHit's test: the first hit within `max_angle` of the car's `forward` (either way), at more than the light
+/// speed: where, and whether heavy (above the heavy speed).
+fn impact(speed: f32, forward: Vec3, hits: &[(Vec3, Vec3)], (min_light, min_heavy, max_angle): (f32, f32, f32)) -> Option<(Vec3, bool)> {
+    if speed <= min_light {
+        return None;
+    }
+    let (at, _) = hits.iter().find(|(_, n)| forward.dot(*n).abs() >= max_angle.to_radians().cos())?;
+    Some((*at, speed > min_heavy))
+}
+
 /// Whether `at` is in the car's way: in its KillerFront (moving forward) or KillerRear (backing) box.
 fn in_box(rot: Quat, pos: Vec3, speed: f32, at: Vec3) -> bool {
     let local = rot.inverse() * (at - pos);
@@ -202,6 +212,7 @@ fn drive(
         let (grid, lists) = collision.without(&dynamic, own);
         let level = crate::collision::Excluding(grid, not_vehicle.as_ref().map(|g| &g.0));
         let world = (&level, lists.as_slice());
+        let (min_light, min_heavy, max_angle, light_cue, heavy_cue) = v.impact.clone();
         let car = v.sim.as_mut().unwrap();
         // Moved from outside (the host, a bot): the simulated car starts again there, at rest.
         if xf.translation.distance(to_bevy(car.position)) > 0.5 {
@@ -215,7 +226,8 @@ fn drive(
                 (t * len, if n.dot(dir) > 0.0 { -n } else { n })
             })
         };
-        // The body's contacts: a corner moving into the world's surface this step.
+        // The body's contacts: a corner moving into the world's surface this step (kept: the hits).
+        let mut hits: Vec<(Vec3, Vec3)> = Vec::new();
         let mut contact = |from: Vec3, to: Vec3| {
             let d = to - from;
             if d.length_squared() < 1e-6 {
@@ -223,9 +235,13 @@ fn drive(
             }
             f13_core::collision::segment_hit_normal(&world, to_bevy(from), to_bevy(to), 0.5).map(|(t, n)| {
                 let n = to_unreal(n).normalize_or_zero();
-                ((1.0 - t) * d.length(), if n.dot(d) > 0.0 { -n } else { n })
+                let n = if n.dot(d) > 0.0 { -n } else { n };
+                hits.push((from + d * t, n));
+                ((1.0 - t) * d.length(), n)
             })
         };
+        let speed_before = car.forward_speed().abs();
+        let mut stall = false;
         let handbrake = escaped.is_none() && pads.pressed(driver, Button::Space);
         // FPhysSubstepTask::UpdateTime (0x141662930) under the game's PhysicsSettings (DefaultEngine.ini:
         // bSubstepping, MaxSubstepDeltaTime 0.05, MaxSubsteps 4): the frame's delta (SetUpForFrame 0x14162f470 keeps
@@ -235,6 +251,18 @@ fn drive(
         let n = ((used / PHYSICS_MAX_SUBSTEP_DT).ceil() as u32).clamp(1, PHYSICS_MAX_SUBSTEPS);
         for _ in 0..n {
             car.step(used / n as f32, throttle, steer, handbrake, &mut ray, &mut contact);
+        }
+        // SCDriveableVehicle::OnVehicleHit (0x14043a880; not for characters or projectiles): a hit within
+        // MaxImpactAngle of its forward (|cos| of the forward and the hit's normal), at more than MinLightImpactSpeed:
+        // its ImpactAudioComponent at the hit plays LightImpactCue, or above MinHeavyImpactSpeed HeavyImpactCue, and a
+        // heavy one stalls it (bIsStarted false: the keys again). PLACEHOLDER: its VehicleSlammedMontage (the car's
+        // own animation) isn't played.
+        if let Some((at, heavy)) = impact(speed_before, car.rotation * Vec3::X, &hits, (min_light, min_heavy, max_angle)) {
+            info!("car: {} impact at {speed_before:.0} cm/s", if heavy { "a heavy" } else { "a light" });
+            if let Some(cue) = if heavy { heavy_cue } else { light_cue } {
+                crate::net_world::shout(&mut commands, crate::net_world::Shout::Sound(crate::audio::PlaySound { cue, at: Some(to_bevy(at)) }));
+            }
+            stall = heavy;
         }
         // Jason in front of (or behind) the car stops it dead (KillersInFrontOfCar / KillersBehindCar).
         let speed = car.forward_speed();
@@ -263,6 +291,10 @@ fn drive(
         v.speed = car.forward_speed();
         v.steer = car.steering_input;
         v.drive.rpm = car.rpm();
+        if stall && v.started {
+            v.started = false;
+            crate::net_world::shout(&mut commands, crate::net_world::Shout::StopLoop(crate::audio::StopLoop { actor: player.vehicle, prop: "EngineCue" }));
+        }
         if v.started {
             commands.entity(player.vehicle).insert(crate::audio::CueParams([("RPM".to_string(), v.drive.rpm)].into()));
         }
@@ -489,4 +521,21 @@ fn show_escape(mut commands: Commands, escaped: Query<&Escaped, With<crate::cont
         Node { position_type: PositionType::Absolute, top: Val::Percent(40.0), left: Val::Percent(30.0), ..default() },
         EscapeBanner,
     ));
+}
+
+#[cfg(test)]
+mod impact_tests {
+    use super::*;
+
+    #[test]
+    fn crashes_are_head_on_and_fast() {
+        let t = (250.0, 750.0, 45.0);
+        let wall = [(Vec3::ZERO, -Vec3::X)];
+        let ground = [(Vec3::ZERO, Vec3::Z)];
+        assert_eq!(impact(800.0, Vec3::X, &wall, t), Some((Vec3::ZERO, true)));
+        assert_eq!(impact(500.0, Vec3::X, &wall, t), Some((Vec3::ZERO, false)));
+        assert_eq!(impact(200.0, Vec3::X, &wall, t), None);
+        // The ground under it isn't a crash.
+        assert_eq!(impact(800.0, Vec3::X, &ground, t), None);
+    }
 }

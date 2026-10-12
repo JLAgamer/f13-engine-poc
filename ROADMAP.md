@@ -46,8 +46,6 @@ Moved from Milestone 1 (not tied to gameplay):
 Server-authoritative netcode, tested with bots, then an 8-player lobby.
 
 Steps (lightyear 0.30 for the netcode):
-- [ ] Clients interpolate the characters between snapshots (they smooth toward the newest now); the car's
-      OnVehicleHit impacts (its light and heavy cues, the heavy one's stall)
 - [ ] Bot clients for the scenarios: the bots that set up their scene (teleports, locks) need a server-side hook
       (the net bot plays through its input only)
 - [ ] The lobby's rest: the match-end lobby as its own screen (its badges' icons and names: SCStatBadge), back to the

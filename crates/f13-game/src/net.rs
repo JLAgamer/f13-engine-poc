@@ -14,7 +14,6 @@
 //!
 //! PLACEHOLDERS:
 //! - the development key and protocol id (no matchmaking backend issues tokens yet);
-//! - twins smooth toward the newest body rather than interpolating between snapshots;
 //! - the world's doors, windows, items and cars don't replicate yet.
 
 use crate::character::{PlayAction, RestartAction, SeekAction};
@@ -293,7 +292,7 @@ impl Plugin for NetPlugin {
                     .add_systems(Update, connect)
                     .add_observer(body_gone)
                     .init_resource::<Twins>()
-                    .add_systems(Update, (send_input, (make_twins, mirror, hide_jason).chain().in_set(Mirrored).before(crate::character::animate)));
+                    .add_systems(Update, (send_input, (make_twins, record_bodies, mirror, hide_jason).chain().in_set(Mirrored).before(crate::character::animate)));
                 app.add_systems(Update, receive_match.after(Mirrored));
                 crate::net_world::client(app);
                 crate::lobby::client(app);
@@ -591,33 +590,74 @@ fn stance(n: u8) -> Stance {
     }
 }
 
-/// How fast a twin closes on the newest body (1/s; PLACEHOLDER for interpolating between snapshots), and how far
-/// off it snaps instead (m).
-const FOLLOW_RATE: f32 = 25.0;
+/// How far behind the newest body a twin is shown (s): between the two bodies received around then, so the server's
+/// ticks and the network's jitter don't show. A body further than [`SNAP_M`] from the one before is a jump (a
+/// teleport, a respawn): no blend across it.
+const INTERP_DELAY_S: f32 = 0.1;
 const SNAP_M: f32 = 3.0;
+/// How long the bodies received are kept (s).
+const SNAPSHOTS_KEPT_S: f32 = 1.0;
+
+/// On a client: a character's bodies as they came in (real time received, place, yaw).
+#[derive(Component, Default)]
+struct Snapshots(std::collections::VecDeque<(f32, Vec3, f32)>);
+
+/// Each body received is kept, with when it came.
+fn record_bodies(mut commands: Commands, real: Res<Time<Real>>, mut bodies: Query<(Entity, &NetBody, Option<&mut Snapshots>), Changed<NetBody>>) {
+    let now = real.elapsed_secs();
+    for (e, b, snaps) in &mut bodies {
+        let s = (now, Vec3::from_array(b.pos), b.yaw);
+        match snaps {
+            Some(mut q) => {
+                q.0.push_back(s);
+                while q.0.front().is_some_and(|f| now - f.0 > SNAPSHOTS_KEPT_S) && q.0.len() > 2 {
+                    q.0.pop_front();
+                }
+            }
+            None => {
+                commands.entity(e).insert(Snapshots([s].into()));
+            }
+        }
+    }
+}
+
+/// The place and yaw at time `t` among the bodies: between the two around it (no blend across a jump), else the
+/// nearest end.
+fn sample(snaps: &Snapshots, t: f32) -> Option<(Vec3, f32)> {
+    let q = &snaps.0;
+    let last = q.back()?;
+    if t >= last.0 {
+        return Some((last.1, last.2));
+    }
+    let i = q.iter().position(|s| s.0 > t)?;
+    if i == 0 {
+        return Some((q[0].1, q[0].2));
+    }
+    let (a, b) = (q[i - 1], q[i]);
+    if a.1.distance(b.1) > SNAP_M {
+        return Some((b.1, b.2));
+    }
+    let f = ((t - a.0) / (b.0 - a.0).max(1e-4)).clamp(0.0, 1.0);
+    let dy = (b.2 - a.2 + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+    Some((a.1.lerp(b.1, f), a.2 + dy * f))
+}
 
 /// Each twin takes its character's state.
 #[allow(clippy::type_complexity)]
 fn mirror(
     mut commands: Commands,
-    time: Res<Time>,
-    mut bodies: Query<(&NetBody, &NetAction, Option<&NetCounselor>, Option<&NetJason>, &mut Twin)>,
+    real: Res<Time<Real>>,
+    mut bodies: Query<(&NetBody, &NetAction, Option<&NetCounselor>, Option<&NetJason>, &mut Twin, Option<&Snapshots>)>,
     mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>, (Option<&Name>, Option<&mut Controls>, Has<LocalPlayer>, Option<&mut crate::senses::Knowledge>))>,
     actors: Res<crate::net_world::Actors>,
     cams: Query<&crate::kill_camera::KillCam>,
 ) {
-    let k = 1.0 - (-FOLLOW_RATE * time.delta_secs()).exp();
-    for (b, a, nc, nj, mut twin) in &mut bodies {
+    let shown_at = real.elapsed_secs() - INTERP_DELAY_S;
+    for (b, a, nc, nj, mut twin, snaps) in &mut bodies {
         let Ok((mut xf, player, jason, action, blocking, (name, controls, local, know))) = twins.get_mut(twin.local) else { continue };
-        let to = Vec3::from_array(b.pos);
-        let rot = Quat::from_rotation_y(b.yaw);
-        if xf.translation.distance(to) > SNAP_M {
-            xf.translation = to;
-            xf.rotation = rot;
-        } else {
-            xf.translation = xf.translation.lerp(to, k);
-            xf.rotation = xf.rotation.slerp(rot, k);
-        }
+        let (to, yaw) = snaps.and_then(|s| sample(s, shown_at)).unwrap_or((Vec3::from_array(b.pos), b.yaw));
+        xf.translation = to;
+        xf.rotation = Quat::from_rotation_y(yaw);
         if let (Some(mut p), Some(n)) = (player, nc) {
             let c = &mut p.counselor;
             c.stance = stance(n.stance);
@@ -1031,5 +1071,26 @@ fn net_bot_jason(
             bot.step = 3;
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn twins_are_shown_between_the_bodies_around_then() {
+        let s = Snapshots([(0.0, Vec3::ZERO, 0.0), (0.1, Vec3::X, 0.2), (0.2, Vec3::X * 10.0, 0.4)].into());
+        let (p, y) = sample(&s, 0.05).unwrap();
+        assert!((p.x - 0.5).abs() < 1e-4 && (y - 0.1).abs() < 1e-4);
+        // Across a jump: no blend.
+        assert_eq!(sample(&s, 0.15).unwrap().0, Vec3::X * 10.0);
+        // Before the first and after the last: the ends.
+        assert_eq!(sample(&s, -1.0).unwrap().0, Vec3::ZERO);
+        assert_eq!(sample(&s, 5.0).unwrap().0, Vec3::X * 10.0);
+        // Yaw the short way round.
+        let w = Snapshots([(0.0, Vec3::ZERO, 3.0), (1.0, Vec3::ZERO, -3.0)].into());
+        let (_, y) = sample(&w, 0.5).unwrap();
+        assert!((y - (3.0 + (std::f32::consts::TAU - 6.0) / 2.0)).abs() < 1e-3, "{y}");
     }
 }
