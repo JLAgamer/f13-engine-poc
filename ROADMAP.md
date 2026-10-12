@@ -35,6 +35,9 @@ Base content (asset paths in the player's install; all gameplay values come from
       for a decision on that
 - [ ] Optimize performance
 - [ ] Blood effects as the game's (which of its blood the port lacks isn't surveyed yet)
+- [ ] Jason's knife pick-up: the knife in his hand during the take (its Prop: throwing_Dart window, 0.89-2.35 s), and
+      the special move's 0.15 s interp and walk to its place (he only turns to it now)
+- [ ] The computer Jason and knife pickups: he takes them in passing (no pick-up move) and doesn't go looking for them
 - [ ] More content, one at a time: maps (with their boat and other escapes), Jasons, counselors, perks, skins,
       emotes, a main menu
 
