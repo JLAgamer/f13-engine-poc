@@ -747,6 +747,9 @@ switch (rest[0])
         {
             var wx = new WidgetExporter(provider, outDir, Queue, ToFile);
             foreach (var w in Mvp.Widgets) wx.Export(w);
+            // M_UI_JasonHud_01's own texture samples (its Smoke and Grime layers).
+            ExportAsset("/Game/UI/Materials/UI_Smoke");
+            ExportAsset("/Game/UI/Materials/Grime");
             wx.ClassTextures();
             wx.Fonts(game!);
         }
@@ -1286,6 +1289,9 @@ static class Mvp
     ];
     public static readonly string[] Assets =
     [
+        // The light functions' textures (lighting.rs: the flashlight's, the car headlights').
+        "/Game/Art/Textures/LightFunctionTest",
+        "/Game/Lighting/LightFunctions/T_LightFunction_CarHeadlights_01",
         "/Game/Characters/Counselors/Athlete/Meshes/Body/Athlete_Body",
         "/Game/Characters/Counselors/Athlete/Meshes/Body/Athlete_Face",
         "/Game/Characters/Counselors/Athlete/Meshes/Body/Athlete_Hair_SM",
@@ -1361,6 +1367,8 @@ static class Mvp
         "/Game/UI/HUD/SC_WiggleMinigame_Widget",
         // Jason's, when he's played.
         "/Game/UI/HUD/Killer/KillerHUDWidget",
+        // His notice as an ability unlocks or rage starts.
+        "/Game/UI/HUD/Killer/AbilityAvailable",
         // The software cursors (DefaultEngine.ini UserInterfaceSettings): Crosshairs, his Morph map's; Hand, its refusal.
         "/Game/UI/HUD/Minimap/Morph_Area_Cursor",
         "/Game/UI/HUD/Minimap/Morph_Area_Bad_Cursor",

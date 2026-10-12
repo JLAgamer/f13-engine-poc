@@ -4,3 +4,4 @@ tools/f13-export/bin/
 tools/f13-export/obj/
 *.log
 .cargo/
+dist/

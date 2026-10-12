@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/f13-core", "crates/f13-data", "crates/f13-bevy", "crates/f13-game", "crates/f13-host"]
+members = ["crates/f13-core", "crates/f13-data", "crates/f13-bevy", "crates/f13-game", "crates/f13-host", "crates/f13-installer"]
 
 [workspace.package]
 edition = "2021"

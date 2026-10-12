@@ -6,7 +6,28 @@ using assets and tuning loaded from your own legitimate install.
 This repository contains no game files, extracted assets or decompiled code. Gameplay values are not
 shipped. They are passed in at runtime, and a loader will read them from the player's install.
 
-## Crates
+## Install
+
+You need your own copy of *Friday the 13th: The Game* with its files unpacked (its content as loose files under
+`SummerCamp/Content`), [UAssetGUI](https://github.com/atenfyr/UAssetGUI/releases) and
+[Python 3](https://www.python.org/downloads/) (tick "Add python.exe to PATH" when installing it).
+
+1. Download `f13-rs-windows-x64.zip` from the releases page and unzip it anywhere.
+2. Run `f13-installer.exe`.
+3. Pick your game folder (the one with `SummerCamp` in it) and `UAssetGUI.exe`. The installer checks each one and
+   says what's missing.
+4. Press **Install**. It reads the gameplay values, the map, characters, sounds and effects from your game into the
+   `export` folder next to it; this takes a while.
+5. Press **Play**. Afterwards, start `f13-game.exe` directly. Run the installer again (Reinstall) after a game update.
+
+The zip contains no game files: everything comes from your copy.
+
+## Building from source
+
+Developers build the same pieces by hand (below), and `python tools/package.py [--dotnet <dotnet.exe>]` builds the
+release zip into `dist/` (the Rust binaries in release, the exporter published self-contained, the tuning script).
+
+### Crates
 - `f13-core`: engine-independent rules (no Bevy dependency), unit-tested
   - `killer_abilities`: Jason's ability unlock order and intervals, recharge, availability, rage
   - `killer_moves`: Shift (wind-up, speed, length), Stalk (timer, slower standing still), Morph's destination, the
@@ -25,8 +46,10 @@ shipped. They are passed in at runtime, and a loader will read them from the pla
 - `f13-bevy`: Bevy 0.19 plugin (`F13GameplayPlugin`) with components, `FixedUpdate` systems and messages
 - `f13-game`: the game client; for now a viewer for the MVP map built from your own export
 - `f13-host`: sends the host's commands to a running f13-game (see Host commands)
+- `f13-installer`: the players' setup window (the tuning script and the exporter, then Play); `--install <game>
+  <UAssetGUI.exe>` runs the same without the window
 
-## Tuning from your own install
+### Tuning from your own install
 Gameplay values are read from your copy of the game, never shipped here:
 
 ```
@@ -38,13 +61,15 @@ Re-run the extractor when a new build reports a different tuning format.
 It needs the main pak extracted to loose files, and it checks the game executable's build before reading
 any constant from it.
 
-## Meshes and maps from your own install
+### Meshes and maps from your own install
 `tools/f13-export` is a small C# tool (.NET 10, using [CUE4Parse](https://github.com/FabianFG/CUE4Parse)) that
 reads your install's loose files and writes glTF meshes, PNG textures, material info and level layouts (see the note below):
 
 ```
 dotnet run --project tools/f13-export -- --game "<path to F13Game>" --out "<export dir>" mvp
 ```
+
+then the same with `sequences` (the intro and outro) and `particles` (the effects; it reads the levels `mvp` wrote).
 
 - `levels/<map>.json`: every mesh placement (including foliage instances), landscape and gameplay actor, in Unreal
   space. `f13_data::level` loads it and converts transforms to Bevy space.
@@ -95,6 +120,8 @@ picks it (`--seed n` repeats a match; `--layout 1-4` picks the layout yourself):
 ```
 cargo run -p f13-game --release -- --export "<export dir>"
 ```
+
+Without `--export`, f13-game uses the `export` folder next to its executable (where the installer puts it).
 
 Building needs CMake for libopus (voice chat): put it on the PATH, or point `CMAKE` at it (Visual Studio's Build
 Tools ship one under `Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe`; a `.cargo/config.toml`
