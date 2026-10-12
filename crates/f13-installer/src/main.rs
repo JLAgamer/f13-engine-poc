@@ -1,4 +1,4 @@
-//! f13-installer: sets f13-rs up from the player's own unpacked copy of Friday the 13th: The Game, then plays.
+//! f13-installer: sets Lakeside up from the player's own unpacked copy of Friday the 13th: The Game, then plays.
 //!
 //! The player picks the game's folder (its content extracted to loose files under `SummerCamp/Content`); Install then
 //! runs the exporter (`tools/f13-export/f13-export.exe`, self-contained .NET) four times:
@@ -231,7 +231,7 @@ impl eframe::App for Installer {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll();
         egui::CentralPanel::default().show(ui, |ui| {
-            ui.heading("f13-rs setup");
+            ui.heading("Lakeside setup");
             ui.label("Builds the game from your own copy of Friday the 13th: The Game.");
             ui.add_space(8.0);
             let busy = self.running();
@@ -324,9 +324,9 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("f13-rs setup").with_inner_size([680.0, 420.0]).with_min_inner_size([520.0, 320.0]),
+        viewport: egui::ViewportBuilder::default().with_title("Lakeside setup").with_inner_size([680.0, 420.0]).with_min_inner_size([520.0, 320.0]),
         ..Default::default()
     };
     let app = Installer { game: load_game_folder(), rx: None, step: None, log: Vec::new(), outcome: None };
-    eframe::run_native("f13-rs setup", options, Box::new(|_| Ok(Box::new(app))))
+    eframe::run_native("Lakeside setup", options, Box::new(|_| Ok(Box::new(app))))
 }

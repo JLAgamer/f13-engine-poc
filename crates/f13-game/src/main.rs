@@ -642,6 +642,7 @@ fn main() {
                 // --perf measures the frame's real cost: no waiting for the display.
                 .set(WindowPlugin {
                     primary_window: Some(bevy::window::Window {
+                        title: "Lakeside".into(),
                         present_mode: if args.perf { bevy::window::PresentMode::AutoNoVsync } else { bevy::window::PresentMode::AutoVsync },
                         ..default()
                     }),

@@ -1,4 +1,4 @@
-"""Builds the player's release zip: dist/f13-rs-windows-x64.zip.
+"""Builds the player's release zip: dist/lakeside-windows-x64.zip.
 
     python tools/package.py [--dotnet path/to/dotnet.exe]
 
@@ -12,17 +12,18 @@ import argparse, os, shutil, subprocess, sys, zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST = os.path.join(ROOT, "dist")
-STAGE = os.path.join(DIST, "f13-rs")
-ZIP = os.path.join(DIST, "f13-rs-windows-x64.zip")
+STAGE = os.path.join(DIST, "lakeside")
+ZIP = os.path.join(DIST, "lakeside-windows-x64.zip")
 
-PLAYER_README = """f13-rs: Friday the 13th: The Game, rebuilt from your own copy
+PLAYER_README = """Lakeside: a fan reimplementation that runs on your own copy of Friday the 13th: The Game
 
 1. Run f13-installer.exe.
 2. Pick your unpacked Friday the 13th: The Game folder.
 3. Press Install (a few minutes: it reads the gameplay values, map, characters and sounds from your game), then Play.
 
 Afterwards start f13-game.exe directly. Reinstall after a game update.
-This package contains no game files: everything is read from your copy.
+This package contains no game files: everything is read from your copy. Lakeside is unofficial: not affiliated
+with or endorsed by IllFonic, Gun Media or the film's rights holders.
 """
 
 

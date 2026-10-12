@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to f13-rs. Versions follow [semver](https://semver.org); the supported game build is named in
+All notable changes to Lakeside. Versions follow [semver](https://semver.org); the supported game build is named in
 each release.
 
 ## 0.1.0 (2026-10-12)
