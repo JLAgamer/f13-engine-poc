@@ -123,6 +123,8 @@ struct Hud;
 
 pub struct PlayerPlugin {
     pub spawn: Vec3,
+    /// Other counselors' starts (--counselors).
+    pub others: Vec<Vec3>,
     /// A placeholder capsule instead of the counselor's model.
     pub capsule: bool,
     /// A fixed camera instead of the follow camera: eye and look-at point relative to the counselor's feet (testing).
@@ -138,6 +140,7 @@ pub struct PlayerPlugin {
 #[derive(Resource)]
 pub(crate) struct PlayerConfig {
     spawn: Vec3,
+    others: Vec<Vec3>,
     capsule: bool,
     pub(crate) camera: Option<(Vec3, Vec3)>,
     demo: bool,
@@ -147,7 +150,7 @@ pub(crate) struct PlayerConfig {
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(PlayerConfig { spawn: self.spawn, capsule: self.capsule, camera: self.camera, demo: self.demo, fear: self.fear, health: self.health })
+        app.insert_resource(PlayerConfig { others: self.others.clone(), spawn: self.spawn, capsule: self.capsule, camera: self.camera, demo: self.demo, fear: self.fear, health: self.health })
             .add_systems(Startup, spawn_player)
             // Input is read once per frame; one-shot actions stay latched until a fixed step uses them, so a frame
             // that runs several fixed steps (low frame rate, --speed) doesn't repeat a key press.
@@ -205,6 +208,26 @@ fn spawn_player(
                 ChildOf(player),
             ));
         }
+    }
+    // The other counselors (--counselors): at their starts, their controls idle (a network or bot player's later).
+    for &at in &config.others {
+        let mut counselor = Counselor::new(tuning.stats);
+        counselor.health = tuning.counselor.health.max_health;
+        let other = commands
+            .spawn((
+                Player { counselor, velocity: Vec2::ZERO, walk_toggle: false, fear: 0.0, root_motion: None, montage: None, vel_y: 0.0, grounded: false, hidden: false, swim_accel_sq: 0.0 },
+                Transform::from_translation(at),
+                Visibility::default(),
+                Unsettled,
+                crate::controls::Controls::default(),
+                Intent::default(),
+                Name::new("counselor"),
+            ))
+            .id();
+        if let Some(character) = character.as_deref().filter(|_| !config.capsule) {
+            crate::character::spawn_model(&mut commands, &assets, character, crate::character::Model::Counselor, other, ());
+        }
+        info!("counselor {other} at {at}");
     }
     commands.spawn((
         Camera3d::default(),

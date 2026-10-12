@@ -87,6 +87,8 @@ const MAP: &str = "CrystalLake_Small";
 const LAYOUTS: u32 = 4;
 
 struct Args {
+    /// Counselors in the match (--counselors n): the local one and n - 1 others at the next starts (testing).
+    counselors: usize,
     export: PathBuf,
     /// None: picked as the game picks it.
     layout: Option<u32>,
@@ -224,6 +226,7 @@ fn parse_args() -> Args {
     let mut speed = 1.0f32;
     let mut health = None;
     let mut spawn = None;
+    let mut counselors = 1usize;
     let mut tuning = None;
     let mut foliage = true;
     let mut screenshot = None;
@@ -297,6 +300,7 @@ fn parse_args() -> Args {
             "--speed" => speed = it.next().and_then(|v| v.parse().ok()).unwrap_or(1.0f32).clamp(0.1, 16.0),
             "--fear" => fear = Some(it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0f32).clamp(0.0, 100.0)),
             "--health" => health = it.next().and_then(|v| v.parse().ok()),
+            "--counselors" => counselors = it.next().and_then(|v| v.parse().ok()).unwrap_or(1usize).clamp(1, 8),
             "--spawn" => {
                 let v: Vec<f32> = it.next().unwrap_or_default().split(',').filter_map(|x| x.trim().parse().ok()).collect();
                 if v.len() == 3 {
@@ -333,7 +337,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { export, layout, seed, near_car, bot_escape, bot_escape4, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, camera, round_time, flashlight, rain }
+    Args { counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, camera, round_time, flashlight, rain }
 }
 
 #[derive(Resource)]
@@ -481,7 +485,7 @@ fn main() {
         })
             .insert_resource(senses::KillerAbilityTuning(tuning.jason.clone()))
             .add_plugins(controls::ControlsPlugin)
-            .add_plugins(player::PlayerPlugin { spawn, capsule: args.capsule, camera: args.camera, demo: args.demo, fear: args.fear.unwrap_or(0.0), health: args.health })
+            .add_plugins(player::PlayerPlugin { others: counselor_starts(&layouts).into_iter().skip(1).take(args.counselors - 1).collect(), spawn, capsule: args.capsule, camera: args.camera, demo: args.demo, fear: args.fear.unwrap_or(0.0), health: args.health })
             .add_plugins(fear_events::FearEventsPlugin { locked: args.fear })
             // Playing Jason, the bot playing her doesn't decide when the run ends.
             .add_plugins(match_flow::MatchPlugin { leave: !bot || args.play_jason })
@@ -638,12 +642,13 @@ fn rain_roll(main: &LevelLayout, seed: u64) -> bool {
 }
 
 fn counselor_start(layouts: &[LevelLayout]) -> Vec3 {
-    layouts
-        .iter()
-        .flat_map(|l| l.actors_of("SCCounselorPlayerStart"))
-        .find_map(|a| a.transform.as_ref())
-        .map(|x| to_transform(x).translation)
-        .unwrap_or(Vec3::ZERO)
+    counselor_starts(layouts).first().copied().unwrap_or(Vec3::ZERO)
+}
+
+/// The layouts' counselor starts, in the level's order. PLACEHOLDER: which start each counselor gets (the game mode's
+/// choice isn't read); the first goes to the local counselor, the next to the others.
+fn counselor_starts(layouts: &[LevelLayout]) -> Vec<Vec3> {
+    layouts.iter().flat_map(|l| l.actors_of("SCCounselorPlayerStart")).filter_map(|a| a.transform.as_ref()).map(|x| to_transform(x).translation).collect()
 }
 
 fn is_grass(mesh: &str) -> bool {
