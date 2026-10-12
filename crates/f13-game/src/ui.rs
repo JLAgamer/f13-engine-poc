@@ -2319,7 +2319,7 @@ struct DialPips {
 fn dial(
     mut commands: Commands,
     hud: Res<Hud>,
-    interaction: Option<Res<crate::interact::Interaction>>,
+    interaction: Query<&crate::interact::Interaction, With<crate::controls::LocalPlayer>>,
     tuning: Res<crate::player::PlayerTuning>,
     mut vis: Query<&mut Visibility>,
     mut transforms: Query<&mut UiTransform>,
@@ -2330,7 +2330,7 @@ fn dial(
 ) {
     use f13_core::minigame::PipState;
     let Some(&root) = hud.names.get("SCInteractMinigame_Widget") else { return };
-    let hold = interaction.as_ref().and_then(|i| i.hold.as_ref()).filter(|h| h.started);
+    let hold = interaction.single().ok().and_then(|i| i.hold.as_ref()).filter(|h| h.started);
     if let Ok(mut v) = vis.get_mut(root) {
         v.set_if_neq(if hold.is_some() { Visibility::Inherited } else { Visibility::Hidden });
     }

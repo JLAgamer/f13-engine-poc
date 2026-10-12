@@ -83,11 +83,15 @@ impl Player {
     }
 }
 
-/// What the player wants this tick, from the keyboard or the demo script.
-#[derive(Resource, Default)]
+/// What a counselor wants this tick, from her pad ([`crate::controls::Pads`]) or the demo script.
+#[derive(Component, Default)]
 pub(crate) struct Intent {
-    /// x = right, y = forward, relative to the camera.
+    /// x = right, y = forward, relative to her control yaw.
     movement: Vec2,
+    /// Her control rotation's yaw (the local counselor's: the camera's).
+    yaw: f32,
+    /// When she last tapped A, D, S (double taps dodge).
+    last_tap: [f32; 3],
     sprint_held: bool,
     sprint_changed: bool,
     toggle_walk: bool,
@@ -144,7 +148,6 @@ pub(crate) struct PlayerConfig {
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(PlayerConfig { spawn: self.spawn, capsule: self.capsule, camera: self.camera, demo: self.demo, fear: self.fear, health: self.health })
-            .init_resource::<Intent>()
             .add_systems(Startup, spawn_player)
             // Input is read once per frame; one-shot actions stay latched until a fixed step uses them, so a frame
             // that runs several fixed steps (low frame rate, --speed) doesn't repeat a key press.
@@ -182,6 +185,9 @@ fn spawn_player(
         Transform::from_translation(config.spawn),
         Visibility::default(),
         Unsettled,
+        crate::controls::LocalPlayer,
+        crate::controls::Controls::default(),
+        Intent::default(),
     ));
     let player = player.id();
     match character.as_deref().filter(|_| !config.capsule) {
@@ -250,40 +256,37 @@ fn grab_cursor(mut cursor: Single<&mut CursorOptions>, mouse: Res<ButtonInput<Mo
 const DOUBLE_TAP_SECONDS: f32 = 0.2;
 
 fn read_intent(
-    keys: Res<ButtonInput<KeyCode>>,
+    pads: crate::controls::Pads,
     time: Res<Time<Real>>,
     config: Res<PlayerConfig>,
-    mut intent: ResMut<Intent>,
-    mut last_tap: Local<[f32; 3]>,
+    mut counselors: Query<(Entity, &mut Intent, Has<crate::controls::LocalPlayer>), With<Player>>,
 ) {
-    if config.demo {
-        let was = intent.sprint_held;
-        intent.movement = Vec2::Y;
-        intent.sprint_held = true;
-        intent.sprint_changed |= !was;
-        return;
-    }
-    let mut movement = Vec2::ZERO;
-    for (k, v) in [(KeyCode::KeyW, Vec2::Y), (KeyCode::KeyS, -Vec2::Y), (KeyCode::KeyD, Vec2::X), (KeyCode::KeyA, -Vec2::X)] {
-        if keys.pressed(k) {
-            movement += v;
+    use crate::controls::Button;
+    for (who, mut intent, local) in &mut counselors {
+        intent.yaw = pads.look(who).0;
+        if config.demo && local {
+            let was = intent.sprint_held;
+            intent.movement = Vec2::Y;
+            intent.sprint_held = true;
+            intent.sprint_changed |= !was;
+            continue;
         }
-    }
-    intent.movement = movement;
-    intent.sprint_held = keys.pressed(KeyCode::ShiftLeft);
-    intent.sprint_changed |= keys.just_pressed(KeyCode::ShiftLeft) || keys.just_released(KeyCode::ShiftLeft);
-    // CSLR_Run (X), on release.
-    intent.toggle_walk |= keys.just_released(KeyCode::KeyX);
-    intent.toggle_crouch |= keys.just_pressed(KeyCode::ControlLeft);
-    intent.toggle_combat |= keys.just_pressed(KeyCode::KeyC);
-    let now = time.elapsed_secs();
-    for (i, (key, dir)) in [(KeyCode::KeyA, DodgeDirection::Left), (KeyCode::KeyD, DodgeDirection::Right), (KeyCode::KeyS, DodgeDirection::Back)].into_iter().enumerate() {
-        if keys.just_pressed(key) {
-            if now - last_tap[i] <= DOUBLE_TAP_SECONDS {
-                intent.dodge = Some(dir);
-                last_tap[i] = f32::MIN;
-            } else {
-                last_tap[i] = now;
+        intent.movement = pads.movement(who);
+        intent.sprint_held = pads.pressed(who, Button::Sprint);
+        intent.sprint_changed |= pads.just_pressed(who, Button::Sprint) || pads.just_released(who, Button::Sprint);
+        // CSLR_Run (X), on release.
+        intent.toggle_walk |= pads.just_released(who, Button::Walk);
+        intent.toggle_crouch |= pads.just_pressed(who, Button::Crouch);
+        intent.toggle_combat |= pads.just_pressed(who, Button::Combat);
+        let now = time.elapsed_secs();
+        for (i, (b, dir)) in [(Button::Left, DodgeDirection::Left), (Button::Right, DodgeDirection::Right), (Button::Back, DodgeDirection::Back)].into_iter().enumerate() {
+            if pads.just_pressed(who, b) {
+                if now - intent.last_tap[i] <= DOUBLE_TAP_SECONDS {
+                    intent.dodge = Some(dir);
+                    intent.last_tap[i] = f32::MIN;
+                } else {
+                    intent.last_tap[i] = now;
+                }
             }
         }
     }
@@ -292,20 +295,26 @@ fn read_intent(
 /// Applies sprint/run/crouch input, ticks stamina and rolls stumbles.
 #[allow(clippy::too_many_arguments)]
 fn update_counselor(
-    mut intent: ResMut<Intent>,
     config: Res<PlayerConfig>,
     time: Res<Time>,
     tuning: Res<PlayerTuning>,
     anims: Res<crate::Anims>,
     mut rng: ResMut<crate::GameRng>,
-    mut player: Single<&mut Player>,
+    mut counselors: Query<(&mut Player, &mut Intent, Has<crate::controls::LocalPlayer>)>,
     mut demo_log: Local<u32>,
 ) {
+    for (mut player, mut intent, local) in &mut counselors {
+        update_one(&mut player, &mut intent, local, &config, &time, &tuning, &anims, &mut rng, &mut demo_log);
+    }
+}
+
+/// One counselor's [`update_counselor`].
+#[allow(clippy::too_many_arguments)]
+fn update_one(p: &mut Player, intent: &mut Intent, local: bool, config: &PlayerConfig, time: &Time, tuning: &PlayerTuning, anims: &crate::Anims, rng: &mut crate::GameRng, demo_log: &mut u32) {
     let now = time.elapsed_secs();
     // Consume this frame's one-shot actions (see PlayerPlugin).
-    let once = Intent { movement: intent.movement, sprint_held: intent.sprint_held, ..default() };
-    let intent = std::mem::replace(&mut *intent, once);
-    let p = &mut **player;
+    let once = Intent { movement: intent.movement, sprint_held: intent.sprint_held, yaw: intent.yaw, last_tap: intent.last_tap, ..default() };
+    let intent = std::mem::replace(intent, once);
     // The run toggle (0x1403cab00): crouching, she stands first (0x1403c09c0); then bIsRunning flips.
     if intent.toggle_walk {
         if p.counselor.stance == Stance::Crouching {
@@ -371,7 +380,7 @@ fn update_counselor(
         p.root_motion = root_motion(&m.name, m.length);
         p.montage = Some(m.name.clone());
     }
-    if config.demo && time.elapsed_secs() as u32 > *demo_log {
+    if config.demo && local && time.elapsed_secs() as u32 > *demo_log {
         *demo_log = time.elapsed_secs() as u32;
         let c = &p.counselor;
         info!(
@@ -386,140 +395,138 @@ fn update_counselor(
 pub struct Autopilot(pub Vec2);
 
 pub(crate) fn move_player(
-    intent: Res<Intent>,
     autopilot: Query<&Autopilot>,
     time: Res<Time>,
     tuning: Res<PlayerTuning>,
-    camera: Single<&PlayerCamera>,
-    mut player: Single<
-        (Entity, &mut Player, &mut Transform, Option<&crate::interact::UsingItem>, Option<&Unsettled>, (Has<crate::jason::Held>, Has<crate::hiding::Hiding>, Has<crate::items::Trapped>, (Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>, Has<crate::interact::BarricadeMove>, Has<crate::interact::MoveToSpot>, Has<crate::cabinets::CabinetUse>)), Has<crate::jason::Staggered>, Option<&crate::items::ItemAction>, Option<&crate::items::GunAim>),
+    mut counselors: Query<
+        (Entity, &mut Player, &mut Transform, &Intent, Option<&crate::interact::UsingItem>, Option<&Unsettled>, (Has<crate::jason::Held>, Has<crate::hiding::Hiding>, Has<crate::items::Trapped>, (Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>, Has<crate::interact::BarricadeMove>, Has<crate::interact::MoveToSpot>, Has<crate::cabinets::CabinetUse>)), Has<crate::jason::Staggered>, Option<&crate::items::ItemAction>, Option<&crate::items::GunAim>, Option<&crate::interact::Interaction>),
         Without<Driving>,
     >,
-    interaction: Option<Res<crate::interact::Interaction>>,
     collision: Res<crate::collision::WorldCollision>,
     dynamic: Res<crate::collision::DynamicColliders>,
     water: Option<Res<crate::water::Water>>,
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
-    let (entity, ref mut p, ref mut xf, using, settle, (held, hiding, trapped, (door_move, window_move, barricade_move, sliding, searching)), staggered, item_action, gun_aim) = *player;
-    p.hidden = hiding;
-    if held || hiding || sliding {
-        // In Jason's hands (he places her), in a hiding spot (hiding.rs places her) or sliding onto a move's spot
-        // (interact.rs places her).
-        p.velocity = Vec2::ZERO;
-        return;
-    }
-    let (sin, cos) = camera.yaw.sin_cos();
-    let forward = Vec2::new(-sin, -cos);
-    let right = Vec2::new(cos, -sin);
-    let repairing = interaction.as_ref().is_some_and(|i| i.busy());
-    // A swing's montage moves her by its root motion while it plays (RootMotionFromMontagesOnly), her input ignored.
-    let swing_root = item_action.and_then(|a| a.root);
-    let item_action = item_action.is_some();
-    // Aiming a gun: the controller ignores move input (SetIgnoreMoveInput) and she takes the control yaw (items.rs).
-    let aiming = gun_aim.is_some_and(|a| a.aiming);
-    let busy = aiming || !p.counselor.alive() || using.is_some() || repairing || staggered || item_action || trapped || door_move || window_move || barricade_move || sliding || searching;
-    let wish = match autopilot.get(entity) {
-        _ if busy => Vec2::ZERO,
-        Ok(a) => a.0.normalize_or_zero(),
-        Err(_) => forward * intent.movement.y + right * intent.movement.x,
-    };
-
-    let (facing, _, _) = xf.rotation.to_euler(EulerRot::YXZ);
-    if let Some(local) = p.root_motion.map(|(l, _)| l).or(swing_root) {
-        // The montage moves the counselor (relative to where they face), whatever the input.
-        let fwd = Vec2::new(facing.sin(), facing.cos());
-        let rt = Vec2::new(-fwd.y, fwd.x);
-        p.velocity = fwd * local.y + rt * local.x;
-    } else {
-        let situation = p.situation();
-        let max_speed = p.counselor.max_speed(&situation, &tuning.counselor);
-        let accel = input_acceleration(wish.to_array(), &tuning.movement);
-        p.swim_accel_sq = accel[0] * accel[0] + accel[1] * accel[1];
-        let mut v = p.velocity.to_array();
-        calc_velocity(&mut v, accel, max_speed, dt, &tuning.movement);
-        p.velocity = Vec2::from_array(v);
-    }
-
-    // Move the capsule through the world's collision (walls, steps, slopes, falling).
-    let world = collision.with(&dynamic);
-    if settle.is_some() {
-        if let Some(at) = f13_core::collision::spawn_floor(&world, xf.translation, SPAWN_PROBE_M, CAPSULE_HALF_HEIGHT_M * 2.0, &WALK) {
-            if at.distance(xf.translation) > 0.01 {
-                info!("placed on the floor at {at} (was {})", xf.translation);
-            }
-            xf.translation = at;
+    for (entity, mut p, mut xf, intent, using, settle, (held, hiding, trapped, (door_move, window_move, barricade_move, sliding, searching)), staggered, item_action, gun_aim, interaction) in &mut counselors {
+        p.hidden = hiding;
+        if held || hiding || sliding {
+            // In Jason's hands (he places her), in a hiding spot (hiding.rs places her) or sliding onto a move's spot
+            // (interact.rs places her).
+            p.velocity = Vec2::ZERO;
+            continue;
         }
-        p.vel_y = 0.0;
-        p.grounded = true;
-        commands.entity(entity).remove::<Unsettled>();
-    }
-    let cap = f13_core::collision::Capsule { radius: CAPSULE_RADIUS_M, half_height: CAPSULE_HALF_HEIGHT_M };
-    let mut pos = xf.translation;
-    let (grounded, delta) = (p.grounded, p.velocity * dt / CM);
-    // Water: she swims while her centre is under the surface (Unreal's IsInWater at the pawn's location); with
-    // Buoyancy 1 she floats with her centre at the surface (SWIM_DEPTH_M under it, so she stays in).
-    let surface = water.as_ref().and_then(|w| w.surface_at(pos + Vec3::Y * CAPSULE_HALF_HEIGHT_M));
-    let swimming = p.counselor.stance == Stance::Swimming;
-    if let (Some(top), false) = (surface, swimming) {
-        info!("swimming (surface {top:.2})");
-        p.counselor.stance = Stance::Swimming;
-        p.counselor.set_sprinting(false);
-    }
-    let swim_feet = surface.map(|top| top - SWIM_DEPTH_M - CAPSULE_HALF_HEIGHT_M);
-    if let Some(feet) = swim_feet {
-        // Afloat (from wherever she was under the surface).
-        pos.y = feet;
-        p.vel_y = 0.0;
-    }
-    let falling = p.vel_y;
-    let r = f13_core::collision::move_capsule(&world, &mut pos, &mut p.vel_y, grounded && swim_feet.is_none(), delta, dt, &cap, &WALK);
-    p.grounded = r.grounded;
-    // Down from a fall: her landing sound (GetLandingSound).
-    if !grounded && r.grounded && falling < -LANDING_SPEED_M_S && swim_feet.is_none() {
-        commands.trigger(crate::audio::Footstep { owner: entity, left: true, land: true });
-    }
-    if let (Some(feet), Stance::Swimming) = (swim_feet, p.counselor.stance) {
-        // Out where the bottom comes up to where she floats, else afloat.
-        let floor = f13_core::collision::surface_below(&world, pos.x, pos.z, feet + MAX_STEP_HEIGHT_M, feet - 3.0).map(|s| s.0);
-        if floor.is_some_and(|y| y >= feet) {
-            info!("out of the water");
-            p.counselor.stance = Stance::Standing;
-            pos.y = floor.unwrap_or(pos.y).max(pos.y);
-            p.grounded = true;
+        let (sin, cos) = intent.yaw.sin_cos();
+        let forward = Vec2::new(-sin, -cos);
+        let right = Vec2::new(cos, -sin);
+        let repairing = interaction.is_some_and(|i| i.busy());
+        // A swing's montage moves her by its root motion while it plays (RootMotionFromMontagesOnly), her input ignored.
+        let swing_root = item_action.and_then(|a| a.root);
+        let item_action = item_action.is_some();
+        // Aiming a gun: the controller ignores move input (SetIgnoreMoveInput) and she takes the control yaw (items.rs).
+        let aiming = gun_aim.is_some_and(|a| a.aiming);
+        let busy = aiming || !p.counselor.alive() || using.is_some() || repairing || staggered || item_action || trapped || door_move || window_move || barricade_move || sliding || searching;
+        let wish = match autopilot.get(entity) {
+            _ if busy => Vec2::ZERO,
+            Ok(a) => a.0.normalize_or_zero(),
+            Err(_) => forward * intent.movement.y + right * intent.movement.x,
+        };
+
+        let (facing, _, _) = xf.rotation.to_euler(EulerRot::YXZ);
+        if let Some(local) = p.root_motion.map(|(l, _)| l).or(swing_root) {
+            // The montage moves the counselor (relative to where they face), whatever the input.
+            let fwd = Vec2::new(facing.sin(), facing.cos());
+            let rt = Vec2::new(-fwd.y, fwd.x);
+            p.velocity = fwd * local.y + rt * local.x;
         } else {
+            let situation = p.situation();
+            let max_speed = p.counselor.max_speed(&situation, &tuning.counselor);
+            let accel = input_acceleration(wish.to_array(), &tuning.movement);
+            p.swim_accel_sq = accel[0] * accel[0] + accel[1] * accel[1];
+            let mut v = p.velocity.to_array();
+            calc_velocity(&mut v, accel, max_speed, dt, &tuning.movement);
+            p.velocity = Vec2::from_array(v);
+        }
+
+        // Move the capsule through the world's collision (walls, steps, slopes, falling).
+        let world = collision.with(&dynamic);
+        if settle.is_some() {
+            if let Some(at) = f13_core::collision::spawn_floor(&world, xf.translation, SPAWN_PROBE_M, CAPSULE_HALF_HEIGHT_M * 2.0, &WALK) {
+                if at.distance(xf.translation) > 0.01 {
+                    info!("placed on the floor at {at} (was {})", xf.translation);
+                }
+                xf.translation = at;
+            }
+            p.vel_y = 0.0;
+            p.grounded = true;
+            commands.entity(entity).remove::<Unsettled>();
+        }
+        let cap = f13_core::collision::Capsule { radius: CAPSULE_RADIUS_M, half_height: CAPSULE_HALF_HEIGHT_M };
+        let mut pos = xf.translation;
+        let (grounded, delta) = (p.grounded, p.velocity * dt / CM);
+        // Water: she swims while her centre is under the surface (Unreal's IsInWater at the pawn's location); with
+        // Buoyancy 1 she floats with her centre at the surface (SWIM_DEPTH_M under it, so she stays in).
+        let surface = water.as_ref().and_then(|w| w.surface_at(pos + Vec3::Y * CAPSULE_HALF_HEIGHT_M));
+        let swimming = p.counselor.stance == Stance::Swimming;
+        if let (Some(top), false) = (surface, swimming) {
+            info!("swimming (surface {top:.2})");
+            p.counselor.stance = Stance::Swimming;
+            p.counselor.set_sprinting(false);
+        }
+        let swim_feet = surface.map(|top| top - SWIM_DEPTH_M - CAPSULE_HALF_HEIGHT_M);
+        if let Some(feet) = swim_feet {
+            // Afloat (from wherever she was under the surface).
             pos.y = feet;
             p.vel_y = 0.0;
-            p.grounded = false;
         }
-    } else if p.counselor.stance == Stance::Swimming {
-        info!("out of the water");
-        p.counselor.stance = Stance::Standing;
-    }
-    // Like Unreal's SlideAlongSurface: drop the velocity going into the walls hit.
-    if let Some(n) = r.wall_normal.try_normalize() {
-        let into = p.velocity.dot(n).min(0.0);
-        p.velocity -= n * into;
-    }
-    // Fell out of the world (no surface under the feet at all): back onto the surface above.
-    if !r.grounded && f13_core::collision::surface_below(&world, pos.x, pos.z, pos.y + MAX_STEP_HEIGHT_M, pos.y - 100.0).is_none() {
-        if let Some(at) = f13_core::collision::spawn_floor(&world, pos, SPAWN_PROBE_M, CAPSULE_HALF_HEIGHT_M * 2.0, &WALK) {
-            warn!("fell out of the map at {pos}; back to {at}");
-            pos = at;
-            p.vel_y = 0.0;
+        let falling = p.vel_y;
+        let r = f13_core::collision::move_capsule(&world, &mut pos, &mut p.vel_y, grounded && swim_feet.is_none(), delta, dt, &cap, &WALK);
+        p.grounded = r.grounded;
+        // Down from a fall: her landing sound (GetLandingSound).
+        if !grounded && r.grounded && falling < -LANDING_SPEED_M_S && swim_feet.is_none() {
+            commands.trigger(crate::audio::Footstep { owner: entity, left: true, land: true });
         }
-    }
-    xf.translation = pos;
+        if let (Some(feet), Stance::Swimming) = (swim_feet, p.counselor.stance) {
+            // Out where the bottom comes up to where she floats, else afloat.
+            let floor = f13_core::collision::surface_below(&world, pos.x, pos.z, feet + MAX_STEP_HEIGHT_M, feet - 3.0).map(|s| s.0);
+            if floor.is_some_and(|y| y >= feet) {
+                info!("out of the water");
+                p.counselor.stance = Stance::Standing;
+                pos.y = floor.unwrap_or(pos.y).max(pos.y);
+                p.grounded = true;
+            } else {
+                pos.y = feet;
+                p.vel_y = 0.0;
+                p.grounded = false;
+            }
+        } else if p.counselor.stance == Stance::Swimming {
+            info!("out of the water");
+            p.counselor.stance = Stance::Standing;
+        }
+        // Like Unreal's SlideAlongSurface: drop the velocity going into the walls hit.
+        if let Some(n) = r.wall_normal.try_normalize() {
+            let into = p.velocity.dot(n).min(0.0);
+            p.velocity -= n * into;
+        }
+        // Fell out of the world (no surface under the feet at all): back onto the surface above.
+        if !r.grounded && f13_core::collision::surface_below(&world, pos.x, pos.z, pos.y + MAX_STEP_HEIGHT_M, pos.y - 100.0).is_none() {
+            if let Some(at) = f13_core::collision::spawn_floor(&world, pos, SPAWN_PROBE_M, CAPSULE_HALF_HEIGHT_M * 2.0, &WALK) {
+                warn!("fell out of the map at {pos}; back to {at}");
+                pos = at;
+                p.vel_y = 0.0;
+            }
+        }
+        xf.translation = pos;
 
-    // Orient to movement (the model faces +Z); in combat stance face where the camera looks. Not during root motion.
-    let combat = p.counselor.stance == Stance::Combat;
-    if p.root_motion.is_none() && !aiming && (combat || p.velocity.length_squared() > 1.0) {
-        let target = if combat { forward.x.atan2(forward.y) } else { p.velocity.x.atan2(p.velocity.y) };
-        let (current, _, _) = xf.rotation.to_euler(EulerRot::YXZ);
-        let delta = (target - current + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-        let max = TURN_RATE_DEG.to_radians() * dt;
-        xf.rotation = Quat::from_rotation_y(current + delta.clamp(-max, max));
+        // Orient to movement (the model faces +Z); in combat stance face where the camera looks. Not during root motion.
+        let combat = p.counselor.stance == Stance::Combat;
+        if p.root_motion.is_none() && !aiming && (combat || p.velocity.length_squared() > 1.0) {
+            let target = if combat { forward.x.atan2(forward.y) } else { p.velocity.x.atan2(p.velocity.y) };
+            let (current, _, _) = xf.rotation.to_euler(EulerRot::YXZ);
+            let delta = (target - current + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+            let max = TURN_RATE_DEG.to_radians() * dt;
+            xf.rotation = Quat::from_rotation_y(current + delta.clamp(-max, max));
+        }
     }
 }
 

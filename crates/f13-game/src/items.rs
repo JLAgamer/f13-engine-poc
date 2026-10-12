@@ -393,41 +393,42 @@ fn wear_weapon(commands: &mut Commands, wear: &mut Query<Option<&mut Wear>>, inv
 fn aim(
     mut commands: Commands,
     time: Res<Time>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    interaction: Res<crate::interact::Interaction>,
-    camera: Single<&PlayerCamera>,
-    mut player: Query<(Entity, &Player, &Inventory, &mut Transform, Option<&mut GunAim>, Has<ItemAction>, (Has<crate::vehicle::Driving>, Has<crate::hiding::Hiding>, Has<crate::jason::Held>, Has<crate::interact::UsingItem>))>,
+    pads: crate::controls::Pads,
+    mut player: Query<(Entity, &Player, &Inventory, &mut Transform, Option<&mut GunAim>, Has<ItemAction>, (Has<crate::vehicle::Driving>, Has<crate::hiding::Hiding>, Has<crate::jason::Held>, Has<crate::interact::UsingItem>), Option<&crate::interact::Interaction>)>,
     items: Query<(&Item, Has<Spent>)>,
 ) {
-    let Ok((pe, p, inv, mut xf, aim, acting, (driving, hiding, held, using))) = player.single_mut() else { return };
-    let Some(mut aim) = aim else {
-        commands.entity(pe).try_insert(GunAim::default());
-        return;
-    };
-    let c = &p.counselor;
-    // A loaded gun (AimGun sets bIsAiming only with bHasAmmunition; Fire clears it).
-    let gun = inv.hand.and_then(|h| items.get(h).ok()).is_some_and(|(i, spent)| matches!(i.kind, ItemKind::Gun { .. }) && !spent);
-    use f13_core::counselor::Stance;
-    if !gun || !c.alive() || held || driving || hiding {
-        aim.aiming = false;
-    } else if !mouse.pressed(MouseButton::Right) {
-        aim.aiming = false;
-    } else if mouse.just_pressed(MouseButton::Right)
-        && !matches!(c.stance, Stance::Swimming | Stance::Combat)
-        && !interaction.busy()
-        && !using
-        && !acting
-        && p.root_motion.is_none()
-    {
-        // The gun has its one shot until it's fired (the shot spends it; the port drops the gun then).
-        aim.aiming = true;
-    }
-    if aim.aiming {
-        let (sin, cos) = camera.yaw.sin_cos();
-        xf.rotation = Quat::from_rotation_y((-sin).atan2(-cos));
-        aim.pitch = (camera.pitch.to_degrees() + 180.0).rem_euclid(360.0) - 180.0;
-    } else if aim.pitch.abs() > 1e-8 {
-        aim.pitch = finterp_to(aim.pitch, 0.0, time.delta_secs(), AIM_PITCH_RETURN_SPEED);
+    use crate::controls::Button;
+    for (pe, p, inv, mut xf, aim, acting, (driving, hiding, held, using), interaction) in &mut player {
+        let Some(mut aim) = aim else {
+            commands.entity(pe).try_insert(GunAim::default());
+            continue;
+        };
+        let c = &p.counselor;
+        // A loaded gun (AimGun sets bIsAiming only with bHasAmmunition; Fire clears it).
+        let gun = inv.hand.and_then(|h| items.get(h).ok()).is_some_and(|(i, spent)| matches!(i.kind, ItemKind::Gun { .. }) && !spent);
+        use f13_core::counselor::Stance;
+        if !gun || !c.alive() || held || driving || hiding {
+            aim.aiming = false;
+        } else if !pads.pressed(pe, Button::Secondary) {
+            aim.aiming = false;
+        } else if pads.just_pressed(pe, Button::Secondary)
+            && !matches!(c.stance, Stance::Swimming | Stance::Combat)
+            && !interaction.is_some_and(|i| i.busy())
+            && !using
+            && !acting
+            && p.root_motion.is_none()
+        {
+            // The gun has its one shot until it's fired (the shot spends it; the port drops the gun then).
+            aim.aiming = true;
+        }
+        if aim.aiming {
+            let (yaw, pitch) = pads.look(pe);
+            let (sin, cos) = yaw.sin_cos();
+            xf.rotation = Quat::from_rotation_y((-sin).atan2(-cos));
+            aim.pitch = (pitch.to_degrees() + 180.0).rem_euclid(360.0) - 180.0;
+        } else if aim.pitch.abs() > 1e-8 {
+            aim.pitch = finterp_to(aim.pitch, 0.0, time.delta_secs(), AIM_PITCH_RETURN_SPEED);
+        }
     }
 }
 
@@ -447,23 +448,24 @@ pub(crate) fn finterp_to(current: f32, target: f32, dt: f32, speed: f32) -> f32 
 #[allow(clippy::type_complexity)]
 fn block(
     mut commands: Commands,
-    mouse: Res<ButtonInput<MouseButton>>,
-    interaction: Res<crate::interact::Interaction>,
-    player: Query<(Entity, &Player, &Inventory, Has<Blocking>, Has<ItemAction>, Has<crate::jason::Staggered>, Has<crate::jason::Held>), (Without<crate::vehicle::Driving>, Without<Trapped>)>,
+    pads: crate::controls::Pads,
+    player: Query<(Entity, &Player, &Inventory, Has<Blocking>, Has<ItemAction>, Has<crate::jason::Staggered>, Has<crate::jason::Held>, Option<&crate::interact::Interaction>), (Without<crate::vehicle::Driving>, Without<Trapped>)>,
     items: Query<&Item>,
 ) {
-    let Ok((pe, p, inv, blocking, acting, staggered, held)) = player.single() else { return };
-    let c = &p.counselor;
-    let weapon = inv.hand.and_then(|h| items.get(h).ok()).is_some_and(|i| matches!(i.kind, ItemKind::Weapon(_) | ItemKind::Gun { .. }));
-    let combat = c.stance == f13_core::counselor::Stance::Combat;
-    if blocking {
-        if !mouse.pressed(MouseButton::Right) || !combat || !weapon || !c.alive() || held {
-            info!("block ends");
-            commands.entity(pe).remove::<Blocking>();
+    use crate::controls::Button;
+    for (pe, p, inv, blocking, acting, staggered, held, interaction) in &player {
+        let c = &p.counselor;
+        let weapon = inv.hand.and_then(|h| items.get(h).ok()).is_some_and(|i| matches!(i.kind, ItemKind::Weapon(_) | ItemKind::Gun { .. }));
+        let combat = c.stance == f13_core::counselor::Stance::Combat;
+        if blocking {
+            if !pads.pressed(pe, Button::Secondary) || !combat || !weapon || !c.alive() || held {
+                info!("block ends");
+                commands.entity(pe).remove::<Blocking>();
+            }
+        } else if pads.just_pressed(pe, Button::Secondary) && combat && weapon && c.alive() && !acting && !staggered && !held && !interaction.is_some_and(|i| i.busy()) && !c.dodging() && p.root_motion.is_none() {
+            info!("blocking");
+            commands.entity(pe).insert(Blocking);
         }
-    } else if mouse.just_pressed(MouseButton::Right) && combat && weapon && c.alive() && !acting && !staggered && !held && !interaction.busy() && !c.dodging() && p.root_motion.is_none() {
-        info!("blocking");
-        commands.entity(pe).insert(Blocking);
     }
 }
 
@@ -616,12 +618,10 @@ fn shotgun_hold(
 #[allow(clippy::too_many_arguments)]
 fn start_action(
     mut commands: Commands,
-    mouse: Res<ButtonInput<MouseButton>>,
+    pads: crate::controls::Pads,
     character: Option<Res<CounselorCharacter>>,
-    interaction: Res<crate::interact::Interaction>,
-    camera: Single<&PlayerCamera>,
     mut player: Query<
-        (Entity, &Player, &Inventory, &mut Transform, Option<&GunAim>),
+        (Entity, &Player, &Inventory, &mut Transform, Option<&GunAim>, Option<&crate::interact::Interaction>),
         (Without<ItemAction>, Without<crate::interact::UsingItem>, Without<crate::jason::Held>, Without<crate::jason::Staggered>, Without<crate::vehicle::Driving>, Without<Blocking>, Without<Trapped>),
     >,
     items: Query<&Item>,
@@ -629,62 +629,64 @@ fn start_action(
     anims: Res<crate::Anims>,
 ) {
     let Some(character) = character else { return };
-    let Ok((pe, p, inv, mut xf, aim)) = player.single_mut() else { return };
-    let aiming = aim.is_some_and(|a| a.aiming);
-    if !p.counselor.alive() || interaction.busy() || p.counselor.dodging() || p.root_motion.is_some() {
-        return;
-    }
-    let len = |n: &str| character.length(n).unwrap_or(1.0);
-    let combat = p.counselor.stance == f13_core::counselor::Stance::Combat;
-    let mut start = |what: Use, item: Entity, anim: &str, at: f32| {
-        // A swing in combat stance: the button's hold counts toward the heavy attack.
-        let hold = (combat && matches!(what, Use::Swing { .. })).then_some(0.0);
-        let root = matches!(what, Use::Swing { .. }).then(|| swing_root(&anims, anim)).flatten();
-        commands.entity(pe).insert((ItemAction { what, item, t: 0.0, len: len(anim), at, done: false, trace: None, hold, root }, PlayAction(anim.into())));
-    };
-    // Face where the camera looks.
-    let (sin, cos) = camera.yaw.sin_cos();
-    let face = Quat::from_rotation_y((-sin).atan2(-cos));
-    if mouse.just_pressed(MouseButton::Left) {
-        let Some(hand) = inv.hand else { return };
-        let Ok(item) = items.get(hand) else { return };
-        let melee_gun = match &item.kind {
-            ItemKind::Gun { stats, melee: true, .. } if combat && !(aiming && !spent.contains(hand)) => Some(stats.clone()),
-            _ => None,
-        };
-        match (&item.kind, melee_gun.as_ref()) {
-            (ItemKind::Weapon(stats), _) | (_, Some(stats)) => {
-                // The NeutralAttack (0x1402e5aa0: MULTICAST_Attack(false)); in combat stance the button's hold starts
-                // counting (the heavy attack after 0.1 s, in tick_action).
-                let anim = if stats.two_handed { SWING_2H[0] } else { SWING_1H[0] };
-                let window = character.info.animations.get(anim).and_then(|a| a.window("AttackTraceNotify")).unwrap_or((0.6, 0.8));
-                info!("swing {} (light)", item.name);
-                xf.rotation = face;
-                start(Use::Swing { stats: stats.clone(), window, heavy: false }, hand, anim, window.0);
-            }
-            (ItemKind::Gun { projectile, .. }, None) => {
-                if !aiming || spent.contains(hand) {
-                    return;
-                }
-                info!("fire {}", item.name);
-                xf.rotation = face;
-                let anim = if *projectile { FLARE_FIRE } else { SHOTGUN_FIRE };
-                start(Use::Fire { kind: item.kind.clone() }, hand, anim, 0.0);
-            }
-            (ItemKind::Trap, _) => {
-                info!("placing {}", item.name);
-                xf.rotation = face;
-                start(Use::PlaceTrap, hand, PLACE_TRAP, len(PLACE_TRAP));
-            }
-            _ => {}
+    use crate::controls::Button;
+    for (pe, p, inv, mut xf, aim, interaction) in &mut player {
+        let aiming = aim.is_some_and(|a| a.aiming);
+        if !p.counselor.alive() || interaction.is_some_and(|i| i.busy()) || p.counselor.dodging() || p.root_motion.is_some() {
+            continue;
         }
-        return;
-    }
-    let Some(item) = inv.use_small else { return };
-    if let Ok(Item { kind: ItemKind::Firecracker { throw_delay }, .. }) = items.get(item) {
-        info!("throwing firecrackers");
-        xf.rotation = face;
-        start(Use::Throw, item, THROW, *throw_delay);
+        let len = |n: &str| character.length(n).unwrap_or(1.0);
+        let combat = p.counselor.stance == f13_core::counselor::Stance::Combat;
+        let mut start = |what: Use, item: Entity, anim: &str, at: f32| {
+            // A swing in combat stance: the button's hold counts toward the heavy attack.
+            let hold = (combat && matches!(what, Use::Swing { .. })).then_some(0.0);
+            let root = matches!(what, Use::Swing { .. }).then(|| swing_root(&anims, anim)).flatten();
+            commands.entity(pe).insert((ItemAction { what, item, t: 0.0, len: len(anim), at, done: false, trace: None, hold, root }, PlayAction(anim.into())));
+        };
+        // Face where the camera looks.
+        let (sin, cos) = pads.look(pe).0.sin_cos();
+        let face = Quat::from_rotation_y((-sin).atan2(-cos));
+        if pads.just_pressed(pe, Button::Primary) {
+            let Some(hand) = inv.hand else { continue };
+            let Ok(item) = items.get(hand) else { continue };
+            let melee_gun = match &item.kind {
+                ItemKind::Gun { stats, melee: true, .. } if combat && !(aiming && !spent.contains(hand)) => Some(stats.clone()),
+                _ => None,
+            };
+            match (&item.kind, melee_gun.as_ref()) {
+                (ItemKind::Weapon(stats), _) | (_, Some(stats)) => {
+                    // The NeutralAttack (0x1402e5aa0: MULTICAST_Attack(false)); in combat stance the button's hold starts
+                    // counting (the heavy attack after 0.1 s, in tick_action).
+                    let anim = if stats.two_handed { SWING_2H[0] } else { SWING_1H[0] };
+                    let window = character.info.animations.get(anim).and_then(|a| a.window("AttackTraceNotify")).unwrap_or((0.6, 0.8));
+                    info!("swing {} (light)", item.name);
+                    xf.rotation = face;
+                    start(Use::Swing { stats: stats.clone(), window, heavy: false }, hand, anim, window.0);
+                }
+                (ItemKind::Gun { projectile, .. }, None) => {
+                    if !aiming || spent.contains(hand) {
+                        continue;
+                    }
+                    info!("fire {}", item.name);
+                    xf.rotation = face;
+                    let anim = if *projectile { FLARE_FIRE } else { SHOTGUN_FIRE };
+                    start(Use::Fire { kind: item.kind.clone() }, hand, anim, 0.0);
+                }
+                (ItemKind::Trap, _) => {
+                    info!("placing {}", item.name);
+                    xf.rotation = face;
+                    start(Use::PlaceTrap, hand, PLACE_TRAP, len(PLACE_TRAP));
+                }
+                _ => {}
+            }
+            continue;
+        }
+        let Some(item) = inv.use_small else { continue };
+        if let Ok(Item { kind: ItemKind::Firecracker { throw_delay }, .. }) = items.get(item) {
+            info!("throwing firecrackers");
+            xf.rotation = face;
+            start(Use::Throw, item, THROW, *throw_delay);
+        }
     }
 }
 

@@ -28,6 +28,7 @@ mod cabinets;
 mod cinematic;
 mod car_lights;
 mod character;
+mod controls;
 mod collision;
 mod doors;
 mod fear_events;
@@ -479,6 +480,7 @@ fn main() {
             vehicle_start: tuning.vehicle_start.clone(),
         })
             .insert_resource(senses::KillerAbilityTuning(tuning.jason.clone()))
+            .add_plugins(controls::ControlsPlugin)
             .add_plugins(player::PlayerPlugin { spawn, capsule: args.capsule, camera: args.camera, demo: args.demo, fear: args.fear.unwrap_or(0.0), health: args.health })
             .add_plugins(fear_events::FearEventsPlugin { locked: args.fear })
             // Playing Jason, the bot playing her doesn't decide when the run ends.

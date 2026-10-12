@@ -157,13 +157,16 @@ enum Target {
     Phone(Entity),
 }
 
-#[derive(Resource, Default)]
+/// A counselor's interaction: what she'd use, and the hold in progress.
+#[derive(Component, Default)]
 pub struct Interaction {
     target: Option<Target>,
     /// The hold interaction (repair) in progress.
     pub hold: Option<HoldInteraction>,
     /// A hold finished while E is still down: its release isn't a press.
     hold_done: bool,
+    /// How long she's held the drop key (small_items).
+    drop_held: Option<f32>,
 }
 
 impl Interaction {
@@ -435,12 +438,11 @@ fn moves_to_spots(
     time: Res<Time>,
     collision: Res<crate::collision::WorldCollision>,
     dynamic: Res<crate::collision::DynamicColliders>,
-    mut interaction: ResMut<Interaction>,
-    mut players: Query<(Entity, &mut Transform, &mut MoveToSpot), With<Player>>,
+    mut players: Query<(Entity, &mut Transform, &mut MoveToSpot, &mut Interaction), With<Player>>,
 ) {
     let world = collision.with(&dynamic);
     let sweep = |from: Vec3, to: Vec3| f13_core::collision::capsule_sweep(&world, from, to, crate::player::CAPSULE_RADIUS_M, crate::player::CAPSULE_HALF_HEIGHT_M);
-    for (pe, mut xf, mut m) in &mut players {
+    for (pe, mut xf, mut m, mut interaction) in &mut players {
         m.t += time.delta_secs();
         let a = (m.t / m.params.interp_time.max(1e-4)).clamp(0.0, 1.0);
         if a >= 1.0 {
@@ -691,8 +693,7 @@ pub struct InteractPlugin;
 
 impl Plugin for InteractPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Interaction>()
-            .add_observer(door_move_ended)
+        app.add_observer(door_move_ended)
             .add_observer(window_move_ended)
             .add_systems(Startup, (spawn_prompt, load_special_moves))
             .add_systems(
@@ -720,7 +721,7 @@ fn add_inventory(mut commands: Commands, players: Query<Entity, (With<Player>, W
     for p in &players {
         // MaxSmallItems (her class's; the constructor's 3 for an older export).
         let max_small = model.info.values.get("MaxSmallItems").map_or(3, |&v| v as usize);
-        commands.entity(p).insert(Inventory { max_small, ..default() });
+        commands.entity(p).insert((Inventory { max_small, ..default() }, Interaction::default()));
     }
 }
 
@@ -754,8 +755,8 @@ pub(crate) fn score(centre: Vec3, point: Vec3, reach_cm: f32, look: Vec3, facing
 }
 
 fn choose_target(
-    player: Single<(Entity, &Transform, &Inventory, &Player, Option<&crate::cabinets::CabinetUse>), (Without<Driving>, Without<crate::hiding::Hiding>)>,
-    camera: Single<&PlayerCamera>,
+    mut players: Query<(Entity, &Transform, &Inventory, &Player, Option<&crate::cabinets::CabinetUse>, &mut Interaction), (Without<Driving>, Without<crate::hiding::Hiding>)>,
+    pads: crate::controls::Pads,
     items: Query<(Entity, &Item, &GlobalTransform, Option<&InCabinet>), Without<Carried>>,
     carried: Query<&Item, With<Carried>>,
     cabinets: Query<(Entity, &Cabinet, &GlobalTransform)>,
@@ -765,7 +766,6 @@ fn choose_target(
     barricades: Query<&Barricade>,
     (spots, fuse_boxes): (Query<(Entity, &crate::hiding::HidingSpot, &GlobalTransform)>, Query<(Entity, &crate::power::FuseBox)>),
     (phone_boxes, phones): (Query<(Entity, &crate::police::PhoneBox)>, Query<(Entity, &crate::police::Phone)>),
-    mut interaction: ResMut<Interaction>,
     (limits, globals, collision, dynamic, parents, no_world_dynamic, (names, actor_tris, no_visibility, (not_visibility, not_world_dynamic))): (
         Query<&InteractLimits>,
         Query<&GlobalTransform>,
@@ -776,10 +776,10 @@ fn choose_target(
         (Query<&Name>, Option<Res<crate::collision::ActorTris>>, Query<(), With<crate::collision::NoVisibility>>, (Option<Res<crate::collision::NotVisibility>>, Option<Res<crate::collision::NotWorldDynamic>>)),
     ),
 ) {
+    for (pe, xf, inv, p, searching, mut interaction) in &mut players {
     if interaction.busy() {
-        return; // keep the target while repairing
+        continue; // keep the target while repairing
     }
-    let (pe, xf, inv, p, searching) = *player;
     // At a drawer: it's the only thing to use, once it's ready (CanInteractWith: nothing on it before).
     if let Some(u) = searching {
         let ready = cabinets.get(u.cabinet).is_ok_and(|(_, c, _)| c.slots.get(u.slot).is_some_and(|s| s.ready && s.interactor == Some(pe)));
@@ -788,10 +788,10 @@ fn choose_target(
             interaction.hold = None;
         }
         interaction.target = target;
-        return;
+        continue;
     }
     let centre = xf.translation + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M;
-    let look = camera.look();
+    let look = { let (yaw, pitch) = pads.look(pe); PlayerCamera { yaw, pitch }.look() };
     let facing = xf.rotation * Vec3::Z;
     // Her velocity is in Bevy's XZ plane.
     let moving = (p.velocity.length_squared() > 0.0).then(|| Vec3::new(p.velocity.x, 0.0, p.velocity.y).normalize_or_zero());
@@ -898,19 +898,18 @@ fn choose_target(
         interaction.hold = None;
     }
     interaction.target = target;
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn act(
     mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
+    pads: crate::controls::Pads,
     time: Res<Time>,
-    mut interaction: ResMut<Interaction>,
-    mouse: Res<ButtonInput<MouseButton>>,
     tuning: Res<PlayerTuning>,
     mut rng: ResMut<crate::GameRng>,
     // Held or in a trap, E wiggles (the stun's WiggleInputComponent over hers).
-    mut player: Single<(Entity, &mut Transform, &mut Inventory, &mut Player, Has<MoveToSpot>), (Without<Driving>, Without<crate::hiding::Hiding>, Without<crate::jason::Held>, Without<crate::items::Trapped>)>,
+    mut players: Query<(Entity, &mut Transform, &mut Inventory, &mut Player, Has<MoveToSpot>, &mut Interaction), (Without<Driving>, Without<crate::hiding::Hiding>, Without<crate::jason::Held>, Without<crate::items::Trapped>)>,
     (items, item_xfs): (Query<&Item>, Query<&GlobalTransform, With<Item>>),
     (mut spots, model): (Query<(&mut crate::hiding::HidingSpot, &GlobalTransform)>, Option<Res<crate::character::CounselorCharacter>>),
     (cabinets, cabinet_xfs): (Query<&Cabinet>, Query<&GlobalTransform, With<Cabinet>>),
@@ -919,19 +918,21 @@ fn act(
     (windows, mut barricades, (mut phone_boxes, mut phones, mut game, match_tuning), (names, special_moves)): (Query<(&mut Window, &GlobalTransform)>, Query<&mut Barricade>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<ResMut<crate::match_flow::GameMatch>>, Option<Res<crate::match_flow::MatchTuning>>), (Query<&Name>, Option<Res<SpecialMoves>>)),
     (mut visibility, mut fuse_boxes, mut grids, vehicle_xfs): (Query<&mut Visibility>, Query<&mut crate::power::FuseBox>, Option<ResMut<crate::power::PowerGrids>>, Query<&GlobalTransform, With<Vehicle>>),
 ) {
-    let Some(target) = interaction.target else { return };
-    let (player_entity, ref mut player_xf, ref mut inv, ref mut p, sliding) = *player;
+    use crate::controls::Button;
+    for (player_entity, mut player_xf, mut inv, mut p, sliding, mut interaction) in &mut players {
+    let (player_xf, inv, p) = (&mut *player_xf, &mut *inv, &mut *p);
+    let Some(target) = interaction.target else { continue };
     // A special move component's way onto its spot (its owner's class: the actor's Name).
     let class_of = |owner: Entity| names.get(owner).map_or(String::new(), |n| n.as_str().to_string());
     let moves = special_moves.as_deref();
     let mv = |owner: Entity, component: &str| moves.map_or(MoveParams::default(), |m| m.of(&class_of(owner), component));
     // On her way onto a move's spot: only the hold that started it goes on.
     if sliding && !interaction.hold.as_ref().is_some_and(|h| h.started) {
-        return;
+        continue;
     }
     match target {
-        Target::Item(e) if keys.just_pressed(KeyCode::KeyE) => {
-            let Ok(item) = items.get(e) else { return };
+        Target::Item(e) if pads.just_pressed(player_entity, Button::Interact) => {
+            let Ok(item) = items.get(e) else { continue };
             if item.large {
                 if let Some(old) = inv.hand.take() {
                     drop_at(&mut commands, &mut visibility, old, player_xf);
@@ -950,38 +951,38 @@ fn act(
             interaction.target = None;
         }
         Target::Cabinet(e, i) => {
-            let (Ok(cab), Ok(gxf)) = (cabinets.get(e), cabinet_xfs.get(e)) else { return };
-            let Some(slot) = cab.slots.get(i) else { return };
+            let (Ok(cab), Ok(gxf)) = (cabinets.get(e), cabinet_xfs.get(e)) else { continue };
+            let Some(slot) = cab.slots.get(i) else { continue };
             if interaction.hold_done {
-                interaction.hold_done = keys.pressed(KeyCode::KeyE);
-                return;
+                interaction.hold_done = pads.pressed(player_entity, Button::Interact);
+                continue;
             }
             // Closed: a press searches it (its special move).
             if slot.searchable() {
-                if keys.just_pressed(KeyCode::KeyE) {
+                if pads.just_pressed(player_entity, Button::Interact) {
                     let at = crate::hiding::HidingSpot::world(gxf, &slot.spot);
-                    let to = Transform { translation: at.translation.with_y(player_xf.translation.y), rotation: at.rotation, ..**player_xf };
+                    let to = Transform { translation: at.translation.with_y(player_xf.translation.y), rotation: at.rotation, ..*player_xf };
                     let handler = if i == 0 { "UseCabinet_SpecialMoveHandler" } else { "UseCabinet_SpecialMoveHandler2" };
-                    crate::cabinets::search(&mut commands, player_entity, **player_xf, e, i, to, mv(e, handler));
+                    crate::cabinets::search(&mut commands, player_entity, *player_xf, e, i, to, mv(e, handler));
                     interaction.target = None;
                 }
-                return;
+                continue;
             }
             if !slot.ready || slot.interactor != Some(player_entity) {
-                return;
+                continue;
             }
             // Ready: a press closes it; holding takes the item.
             let item = slot.item.and_then(|(it, _)| items.get(it).ok());
             let takeable = crate::cabinets::can_take(item, inv, &items);
             let started = interaction.hold.as_ref().is_some_and(|h| h.started);
-            if keys.just_released(KeyCode::KeyE) && !started {
+            if pads.just_released(player_entity, Button::Interact) && !started {
                 interaction.hold = None;
                 commands.trigger(crate::cabinets::CloseCabinet { player: player_entity, take: false });
-                return;
+                continue;
             }
-            if !keys.pressed(KeyCode::KeyE) || !takeable {
+            if !pads.pressed(player_entity, Button::Interact) || !takeable {
                 interaction.hold = None;
-                return;
+                continue;
             }
             let h = interaction.hold.get_or_insert_with(|| HoldInteraction::new(crate::cabinets::TAKE_HOLD_S, false));
             let mut events = Vec::new();
@@ -993,19 +994,19 @@ fn act(
             }
         }
         Target::Repair(v, i) => {
-            let Ok(mut vehicle) = vehicles.get_mut(v) else { return };
-            if !keys.pressed(KeyCode::KeyE) {
+            let Ok(mut vehicle) = vehicles.get_mut(v) else { continue };
+            if !pads.pressed(player_entity, Button::Interact) {
                 if interaction.hold.take().is_some_and(|h| h.started) {
                     info!("repair cancelled");
                     end_repair_anim(&mut commands, player_entity, vehicle.repairs[i].anim.as_ref(), false);
                 }
-                return;
+                continue;
             }
             let r = &vehicle.repairs[i];
             let hold = interaction.hold.get_or_insert_with(|| HoldInteraction::new(r.hold_time.unwrap_or(tuning.repair_hold_time), r.has_pips));
             let mut events = Vec::new();
-            for (button, key) in [(MouseButton::Right, 0), (MouseButton::Left, 1)] {
-                if mouse.just_pressed(button) {
+            for (button, key) in [(Button::Secondary, 0), (Button::Primary, 1)] {
+                if pads.just_pressed(player_entity, button) {
                     hold.press(key, &tuning.minigame, &mut events);
                 }
             }
@@ -1018,11 +1019,11 @@ fn act(
                         // On its special move's spot, facing its forward (Unreal +X; she faces +Z), on her floor.
                         let to = match (r.stand, vehicle_xfs.get(v)) {
                             (Some(stand), Ok(vxf)) => standing_on(player_xf, vxf.mul_transform(stand).compute_transform()),
-                            _ => **player_xf,
+                            _ => *player_xf,
                         };
                         if let Some(base) = r.anim.clone() {
                             let params = moves.map_or(MoveParams::default(), |m| m.of_child(&class_of(v), &r.name));
-                            move_to_spot(&mut commands, player_entity, **player_xf, to, params, move |w| {
+                            move_to_spot(&mut commands, player_entity, *player_xf, to, params, move |w| {
                                 w.entity_mut(player_entity).insert(repair_start(&base));
                             });
                         }
@@ -1034,10 +1035,10 @@ fn act(
                 }
             }
             if !completed {
-                return;
+                continue;
             }
             let parts = vehicle.repairs[i].parts.clone();
-            let Some(used) = take_part(inv, &items, &parts) else { return };
+            let Some(used) = take_part(inv, &items, &parts) else { continue };
             commands.entity(used).despawn();
             vehicle.repairs[i].done = true;
             end_repair_anim(&mut commands, player_entity, vehicle.repairs[i].anim.as_ref(), true);
@@ -1054,17 +1055,17 @@ fn act(
         }
         Target::FuseBox(f) => {
             // Repairing the fuse box: a hold with the minigame (its HoldTimeLimit), like a car part.
-            if !keys.pressed(KeyCode::KeyE) {
+            if !pads.pressed(player_entity, Button::Interact) {
                 if interaction.hold.take().is_some_and(|h| h.started) {
                     info!("fuse box repair cancelled");
                 }
-                return;
+                continue;
             }
-            let Ok(mut fuse) = fuse_boxes.get_mut(f) else { return };
+            let Ok(mut fuse) = fuse_boxes.get_mut(f) else { continue };
             let hold = interaction.hold.get_or_insert_with(|| HoldInteraction::new(fuse.hold_time, fuse.has_pips));
             let mut events = Vec::new();
-            for (button, key) in [(MouseButton::Right, 0), (MouseButton::Left, 1)] {
-                if mouse.just_pressed(button) {
+            for (button, key) in [(Button::Secondary, 0), (Button::Primary, 1)] {
+                if pads.just_pressed(player_entity, button) {
                     hold.press(key, &tuning.minigame, &mut events);
                 }
             }
@@ -1073,7 +1074,7 @@ fn act(
                 info!("fuse box repair started: {} pips, {:.1}s", hold.pips.len(), hold.hold_time);
             }
             if !events.contains(&MinigameEvent::Completed) {
-                return;
+                continue;
             }
             if let Some(g) = grids.as_mut() {
                 crate::power::set_destroyed(&mut fuse, false, g);
@@ -1085,41 +1086,41 @@ fn act(
         Target::PhoneBox(b) => {
             // Putting the fuse in (its FuseRepair) or repairing it after Jason broke it (its Interactable): a hold
             // with the repair minigame, on its special move's spot.
-            let Ok(mut pb) = phone_boxes.get_mut(b) else { return };
+            let Ok(mut pb) = phone_boxes.get_mut(b) else { continue };
             if !pb.needs_work() {
                 interaction.hold = None;
                 interaction.target = None;
-                return;
+                continue;
             }
             let fixing = pb.repaired;
-            if !keys.pressed(KeyCode::KeyE) {
+            if !pads.pressed(player_entity, Button::Interact) {
                 if interaction.hold.take().is_some_and(|h| h.started) {
                     info!("phone box repair cancelled");
                     end_repair_anim(&mut commands, player_entity, Some(&crate::police::PHONE_BOX_TAKE.to_string()), false);
                 }
-                return;
+                continue;
             }
             let hold = interaction.hold.get_or_insert_with(|| HoldInteraction::new(pb.hold_time, if fixing { pb.fix_pips } else { pb.has_pips }));
             let mut events = Vec::new();
-            for (button, key) in [(MouseButton::Right, 0), (MouseButton::Left, 1)] {
-                if mouse.just_pressed(button) {
+            for (button, key) in [(Button::Secondary, 0), (Button::Primary, 1)] {
+                if pads.just_pressed(player_entity, button) {
                     hold.press(key, &tuning.minigame, &mut events);
                 }
             }
             hold.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
             if events.contains(&MinigameEvent::Started) {
                 info!("phone box {} started: {} pips, {:.1}s", if fixing { "repair" } else { "fuse" }, hold.pips.len(), hold.hold_time);
-                let to = pb.stand.map_or(**player_xf, |stand| standing_on(player_xf, stand));
-                move_to_spot(&mut commands, player_entity, **player_xf, to, mv(b, "InteractSpecialMove"), move |w| {
+                let to = pb.stand.map_or(*player_xf, |stand| standing_on(player_xf, stand));
+                move_to_spot(&mut commands, player_entity, *player_xf, to, mv(b, "InteractSpecialMove"), move |w| {
                     w.entity_mut(player_entity).insert(repair_start(crate::police::PHONE_BOX_TAKE));
                 });
             }
             if !events.contains(&MinigameEvent::Completed) {
-                return;
+                continue;
             }
             if !fixing {
                 let parts = pb.parts.clone();
-                let Some(used) = take_part(inv, &items, &parts) else { return };
+                let Some(used) = take_part(inv, &items, &parts) else { continue };
                 commands.entity(used).despawn();
             }
             crate::police::repair_phone_box(&mut pb, &mut phones);
@@ -1131,7 +1132,7 @@ fn act(
         }
         Target::Phone(ph) => {
             // Calling the police: a plain hold (no pips) on the phone's spot.
-            let Ok(mut phone) = phones.get_mut(ph) else { return };
+            let Ok(mut phone) = phones.get_mut(ph) else { continue };
             // Its box broken under her (Jason): the call is cut off.
             if !phone.enabled {
                 if interaction.hold.take().is_some_and(|h| h.started) {
@@ -1139,27 +1140,27 @@ fn act(
                     end_repair_anim(&mut commands, player_entity, Some(&crate::police::PHONE_TAKE.to_string()), false);
                 }
                 interaction.target = None;
-                return;
+                continue;
             }
-            if !keys.pressed(KeyCode::KeyE) {
+            if !pads.pressed(player_entity, Button::Interact) {
                 if interaction.hold.take().is_some_and(|h| h.started) {
                     info!("phone call cancelled");
                     end_repair_anim(&mut commands, player_entity, Some(&crate::police::PHONE_TAKE.to_string()), false);
                 }
-                return;
+                continue;
             }
             let hold = interaction.hold.get_or_insert_with(|| HoldInteraction::new(phone.hold_time, false));
             let mut events = Vec::new();
             hold.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
             if events.contains(&MinigameEvent::Started) {
                 info!("calling the police: {:.1}s", hold.hold_time);
-                let to = phone.stand.map_or(**player_xf, |stand| standing_on(player_xf, stand));
-                move_to_spot(&mut commands, player_entity, **player_xf, to, mv(ph, "UsePhone_SpecialMove"), move |w| {
+                let to = phone.stand.map_or(*player_xf, |stand| standing_on(player_xf, stand));
+                move_to_spot(&mut commands, player_entity, *player_xf, to, mv(ph, "UsePhone_SpecialMove"), move |w| {
                     w.entity_mut(player_entity).insert(repair_start(crate::police::PHONE_TAKE));
                 });
             }
             if !events.contains(&MinigameEvent::Completed) {
-                return;
+                continue;
             }
             end_repair_anim(&mut commands, player_entity, Some(&crate::police::PHONE_TAKE.to_string()), true);
             crate::police::call_police(&mut commands, &mut phone, game.as_deref_mut(), match_tuning.as_deref(), player_entity);
@@ -1167,21 +1168,21 @@ fn act(
             interaction.target = None;
         }
         Target::Door(d) => {
-            let Ok((mut door, gxf)) = doors.get_mut(d) else { return };
+            let Ok((mut door, gxf)) = doors.get_mut(d) else { continue };
             if interaction.hold_done {
-                interaction.hold_done = keys.pressed(KeyCode::KeyE);
-                return;
+                interaction.hold_done = pads.pressed(player_entity, Button::Interact);
+                continue;
             }
             let barricade = barricades.iter().find(|b| b.door == Some(d)).map(|b| b.enabled);
             let (press, hold) = door.can_interact(gxf, player_xf.translation, barricade);
             // Press = let go before the hold starts; hold = keep holding for the door's hold time.
             let started = interaction.hold.as_ref().is_some_and(|h| h.started);
-            if keys.just_released(KeyCode::KeyE) && !started && press {
+            if pads.just_released(player_entity, Button::Interact) && !started && press {
                 interaction.hold = None;
                 if door.locked {
                     info!("door locked");
                     commands.trigger(crate::audio::ActorSound { actor: d, prop: "LockedDoorSound" });
-                    return;
+                    continue;
                 }
                 // Her open or close montage; the leaf moves in its driver window (DoorMove).
                 let anim = door_anim(!door.open, Door::is_inside(gxf, player_xf.translation));
@@ -1194,9 +1195,9 @@ fn act(
                         // the camera (doors' open and close moves have bTakeCameraControl).
                         let spot = door.spots.get(door_spot(anim)).map(|spot| {
                             let at = crate::hiding::HidingSpot::world(gxf, spot);
-                            Transform { translation: at.translation.with_y(player_xf.translation.y), rotation: at.rotation, ..**player_xf }
+                            Transform { translation: at.translation.with_y(player_xf.translation.y), rotation: at.rotation, ..*player_xf }
                         });
-                        let to = spot.unwrap_or(**player_xf);
+                        let to = spot.unwrap_or(*player_xf);
                         let origin = root.map(|r| r.0);
                         let m = DoorMove { door: d, t: 0.0, swing, curve: t.curve("DoorRotation"), length: t.length, swung: false, root };
                         let begin = move |w: &mut World| {
@@ -1204,8 +1205,8 @@ fn act(
                             w.trigger(crate::interaction_camera::PlayInteractionCamera { actor: d, handler: door_spot(anim), killer: false });
                         };
                         match origin {
-                            Some(origin) => move_to_rooted_spot(&mut commands, player_entity, **player_xf, to, origin, mv(d, door_spot(anim)), begin),
-                            None => move_to_spot(&mut commands, player_entity, **player_xf, to, mv(d, door_spot(anim)), begin),
+                            Some(origin) => move_to_rooted_spot(&mut commands, player_entity, *player_xf, to, origin, mv(d, door_spot(anim)), begin),
+                            None => move_to_spot(&mut commands, player_entity, *player_xf, to, mv(d, door_spot(anim)), begin),
                         }
                     }
                     None => {
@@ -1213,14 +1214,14 @@ fn act(
                         info!("door {what}");
                     }
                 }
-                return;
+                continue;
             }
             let barricaded_door = barricades.iter().any(|b| b.door == Some(d));
-            if !keys.pressed(KeyCode::KeyE) || !hold {
+            if !pads.pressed(player_entity, Button::Interact) || !hold {
                 if interaction.hold.take().is_some_and(|h| h.started) && !barricaded_door {
                     commands.entity(player_entity).remove::<(LockAnim, crate::character::PlayAction, MoveToSpot)>();
                 }
-                return;
+                continue;
             }
             let h = interaction.hold.get_or_insert_with(|| HoldInteraction::new(door.hold_time, false));
             let mut events = Vec::new();
@@ -1234,11 +1235,11 @@ fn act(
                 } else {
                     door_spot(anim)
                 };
-                let to = door.spots.get(spot).map_or(**player_xf, |s| {
+                let to = door.spots.get(spot).map_or(*player_xf, |s| {
                     let at = crate::hiding::HidingSpot::world(gxf, s);
-                    Transform { translation: Vec3::new(at.translation.x, player_xf.translation.y, at.translation.z), rotation: at.rotation, ..**player_xf }
+                    Transform { translation: Vec3::new(at.translation.x, player_xf.translation.y, at.translation.z), rotation: at.rotation, ..*player_xf }
                 });
-                move_to_spot(&mut commands, player_entity, **player_xf, to, mv(d, spot), move |w| {
+                move_to_spot(&mut commands, player_entity, *player_xf, to, mv(d, spot), move |w| {
                     w.entity_mut(player_entity).insert((LockAnim, crate::character::PlayAction(anim.into())));
                 });
             }
@@ -1269,14 +1270,14 @@ fn act(
             }
         }
         Target::Window(w) => {
-            let Ok((window, gxf)) = windows.get(w) else { return };
+            let Ok((window, gxf)) = windows.get(w) else { continue };
             let w_entity = w;
             if interaction.hold_done {
-                interaction.hold_done = keys.pressed(KeyCode::KeyE);
-                return;
+                interaction.hold_done = pads.pressed(player_entity, Button::Interact);
+                continue;
             }
             let started = interaction.hold.as_ref().is_some_and(|h| h.started);
-            if keys.just_released(KeyCode::KeyE) && !started {
+            if pads.just_released(player_entity, Button::Interact) && !started {
                 interaction.hold = None;
                 let action = window.press_action(p.counselor.sprinting, p.counselor.wounded);
                 match action {
@@ -1306,7 +1307,7 @@ fn act(
                                     (false, 0) => "CounselorVaultInside",
                                     (false, _) => "CounselorVaultOutside",
                                 };
-                                move_to_rooted_spot(&mut commands, player_entity, **player_xf, at, root.0, mv(w, component), move |w| {
+                                move_to_rooted_spot(&mut commands, player_entity, *player_xf, at, root.0, mv(w, component), move |w| {
                                     w.entity_mut(player_entity).insert(window_root_move(w_entity, kind, root));
                                 });
                             }
@@ -1318,15 +1319,15 @@ fn act(
                         p.velocity = Vec2::ZERO;
                         info!("window {action:?}: {damage:.0} damage, health {:.0}", p.counselor.health);
                         interaction.target = None;
-                        return;
+                        continue;
                     }
                 }
                 info!("window {action:?}");
-                return;
+                continue;
             }
-            if !keys.pressed(KeyCode::KeyE) || !window.can_hold() {
+            if !pads.pressed(player_entity, Button::Interact) || !window.can_hold() {
                 interaction.hold = None;
-                return;
+                continue;
             }
             let h = interaction.hold.get_or_insert_with(|| HoldInteraction::new(0.5, false));
             let mut events = Vec::new();
@@ -1340,14 +1341,14 @@ fn act(
                 interaction.hold_done = true;
             }
         }
-        Target::Hide(s) if keys.just_pressed(KeyCode::KeyE) && p.counselor.alive() => {
-            let (Ok((mut spot, gxf)), Some(model)) = (spots.get_mut(s), model.as_ref()) else { return };
+        Target::Hide(s) if pads.just_pressed(player_entity, Button::Interact) && p.counselor.alive() => {
+            let (Ok((mut spot, gxf)), Some(model)) = (spots.get_mut(s), model.as_ref()) else { continue };
             if spot.usable() {
                 crate::hiding::enter(&mut commands, player_entity, player_xf, p, s, &mut spot, gxf, model, time.elapsed_secs(), |c| mv(s, c));
             }
             interaction.target = None;
         }
-        Target::Seat(v) if keys.just_pressed(KeyCode::KeyE) => {
+        Target::Seat(v) if pads.just_pressed(player_entity, Button::Interact) => {
             let d = Driving::enter(v);
             let take = d.seat_move.map(|m| m.take()).unwrap_or(crate::vehicle::DRIVE_TAKE);
             commands.entity(player_entity).remove::<RepairAnim>().insert((d, crate::character::PlayAction(take.into())));
@@ -1355,6 +1356,7 @@ fn act(
             interaction.target = None;
         }
         _ => {}
+    }
     }
 }
 
@@ -1464,45 +1466,47 @@ pub(crate) fn take_small(commands: &mut Commands, visibility: &mut Query<&mut Vi
 fn small_items(
     mut commands: Commands,
     time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
+    pads: crate::controls::Pads,
     scroll: Res<bevy::input::mouse::AccumulatedMouseScroll>,
     model: Option<Res<crate::character::CounselorCharacter>>,
-    interaction: Res<Interaction>,
     water: Option<Res<crate::water::Water>>,
-    mut player: Single<(Entity, &Transform, &mut Inventory, Has<UsingItem>, Has<crate::items::ItemAction>, Has<Dropping>, Has<MoveToSpot>), (With<Player>, Without<Driving>)>,
-    mut drop_held: Local<Option<f32>>,
+    mut players: Query<(Entity, &Transform, &mut Inventory, &mut Interaction, Has<UsingItem>, Has<crate::items::ItemAction>, Has<Dropping>, Has<MoveToSpot>, Has<crate::controls::LocalPlayer>), (With<Player>, Without<Driving>)>,
 ) {
-    let (pe, xf, ref mut inv, using, acting, dropping, sliding) = *player;
+    use crate::controls::Button;
+    for (pe, xf, mut inv, mut interaction, using, acting, dropping, sliding, local) in &mut players {
+    let busy = interaction.hold.as_ref().is_some_and(|h| h.started);
+    let drop_held = &mut interaction.drop_held;
     inv.use_small = None;
     let count = inv.pockets.len();
     if !using && !acting && count > 0 {
-        if scroll.delta.y < 0.0 {
+        // The mouse wheel: this machine's counselor.
+        if local && scroll.delta.y < 0.0 {
             inv.selected = if inv.selected + 1 >= count { 0 } else { inv.selected + 1 };
-        } else if scroll.delta.y > 0.0 {
+        } else if local && scroll.delta.y > 0.0 {
             inv.selected = if inv.selected == 0 { count - 1 } else { inv.selected - 1 };
         }
-        if let Some(slot) = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3].iter().position(|&k| keys.just_pressed(k)) {
+        if let Some(slot) = [Button::Slot1, Button::Slot2, Button::Slot3].iter().position(|&b| pads.just_pressed(pe, b)) {
             if slot < count {
                 inv.selected = slot;
                 inv.use_small = inv.current_small();
             }
         }
     }
-    if keys.just_pressed(KeyCode::KeyG) {
+    if pads.just_pressed(pe, Button::Drop) {
         inv.use_small = inv.current_small();
     }
     // The drop key: not in a water volume (her feet in one) nor during a special move or an interaction.
     let hold_time = model.as_ref().and_then(|m| m.info.values.get("DropItemHoldTime").copied()).unwrap_or(1.5);
     let in_water = water.as_ref().is_some_and(|w| w.surface_at(xf.translation + Vec3::Y * 0.05).is_some());
-    let free = !in_water && !interaction.busy() && !sliding;
-    if keys.just_pressed(KeyCode::KeyZ) {
-        debug!("drop key pressed (dt {:.3}): free {free} (water {in_water}, busy {}, sliding {sliding}), dropping {dropping}", time.delta_secs(), interaction.busy());
+    let free = !in_water && !busy && !sliding;
+    if pads.just_pressed(pe, Button::UseItem) {
+        debug!("drop key pressed (dt {:.3}): free {free} (water {in_water}, busy {}, sliding {sliding}), dropping {dropping}", time.delta_secs(), busy);
     }
-    if keys.just_pressed(KeyCode::KeyZ) && free && !dropping {
+    if pads.just_pressed(pe, Button::UseItem) && free && !dropping {
         *drop_held = Some(0.0);
     }
     if let Some(held) = drop_held.as_mut() {
-        if free && keys.pressed(KeyCode::KeyZ) {
+        if free && pads.pressed(pe, Button::UseItem) {
             *held += time.delta_secs();
             if *held >= hold_time {
                 if inv.hand.is_some() && !dropping {
@@ -1512,13 +1516,14 @@ fn small_items(
             }
         }
     }
-    if keys.just_released(KeyCode::KeyZ) {
+    if pads.just_released(pe, Button::UseItem) {
         debug!("drop key released: held {:?}, free {free}, dropping {dropping}, hand {:?}, pockets {}", *drop_held, inv.hand, inv.pockets.len());
         if let Some(held) = drop_held.take() {
             if free && !dropping && (inv.hand.is_none() || held < hold_time) && !inv.pockets.is_empty() {
                 commands.entity(pe).insert((Dropping { large: false, t: 0.0 }, crate::character::PlayAction(DROP_SMALL_TAKE.into())));
             }
         }
+    }
     }
 }
 
@@ -1556,11 +1561,10 @@ fn use_item(
 }
 
 fn update_prompt(
-    interaction: Res<Interaction>,
     tuning: Res<PlayerTuning>,
     doors: Query<(&Door, &GlobalTransform)>,
     (windows, barricades): (Query<&Window>, Query<&Barricade>),
-    player: Single<(&Inventory, Has<Driving>, &Transform, Option<&UsingItem>, &Player, Option<&crate::hiding::Hiding>)>,
+    player: Single<(&Inventory, Has<Driving>, &Transform, Option<&UsingItem>, &Player, Option<&crate::hiding::Hiding>, &Interaction), With<crate::controls::LocalPlayer>>,
     items: Query<&Item>,
     (vehicles, phone_boxes, cabinets): (Query<&Vehicle>, Query<&crate::police::PhoneBox>, Query<&Cabinet>),
     mut text: Single<&mut Text, With<PromptText>>,
@@ -1573,7 +1577,7 @@ fn update_prompt(
         }
         return;
     }
-    let (inv, driving, _, using, p, hiding) = *player;
+    let (inv, driving, _, using, p, hiding, interaction) = *player;
     let name = |e: Entity| items.get(e).map_or("?".to_string(), |i| i.name.clone());
     let mut lines = vec![format!(
         "Hands: {}   Pockets: [{}] ({}/{})",

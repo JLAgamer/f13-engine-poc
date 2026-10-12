@@ -279,7 +279,7 @@ fn run_bot(
     (time, real): (Res<Time>, Res<Time<Real>>),
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
-    (interaction, tuning): (Res<crate::interact::Interaction>, Res<crate::player::PlayerTuning>),
+    (interactions, tuning): (Query<&crate::interact::Interaction, With<crate::controls::LocalPlayer>>, Res<crate::player::PlayerTuning>),
     mut player: Single<(&mut Transform, &Player, Option<&Inventory>, Has<Driving>, Has<UsingItem>, (Has<crate::jason::Held>, Has<crate::items::ItemAction>, Has<crate::jason::Staggered>, Has<crate::items::Blocking>, Has<crate::items::Trapped>, Option<&crate::hiding::Breathing>), Option<&mut crate::hiding::Hiding>)>,
     mut camera: Single<&mut PlayerCamera>,
     items: Query<(Entity, &Item, &GlobalTransform, Option<&InCabinet>), Without<Carried>>,
@@ -309,6 +309,9 @@ fn run_bot(
     ),
     (collision, dynamic, (mut phone_boxes, mut phones, arrived, police_cars, jason_entities, placed_kills), water, navmesh, moving): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<Res<crate::police::PoliceArrived>>, Query<&Transform, (With<crate::police::PoliceCar>, Without<Player>, Without<Vehicle>)>, Query<Entity, With<crate::jason::Jason>>, Query<(Entity, &crate::placed_kills::PlacedKill)>), Option<Res<crate::water::Water>>, Option<Res<crate::navigation::Navmesh>>, Query<(), (With<Player>, Or<(With<crate::interact::WindowMove>, With<crate::interact::MoveToSpot>, With<crate::interact::DoorMove>)>)>),
 ) {
+    // The counselor's interaction (none before her inventory is in).
+    let idle = crate::interact::Interaction::default();
+    let interaction = interactions.single().unwrap_or(&idle);
     let world = collision.with(&dynamic);
     let dt = time.delta_secs();
     bot.timer += dt;
