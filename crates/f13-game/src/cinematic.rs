@@ -392,10 +392,11 @@ struct Attached {
     socket: Transform,
 }
 
-/// What CLsm_IntroCinematic's level Blueprint (IntroStarted) detaches (K2_DetachFromActor, KeepRelative x 3) for
-/// the J2 killer: the J6 props when the killer isn't Jason_Utility, the Savini embers and eye glows when it isn't
-/// Jason_TS1 (F13-decomp pseudo_CLsm_IntroCinematic.txt, Label_1910 and Label_2177).
-const DETACHED: [&str; 18] = [
+/// What the cinematic levels' Blueprints (CLsm_IntroCinematic's IntroStarted, CLsm_OutroCinematic's OutroStarted)
+/// detach (K2_DetachFromActor, KeepRelative x 3) for the J2 killer: the J6 props when the killer isn't Jason_Utility,
+/// the Savini embers and eye glows when it isn't Jason_TS1 (F13-decomp pseudo_CLsm_IntroCinematic.txt Label_1910 and
+/// Label_2177, pseudo_CLsm_OutroCinematic.txt Label_2656 and Label_2184).
+const DETACHED: [&str; 36] = [
     "throwing_Dart_VFX_mesh3",
     "throwing_Dart_VFX_mesh2",
     "throwing_Dart_VFX_mesh_2",
@@ -414,6 +415,24 @@ const DETACHED: [&str; 18] = [
     "P_Savini_Ember_Jason_Small_Patch_29",
     "P_Savini_Ember_Jason_Small_Patch_32",
     "P_Savini_Jason_EyeGlow_Left_01_2",
+    "P_Savini_Ember_Jason_RightShoulder_2",
+    "P_Savini_Ember_Jason_Small_Patch_9",
+    "P_Savini_Ember_Jason_Small_Patch_10",
+    "P_Savini_Ember_Jason_Small_Patch_11",
+    "P_Savini_Ember_Jason_Small_Patch_12",
+    "P_Savini_Ember_Jason_Small_Patch_13",
+    "P_Savini_Ember_Jason_Small_Patch_14",
+    "P_Savini_Ember_Jason_Small_Patch_15",
+    "P_Savini_Ember_Jason_Small_Patch_16",
+    "P_Savini_Jason_EyeGlow_Left_3",
+    "P_Savini_Jason_EyeGlow_Left_4",
+    "KnifeSheath_LOD_7",
+    "MacheteSheath_LOD_2",
+    "USMCPack_LOD_6",
+    "throwing_Dart_VFX_mesh4_3",
+    "throwing_Dart_VFX_mesh5_4",
+    "throwing_Dart_VFX_mesh6_5",
+    "S_throwingKnife2",
 ];
 
 /// The entity an attachment follows: the parent's bone, or the parent itself.
