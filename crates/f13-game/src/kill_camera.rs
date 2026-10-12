@@ -17,6 +17,10 @@ use std::collections::HashMap;
 /// The kills' SCSplineCamera templates' HandicamShakeFrequency (the throat hack's) (HandicamShakeFrequenceRandomizer is left at 0).
 const HANDICAM_FREQUENCY: Vec3 = Vec3::new(1.0, 1.0, 0.5);
 
+/// The kill, blend-back and escape cameras (the spectator's fixed views come after).
+#[derive(SystemSet, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct KillCameraSystems;
+
 pub struct KillCameraPlugin;
 
 impl Plugin for KillCameraPlugin {
@@ -24,7 +28,7 @@ impl Plugin for KillCameraPlugin {
         app.init_resource::<KillCameras>()
             .add_systems(Startup, load)
             .add_observer(start_escape_camera)
-            .add_systems(Update, (kill_camera, blend_back, escape_camera).chain().after(crate::counselor_camera::counselor_camera).after(crate::hiding::hiding_camera));
+            .add_systems(Update, (kill_camera, blend_back, escape_camera).chain().in_set(KillCameraSystems).after(crate::counselor_camera::counselor_camera).after(crate::hiding::hiding_camera));
     }
 }
 

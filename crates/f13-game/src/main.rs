@@ -31,6 +31,7 @@ mod character;
 mod controls;
 mod lobby;
 mod net;
+mod spectate;
 mod net_world;
 mod collision;
 mod doors;
@@ -94,6 +95,8 @@ struct Args {
     net: Option<net::Role>,
     /// --bot-net: as a client, the network test bot (net.rs).
     bot_net: bool,
+    /// --bot-spectate: the spectating test (spectate.rs; with --counselors 2).
+    bot_spectate: bool,
     /// --lobby (a server): the players gather and ready up first (lobby.rs); --dedicated: the server plays no one.
     lobby: bool,
     dedicated: bool,
@@ -197,6 +200,7 @@ fn parse_args() -> Args {
     let mut bot_heal = false;
     let mut bot_drop = false;
     let mut bot_net = false;
+    let mut bot_spectate = false;
     let (mut lobby, mut dedicated, mut name, mut prefer) = (false, false, None, lobby::Preference::NoPreference);
     let mut bot_dodge = false;
     let mut bot_door = false;
@@ -263,6 +267,7 @@ fn parse_args() -> Args {
             "--bot-heal" => bot_heal = true,
             "--bot-drop" => bot_drop = true,
             "--bot-net" => bot_net = true,
+            "--bot-spectate" => bot_spectate = true,
             "--lobby" => lobby = true,
             "--dedicated" => dedicated = true,
             "--name" => name = it.next(),
@@ -367,7 +372,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { net, bot_net, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, camera, round_time, flashlight, rain }
+    Args { net, bot_net, bot_spectate, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, camera, round_time, flashlight, rain }
 }
 
 #[derive(Resource)]
@@ -447,17 +452,29 @@ fn main() {
             std::process::exit(1);
         })
     };
-    let seed = args.seed.unwrap_or_else(|| {
+    // A client builds the server's world (its seed, layout and weather).
+    let joined = match args.net {
+        Some(net::Role::Client(addr)) => net::query_world(addr),
+        _ => None,
+    };
+    if let Some(w) = &joined {
+        println!("the server's world: seed {}, {}, {}", w.seed, w.layout, if w.rain { "rain" } else { "clear" });
+    }
+    let seed = joined.as_ref().map(|w| w.seed).or(args.seed).unwrap_or_else(|| {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
     });
     let main = load(MAP);
-    let layout = match args.layout {
-        Some(n) => format!("CLsm_Design_SL{n}"),
-        None => random_level(&main, seed).unwrap_or_else(|| "CLsm_Design_SL1".into()),
+    let layout = match (&joined, args.layout) {
+        (Some(w), _) => w.layout.clone(),
+        (None, Some(n)) => format!("CLsm_Design_SL{n}"),
+        (None, None) => random_level(&main, seed).unwrap_or_else(|| "CLsm_Design_SL1".into()),
     };
     println!("cabin layout {layout}");
     // The weather (SCWorldSettings: rolled after the layout).
-    let rain = args.rain.unwrap_or_else(|| rain_roll(&main, seed));
+    let rain = joined.as_ref().map(|w| w.rain).or(args.rain).unwrap_or_else(|| rain_roll(&main, seed));
+    if let Some(net::Role::Server(port)) = args.net {
+        net::serve_world(port, net::WorldInfo { seed, layout: layout.clone(), rain });
+    }
     let weather = if rain { "CLsm_RainOn" } else { "CLsm_RainOff" };
     println!("weather: {}", if rain { "rain" } else { "clear" });
     let mut layouts = vec![main, load(&layout)];
@@ -521,7 +538,7 @@ fn main() {
             // Playing Jason, the bot playing her doesn't decide when the run ends.
             .add_plugins(match_flow::MatchPlugin { leave: !bot || args.play_jason })
             .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone(), outfit: args.outfit.clone() }, collision::CollisionPlugin, audio::AudioPlugin, water::WaterPlugin, power::PowerPlugin { cut: args.cut_power }, kill_camera::KillCameraPlugin, prop_anim::PropAnimPlugin, doors::DebrisPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin, navigation::NavigationPlugin { debug: args.nav_debug }))
-            .add_plugins((police::PolicePlugin, placed_kills::PlacedKillsPlugin, interaction_camera::InteractionCameraPlugin, counselor_camera::CounselorCameraPlugin, cabinets::CabinetsPlugin, weather::WeatherPlugin, car_lights::CarLightsPlugin, cinematic::CinematicPlugin, hair::HairPlugin, audio_volumes::AudioVolumesPlugin));
+            .add_plugins((spectate::SpectatePlugin { bot: args.bot_spectate }, police::PolicePlugin, placed_kills::PlacedKillsPlugin, interaction_camera::InteractionCameraPlugin, counselor_camera::CounselorCameraPlugin, cabinets::CabinetsPlugin, weather::WeatherPlugin, car_lights::CarLightsPlugin, cinematic::CinematicPlugin, hair::HairPlugin, audio_volumes::AudioVolumesPlugin));
         // Playing Jason without a --bot-*, she stands idle (time to try him out).
         if args.bot_escape {
             app.add_plugins(bot::BotPlugin(bot::Goal::Escape));

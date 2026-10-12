@@ -45,6 +45,54 @@ pub enum Role {
     Client(SocketAddr),
 }
 
+/// The match's world as the server built it: its seed, cabin layout and weather. A client asks for it before it
+/// builds its own (the same, so the actors' ids match: net_world.rs); PLACEHOLDER for the lobby's travel.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WorldInfo {
+    pub seed: u64,
+    pub layout: String,
+    pub rain: bool,
+}
+
+const WORLD_ASK: &[u8] = b"F13 world?";
+const WORLD_TELL: &str = "F13 world ";
+
+/// Answers clients' world questions on UDP `port + 1`.
+pub fn serve_world(port: u16, info: WorldInfo) {
+    let Ok(socket) = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port + 1)) else {
+        eprintln!("net: can't answer world questions on UDP {}", port + 1);
+        return;
+    };
+    let answer = format!("{WORLD_TELL}{} {} {}", info.seed, info.layout, info.rain);
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 64];
+        while let Ok((n, from)) = socket.recv_from(&mut buf) {
+            if &buf[..n] == WORLD_ASK {
+                let _ = socket.send_to(answer.as_bytes(), from);
+            }
+        }
+    });
+}
+
+/// Asks the server at `server` (its world question port, one up) for its world, for up to a minute.
+pub fn query_world(server: SocketAddr) -> Option<WorldInfo> {
+    let socket = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    socket.set_read_timeout(Some(Duration::from_secs(1))).ok()?;
+    let to = SocketAddr::new(server.ip(), server.port() + 1);
+    let mut buf = [0u8; 256];
+    for _ in 0..60 {
+        let _ = socket.send_to(WORLD_ASK, to);
+        if let Ok((n, _)) = socket.recv_from(&mut buf) {
+            let text = std::str::from_utf8(&buf[..n]).ok()?;
+            let mut parts = text.strip_prefix(WORLD_TELL)?.split(' ');
+            let (seed, layout, rain) = (parts.next()?.parse().ok()?, parts.next()?.to_string(), parts.next()? == "true");
+            return Some(WorldInfo { seed, layout, rain });
+        }
+    }
+    eprintln!("net: no answer from {to} about the world: building our own");
+    None
+}
+
 /// The client's role marker: present on a client (its own simulation of others is replaced by what it receives).
 #[derive(Resource)]
 pub struct NetClient;
@@ -92,6 +140,9 @@ pub struct NetCounselor {
     pub root_motion: bool,
     pub hidden: bool,
     pub grounded: bool,
+    /// Her player's name, and where she looks (her control rotation: yaw, pitch).
+    pub name: String,
+    pub look: [f32; 2],
 }
 
 /// What Jason's animation reads of his state.
@@ -200,7 +251,7 @@ impl Plugin for NetPlugin {
                     .add_systems(Update, connect)
                     .add_observer(body_gone)
                     .init_resource::<Twins>()
-                    .add_systems(Update, (send_input, (make_twins, mirror).chain().in_set(Mirrored).before(crate::character::animate)));
+                    .add_systems(Update, (send_input, (make_twins, mirror, hide_jason).chain().in_set(Mirrored).before(crate::character::animate)));
                 app.add_systems(Update, receive_match.after(Mirrored));
                 crate::net_world::client(app);
                 crate::lobby::client(app);
@@ -328,7 +379,7 @@ fn set<T: PartialEq>(mut c: Mut<T>, v: T) {
 #[allow(clippy::type_complexity)]
 fn update_bodies(
     mut bodies: Query<(&mut NetBody, &Transform, &mut NetAction, Option<&PlayAction>, Has<crate::items::Blocking>)>,
-    mut counselors: Query<(&mut NetCounselor, &Player)>,
+    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>)>,
     mut jasons: Query<(&mut NetJason, &crate::jason::Jason)>,
 ) {
     for (mut b, xf, mut a, action, blocking) in &mut bodies {
@@ -344,7 +395,7 @@ fn update_bodies(
             a.blocking = blocking;
         }
     }
-    for (n, p) in &mut counselors {
+    for (n, p, name, controls) in &mut counselors {
         let c = &p.counselor;
         set(n, NetCounselor {
             stance: c.stance as u8,
@@ -359,6 +410,8 @@ fn update_bodies(
             root_motion: p.root_motion.is_some(),
             hidden: p.hidden,
             grounded: p.grounded,
+            name: name.map_or(String::new(), |n| n.to_string()),
+            look: controls.map_or([0.0; 2], |c| [c.yaw, c.pitch]),
         });
     }
     for (n, j) in &mut jasons {
@@ -381,7 +434,7 @@ fn connect(mut commands: Commands, server: Res<ServerAddr>, level: Res<crate::Le
     let auth = Authentication::Manual { server_addr: server.0, client_id: id, private_key: DEV_KEY, protocol_id: PROTOCOL_ID };
     let name = if name.0.is_empty() { format!("player {}", id % 10000) } else { name.0.clone() };
     commands.insert_resource(crate::lobby::Me { id, name });
-    let config = lightyear::prelude::client::NetcodeConfig { client_timeout_secs: TIMEOUT_SECS, ..default() };
+    let config = lightyear::prelude::client::NetcodeConfig { client_timeout_secs: TIMEOUT_SECS, token_expire_secs: TIMEOUT_SECS, ..default() };
     let netcode = match lightyear::prelude::client::NetcodeClient::new(auth, config) {
         Ok(n) => n,
         Err(e) => {
@@ -437,6 +490,13 @@ fn make_twins(
     }
 }
 
+/// The local Jason shows only as the server's Jason's twin (the server may have none: `--no-jason`).
+fn hide_jason(twins: Res<Twins>, mut jasons: Query<(Entity, &mut Visibility), With<crate::jason::Jason>>) {
+    for (e, mut v) in &mut jasons {
+        v.set_if_neq(if twins.0.values().any(|t| *t == e) { Visibility::Inherited } else { Visibility::Hidden });
+    }
+}
+
 /// A character gone from the server: a spawned twin goes with it.
 fn body_gone(gone: On<Remove, NetBody>, twins: Query<(&NetBody, &Twin, Has<Controlled>)>, mut commands: Commands) {
     if let Ok((b, t, own)) = twins.get(gone.entity) {
@@ -471,11 +531,11 @@ fn mirror(
     mut commands: Commands,
     time: Res<Time>,
     mut bodies: Query<(&NetBody, &NetAction, Option<&NetCounselor>, Option<&NetJason>, &mut Twin)>,
-    mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>)>,
+    mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>, (Option<&Name>, Option<&mut Controls>, Has<LocalPlayer>))>,
 ) {
     let k = 1.0 - (-FOLLOW_RATE * time.delta_secs()).exp();
     for (b, a, nc, nj, mut twin) in &mut bodies {
-        let Ok((mut xf, player, jason, action, blocking)) = twins.get_mut(twin.local) else { continue };
+        let Ok((mut xf, player, jason, action, blocking, (name, controls, local))) = twins.get_mut(twin.local) else { continue };
         let to = Vec3::from_array(b.pos);
         let rot = Quat::from_rotation_y(b.yaw);
         if xf.translation.distance(to) > SNAP_M {
@@ -499,6 +559,14 @@ fn mirror(
             p.root_motion = n.root_motion.then_some((Vec2::ZERO, 0.0));
             p.hidden = n.hidden;
             p.grounded = n.grounded;
+            if !n.name.is_empty() && name.is_none_or(|x| x.as_str() != n.name) {
+                commands.entity(twin.local).insert(Name::new(n.name.clone()));
+            }
+            // Another player's look (the local one's is this machine's mouse).
+            if let (Some(mut c), false) = (controls, local) {
+                c.yaw = n.look[0];
+                c.pitch = n.look[1];
+            }
         }
         if let (Some(mut j), Some(n)) = (jason, nj) {
             j.velocity = Vec2::from_array(n.velocity);

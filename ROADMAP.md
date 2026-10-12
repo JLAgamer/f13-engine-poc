@@ -48,8 +48,7 @@ Server-authoritative netcode, tested with bots, then an 8-player lobby.
 Steps (lightyear 0.30 for the netcode):
 - [ ] The rest of the world over the network: the cabinets' drawers, the police car, armed traps, thrown knives
       and firecrackers; clients interpolate the characters between snapshots
-      (they smooth toward the newest now); the lobby hands the client the server's layout and seed (it must be
-      started with the same ones)
+      (they smooth toward the newest now)
 - [ ] Jason's presentation on clients: his stalk, shift and morph effects, the kills' paired takes and cameras, his
       held items, his abilities on a Jason player's HUD; no Jason shown when the server has none
 - [ ] The game's choice of counselor start (starts are handed out in order; PLACEHOLDER); the chase (its music and
@@ -57,10 +56,10 @@ Steps (lightyear 0.30 for the netcode):
 - [ ] Bot clients for the scenarios: the bots that set up their scene (teleports, locks) need a server-side hook
       (the net bot plays through its input only)
 - [ ] The lobby's rest: the match-end lobby with its badges (SCMatchEndLobbyWidget), back to the lobby after a match,
-      the counselors' character picks, a full 8-player run (`--lobby` gathers, picks Jason and starts the match now)
+      the counselors' character picks, a full 8-player run (`--lobby` gathers, picks Jason and starts the match now);
+      the spectator's HUD (SpectatorHUDWidget) and its unfreeze wait
 
 Moved from Milestone 2 (they need more than one counselor):
-- [ ] The death and spectating cameras (a dead counselor becomes a spectator of the others)
 - [ ] Fear events near friendlies and corpses (other counselors)
 - [ ] Car passengers, and the car running counselors over
 - [ ] The lobby (with the match's badges: their award sites and classes are read (MODLOG); the game shows them in its

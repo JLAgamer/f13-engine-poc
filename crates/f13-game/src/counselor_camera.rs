@@ -327,6 +327,8 @@ pub struct Rig {
     pub view: View,
     /// The chase's camera shake while it plays.
     shake: Option<f13_core::dynamic_camera::ShakeInstance>,
+    /// The counselor whose cameras these are (the local one, or the one spectated).
+    subject: Option<Entity>,
 }
 
 impl Rig {
@@ -371,6 +373,7 @@ fn new_rig(info: &f13_data::character::CharacterInfo, now: f32) -> Option<Rig> {
         vehicle_look: Vec2::ZERO,
         view: View::default(),
         shake: None,
+        subject: None,
     };
     rig.cams.set_active(OUTDOOR, now).then_some(rig)
 }
@@ -403,27 +406,36 @@ pub(crate) fn counselor_camera(
     rig: Option<ResMut<Rig>>,
     chase: Res<Chase>,
     surroundings: Option<Res<crate::fear_events::Surroundings>>,
-    player: Single<(&Player, &Transform, Option<&crate::vehicle::Driving>, Has<crate::jason::Held>, Has<crate::items::Trapped>), (Without<PlayerCamera>, With<crate::controls::LocalPlayer>)>,
+    players: Query<(&Player, &Transform, Option<&crate::vehicle::Driving>, Has<crate::jason::Held>, Has<crate::items::Trapped>, Option<&crate::controls::Controls>), Without<PlayerCamera>>,
+    (local, spectate): (Query<Entity, (With<Player>, With<crate::controls::LocalPlayer>)>, Option<Res<crate::spectate::Spectate>>),
     vehicles: Query<&GlobalTransform>,
     mut camera: Single<(&mut PlayerCamera, &mut Transform, &mut Projection)>,
     windows: Query<&Window>,
     (collision, dynamic, blockers): (Option<Res<crate::collision::WorldCollision>>, Res<crate::collision::DynamicColliders>, Query<(), With<crate::collision::CameraBlocker>>),
     mut rng: ResMut<crate::GameRng>,
 ) {
-    let (p, pxf, driving, held, trapped) = *player;
+    // Her cameras, or (spectating) the watched counselor's, turned as her controls are.
+    let watched = spectate.as_ref().and_then(|s| s.viewed());
+    let Some(subject) = watched.or_else(|| local.single().ok()) else { return };
+    let Ok((p, pxf, driving, held, trapped, controls)) = players.get(subject) else { return };
     // In her seat (SetCurrentSeat): not while getting in or out.
     let driving = driving.filter(|d| d.seat_move.is_none());
     let (ref mut cam, ref mut xf, ref mut proj) = *camera;
+    if let (Some(_), Some(c)) = (watched, controls) {
+        cam.yaw = c.yaw;
+        cam.pitch = c.pitch;
+    }
     if let Some((eye, target)) = config.camera {
         xf.translation = pxf.translation + eye;
         xf.look_at(pxf.translation + target, Vec3::Y);
         return;
     }
     let now = time.elapsed_secs();
-    let mut rig = match rig {
+    let mut rig = match rig.filter(|r| r.subject == Some(subject)) {
         Some(r) => r,
         None => {
-            let Some(r) = counselor.as_ref().and_then(|c| new_rig(&c.info, now)) else { return };
+            let Some(mut r) = counselor.as_ref().and_then(|c| new_rig(&c.info, now)) else { return };
+            r.subject = Some(subject);
             // Possession turns her view to her facing, level (AController::Possess).
             let f = to_unreal(pxf.rotation * Vec3::Z);
             set_control_rotation(cam, f.y.atan2(f.x).to_degrees(), 0.0);

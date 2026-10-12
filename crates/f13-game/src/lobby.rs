@@ -268,6 +268,8 @@ fn count_down(
             starts.0.insert(0, xf.translation);
             commands.entity(e).despawn();
         }
+    } else if let (Ok((e, _)), Some(id)) = (local.single(), local_plays) {
+        commands.entity(e).insert(Name::new(name(id)));
     }
     for &(id, _) in &members {
         let Some(l) = link(id) else { continue };
@@ -280,7 +282,7 @@ fn count_down(
         }
         let at = starts.0.remove(0);
         let c = crate::player::spawn_counselor(&mut commands, &assets, character.as_deref(), &tuning, at);
-        commands.entity(c).insert((PlayedBy(l), ControlledBy { owner: l, lifetime: default() }));
+        commands.entity(c).insert((PlayedBy(l), ControlledBy { owner: l, lifetime: default() }, Name::new(name(id))));
         info!("lobby: {} plays counselor {c} at {at}", name(id));
     }
     if let Some(k) = killer {
