@@ -23,14 +23,7 @@ The finished Milestone 1 work, with its references to the decomp, is in F13-deco
 Police, 4-seat car, boat, then the others, one at a time. The police and the 4-seat car are in (MODLOG); Crystal Lake
 (small) has no boat or other escape, so those come with more maps (Afterwards).
 
-Bugs:
-- [ ] Grabbing a counselor as Jason still loops the struggle audio (the sound cues' looping and random nodes are
-      ported, audio.rs Reloop; not the fix). Read so far (MODLOG "The grab's struggle loop"): the game repeats her
-      Choke takes for as long as he holds her; the hold ends at her struggle's TotalStunTime (15 s, less with her
-      stats), a kill or a drop, and traces show Choke stopping at each. Playing Jason, his E no longer counts as her
-      wiggle. Needs a retest to say what still sounds wrong
-- [ ] Intro cinematic: some actors have no heads; Jason has no mask as he reaches out of the water; in the following
-      shots Jason's face shows through the mask; trees pop in and out during it
+Bugs: none open (the struggle loop's repeated take and the intro's fixed: MODLOG "Milestone 2 bugs").
 
 Moved from Milestone 1 (not tied to gameplay):
 - [ ] Materials, remaining: foliage subsurface (its transmission is the deferred light pass's, whose code isn't

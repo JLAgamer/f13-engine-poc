@@ -42,8 +42,11 @@ pub struct CinematicPlugin;
 impl Plugin for CinematicPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CinematicDone>()
-            .add_systems(Update, (start, ready, attach, emitters_follow, title_text).chain())
-            .add_systems(PostUpdate, (play, face_morphs).chain().before(bevy::transform::TransformSystems::Propagate));
+            .add_systems(Update, (start, ready, emitters_follow, title_text).chain())
+            // Before the camera's update: the cut's field of view and pose in the projection it draws with and the frustum
+            // it culls with in the same frame (unordered, it drew a stale, wider view while culling to the cine camera's
+            // narrow one, so trees and props at the edges popped in and out).
+            .add_systems(PostUpdate, (play, attach, face_morphs).chain().before(bevy::transform::TransformSystems::Propagate).before(bevy::camera::CameraUpdateSystems));
     }
 }
 
@@ -381,7 +384,37 @@ struct Attached {
     parent: String,
     bone: Option<String>,
     rel: Option<Transform>,
+    /// On a bone: its offset from it, the socket's offset times its own relative transform (UE keeps an attached
+    /// component's RelativeLocation / Rotation / Scale in the socket's space; the export's transform composes it with
+    /// the parent's root instead, so that is undone here).
+    on_bone: Transform,
+    /// The socket's offset from its bone (none on a bare bone).
+    socket: Transform,
 }
+
+/// What CLsm_IntroCinematic's level Blueprint (IntroStarted) detaches (K2_DetachFromActor, KeepRelative x 3) for
+/// the J2 killer: the J6 props when the killer isn't Jason_Utility, the Savini embers and eye glows when it isn't
+/// Jason_TS1 (F13-decomp pseudo_CLsm_IntroCinematic.txt, Label_1910 and Label_2177).
+const DETACHED: [&str; 18] = [
+    "throwing_Dart_VFX_mesh3",
+    "throwing_Dart_VFX_mesh2",
+    "throwing_Dart_VFX_mesh_2",
+    "USMCPack_LOD_0",
+    "KnifeSheath_LOD_0",
+    "S_throwingKnife_2",
+    "MacheteSheath_LOD_0",
+    "P_Savini_Jason_EyeGlow_Left_5",
+    "P_Savini_Ember_Jason_RightShoulder_01_8",
+    "P_Savini_Ember_Jason_Small_Patch_01_11",
+    "P_Savini_Ember_Jason_Small_Patch_14",
+    "P_Savini_Ember_Jason_Small_Patch_17",
+    "P_Savini_Ember_Jason_Small_Patch_20",
+    "P_Savini_Ember_Jason_Small_Patch_23",
+    "P_Savini_Ember_Jason_Small_Patch_26",
+    "P_Savini_Ember_Jason_Small_Patch_29",
+    "P_Savini_Ember_Jason_Small_Patch_32",
+    "P_Savini_Jason_EyeGlow_Left_01_2",
+];
 
 /// The entity an attachment follows: the parent's bone, or the parent itself.
 fn anchor(parent: Entity, bone: &Option<String>, children: &Query<&Children>, names: &Query<&Name>) -> Option<Entity> {
@@ -561,16 +594,22 @@ fn start(
             }
         }
         if let Some(parent) = a["AttachParent"].as_str() {
-            // A socket on the parent's mesh (its bone), a bone itself, or (none) the parent's root.
-            let parent_comps = level["Actors"].as_array().and_then(|l| l.iter().find(|p| p["Name"] == parent)).map(|p| p["Components"].clone()).unwrap_or(Value::Null);
-            let bone = a["AttachSocket"].as_str().map(|socket| {
-                parent_comps
-                    .as_array()
-                    .and_then(|cs| cs.iter().find_map(|c| c["SocketBones"][socket]["Bone"].as_str()))
-                    .unwrap_or(socket)
-                    .to_string()
-            });
-            e.insert(Attached { parent: parent.to_string(), bone, rel: None });
+            // A socket on the parent's mesh (its bone and offset), a bone itself, or (none) the parent's root.
+            let parent_actor = level["Actors"].as_array().and_then(|l| l.iter().find(|p| p["Name"] == parent));
+            let parent_comps = parent_actor.map(|p| p["Components"].clone()).unwrap_or(Value::Null);
+            let socket = a["AttachSocket"].as_str().and_then(|socket| parent_comps.as_array().and_then(|cs| cs.iter().map(|c| &c["SocketBones"][socket]).find(|b| b["Bone"].is_string())));
+            let bone = a["AttachSocket"].as_str().map(|name| socket.and_then(|b| b["Bone"].as_str()).unwrap_or(name).to_string());
+            let offset = socket.and_then(|b| serde_json::from_value::<Xform>(b.clone()).ok()).map(|x| crate::to_transform(&x)).unwrap_or_default();
+            let own = parent_actor
+                .and_then(|p| serde_json::from_value::<Xform>(p["Transform"].clone()).ok())
+                .map(|px| Transform::from_matrix(crate::to_transform(&px).to_matrix().inverse() * crate::to_transform(&xf).to_matrix()))
+                .unwrap_or_default();
+            if DETACHED.contains(&name.as_str()) {
+                // K2_DetachFromActor(KeepRelative): its relative transform becomes its world one.
+                e.insert(own);
+            } else {
+                e.insert(Attached { parent: parent.to_string(), bone, rel: None, on_bone: offset * own, socket: offset });
+            }
         }
         actors.insert(name.clone(), e.id());
         // Its takes (cinematic/<actor>.json).
@@ -604,11 +643,12 @@ fn start(
 /// intro level whole before playing it), and their attached actors' offsets taken at the bind pose.
 #[allow(clippy::too_many_arguments)]
 fn ready(
+    mut commands: Commands,
     mut playing: Option<ResMut<Playing>>,
     assets: Res<AssetServer>,
     scenes: Query<&WorldAssetRoot, With<Staged>>,
     staged: Query<(Entity, &Staged)>,
-    mut attached: Query<(&Staged, &mut Attached, &GlobalTransform)>,
+    mut attached: Query<(Entity, &Staged, &mut Attached, &GlobalTransform)>,
     children: Query<&Children>,
     names: Query<&Name>,
     globals: Query<&GlobalTransform>,
@@ -625,7 +665,7 @@ fn ready(
     }
     // Every attachment's bone there (the scenes spawned)...
     let mut missing = vec![];
-    for (s, a, _) in &attached {
+    for (_, s, a, _) in &attached {
         let parent = staged.iter().find(|(_, s)| s.name == a.parent).map(|(e, _)| e);
         if parent.and_then(|e| anchor(e, &a.bone, &children, &names)).is_none() {
             missing.push(format!("{} ({}.{:?})", s.name, a.parent, a.bone));
@@ -642,11 +682,17 @@ fn ready(
     if !missing.is_empty() {
         warn!("cinematic: attachments without their bone: {}", missing.join(", "));
     }
-    for (_, mut a, gt) in &mut attached {
+    for (e, _, mut a, gt) in &mut attached {
         let Some((parent, _)) = staged.iter().find(|(_, s)| s.name == a.parent) else { continue };
-        if let Some(bg) = anchor(parent, &a.bone, &children, &names).and_then(|b| globals.get(b).ok()) {
+        let Some(at) = anchor(parent, &a.bone, &children, &names) else { continue };
+        if a.bone.is_some() {
+            a.rel = Some(a.on_bone);
+        } else if let Ok(bg) = globals.get(at) {
             a.rel = Some(Transform::from_matrix((bg.affine().inverse() * gt.affine()).into()));
         }
+        // A child of its bone (or parent), so it moves with it in the same frame's propagation (followed from the
+        // last frame's GlobalTransform, it trailed it by a frame: Jason's face showed through his moving mask).
+        commands.entity(e).insert(ChildOf(at));
     }
     p.started = true;
 }
@@ -828,24 +874,15 @@ fn emitters_follow(playing: Option<Res<Playing>>, mut systems: Query<&mut crate:
     }
 }
 
-/// Attached actors follow their parent's bone.
-fn attach(
-    playing: Option<Res<Playing>>,
-    mut attached: Query<(&Attached, &mut Transform)>,
-    children: Query<&Children>,
-    names: Query<&Name>,
-    globals: Query<&GlobalTransform>,
-) {
+/// Attached actors (children of their parent's bone since [`ready`]) keep their offset from it.
+fn attach(playing: Option<Res<Playing>>, mut attached: Query<(&Attached, &mut Transform)>) {
     let Some(p) = playing else { return };
     if !p.started {
         return;
     }
     for (a, mut xf) in &mut attached {
-        let Some(rel) = a.rel else { continue };
-        let Some(&parent) = p.actors.get(&a.parent) else { continue };
-        let Some(bone) = anchor(parent, &a.bone, &children, &names) else { continue };
-        if let Ok(bg) = globals.get(bone) {
-            *xf = Transform::from_matrix((bg.affine() * rel.compute_affine()).into());
+        if let Some(rel) = a.rel {
+            xf.set_if_neq(rel);
         }
     }
 }
@@ -892,15 +929,14 @@ fn play(
     let t = p.t;
     let mut frame = Frame::default();
     evaluate(&p.sequences, p.cinematic.master, t, &p.base, &p.lengths, &mut frame);
-    // Transforms (an attached actor's are relative to its parent: it keeps its offset from its bone) and visibility.
+    // Transforms (an attached actor's track is its relative transform: from its parent's root, or from its socket on a
+    // bone; Jts_Mask's lifts it 299.6 cm while the boat take drops both roots 3 m) and visibility.
     for (actor, xf) in &frame.transforms {
         let Some(&e) = p.actors.get(actor) else { continue };
         match attached.get_mut(e) {
-            // One on its parent's root: the track is its offset from it.
             Ok(mut a) => {
-                if a.bone.is_none() {
-                    a.rel = Some(crate::to_transform(xf));
-                }
+                let track = crate::to_transform(xf);
+                a.rel = Some(if a.bone.is_some() { a.socket * track } else { track });
             }
             Err(_) => {
                 if let Ok(mut t) = transforms.get_mut(e) {
@@ -1037,8 +1073,9 @@ fn play(
     };
     if finished {
         info!("cinematic: {} over at {:.2} s", p.cinematic.master, t);
+        // (Attached ones go with their parent.)
         for e in &staged {
-            commands.entity(e).despawn();
+            commands.entity(e).try_despawn();
         }
         for (e, _) in &overlay {
             commands.entity(e).despawn();

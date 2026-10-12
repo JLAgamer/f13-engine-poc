@@ -901,13 +901,110 @@ switch (rest[0])
 
 Console.WriteLine($"exporting {session.TotalQueued} objects...");
 var results = (await session.RunAsync(outDir, options)).Concat(await faceSession.RunAsync(outDir, faceOptions)).ToList();
-foreach (var f in faces) FillEmptyAccessors(Path.Combine(outDir, f));
+foreach (var f in faces)
+{
+    HealMorphSeams(Path.Combine(outDir, f));
+    FillEmptyAccessors(Path.Combine(outDir, f));
+}
+results.AddRange(await ExportDefaultTextures());
 var failed = results.Where(r => !r.Success).ToList();
 Console.WriteLine($"done: {results.Count - failed.Count} ok, {failed.Count} failed");
 foreach (var f in failed.Take(20)) Console.WriteLine($"  failed {f.ObjectPath}");
 WriteMaterialIndex();
 DdsExporter.WriteAll(provider, outDir);
 return 0;
+
+// A face glb's morph targets moved at its seams too: UE keeps a delta for every render vertex (FMorphTargetDelta's
+// SourceIdx), so the copies of a vertex split at a UV or section seam move together, but the export leaves all but one
+// copy at zero (every counselor face: Prep's Fear 155 of its 155 seam groups), tearing the face along its seams as an
+// expression plays. Each target's zero-delta copies take the delta of a coincident vertex that has one.
+static void HealMorphSeams(string path)
+{
+    if (!File.Exists(path)) return;
+    var b = File.ReadAllBytes(path);
+    var jsonLen = BitConverter.ToInt32(b, 12);
+    var json = Newtonsoft.Json.Linq.JObject.Parse(System.Text.Encoding.UTF8.GetString(b, 20, jsonLen));
+    var binAt = 20 + jsonLen;
+    var bin = new List<byte>(binAt + 8 <= b.Length ? b.AsSpan(binAt + 8, BitConverter.ToInt32(b, binAt)).ToArray() : []);
+    var accessors = (Newtonsoft.Json.Linq.JArray)json["accessors"]!;
+    var views = (Newtonsoft.Json.Linq.JArray)(json["bufferViews"] ??= new Newtonsoft.Json.Linq.JArray());
+    static int Components(string t) => t switch { "SCALAR" => 1, "VEC2" => 2, "VEC3" => 3, "VEC4" => 4, _ => 4 };
+    int? Offset(Newtonsoft.Json.Linq.JToken a) => a["bufferView"] is { } v ? ((int?)views[(int)v]!["byteOffset"] ?? 0) + ((int?)a["byteOffset"] ?? 0) : null;
+    float[] Read(int i)
+    {
+        var a = accessors[i]!;
+        var data = new float[(int)a["count"]! * Components(a["type"]!.ToString())];
+        if (Offset(a) is int at && (int)a["componentType"]! == 5126)
+        {
+            var raw = bin.ToArray();
+            for (var k = 0; k < data.Length; k++) data[k] = BitConverter.ToSingle(raw, at + 4 * k);
+        }
+        return data;
+    }
+    var healed = 0;
+    foreach (var mesh in json["meshes"] ?? new Newtonsoft.Json.Linq.JArray())
+        foreach (var prim in mesh["primitives"] ?? new Newtonsoft.Json.Linq.JArray())
+        {
+            if (prim["targets"] is not Newtonsoft.Json.Linq.JArray targets || prim["attributes"]?["POSITION"] is not { } posIndex) continue;
+            var pos = Read((int)posIndex);
+            var groups = Enumerable.Range(0, pos.Length / 3)
+                .GroupBy(v => (MathF.Round(pos[3 * v] * 20000), MathF.Round(pos[3 * v + 1] * 20000), MathF.Round(pos[3 * v + 2] * 20000)))
+                .Where(g => g.Count() > 1).Select(g => g.ToArray()).ToList();
+            if (groups.Count == 0) continue;
+            foreach (var target in targets)
+                foreach (var attr in ((Newtonsoft.Json.Linq.JObject)target).Properties().ToList())
+                {
+                    var index = (int)attr.Value;
+                    var a = accessors[index]!;
+                    var n = Components(a["type"]!.ToString());
+                    var d = Read(index);
+                    bool Moves(int v) { for (var c = 0; c < n; c++) if (MathF.Abs(d[n * v + c]) > 1e-6f) return true; return false; }
+                    var changed = false;
+                    foreach (var g in groups)
+                    {
+                        var from = g.FirstOrDefault(v => Moves(v), -1);
+                        if (from < 0) continue;
+                        foreach (var v in g.Where(v => !Moves(v)))
+                        {
+                            for (var c = 0; c < n; c++) d[n * v + c] = d[n * from + c];
+                            changed = true;
+                            healed++;
+                        }
+                    }
+                    if (!changed) continue;
+                    // Its own new view (others may share the old one: FillEmptyAccessors' zero view).
+                    var bytes = d.SelectMany(BitConverter.GetBytes).ToArray();
+                    while (bin.Count % 4 != 0) bin.Add(0);
+                    views.Add(new Newtonsoft.Json.Linq.JObject { ["buffer"] = 0, ["byteOffset"] = bin.Count, ["byteLength"] = bytes.Length });
+                    bin.AddRange(bytes);
+                    a["bufferView"] = views.Count - 1;
+                    a["byteOffset"] = 0;
+                    if (a["min"] != null)
+                    {
+                        a["min"] = new Newtonsoft.Json.Linq.JArray(Enumerable.Range(0, n).Select(c => (double)Enumerable.Range(0, d.Length / n).Min(v => d[n * v + c])));
+                        a["max"] = new Newtonsoft.Json.Linq.JArray(Enumerable.Range(0, n).Select(c => (double)Enumerable.Range(0, d.Length / n).Max(v => d[n * v + c])));
+                    }
+                }
+        }
+    if (healed == 0) return;
+    while (bin.Count % 4 != 0) bin.Add(0);
+    json["buffers"]![0]!["byteLength"] = bin.Count;
+    var jsonBytes = System.Text.Encoding.UTF8.GetBytes(json.ToString(Newtonsoft.Json.Formatting.None));
+    var jsonPadded = new byte[(jsonBytes.Length + 3) & ~3];
+    Array.Fill(jsonPadded, (byte)' ');
+    Array.Copy(jsonBytes, jsonPadded, jsonBytes.Length);
+    using var o = new BinaryWriter(File.Create(path));
+    o.Write(0x46546C67u);
+    o.Write(2u);
+    o.Write((uint)(12 + 8 + jsonPadded.Length + 8 + bin.Count));
+    o.Write((uint)jsonPadded.Length);
+    o.Write(0x4E4F534Au);
+    o.Write(jsonPadded);
+    o.Write((uint)bin.Count);
+    o.Write(0x004E4942u);
+    o.Write(bin.ToArray());
+    Console.WriteLine($"{Path.GetFileName(path)}: {healed} morph deltas copied onto their seam twins");
+}
 
 // A glb's accessors without a bufferView (and not sparse: all zeros) pointed at one zero-filled view appended to its
 // binary chunk.
@@ -944,6 +1041,32 @@ static void FillEmptyAccessors(string path)
     o.Write((uint)newBin.Length);
     o.Write(0x004E4942u);
     o.Write(newBin);
+}
+
+// The textures every exported material draws with that its own export left out: its master's texture parameter
+// defaults up the Parent chain (M_Prep_Eye_Inst sets only IrisScale; its EyeDiffuse is EyeMaster_02_m's Eye_Diffuse,
+// which materials.json names but nothing wrote).
+async Task<List<ExportResult>> ExportDefaultTextures()
+{
+    var extra = new ExportSession();
+    var exported = Path.Combine(Path.GetFullPath(outDir!), "SummerCamp");
+    if (!Directory.Exists(exported)) return [];
+    foreach (var file in Directory.EnumerateFiles(exported, "*.json", SearchOption.AllDirectories))
+    {
+        var pkg = Path.GetRelativePath(Path.GetFullPath(outDir!), file).Replace(Path.DirectorySeparatorChar, '/')[..^".json".Length];
+        UObject? mat;
+        try { mat = provider.LoadPackage(pkg).GetExports().FirstOrDefault(e => e.Name.Equals(Path.GetFileNameWithoutExtension(file), StringComparison.OrdinalIgnoreCase)); }
+        catch { continue; }
+        if (mat is not UMaterialInterface) continue;
+        ParticleExporter.QueueTextures(mat, t =>
+        {
+            var tp = t.GetPathName().Split('.')[0].TrimStart('/');
+            if (tp.StartsWith("Game/")) tp = "SummerCamp/Content/" + tp["Game/".Length..];
+            if (queued.Add(t.GetPathName()) && !File.Exists(Path.Combine(outDir!, tp + ".png"))) extra.Add(t);
+        });
+    }
+    Console.WriteLine($"materials' default textures: {extra.TotalQueued} to export");
+    return (await extra.RunAsync(outDir, options)).ToList();
 }
 
 // materials.json: name -> exported JSON file, effective blend mode and two-sidedness. Material instances usually
