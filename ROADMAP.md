@@ -37,6 +37,8 @@ Base content (asset paths in the player's install; all gameplay values come from
 - [ ] Knives for Jason to find across the map (their spawners and pickup)
 - [ ] Jason's prompt for destroying doors
 - [ ] Jason's sound blips: a faint square shows around the ring (cause not yet found)
+- [ ] The music in the intro cinematic sounds lower quality since voice chat (the user's report; maybe the voice
+      chat's audio stream conflicting with it: cause not yet found)
 - [ ] More content, one at a time: maps (with their boat and other escapes), Jasons, counselors, perks, skins,
       emotes, a main menu
 
