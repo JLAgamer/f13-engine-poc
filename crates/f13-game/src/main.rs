@@ -142,6 +142,7 @@ struct Args {
     play_jason: bool,
     /// Every spawner spawns, as with the world settings' bOverrideSpawning (testing: the radios).
     override_spawning: bool,
+    no_voice: bool,
     bot_radio: bool,
     /// Jason's grab kill, by name (jason::KILLS: e.g. curbstomp); else one at random.
     kill: Option<usize>,
@@ -225,6 +226,7 @@ fn parse_args() -> Args {
     let mut perf = false;
     let mut play_jason = false;
     let mut override_spawning = false;
+    let mut no_voice = false;
     let mut bot_radio = false;
     let mut kill = None;
     let mut cut_power = false;
@@ -308,6 +310,7 @@ fn parse_args() -> Args {
             "--perf" => perf = true,
             "--play-jason" => play_jason = true,
             "--override-spawning" => override_spawning = true,
+            "--no-voice" => no_voice = true,
             "--bot-radio" => bot_radio = true,
             "--kill" => {
                 let name = it.next().unwrap_or_default();
@@ -385,7 +388,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { net, bot_net, bot_spectate, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_passenger, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, override_spawning, bot_radio, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, camera, round_time, flashlight, rain }
+    Args { net, bot_net, bot_spectate, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_passenger, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, override_spawning, no_voice, bot_radio, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, camera, round_time, flashlight, rain }
 }
 
 #[derive(Resource)]
@@ -602,6 +605,9 @@ fn main() {
         }
         if args.bot_radio {
             app.init_resource::<radio::RadioBot>();
+        }
+        if args.no_voice {
+            app.insert_resource(voice::NoDevices);
         }
         if args.override_spawning {
             app.insert_resource(props::OverrideSpawning);

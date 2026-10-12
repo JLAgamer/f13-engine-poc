@@ -52,9 +52,9 @@ pub(crate) fn protocol(app: &mut App) {
     app.register_message::<VoiceDown>().add_direction(NetworkDirection::ServerToClient);
 }
 
-/// A dedicated server relays without audio devices of its own.
+/// A dedicated server relays without audio devices of its own (and --no-voice runs without them).
 #[derive(Resource)]
-struct NoDevices;
+pub(crate) struct NoDevices;
 
 pub(crate) fn server(app: &mut App, dedicated: bool) {
     if dedicated {
