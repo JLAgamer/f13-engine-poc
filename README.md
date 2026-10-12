@@ -96,6 +96,12 @@ picks it (`--seed n` repeats a match; `--layout 1-4` picks the layout yourself):
 cargo run -p f13-game --release -- --export "<export dir>"
 ```
 
+Building needs CMake for libopus (voice chat): put it on the PATH, or point `CMAKE` at it (Visual Studio's Build
+Tools ship one under `Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe`; a `.cargo/config.toml`
+`[env]` entry works).
+
+Voice chat is on in networked matches: open mic, from the default microphone, heard from each player's character.
+
 By default you play Vanessa, in her default outfit and animated (idle, walk/run/sprint, crouch, combat strafing,
 dodges, stumbles, first aid; `--capsule` for the old placeholder): WASD move (running by default), Shift sprint, X toggle walk, Ctrl crouch, C combat stance (double-tap
 A/D/S to dodge), click to capture the mouse,

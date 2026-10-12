@@ -13,7 +13,9 @@ Base content (asset paths in the player's install; all gameplay values come from
       SCStatBadge; award sites and classes are read, MODLOG), back to the lobby after a match, the counselors'
       character picks, a full 8-player run (`--lobby` gathers, picks Jason and starts the match now)
 - [ ] The Tommy Jarvis timer, Tommy Jarvis, and Jason dying
-- [ ] Voice chat (cpal and Opus: download approved 2026-10-12)
+- [ ] Voice chat's rules: the walkie-talkies (SCWalkieTalkie MinVoIPDistance 400: carriers further apart hear each
+      other by radio), who hears the dead and Jason, VoIPAudioComponent's real attenuation (UE's defaults stand in),
+      the Psychic perk's VoIPDistanceModifier, push-to-talk and mute options
 - [ ] Materials: foliage subsurface (its transmission is the deferred light pass's, whose code isn't in the shipped
       global shader cache: MODLOG "Foliage subsurface: blocked")
 - [ ] Counselor model: the eye look against a capture of the game (it rolls the eyes 90 degrees from their bind:

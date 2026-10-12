@@ -68,6 +68,7 @@ mod placed_kills;
 mod police;
 mod power;
 mod radio;
+mod voice;
 mod prop_anim;
 mod props;
 mod ragdoll;

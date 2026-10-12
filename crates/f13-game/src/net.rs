@@ -277,6 +277,7 @@ impl Plugin for NetPlugin {
                     })
                     .add_systems(Update, apply_inputs);
                 crate::net_world::server(app);
+                crate::voice::server(app, self.dedicated);
                 if self.lobby {
                     crate::lobby::server(app, self.dedicated, self.name.clone());
                     if self.bot && !self.dedicated {
@@ -301,6 +302,7 @@ impl Plugin for NetPlugin {
                 app.add_systems(Update, receive_match.after(Mirrored));
                 crate::net_world::client(app);
                 crate::lobby::client(app);
+                crate::voice::client(app);
                 crate::lobby::ui(app);
                 app.insert_resource(ClientName(self.name.clone()));
                 if self.bot {
@@ -324,6 +326,7 @@ fn protocol(app: &mut App) {
     app.component::<NetTally>().replicate();
     crate::net_world::protocol(app);
     crate::lobby::protocol(app);
+    crate::voice::protocol(app);
 }
 
 #[derive(Resource)]
