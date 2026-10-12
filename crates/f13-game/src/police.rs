@@ -50,7 +50,7 @@ pub struct PolicePlugin;
 
 impl Plugin for PolicePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_phones).add_systems(Update, (arrive, turn_back_jason, escape_with_police, turn_lights, report_car, box_look).chain().run_if(crate::net::simulating));
+        app.add_systems(Startup, spawn_phones).add_systems(Update, (arrive.run_if(crate::net::simulating), turn_back_jason.run_if(crate::net::simulating), escape_with_police.run_if(crate::net::simulating), turn_lights, report_car.run_if(crate::net::simulating), box_look).chain());
     }
 }
 
@@ -197,6 +197,7 @@ fn spawn_phones(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
         let Some(interact) = world_of(&classes, &a.class, "Interactable", &t) else { continue };
         let e = commands
             .spawn((
+                crate::net_world::WorldId::named(&a.name),
                 Phone {
                     class: a.class.clone(),
                     enabled: false,
@@ -221,6 +222,7 @@ fn spawn_phones(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
         let repair = classes.get(&a.class).and_then(|c| c.components.iter().find(|c| classes.is_child_of(&c.kind, "SCRepairComponent")));
         info!("phone box {} at {:.1}, phone {:?}", a.name, interact.translation, phone);
         commands.spawn((
+            crate::net_world::WorldId::named(&a.name),
             PhoneBox {
                 class: a.class.clone(),
                 actor: a.name.clone(),
@@ -294,7 +296,7 @@ pub fn call_police(commands: &mut Commands, phone: &mut Phone, game: Option<&mut
         g.state.start_police_timer(&t.rules, 0.0);
         info!("police called: they arrive in {} s", g.state.police_time_remaining);
     }
-    commands.trigger(crate::audio::PlaySound { cue: "PoliceCalled".into(), at: None });
+    crate::net_world::shout(commands, crate::net_world::Shout::Sound(crate::audio::PlaySound { cue: "PoliceCalled".into(), at: None }));
     // (Her CallPolice line is her phone take's own notify.)
     commands.trigger(crate::match_flow::ClassScore::new(&phone.class, "CallPoliceScoreEvent"));
 }

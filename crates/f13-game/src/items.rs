@@ -851,7 +851,7 @@ fn tick_action(
                                 // pellet isn't heavy).
                                 let cue = if (1..=22).contains(&surface) { impact_sounds.get(surface as usize).cloned().flatten() } else { impact_sounds.first().cloned().flatten() };
                                 if let Some(cue) = cue {
-                                    commands.trigger(crate::audio::PlaySound { cue, at: Some(at) });
+                                    crate::net_world::shout(&mut commands, crate::net_world::Shout::Sound(crate::audio::PlaySound { cue, at: Some(at) }));
                                 }
                                 // GetImpactDecal: the surface's, DefaultDecal if it has none (or no surface type).
                                 let decal = (1..=22).contains(&surface).then(|| impact_decals.get(2 + surface as usize).cloned().flatten()).flatten().or_else(|| impact_decals.first().cloned().flatten());

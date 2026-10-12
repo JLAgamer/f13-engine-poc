@@ -125,6 +125,7 @@ fn spawn_fuse_boxes(mut commands: Commands, level: Res<crate::Level>, export: Re
             .filter_map(|c| Some((c.name.clone(), crate::audio::cue_name(&c.props["Sound"])?)))
             .collect();
         commands.spawn((
+            crate::net_world::WorldId::named(&a.name),
             FuseBox {
                 class: a.class.clone(),
                 actor: a.name.clone(),

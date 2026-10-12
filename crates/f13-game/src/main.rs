@@ -30,6 +30,7 @@ mod car_lights;
 mod character;
 mod controls;
 mod net;
+mod net_world;
 mod collision;
 mod doors;
 mod fear_events;

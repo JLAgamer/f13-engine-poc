@@ -134,16 +134,16 @@ fn drive(
             v.started = true;
             info!("{} started after holding {:.1}s", v.class, hold.timer);
             // The key turning, then the engine running (EngineStartCue, EngineCue).
-            commands.trigger(crate::audio::ActorSound { actor: player.vehicle, prop: "EngineStartCue" });
+            crate::net_world::shout(&mut commands, crate::net_world::Shout::ActorSound(crate::audio::ActorSound { actor: player.vehicle, prop: "EngineStartCue" }));
             // SCDriveableVehicle::StartVehicle (0x140446ad0): the starter's AppliedLastPart line.
-            commands.trigger(crate::audio::ActorSound { actor: driver, prop: "VO:AppliedLastPart" });
-            commands.trigger(crate::audio::ActorLoop { actor: player.vehicle, prop: "EngineCue" });
+            crate::net_world::shout(&mut commands, crate::net_world::Shout::ActorSound(crate::audio::ActorSound { actor: driver, prop: "VO:AppliedLastPart" }));
+            crate::net_world::shout(&mut commands, crate::net_world::Shout::ActorLoop(crate::audio::ActorLoop { actor: player.vehicle, prop: "EngineCue" }));
         }
         continue;
     }
     let (mut throttle, mut steer) = (0.0f32, 0.0f32);
     if pads.just_pressed(driver, Button::Horn) {
-        commands.trigger(crate::audio::ActorSound { actor: player.vehicle, prop: "HornAudioComponent" });
+        crate::net_world::shout(&mut commands, crate::net_world::Shout::ActorSound(crate::audio::ActorSound { actor: player.vehicle, prop: "HornAudioComponent" }));
     }
     if escaped.is_none() {
         if pads.pressed(driver, Button::Forward) {

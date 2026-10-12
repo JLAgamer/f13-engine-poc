@@ -46,9 +46,10 @@ Moved from Milestone 1 (not tied to gameplay):
 Server-authoritative netcode, tested with bots, then an 8-player lobby.
 
 Steps (lightyear 0.30 for the netcode):
-- [ ] The world over the network: the server replicates the doors, windows, barricades, items (held, dropped,
-      in cabinets), cars, power, police, traps, knives and the match's state and score; clients interpolate the
-      characters between snapshots (they smooth toward the newest now)
+- [ ] The rest of the world over the network: the cabinets' drawers, the police car, armed traps, thrown knives
+      and firecrackers, the match's state, timer and score; clients interpolate the characters between snapshots
+      (they smooth toward the newest now); the lobby hands the client the server's layout and seed (it must be
+      started with the same ones)
 - [ ] Jason's presentation on clients: his stalk, shift and morph effects, the kills' paired takes and cameras, his
       held items
 - [ ] The game's choice of counselor start (starts are handed out in order; PLACEHOLDER), voice lines and the match

@@ -1045,7 +1045,7 @@ fn act(
             info!("{}: {} installed", vehicle.class, vehicle.repairs[i].name);
             // SCDriveableVehicle::Repair (0x14043e4e0): AppliedPart for each part fitted while it isn't repaired yet (the
             // last too; AppliedLastPart is StartVehicle's: vehicle.rs).
-            commands.trigger(crate::audio::ActorSound { actor: player_entity, prop: "VO:AppliedPart" });
+            crate::net_world::shout(&mut commands, crate::net_world::Shout::ActorSound(crate::audio::ActorSound { actor: player_entity, prop: "VO:AppliedPart" }));
             commands.trigger(ClassScore::new(&vehicle.class, "PartRepairedScoreEvent"));
             if vehicle.repairs.iter().all(|r| r.done) {
                 commands.trigger(ClassScore::new(&vehicle.class, "VehicleRepairedScoreEvent"));
@@ -1181,7 +1181,7 @@ fn act(
                 interaction.hold = None;
                 if door.locked {
                     info!("door locked");
-                    commands.trigger(crate::audio::ActorSound { actor: d, prop: "LockedDoorSound" });
+                    crate::net_world::shout(&mut commands, crate::net_world::Shout::ActorSound(crate::audio::ActorSound { actor: d, prop: "LockedDoorSound" }));
                     continue;
                 }
                 // Her open or close montage; the leaf moves in its driver window (DoorMove).
@@ -1373,7 +1373,7 @@ pub(crate) fn drop_at(commands: &mut Commands, visibility: &mut Query<&mut Visib
 /// Puts a carried item down at `at`.
 pub(crate) fn drop_on(commands: &mut Commands, visibility: &mut Query<&mut Visibility>, item: Entity, at: Vec3) {
     commands.entity(item).remove::<(Carried, ChildOf, crate::items::InHand)>().insert(Transform::from_translation(at));
-    commands.trigger(crate::audio::Dropped { item, at });
+    crate::net_world::shout(commands, crate::net_world::Shout::Dropped(crate::audio::Dropped { item, at }));
     if let Ok(mut v) = visibility.get_mut(item) {
         *v = Visibility::Inherited;
     }

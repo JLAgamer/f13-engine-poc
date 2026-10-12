@@ -1667,9 +1667,9 @@ pub(crate) fn update_jason(
         if j.shifting() != j.shift_sound {
             j.shift_sound = j.shifting();
             if j.shift_sound {
-                commands.trigger(crate::audio::ActorLoop { actor: je, prop: SHIFT_CUE });
+                crate::net_world::shout(&mut commands, crate::net_world::Shout::ActorLoop(crate::audio::ActorLoop { actor: je, prop: SHIFT_CUE }));
             } else {
-                commands.trigger(crate::audio::StopLoop { actor: je, prop: SHIFT_CUE });
+                crate::net_world::shout(&mut commands, crate::net_world::Shout::StopLoop(crate::audio::StopLoop { actor: je, prop: SHIFT_CUE }));
             }
         }
         let effect = matches!(j.state, JasonState::Shifting { .. } | JasonState::Morphing { .. });
@@ -1704,7 +1704,7 @@ pub(crate) fn update_jason(
                     info!("Jason: stunned ({stun:?}, {:.0}s)", stun.seconds());
                     if let Some(event) = stun.score_event() {
                         commands.trigger(Score(event));
-                        commands.trigger(crate::audio::ActorSound { actor: pe, prop: "VO:JasonStun" });
+                        crate::net_world::shout(&mut commands, crate::net_world::Shout::ActorSound(crate::audio::ActorSound { actor: pe, prop: "VO:JasonStun" }));
                     }
                     if matches!(j.state, JasonState::Holding { .. }) {
                         let in_water = water.as_ref().is_some_and(|w| w.surface_at(xf.translation + Vec3::Y * t.capsule.half_height).is_some());
@@ -1857,7 +1857,7 @@ pub(crate) fn update_jason(
                                 map.morph = false;
                                 map.open = false;
                                 j.state = JasonState::Morphing { t: 0.0, to };
-                                commands.trigger(Distortion { at: xf.translation, dest: Some(to.translation) });
+                                crate::net_world::shout(&mut commands, crate::net_world::Shout::Distortion(crate::jason::Distortion { at: xf.translation, dest: Some(to.translation) }));
                                 j.velocity = Vec2::ZERO;
                                 continue;
                             }
@@ -1870,7 +1870,7 @@ pub(crate) fn update_jason(
                         }
                         info!("Jason: Stalk");
                         j.stalk = Some(Stalk::start(t.stalk_active_time));
-                        commands.trigger(Distortion { at: xf.translation, dest: None });
+                        crate::net_world::shout(&mut commands, crate::net_world::Shout::Distortion(crate::jason::Distortion { at: xf.translation, dest: None }));
                     }
                     // GLB_Combat_PC: in or out of combat stance.
                     if p.combat {
@@ -1901,7 +1901,7 @@ pub(crate) fn update_jason(
                                 info!("Jason: bursting through a door (raged)");
                                 (JasonState::BurstingDoor { door: de, t: 0.0 }, DOOR_BURST)
                             } else if d.locked || barred {
-                                commands.trigger(crate::audio::ActorSound { actor: de, prop: "LockedDoorSound" });
+                                crate::net_world::shout(&mut commands, crate::net_world::Shout::ActorSound(crate::audio::ActorSound { actor: de, prop: "LockedDoorSound" }));
                                 continue;
                             } else {
                                 info!("Jason: opening a door");
@@ -2171,7 +2171,7 @@ pub(crate) fn update_jason(
                         info!("Jason: Morph ({gdist:.0} m to his goal; to a point {:.0} m from it)", Vec2::new(to.translation.x - goal.x, to.translation.z - goal.z).length());
                         j.state = JasonState::Morphing { t: 0.0, to };
                         j.velocity = Vec2::ZERO;
-                        commands.trigger(Distortion { at: xf.translation, dest: Some(to.translation) });
+                        crate::net_world::shout(&mut commands, crate::net_world::Shout::Distortion(crate::jason::Distortion { at: xf.translation, dest: Some(to.translation) }));
                         continue;
                     }
                 }
@@ -2183,7 +2183,7 @@ pub(crate) fn update_jason(
                     }
                     info!("Jason: Stalk ({gdist:.0} m to his goal)");
                     j.stalk = Some(Stalk::start(t.stalk_active_time));
-                    commands.trigger(Distortion { at: xf.translation, dest: None });
+                    crate::net_world::shout(&mut commands, crate::net_world::Shout::Distortion(crate::jason::Distortion { at: xf.translation, dest: None }));
                 }
                 // A knife at her when she's in throwing range.
                 if sees && !driving && alive && j.knives > 0 && j.knife_cooldown <= 0.0 && (KNIFE_RANGE_M.0..=KNIFE_RANGE_M.1).contains(&dist) {
@@ -2410,7 +2410,7 @@ pub(crate) fn update_jason(
                     info!("Jason: morphed to ({:.0}, {:.0})", dest.translation.x, dest.translation.z);
                     *xf = dest;
                     // OnRep_Teleport as the effect ends: the distortion where he arrived.
-                    commands.trigger(Distortion { at: dest.translation, dest: None });
+                    crate::net_world::shout(&mut commands, crate::net_world::Shout::Distortion(crate::jason::Distortion { at: dest.translation, dest: None }));
                     j.path.clear();
                     j.progress = (dest.translation, 0.0);
                     j.stall = 0.0;
@@ -2528,7 +2528,7 @@ pub(crate) fn update_jason(
                     info!("Jason: burst through the door");
                     if let Some(v) = &d.visuals {
                         let origin = crate::doors::BreakApart::origin(g.transform_point(d.out_arrow), g.transform_point(d.interact), xf.translation, 5.0);
-                        commands.trigger(crate::doors::BreakApart { piece: v.leaf, origin, radius: 30.0, force: d.burst_force, lifespan: d.lifespan });
+                        crate::net_world::shout(&mut commands, crate::net_world::Shout::BreakApart(crate::doors::BreakApart { piece: v.leaf, origin, radius: 30.0, force: d.burst_force, lifespan: d.lifespan }));
                     }
                     commands.entity(d.pivot).insert(Visibility::Hidden);
                     for mut b in barricades.iter_mut().filter(|b| b.door == Some(de)) {
@@ -2582,7 +2582,7 @@ pub(crate) fn update_jason(
                             info!("Jason: broke the door down");
                             if let Some(v) = &d.visuals {
                                 let origin = crate::doors::BreakApart::origin(g.transform_point(d.out_arrow), g.transform_point(d.interact), xf.translation, 5.0);
-                                commands.trigger(crate::doors::BreakApart { piece: v.leaf, origin, radius: 30.0, force: d.break_force, lifespan: d.lifespan });
+                                crate::net_world::shout(&mut commands, crate::net_world::Shout::BreakApart(crate::doors::BreakApart { piece: v.leaf, origin, radius: 30.0, force: d.break_force, lifespan: d.lifespan }));
                             }
                             commands.entity(d.pivot).insert(Visibility::Hidden);
                             for mut b in barricades.iter_mut().filter(|b| b.door == Some(de)) {
@@ -2645,12 +2645,12 @@ pub(crate) fn update_jason(
                             if let Some(s) = w.section {
                                 let interact = g.transform_point(w.interact);
                                 let origin = crate::doors::BreakApart::origin(interact, interact, xf.translation, 10.0);
-                                commands.trigger(crate::doors::BreakApart { piece: s, origin, radius: 3.0, force: w.hit_force, lifespan: w.lifespan });
+                                crate::net_world::shout(&mut commands, crate::net_world::Shout::BreakApart(crate::doors::BreakApart { piece: s, origin, radius: 3.0, force: w.hit_force, lifespan: w.lifespan }));
                             }
-                            commands.trigger(crate::audio::ActorSound { actor: we, prop: "WallDestroySoundCue" });
+                            crate::net_world::shout(&mut commands, crate::net_world::Shout::ActorSound(crate::audio::ActorSound { actor: we, prop: "WallDestroySoundCue" }));
                         } else {
                             info!("Jason: hit the wall ({:.0} left)", w.health);
-                            commands.trigger(crate::audio::ActorSound { actor: we, prop: "WallHitSoundCue" });
+                            crate::net_world::shout(&mut commands, crate::net_world::Shout::ActorSound(crate::audio::ActorSound { actor: we, prop: "WallHitSoundCue" }));
                         }
                     }
                 }

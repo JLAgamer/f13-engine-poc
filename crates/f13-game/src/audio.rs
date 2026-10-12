@@ -323,7 +323,7 @@ pub fn play_anim_sounds(commands: &mut Commands, sounds: Option<&AnimSounds>, sp
 }
 
 /// A line's name as the `&'static str` [`ActorSound`] takes (the notifies' few names, kept once each).
-fn intern(name: &str) -> &'static str {
+pub(crate) fn intern(name: &str) -> &'static str {
     static NAMES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<&'static str>>> = std::sync::OnceLock::new();
     let mut names = NAMES.get_or_init(Default::default).lock().unwrap();
     if let Some(n) = names.get(name) {

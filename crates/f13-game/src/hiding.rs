@@ -436,7 +436,7 @@ fn breathe(
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
     let hidden = hiding.is_some_and(|h| h.phase == HidePhase::Hidden);
-    let say = |commands: &mut Commands, line: &'static str| commands.trigger(crate::audio::ActorSound { actor: pe, prop: line });
+    let say = |commands: &mut Commands, line: &'static str| crate::net_world::shout(commands, crate::net_world::Shout::ActorSound(crate::audio::ActorSound { actor: pe, prop: line }));
     if hidden && pads.pressed(pe, crate::controls::Button::Space) {
         if b.breath.hold() {
             info!("holding her breath");

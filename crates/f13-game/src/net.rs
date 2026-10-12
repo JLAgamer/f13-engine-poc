@@ -62,6 +62,8 @@ pub struct InputChannel;
 /// A character's body as the server sends it: position (Bevy metres), facing (yaw), and what it is.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct NetBody {
+    /// The server's name for the character (its entity's bits).
+    pub id: u64,
     pub pos: [f32; 3],
     pub yaw: f32,
     pub kind: BodyKind,
@@ -118,6 +120,20 @@ struct Twin {
     seeks: u32,
 }
 
+/// On a client: each character's twin, by the server's name for it ([`NetBody::id`]).
+#[derive(Resource, Default)]
+pub struct Twins(std::collections::HashMap<u64, Entity>);
+
+impl Twins {
+    pub fn of(&self, id: u64) -> Option<Entity> {
+        self.0.get(&id).copied()
+    }
+}
+
+/// On a client: the twins have taken the server's state.
+#[derive(SystemSet, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Mirrored;
+
 /// Whether this process runs the match (not a client). The gameplay systems run only if so.
 pub fn simulating(client: Option<Res<NetClient>>) -> bool {
     client.is_none()
@@ -159,7 +175,9 @@ impl Plugin for NetPlugin {
                             a.seek = (a.seek.0 + 1, s.0);
                         }
                     })
-                    .add_systems(Update, apply_inputs)
+                    .add_systems(Update, apply_inputs);
+                crate::net_world::server(app);
+                app
                     .add_systems(PostUpdate, (replicate_bodies, update_bodies).chain().before(ReplicationSystems::Send));
             }
             Role::Client(addr) => {
@@ -169,7 +187,9 @@ impl Plugin for NetPlugin {
                     .insert_resource(ServerAddr(addr))
                     .add_systems(Update, connect)
                     .add_observer(body_gone)
-                    .add_systems(Update, (send_input, (make_twins, mirror).chain().before(crate::character::animate)));
+                    .init_resource::<Twins>()
+                    .add_systems(Update, (send_input, (make_twins, mirror).chain().in_set(Mirrored).before(crate::character::animate)));
+                crate::net_world::client(app);
                 if self.bot {
                     app.init_resource::<NetBot>().add_systems(Update, net_bot.before(send_input));
                 }
@@ -186,6 +206,7 @@ fn protocol(app: &mut App) {
     app.component::<NetCounselor>().replicate();
     app.component::<NetJason>().replicate();
     app.component::<NetAction>().replicate();
+    crate::net_world::protocol(app);
 }
 
 #[derive(Resource)]
@@ -265,10 +286,10 @@ fn replicate_bodies(
     jasons: Query<Entity, (With<crate::jason::Jason>, Without<NetBody>)>,
 ) {
     for e in &counselors {
-        commands.entity(e).insert((NetBody { pos: [0.0; 3], yaw: 0.0, kind: BodyKind::Counselor }, NetCounselor::default(), NetAction::default(), Replicate::to_clients(NetworkTarget::All)));
+        commands.entity(e).insert((NetBody { id: e.to_bits(), pos: [0.0; 3], yaw: 0.0, kind: BodyKind::Counselor }, NetCounselor::default(), NetAction::default(), Replicate::to_clients(NetworkTarget::All)));
     }
     for e in &jasons {
-        commands.entity(e).insert((NetBody { pos: [0.0; 3], yaw: 0.0, kind: BodyKind::Jason }, NetJason::default(), NetAction::default(), Replicate::to_clients(NetworkTarget::All)));
+        commands.entity(e).insert((NetBody { id: e.to_bits(), pos: [0.0; 3], yaw: 0.0, kind: BodyKind::Jason }, NetJason::default(), NetAction::default(), Replicate::to_clients(NetworkTarget::All)));
     }
 }
 
@@ -369,6 +390,7 @@ fn make_twins(
     bodies: Query<(Entity, &NetBody, Has<Controlled>), Without<Twin>>,
     local: Query<Entity, (With<LocalPlayer>, With<Player>)>,
     jason: Query<Entity, With<crate::jason::Jason>>,
+    mut index: ResMut<Twins>,
 ) {
     for (e, b, own) in &bodies {
         let at = Vec3::from_array(b.pos);
@@ -380,6 +402,7 @@ fn make_twins(
         let Some(twin) = twin else { continue };
         info!("net: received {:?} {e} at {at}{}: twin {twin}", b.kind, if own { " (hers)" } else { "" });
         commands.entity(e).insert(Twin { local: twin, restarts: 0, seeks: 0 });
+        index.0.insert(b.id, twin);
     }
 }
 

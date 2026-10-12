@@ -364,6 +364,7 @@ fn spawn_props(
         let Some(info) = classes.get(&actor.class) else { continue };
         let root = commands.spawn((to_transform(&actor.transform), Visibility::default(), Name::new(actor.class.clone()))).id();
         entities.insert(id, root);
+        commands.entity(root).insert(crate::net_world::WorldId(id as u32));
         // The cues its class names (doors, windows, barricades, cars...): audio.rs plays them.
         let sounds: HashMap<String, String> = info
             .props
