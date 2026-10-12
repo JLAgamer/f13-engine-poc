@@ -1851,9 +1851,10 @@ fn run_bot(
                 };
                 let mut unscored = Vec::new();
                 if let Some(g) = &game {
-                    let awards: Vec<String> = g.score.awards.iter().map(|a| format!("{} {}", a.event, a.xp)).collect();
-                    info!("bot: scored {} XP: {}", g.score.total(), awards.join(", "));
-                    unscored = scored.iter().filter(|any| !any.iter().any(|e| g.score.has(e))).collect();
+                    let score = g.mine().map(|t| t.score.clone()).unwrap_or_default();
+                    let awards: Vec<String> = score.awards.iter().map(|a| format!("{} {}", a.event, a.xp)).collect();
+                    info!("bot: scored {} XP: {}", score.total(), awards.join(", "));
+                    unscored = scored.iter().filter(|any| !any.iter().any(|e| score.has(e))).collect();
                     if !unscored.is_empty() {
                         error!("bot: never scored {unscored:?}");
                     }

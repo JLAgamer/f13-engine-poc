@@ -289,7 +289,7 @@ pub fn break_phone_box(b: &mut PhoneBox, phones: &mut Query<&mut Phone>) {
 }
 
 /// The call went through: the police are on their way.
-pub fn call_police(commands: &mut Commands, phone: &mut Phone, game: Option<&mut crate::match_flow::GameMatch>, tuning: Option<&crate::match_flow::MatchTuning>, _player: Entity) {
+pub fn call_police(commands: &mut Commands, phone: &mut Phone, game: Option<&mut crate::match_flow::GameMatch>, tuning: Option<&crate::match_flow::MatchTuning>, player: Entity) {
     phone.called = true;
     phone.enabled = false;
     if let (Some(g), Some(t)) = (game, tuning) {
@@ -298,7 +298,7 @@ pub fn call_police(commands: &mut Commands, phone: &mut Phone, game: Option<&mut
     }
     crate::net_world::shout(commands, crate::net_world::Shout::Sound(crate::audio::PlaySound { cue: "PoliceCalled".into(), at: None }));
     // (Her CallPolice line is her phone take's own notify.)
-    commands.trigger(crate::match_flow::ClassScore::new(&phone.class, "CallPoliceScoreEvent"));
+    commands.trigger(crate::match_flow::ClassScore::new(player, &phone.class, "CallPoliceScoreEvent"));
 }
 
 /// SpawnPolice when the countdown runs out.
@@ -482,7 +482,7 @@ fn turn_back_jason(
             }
             None => info!("police: Jason shot (no free spot outside the escape)"),
         }
-        commands.entity(je).insert(crate::jason::HitJason { stun: Some(crate::jason::Stun::Police), from: center });
+        commands.entity(je).insert(crate::jason::HitJason { by: None, stun: Some(crate::jason::Stun::Police), from: center });
     }
 }
 

@@ -630,7 +630,7 @@ fn barricade_moves(
         if !m.flipped && m.t >= m.driver.1 {
             m.flipped = true;
             if let Some(mut b) = barricades.iter_mut().find(|b| b.door == Some(m.door)) {
-                flip_barricade(&mut commands, &mut b);
+                flip_barricade(&mut commands, &mut b, pe);
             }
         }
         if m.t >= m.length {
@@ -639,10 +639,10 @@ fn barricade_moves(
     }
 }
 
-fn flip_barricade(commands: &mut Commands, b: &mut Barricade) {
+fn flip_barricade(commands: &mut Commands, b: &mut Barricade, who: Entity) {
     b.enabled = !b.enabled;
     if b.enabled {
-        commands.trigger(ClassScore::new(BARRICADE, "BarricadeDoorScoreEvent"));
+        commands.trigger(ClassScore::new(who, BARRICADE, "BarricadeDoorScoreEvent"));
     }
     info!("door {}", if b.enabled { "barricaded" } else { "unbarricaded" });
 }
@@ -943,7 +943,7 @@ fn act(
                 take_small(&mut commands, &mut visibility, inv, item, e, Swap::Drop(at));
             }
             info!("picked up {}", item.name);
-            commands.trigger(ClassScore::new(&item.class, "PickupScoreEvent"));
+            commands.trigger(ClassScore::new(player_entity, &item.class, "PickupScoreEvent"));
             commands.entity(e).insert(Carried).remove::<InCabinet>();
             if let Ok(mut v) = visibility.get_mut(e) {
                 *v = Visibility::Hidden;
@@ -1046,9 +1046,9 @@ fn act(
             // SCDriveableVehicle::Repair (0x14043e4e0): AppliedPart for each part fitted while it isn't repaired yet (the
             // last too; AppliedLastPart is StartVehicle's: vehicle.rs).
             crate::net_world::shout(&mut commands, crate::net_world::Shout::ActorSound(crate::audio::ActorSound { actor: player_entity, prop: "VO:AppliedPart" }));
-            commands.trigger(ClassScore::new(&vehicle.class, "PartRepairedScoreEvent"));
+            commands.trigger(ClassScore::new(player_entity, &vehicle.class, "PartRepairedScoreEvent"));
             if vehicle.repairs.iter().all(|r| r.done) {
-                commands.trigger(ClassScore::new(&vehicle.class, "VehicleRepairedScoreEvent"));
+                commands.trigger(ClassScore::new(player_entity, &vehicle.class, "VehicleRepairedScoreEvent"));
             }
             interaction.hold = None;
             interaction.target = None;
@@ -1079,7 +1079,7 @@ fn act(
             if let Some(g) = grids.as_mut() {
                 crate::power::set_destroyed(&mut fuse, false, g);
             }
-            commands.trigger(ClassScore::new(&fuse.class, "RepairScoreEvent"));
+            commands.trigger(ClassScore::new(player_entity, &fuse.class, "RepairScoreEvent"));
             interaction.hold = None;
             interaction.target = None;
         }
@@ -1126,7 +1126,7 @@ fn act(
             crate::police::repair_phone_box(&mut pb, &mut phones);
             end_repair_anim(&mut commands, player_entity, Some(&crate::police::PHONE_BOX_TAKE.to_string()), true);
             info!("phone box {}: the phone works", if fixing { "repaired" } else { "fused" });
-            commands.trigger(ClassScore::new(&pb.class, "RepairScoreEvent"));
+            commands.trigger(ClassScore::new(player_entity, &pb.class, "RepairScoreEvent"));
             interaction.hold = None;
             interaction.target = None;
         }
@@ -1258,7 +1258,7 @@ fn act(
                                     crate::character::PlayAction(anim.into()),
                                 ));
                             }
-                            None => flip_barricade(&mut commands, &mut b),
+                            None => flip_barricade(&mut commands, &mut b, player_entity),
                         }
                     }
                     Some(_) => info!("door open (can't barricade)"),
@@ -1543,7 +1543,7 @@ fn use_item(
         }
         let healed = p.counselor.heal(tuning.first_aid.health_restored, &tuning.counselor);
         info!("used first aid: +{healed:.0} health");
-        commands.trigger(ClassScore::new(FIRST_AID, "UseFirstAidScoreEvent"));
+        commands.trigger(ClassScore::new(entity, FIRST_AID, "UseFirstAidScoreEvent"));
         inv.pockets.retain(|&e| e != u.item);
         commands.entity(u.item).despawn();
         commands.entity(entity).remove::<UsingItem>();

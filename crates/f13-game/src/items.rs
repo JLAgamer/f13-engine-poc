@@ -480,6 +480,8 @@ fn wear_on_block(hit: On<BlockedHit>, mut commands: Commands, mut player: Query<
 
 #[derive(Component)]
 struct Firecracker {
+    /// Who threw it.
+    by: Entity,
     vel: Vec3,
     age: f32,
     stunned: bool,
@@ -487,6 +489,8 @@ struct Firecracker {
 
 #[derive(Component)]
 struct Flare {
+    /// Who fired it.
+    by: Entity,
     vel: Vec3,
     age: f32,
     hit: bool,
@@ -497,6 +501,8 @@ struct Flare {
 #[derive(Component)]
 pub struct ArmedTrap {
     clear: bool,
+    /// Who set it (none: Jason's).
+    pub by: Option<Entity>,
     pub killer: bool,
 }
 
@@ -512,7 +518,7 @@ const TRAP_MESH: &str = "SummerCamp/Content/Props/SkeletalMeshes/Traps/A_Trap_Be
 
 fn set_killer_trap(ev: On<SetKillerTrap>, mut commands: Commands, assets: Res<AssetServer>) {
     commands.spawn((
-        ArmedTrap { clear: true, killer: true },
+        ArmedTrap { clear: true, by: None, killer: true },
         crate::prop_anim::PropAnim::new(crate::prop_anim::TRAP_ARMED),
         ev.0,
         Visibility::Inherited,
@@ -784,7 +790,7 @@ fn tick_action(
                             stats.stun_chance,
                             if stun { "stun" } else { "no stun" }
                         );
-                        commands.entity(je).insert(HitJason { stun: stun.then_some(Stun::Weapon { left }), from: xf.translation });
+                        commands.entity(je).insert(HitJason { by: Some(pe), stun: stun.then_some(Stun::Weapon { left }), from: xf.translation });
                         // No impact effect: a melee hit's path to it, SCWeapon::SpawnHitEffect (0x1404558e0), is never
                         // called in this build (MODLOG "Melee hits spawn no impact effects").
                         let name = items.get(a.item).map_or("weapon".to_string(), |i| i.name.clone());
@@ -809,7 +815,7 @@ fn tick_action(
                         MeshMaterial3d(mat),
                         Transform::from_translation(chest + aim * 0.5),
                         PointLight { color: Color::srgb(1.0, 0.2, 0.1), intensity: 400_000.0, range: 25.0, ..default() },
-                        Flare { vel: aim * velocity / 100.0, age: 0.0, hit: false },
+                        Flare { by: pe, vel: aim * velocity / 100.0, age: 0.0, hit: false },
                     ));
                     info!("flare fired");
                 } else {
@@ -867,7 +873,7 @@ fn tick_action(
                     }
                     if let (Some((je, _)), true) = (jason, on_jason > 0) {
                         info!("shotgun hit Jason ({on_jason} of {pellets} pellets)");
-                        commands.entity(je).insert(HitJason { stun: Some(Stun::Shotgun), from: xf.translation });
+                        commands.entity(je).insert(HitJason { by: Some(pe), stun: Some(Stun::Shotgun), from: xf.translation });
                     } else {
                         info!("shotgun missed");
                     }
@@ -882,14 +888,14 @@ fn tick_action(
                 let socket = items.get(a.item).map_or("WeaponSocket", |i| i.hand_socket.as_str());
                 let hand = character.as_ref().and_then(|c| rigs.iter().find(|(p, _)| p.parent() == pe).and_then(|(_, rig)| rig.socket(&c.info, socket, &globals)));
                 if let Ok(item) = items.get(a.item) {
-                    commands.trigger(ClassScore::new(&item.class, "UseScoreEvent"));
+                    commands.trigger(ClassScore::new(pe, &item.class, "UseScoreEvent"));
                 }
                 inv.pockets.retain(|&e| e != a.item);
                 commands.entity(a.item).despawn();
                 let (mesh, mat) = (assets.0.add(Cuboid::new(0.06, 0.06, 0.14)), assets.1.add(StandardMaterial { base_color: Color::srgb(0.7, 0.05, 0.05), ..default() }));
                 let vel = look.with_y(0.0).normalize_or(facing.with_y(0.0).normalize_or_zero()) * THROW_SPEED;
                 let from = hand.map_or(chest + facing * 0.4, |h| h.translation);
-                commands.spawn((Mesh3d(mesh), MeshMaterial3d(mat), Transform::from_translation(from), Firecracker { vel, age: 0.0, stunned: false }));
+                commands.spawn((Mesh3d(mesh), MeshMaterial3d(mat), Transform::from_translation(from), Firecracker { by: pe, vel, age: 0.0, stunned: false }));
             }
             Use::PlaceTrap => {
                 a.done = true;
@@ -900,10 +906,10 @@ fn tick_action(
                 commands
                     .entity(a.item)
                     .remove::<(Carried, ChildOf, InHand, HeldAt, Item)>()
-                    .insert((ArmedTrap { clear: false, killer: false }, crate::prop_anim::PropAnim::new(crate::prop_anim::TRAP_ARMED), Transform::from_translation(Vec3::new(at.x, y, at.z)).with_rotation(xf.rotation), Visibility::Inherited));
+                    .insert((ArmedTrap { clear: false, by: Some(pe), killer: false }, crate::prop_anim::PropAnim::new(crate::prop_anim::TRAP_ARMED), Transform::from_translation(Vec3::new(at.x, y, at.z)).with_rotation(xf.rotation), Visibility::Inherited));
                 info!("bear trap armed at ({:.1}, {:.1}, {:.1})", at.x, y, at.z);
                 if let Ok(item) = items.get(a.item) {
-                    commands.trigger(ClassScore::new(&item.class, "PlaceTrapScoreEvent"));
+                    commands.trigger(ClassScore::new(pe, &item.class, "PlaceTrapScoreEvent"));
                 }
             }
         }
@@ -958,7 +964,7 @@ fn fly(
                 if let Some((je, _)) = jasons.iter().find(|(_, j)| j.translation.distance(xf.translation) <= FIRECRACKER_BLAST_M) {
                     f.stunned = true;
                     info!("firecrackers: Jason in the blast");
-                    commands.entity(je).insert(HitJason { stun: Some(Stun::Firecracker), from: xf.translation });
+                    commands.entity(je).insert(HitJason { by: Some(f.by), stun: Some(Stun::Firecracker), from: xf.translation });
                 }
             }
         }
@@ -978,8 +984,8 @@ fn fly(
                         f.hit = true;
                         info!("flare hit Jason");
                         // BP_Flare_Projectile's FlareScoreEventClass.
-                        commands.trigger(Score("SpotJasonFlare"));
-                        commands.entity(je).insert(HitJason { stun: Some(Stun::Flare), from });
+                        commands.trigger(Score { who: f.by, event: "SpotJasonFlare" });
+                        commands.entity(je).insert(HitJason { by: Some(f.by), stun: Some(Stun::Flare), from });
                         f.vel *= 0.1;
                     }
                 }
@@ -1068,7 +1074,7 @@ fn spring_traps(
             }
             if d <= TRAP_RADIUS_M && (jxf.translation.y - txf.translation.y).abs() < 0.6 && matches!(j.state, crate::jason::JasonState::Hunting) {
                 info!("Jason stepped in a bear trap");
-                commands.entity(je).insert(HitJason { stun: Some(Stun::BearTrap), from: txf.translation });
+                commands.entity(je).insert(HitJason { by: trap.by, stun: Some(Stun::BearTrap), from: txf.translation });
                 commands.entity(te).remove::<ArmedTrap>().insert(crate::prop_anim::PropAnim::new(crate::prop_anim::TRAP_SPRUNG));
             }
         }

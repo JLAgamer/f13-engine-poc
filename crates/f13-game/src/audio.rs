@@ -630,21 +630,18 @@ fn action_line(take: &str) -> Option<&'static str> {
 fn voices(
     mut commands: Commands,
     time: Res<Time>,
-    mut last: Local<Option<(f32, bool, bool, Option<String>, Option<String>, bool)>>,
-    mut choke_at: Local<Option<f32>>,
-    // A line waiting for hers to end (PlayVoiceOver's queue: +0x1d8); ChaseStart said this chase (+0x20d) and its
-    // cooldown's end (+0x200); MatchStartVO said.
-    (mut queued, mut chase_said, mut chase_ready_at, mut match_said): (Local<Option<&'static str>>, Local<bool>, Local<f32>, Local<bool>),
+    mut state: Local<HashMap<Entity, VoiceState>>,
     (chase, game, play_jason): (Res<crate::counselor_camera::Chase>, Option<Res<crate::match_flow::GameMatch>>, Option<Res<crate::jason_player::PlayJason>>),
-    // PLACEHOLDER (Milestone 3): the local counselor's lines only; every counselor's needs this state per counselor.
-    players: Query<(Entity, &Player, Option<&crate::character::PlayAction>, Has<crate::jason::Held>), (With<ClassSounds>, With<crate::controls::LocalPlayer>)>,
+    players: Query<(Entity, &Player, Option<&crate::character::PlayAction>, Has<crate::jason::Held>, Has<crate::controls::LocalPlayer>), With<ClassSounds>>,
     saying_now: Query<(&VoiceOf, &ChildOf)>,
     kills: Query<(), With<crate::kill_camera::KillCam>>,
 ) {
-    let Ok((pe, p, action, held)) = players.single() else { return };
+    state.retain(|e, _| players.contains(*e));
+    for (pe, p, action, held, local) in &players {
+    let v = state.entry(pe).or_default();
     let c = &p.counselor;
     let now = (c.health, c.wounded, held, action.map(|a| a.0.clone()), p.montage.clone(), c.alive());
-    let Some((_, wounded, was_held, was_action, _, was_alive)) = last.replace(now.clone()) else { return };
+    let Some((_, wounded, was_held, was_action, _, was_alive)) = v.last.replace(now.clone()) else { continue };
     let alive = now.5;
     let mut say = |line: &'static str| {
         if alive || line == "VO:Died" {
@@ -656,11 +653,11 @@ fn voices(
     // he holds her (grab, placed, drown kills), or by her own kill take.
     let in_kill = kill(&now.3) || kill(&was_action) || held || was_held || !kills.is_empty();
     let t = time.elapsed_secs();
-    if held && !was_held && choke_at.is_none() {
-        *choke_at = Some(t + 1.0);
+    if held && !was_held && v.choke_at.is_none() {
+        v.choke_at = Some(t + 1.0);
     }
-    if choke_at.is_some_and(|at| t >= at) {
-        *choke_at = None;
+    if v.choke_at.is_some_and(|at| t >= at) {
+        v.choke_at = None;
         say("VO:Choke");
     }
     if !now.5 && was_alive && !in_kill {
@@ -669,24 +666,27 @@ fn voices(
     // MULTICAST_PlayWoundedVO (FUN_1403bf8a0): WoundedScreams, then Wounded queued after it.
     if now.1 && !wounded && now.5 {
         say("VO:WoundedScreams");
-        *queued = Some("VO:Wounded");
-    } else if let Some(line) = queued.filter(|_| !saying_now.iter().any(|(_, c)| c.parent() == pe)) {
-        *queued = None;
+        v.queued = Some("VO:Wounded");
+    } else if let Some(line) = v.queued.filter(|_| !saying_now.iter().any(|(_, c)| c.parent() == pe)) {
+        v.queued = None;
         say(line);
     }
     // The chase update (FUN_1403db8f0) tells her voice (FUN_140316e40): a chase starting says ChaseStart, once a chase
     // and not before its timer (ChaseStart's cooldown, 15 s from the constructor 0x1402f4760, set as a chase ends) is out.
-    if chase.chased && !*chase_said && t >= *chase_ready_at {
-        *chase_said = true;
-        say("VO:ChaseStart");
-    } else if !chase.chased && *chase_said {
-        *chase_said = false;
-        *chase_ready_at = t + CHASE_START_VO_COOLDOWN_S;
+    // PLACEHOLDER: the chase is the local counselor's (counselor_camera.rs), so only she says it.
+    if local {
+        if chase.chased && !v.chase_said && t >= v.chase_ready_at {
+            v.chase_said = true;
+            say("VO:ChaseStart");
+        } else if !chase.chased && v.chase_said {
+            v.chase_said = false;
+            v.chase_ready_at = t + CHASE_START_VO_COOLDOWN_S;
+        }
     }
     // SCPlayerController::OnSpawnIntroCompleted: her MatchStartVO (the intro isn't ported: as the match starts), when
     // she's the local player.
-    if !*match_said && play_jason.is_none() && game.as_ref().is_some_and(|g| g.state.state == crate::match_flow::MatchState::InProgress) {
-        *match_said = true;
+    if local && !v.match_said && play_jason.is_none() && game.as_ref().is_some_and(|g| g.state.state == crate::match_flow::MatchState::InProgress) {
+        v.match_said = true;
         say("VO:MatchStartVO");
     }
     // (Her takes' own lines, the swings', dodges', windows', stumbles' and kills', are their notifies':
@@ -696,6 +696,20 @@ fn voices(
     } else if (kill(&now.3) || !kills.is_empty()) && saying(&saying_now, pe, "VO:Choke") {
         commands.trigger(StopVoiceOver { actor: pe });
     }
+    }
+}
+
+/// One counselor's voice state: what she was last frame (health, wounded, held, action, montage, alive); her Choke's
+/// time; a line waiting for hers to end (PlayVoiceOver's queue: +0x1d8); ChaseStart said this chase (+0x20d) and its
+/// cooldown's end (+0x200); MatchStartVO said.
+#[derive(Default)]
+struct VoiceState {
+    last: Option<(f32, bool, bool, Option<String>, Option<String>, bool)>,
+    choke_at: Option<f32>,
+    queued: Option<&'static str>,
+    chase_said: bool,
+    chase_ready_at: f32,
+    match_said: bool,
 }
 
 /// One of the map's ambient loops (its AmbientSounds' AudioComponents): its volume (cue volume times

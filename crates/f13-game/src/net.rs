@@ -19,6 +19,7 @@
 
 use crate::character::{PlayAction, RestartAction, SeekAction};
 use crate::controls::{Controls, LocalPlayer};
+use crate::match_flow::{GameMatch, MatchState};
 use crate::player::Player;
 use f13_core::counselor::Stance;
 use bevy::prelude::*;
@@ -178,7 +179,8 @@ impl Plugin for NetPlugin {
                     .add_systems(Update, apply_inputs);
                 crate::net_world::server(app);
                 app
-                    .add_systems(PostUpdate, (replicate_bodies, update_bodies).chain().before(ReplicationSystems::Send));
+                    .add_systems(Startup, spawn_match)
+                    .add_systems(PostUpdate, (replicate_bodies, update_bodies, send_match).chain().before(ReplicationSystems::Send));
             }
             Role::Client(addr) => {
                 app.add_plugins(client::ClientPlugins { tick_duration: TICK });
@@ -189,6 +191,7 @@ impl Plugin for NetPlugin {
                     .add_observer(body_gone)
                     .init_resource::<Twins>()
                     .add_systems(Update, (send_input, (make_twins, mirror).chain().in_set(Mirrored).before(crate::character::animate)));
+                app.add_systems(Update, receive_match.after(Mirrored));
                 crate::net_world::client(app);
                 if self.bot {
                     app.init_resource::<NetBot>().add_systems(Update, net_bot.before(send_input));
@@ -206,6 +209,8 @@ fn protocol(app: &mut App) {
     app.component::<NetCounselor>().replicate();
     app.component::<NetJason>().replicate();
     app.component::<NetAction>().replicate();
+    app.component::<NetMatch>().replicate();
+    app.component::<NetTally>().replicate();
     crate::net_world::protocol(app);
 }
 
@@ -286,7 +291,7 @@ fn replicate_bodies(
     jasons: Query<Entity, (With<crate::jason::Jason>, Without<NetBody>)>,
 ) {
     for e in &counselors {
-        commands.entity(e).insert((NetBody { id: e.to_bits(), pos: [0.0; 3], yaw: 0.0, kind: BodyKind::Counselor }, NetCounselor::default(), NetAction::default(), Replicate::to_clients(NetworkTarget::All)));
+        commands.entity(e).insert((NetBody { id: e.to_bits(), pos: [0.0; 3], yaw: 0.0, kind: BodyKind::Counselor }, NetCounselor::default(), NetTally::default(), NetAction::default(), Replicate::to_clients(NetworkTarget::All)));
     }
     for e in &jasons {
         commands.entity(e).insert((NetBody { id: e.to_bits(), pos: [0.0; 3], yaw: 0.0, kind: BodyKind::Jason }, NetJason::default(), NetAction::default(), Replicate::to_clients(NetworkTarget::All)));
@@ -515,6 +520,7 @@ struct NetBot {
     t: f32,
     from: Vec3,
     jason_from: Option<Vec3>,
+    clock: Option<i32>,
     failed: Vec<&'static str>,
 }
 
@@ -522,8 +528,8 @@ struct NetBot {
 const NET_BOT_CONNECT_S: f32 = 120.0;
 
 /// `--bot-net`: plays as a client only through its input, and checks what comes back. Its counselor walks (W, 3 s)
-/// and must move on the server; she goes into combat stance (C) and must be in it there; and Jason, whom the server
-/// runs, must move.
+/// and must move on the server; she goes into combat stance (C) and must be in it there; the match's clock must run;
+/// and Jason, whom the server runs, must move.
 fn net_bot(
     mut bot: ResMut<NetBot>,
     time: Res<Time>,
@@ -531,6 +537,7 @@ fn net_bot(
     mut keys: ResMut<ButtonInput<KeyCode>>,
     own: Query<(&NetBody, &NetCounselor), With<Controlled>>,
     jason: Query<&NetBody, With<NetJason>>,
+    game: Res<GameMatch>,
     mut exit: MessageWriter<AppExit>,
 ) {
     bot.t += time.delta_secs();
@@ -579,8 +586,18 @@ fn net_bot(
         }
         4 if bot.t < 0.3 => keys.press(KeyCode::KeyC),
         4 if bot.t > 1.5 => next(&mut bot),
+        // The match runs: in progress, its clock counting down.
+        5 if bot.t < 0.1 => bot.clock = Some(game.state.remaining_time),
+        5 if bot.t > 3.0 => {
+            let (state, from, now) = (game.state.state, bot.clock.unwrap_or(0), game.state.remaining_time);
+            info!("bot: net: match {state:?}, clock {from} -> {now}");
+            if state != MatchState::InProgress || now >= from {
+                bot.failed.push("match clock");
+            }
+            next(&mut bot);
+        }
         // Jason moves on the server (it hunts from the start with --jason-delay 0).
-        5 => {
+        6 => {
             let moved = jason.single().ok().zip(bot.jason_from).map(|(b, from)| Vec3::from_array(b.pos).distance(from));
             if moved.is_some_and(|m| m > 2.0) || bot.t > 30.0 {
                 info!("bot: net: Jason moved {:.1} m", moved.unwrap_or(0.0));
@@ -598,5 +615,118 @@ fn net_bot(
             }
         }
         _ => {}
+    }
+}
+
+/// The match as the clients see it: its state (MatchState's order), its timers, and Jason's score.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct NetMatch {
+    pub state: u8,
+    pub remaining: i32,
+    pub elapsed: i32,
+    pub police: i32,
+    pub killer_awards: Vec<(String, i32)>,
+    pub killer_popups: Vec<(String, String)>,
+}
+
+/// A counselor's match: her awards, her score texts (and their category), and what became of her.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct NetTally {
+    pub awards: Vec<(String, i32)>,
+    pub popups: Vec<(String, String)>,
+    pub dead: bool,
+    pub escaped: bool,
+    pub taken_damage: bool,
+}
+
+const MATCH_STATES: [MatchState; 8] = [
+    MatchState::WaitingToStart,
+    MatchState::WaitingPreMatch,
+    MatchState::PreMatchIntro,
+    MatchState::InProgress,
+    MatchState::WaitingPostMatchOutro,
+    MatchState::PostMatchOutro,
+    MatchState::WaitingPostMatch,
+    MatchState::LeavingMap,
+];
+
+fn spawn_match(mut commands: Commands) {
+    commands.spawn((NetMatch::default(), Replicate::to_clients(NetworkTarget::All), Name::new("match")));
+}
+
+fn awards(s: &f13_core::game_mode::PlayerScore) -> Vec<(String, i32)> {
+    s.awards.iter().map(|a| (a.event.clone(), a.xp)).collect()
+}
+
+/// The match and each counselor's tally, for the clients.
+fn send_match(game: Res<GameMatch>, mut matches: Query<&mut NetMatch>, mut tallies: Query<(Entity, &mut NetTally)>) {
+    if let Ok(n) = matches.single_mut() {
+        let m = &game.state;
+        set(n, NetMatch {
+            state: MATCH_STATES.iter().position(|s| *s == m.state).unwrap_or(0) as u8,
+            remaining: m.remaining_time,
+            elapsed: m.elapsed_in_progress_time,
+            police: m.police_time_remaining,
+            killer_awards: awards(&game.killer_score),
+            killer_popups: game.killer_popups.iter().map(|(t, c, _)| (t.clone(), c.clone())).collect(),
+        });
+    }
+    for (e, n) in &mut tallies {
+        let Some(t) = game.counselors.get(&e) else { continue };
+        set(n, NetTally {
+            awards: awards(&t.score),
+            popups: t.popups.iter().map(|(t, c, _)| (t.clone(), c.clone())).collect(),
+            dead: t.record.dead,
+            escaped: t.record.escaped,
+            taken_damage: t.record.taken_damage,
+        });
+    }
+}
+
+/// The server's match here: its state and timers, the intro and outro as it enters them, each counselor's tally (her
+/// new score texts shown from now), and leaving with it.
+#[allow(clippy::too_many_arguments)]
+fn receive_match(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut game: ResMut<GameMatch>,
+    matches: Query<&NetMatch, Changed<NetMatch>>,
+    tallies: Query<(&NetTally, &Twin)>,
+    local: Query<Entity, (With<LocalPlayer>, With<Player>)>,
+    intro: Option<Res<crate::cinematic::IntroEnabled>>,
+    leave: Res<crate::match_flow::Leave>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    let now = time.elapsed_secs();
+    let g = &mut *game;
+    g.local = local.single().ok();
+    if let Ok(n) = matches.single() {
+        let state = MATCH_STATES.get(n.state as usize).copied().unwrap_or(MatchState::WaitingToStart);
+        if state != g.state.state {
+            info!("net: match {:?}", state);
+            match state {
+                MatchState::PreMatchIntro if intro.is_some() => commands.insert_resource(crate::cinematic::PlayCinematic(crate::cinematic::INTRO)),
+                MatchState::PostMatchOutro if intro.is_some() => commands.insert_resource(crate::cinematic::PlayCinematic(crate::cinematic::OUTRO)),
+                MatchState::LeavingMap if leave.0 => {
+                    info!("match: leaving");
+                    exit.write(AppExit::Success);
+                }
+                _ => {}
+            }
+        }
+        g.state.state = state;
+        g.state.remaining_time = n.remaining;
+        g.state.elapsed_in_progress_time = n.elapsed;
+        g.state.police_time_remaining = n.police;
+        g.killer_score.awards = n.killer_awards.iter().map(|(e, xp)| f13_core::game_mode::Award { event: e.clone(), xp: *xp }).collect();
+        let seen = g.killer_popups.len();
+        g.killer_popups.extend(n.killer_popups.iter().skip(seen).map(|(t, c)| (t.clone(), c.clone(), now)));
+    }
+    for (n, twin) in &tallies {
+        let t = g.counselors.entry(twin.local).or_default();
+        t.score.awards = n.awards.iter().map(|(e, xp)| f13_core::game_mode::Award { event: e.clone(), xp: *xp }).collect();
+        let seen = t.popups.len();
+        t.popups.extend(n.popups.iter().skip(seen).map(|(t, c)| (t.clone(), c.clone(), now)));
+        t.record = f13_core::game_mode::CounselorRecord { dead: n.dead, escaped: n.escaped, taken_damage: n.taken_damage };
     }
 }

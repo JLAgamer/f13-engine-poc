@@ -37,30 +37,34 @@ pub struct MatchTuning {
     pub events: BTreeMap<String, ScoreEvent>,
 }
 
-/// A score event for the counselor: its class name without `_C` (e.g. "StunJason"), at scale 1.
+/// A score event for a counselor: its class name without `_C` (e.g. "StunJason"), at scale 1.
 #[derive(Event, Clone, Debug)]
-pub struct Score(pub &'static str);
+pub struct Score {
+    pub who: Entity,
+    pub event: &'static str,
+}
 
 /// A score event for Jason (e.g. "KillCounselor").
 #[derive(Event, Clone, Debug)]
 pub struct KillerScore(pub &'static str);
 
-/// The score event a class names in one of its properties (e.g. an item's "PickupScoreEvent"), for her or for Jason.
+/// The score event a class names in one of its properties (e.g. an item's "PickupScoreEvent"), for a counselor or
+/// (`who` None) for Jason.
 #[derive(Event, Clone, Debug)]
 pub struct ClassScore {
     pub class: String,
     pub property: &'static str,
-    pub killer: bool,
+    pub who: Option<Entity>,
 }
 
 impl ClassScore {
-    pub fn new(class: &str, property: &'static str) -> Self {
-        Self { class: class.to_string(), property, killer: false }
+    pub fn new(who: Entity, class: &str, property: &'static str) -> Self {
+        Self { class: class.to_string(), property, who: Some(who) }
     }
 
     /// Jason's (a fuse box's DestroyScoreEvent, a kill's KillInfo ScoreEvent).
     pub fn killer(class: &str, property: &'static str) -> Self {
-        Self { class: class.to_string(), property, killer: true }
+        Self { class: class.to_string(), property, who: None }
     }
 }
 
@@ -76,32 +80,52 @@ pub struct ContextKillScore {
 #[derive(Event, Clone, Copy, Debug)]
 pub struct JasonDamaged;
 
-/// The match, and what the counselor and Jason scored in it.
-#[derive(Resource, Default)]
-pub struct GameMatch {
-    pub state: Match,
+/// One counselor's match: what she scored, what became of her, and her score texts (with their category and the
+/// game time they were scored).
+#[derive(Clone, Debug, Default)]
+pub struct Tally {
     pub score: PlayerScore,
     pub record: CounselorRecord,
     last_health: Option<f32>,
-    /// Score texts on the HUD, with their category and the game time they were scored.
-    popups: Vec<(String, String, f32)>,
-    /// Jason's: his score, his score texts, and whether he took damage.
-    pub killer_score: PlayerScore,
-    killer_popups: Vec<(String, String, f32)>,
-    killer_damaged: bool,
+    pub popups: Vec<(String, String, f32)>,
 }
 
-impl GameMatch {
-    fn award(&mut self, name: &str, scale: f32, events: &BTreeMap<String, ScoreEvent>, now: f32) {
+impl Tally {
+    fn award(&mut self, who: Entity, name: &str, scale: f32, events: &BTreeMap<String, ScoreEvent>, now: f32) {
         let Some(event) = events.get(name) else {
             warn!("match: no score event {name}");
             return;
         };
         if let Some(xp) = self.score.award(name, event, scale) {
             let text = event.text(xp);
-            info!("match: scored {name}: {text}");
+            info!("match: {who} scored {name}: {text}");
             self.popups.push((text, event.category.clone(), now));
         }
+    }
+}
+
+/// The match, and what each counselor and Jason scored in it.
+#[derive(Resource, Default)]
+pub struct GameMatch {
+    pub state: Match,
+    /// Each counselor's (by her entity; a client's by her twin's).
+    pub counselors: BTreeMap<Entity, Tally>,
+    /// The counselor this machine plays.
+    pub local: Option<Entity>,
+    /// Jason's: his score, his score texts, and whether he took damage.
+    pub killer_score: PlayerScore,
+    pub killer_popups: Vec<(String, String, f32)>,
+    killer_damaged: bool,
+}
+
+impl GameMatch {
+    fn award(&mut self, who: Entity, name: &str, scale: f32, events: &BTreeMap<String, ScoreEvent>, now: f32) {
+        self.counselors.entry(who).or_default().award(who, name, scale, events, now);
+    }
+
+    /// The local counselor's.
+    pub fn mine(&self) -> Option<&Tally> {
+        self.counselors.get(&self.local?)
     }
 
     fn award_killer(&mut self, name: &str, scale: f32, events: &BTreeMap<String, ScoreEvent>, now: f32) {
@@ -116,9 +140,9 @@ impl GameMatch {
         }
     }
 
-    /// The score texts shown so far: (text, EScoreEventCategory name, game time).
+    /// The local counselor's score texts so far: (text, EScoreEventCategory name, game time).
     pub fn score_lines(&self) -> &[(String, String, f32)] {
-        &self.popups
+        self.mine().map_or(&[], |t| &t.popups)
     }
 
     /// Jason's.
@@ -126,24 +150,26 @@ impl GameMatch {
         &self.killer_popups
     }
 
-    /// The results' headline: hers, or (Jason played) what became of her.
-    fn outcome_for(&self, killer: bool) -> &'static str {
+    /// The results' headline: hers, or (Jason played) what became of the counselors.
+    fn outcome_for(&self, killer: bool) -> String {
         if killer {
-            return if self.record.escaped {
-                "VANESSA ESCAPED"
-            } else if self.record.dead {
-                "VANESSA IS DEAD"
-            } else {
-                "VANESSA SURVIVED"
+            let n = self.counselors.len();
+            let (dead, escaped) = (self.counselors.values().filter(|t| t.record.dead).count(), self.counselors.values().filter(|t| t.record.escaped).count());
+            return match n {
+                1 if escaped == 1 => "VANESSA ESCAPED".into(),
+                1 if dead == 1 => "VANESSA IS DEAD".into(),
+                1 => "VANESSA SURVIVED".into(),
+                _ => format!("{dead} OF {n} DEAD, {escaped} ESCAPED"),
             };
         }
-        self.outcome()
+        self.outcome().into()
     }
 
     fn outcome(&self) -> &'static str {
-        if self.record.escaped {
+        let record = self.mine().map(|t| t.record).unwrap_or_default();
+        if record.escaped {
             "YOU ESCAPED"
-        } else if self.record.dead {
+        } else if record.dead {
             "YOU DIED"
         } else {
             "YOU SURVIVED"
@@ -161,7 +187,7 @@ pub struct MatchPlugin {
 }
 
 #[derive(Resource)]
-struct Leave(bool);
+pub(crate) struct Leave(pub bool);
 
 impl Plugin for MatchPlugin {
     fn build(&self, app: &mut App) {
@@ -185,7 +211,7 @@ fn load_classes(mut commands: Commands, export: Res<crate::ExportRoot>) {
 
 fn on_score(score: On<Score>, tuning: Option<Res<MatchTuning>>, mut game: ResMut<GameMatch>, time: Res<Time>) {
     let Some(t) = tuning else { return };
-    game.award(score.0, 1.0, &t.events, time.elapsed_secs());
+    game.award(score.who, score.event, 1.0, &t.events, time.elapsed_secs());
 }
 
 fn on_killer_score(score: On<KillerScore>, tuning: Option<Res<MatchTuning>>, mut game: ResMut<GameMatch>, time: Res<Time>) {
@@ -206,15 +232,15 @@ fn on_class_score(score: On<ClassScore>, tuning: Option<Res<MatchTuning>>, class
     let (Some(t), Some(db)) = (tuning, &classes.0) else { return };
     if let Some(event) = db.prop(&score.class, score.property).as_str() {
         let name = event.trim_end_matches("_C");
-        if score.killer {
-            game.award_killer(name, 1.0, &t.events, time.elapsed_secs());
-        } else {
-            game.award(name, 1.0, &t.events, time.elapsed_secs());
+        match score.who {
+            Some(who) => game.award(who, name, 1.0, &t.events, time.elapsed_secs()),
+            None => game.award_killer(name, 1.0, &t.events, time.elapsed_secs()),
         }
     }
 }
 
-/// Runs the match timer once she's in the world, keeps her record, and scores her escape and the match's end.
+/// Runs the match timer once the counselors are in the world, keeps each one's record, and scores the escapes and
+/// the match's end.
 #[allow(clippy::too_many_arguments)]
 fn run_match(
     mut commands: Commands,
@@ -222,36 +248,45 @@ fn run_match(
     time: Res<Time>,
     tuning: Option<Res<MatchTuning>>,
     mut game: ResMut<GameMatch>,
-    player: Query<&Player, (Without<Unsettled>, With<crate::controls::LocalPlayer>)>,
+    players: Query<(Entity, &Player, Has<Escaped>, Has<crate::controls::LocalPlayer>), Without<Unsettled>>,
     jason: Query<(), With<Jason>>,
-    // PLACEHOLDER (Milestone 3): the local counselor's record; one per counselor, and the match's end on all of them.
-    escaped: Option<Single<&Escaped, With<crate::controls::LocalPlayer>>>,
     leave: Res<Leave>,
     host: Option<ResMut<crate::host::HostRequests>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let Some(t) = tuning else { return };
-    let Ok(p) = player.single() else { return };
+    if players.is_empty() {
+        return;
+    }
     let now = time.elapsed_secs();
     let g = &mut *game;
-    let health = p.counselor.health;
-    if g.last_health.is_some_and(|h| health < h) {
-        g.record.taken_damage = true;
-    }
-    g.last_health = Some(health);
-    if !p.counselor.alive() && !g.record.dead {
-        g.record.dead = true;
-        info!("match: Vanessa died, {} s in", g.state.elapsed_in_progress_time);
-    }
-    if escaped.is_some() && !g.record.escaped && !g.record.dead {
-        g.record.escaped = true;
-        info!("match: Vanessa escaped, {} s in", g.state.elapsed_in_progress_time);
-        for (name, scale) in escape_awards(&g.record, g.state.elapsed_in_progress_time) {
-            g.award(name, scale, &t.events, now);
+    let elapsed = g.state.elapsed_in_progress_time;
+    let mut left = 0;
+    for (e, p, escaped, local) in &players {
+        if local {
+            g.local = Some(e);
         }
+        let tally = g.counselors.entry(e).or_default();
+        let health = p.counselor.health;
+        if tally.last_health.is_some_and(|h| health < h) {
+            tally.record.taken_damage = true;
+        }
+        tally.last_health = Some(health);
+        if !p.counselor.alive() && !tally.record.dead {
+            tally.record.dead = true;
+            info!("match: counselor {e} died, {elapsed} s in");
+        }
+        if escaped && !tally.record.escaped && !tally.record.dead {
+            tally.record.escaped = true;
+            info!("match: counselor {e} escaped, {elapsed} s in");
+            for (name, scale) in escape_awards(&tally.record, elapsed) {
+                tally.award(e, name, scale, &t.events, now);
+            }
+        }
+        left += u32::from(p.counselor.alive() && !tally.record.escaped);
     }
     let roster = Roster {
-        counselors_left: u32::from(p.counselor.alive() && !g.record.escaped),
+        counselors_left: left,
         // Jason can't die yet.
         killer_alive: (!jason.is_empty()).then_some(true),
     };
@@ -284,13 +319,16 @@ fn run_match(
             MatchState::InProgress => info!("match: started ({} s round)", t.rules.round_time),
             MatchState::WaitingPostMatchOutro => {
                 info!("match: over after {} s: {}", g.state.elapsed_in_progress_time, g.outcome());
-                // One counselor: every counselor escaped if she did.
-                for (name, scale) in end_of_match_awards(&g.record, g.record.escaped, g.state.elapsed_in_progress_time) {
-                    g.award(name, scale, &t.events, now);
+                let all_escaped = g.counselors.values().all(|t| t.record.escaped);
+                let elapsed = g.state.elapsed_in_progress_time;
+                for (&e, tally) in g.counselors.iter_mut() {
+                    for (name, scale) in end_of_match_awards(&tally.record, all_escaped, elapsed) {
+                        tally.award(e, name, scale, &t.events, now);
+                    }
                 }
                 if !jason.is_empty() {
-                    // One counselor spawned.
-                    for (name, scale) in killer_end_of_match_awards(1, u32::from(g.record.dead), g.killer_damaged) {
+                    let (spawned, dead) = (g.counselors.len() as u32, g.counselors.values().filter(|t| t.record.dead).count() as u32);
+                    for (name, scale) in killer_end_of_match_awards(spawned, dead, g.killer_damaged) {
                         g.award_killer(name, scale, &t.events, now);
                     }
                 }
@@ -304,8 +342,10 @@ fn run_match(
                 entered.extend(ended);
             }
             MatchState::WaitingPostMatch => {
-                let list: Vec<String> = g.score.awards.iter().map(|a| format!("{} {}", a.event, a.xp)).collect();
-                info!("match: results: {} XP ({})", g.score.total(), list.join(", "));
+                for (e, tally) in &g.counselors {
+                    let list: Vec<String> = tally.score.awards.iter().map(|a| format!("{} {}", a.event, a.xp)).collect();
+                    info!("match: results: counselor {e}: {} XP ({})", tally.score.total(), list.join(", "));
+                }
                 if !g.killer_score.awards.is_empty() {
                     let list: Vec<String> = g.killer_score.awards.iter().map(|a| format!("{} {}", a.event, a.xp)).collect();
                     info!("match: Jason's results: {} XP ({})", g.killer_score.total(), list.join(", "));
@@ -382,14 +422,15 @@ fn update_hud(
     let m = &game.state;
     // The played character's results: Jason's or hers.
     let killer = play_jason.is_some();
-    let score = if killer { &game.killer_score } else { &game.score };
+    let empty = PlayerScore::default();
+    let score = if killer { &game.killer_score } else { game.mine().map_or(&empty, |t| &t.score) };
     // The game's HUD has its own timer (ui.rs).
     let clock_text = if m.state == MatchState::InProgress && game_hud.is_none() { format!("{}:{:02}", m.remaining_time / 60, m.remaining_time % 60) } else { String::new() };
     if clock.0 != clock_text {
         clock.0 = clock_text;
     }
     let now = time.elapsed_secs();
-    let shown: Vec<&str> = game.popups.iter().filter(|(_, _, at)| game_hud.is_none() && now - at < POPUP_SECONDS).map(|(t, _, _)| t.as_str()).collect();
+    let shown: Vec<&str> = game.score_lines().iter().filter(|(_, _, at)| game_hud.is_none() && now - at < POPUP_SECONDS).map(|(t, _, _)| t.as_str()).collect();
     let popup_text = shown.join("\n");
     if popups.0 != popup_text {
         popups.0 = popup_text;

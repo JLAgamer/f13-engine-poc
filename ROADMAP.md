@@ -47,13 +47,13 @@ Server-authoritative netcode, tested with bots, then an 8-player lobby.
 
 Steps (lightyear 0.30 for the netcode):
 - [ ] The rest of the world over the network: the cabinets' drawers, the police car, armed traps, thrown knives
-      and firecrackers, the match's state, timer and score; clients interpolate the characters between snapshots
+      and firecrackers; clients interpolate the characters between snapshots
       (they smooth toward the newest now); the lobby hands the client the server's layout and seed (it must be
       started with the same ones)
 - [ ] Jason's presentation on clients: his stalk, shift and morph effects, the kills' paired takes and cameras, his
       held items
-- [ ] The game's choice of counselor start (starts are handed out in order; PLACEHOLDER), voice lines and the match
-      record per counselor (still the local one's)
+- [ ] The game's choice of counselor start (starts are handed out in order; PLACEHOLDER); the chase (its music and
+      ChaseStart line) per counselor
 - [ ] Bot clients for the scenarios: the bots that set up their scene (teleports, locks) need a server-side hook
       (the net bot plays through its input only)
 - [ ] The 8-player lobby: Jason and counselor picks, ready, start; the match-end lobby with its badges

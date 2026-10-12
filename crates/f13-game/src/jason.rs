@@ -1135,6 +1135,8 @@ fn segment_distance(p0: Vec3, p1: Vec3, q0: Vec3, q1: Vec3) -> f32 {
 /// A counselor's item hit Jason (items.rs): `stun` if it stunned him, else he flinches.
 #[derive(Component, Clone, Debug)]
 pub struct HitJason {
+    /// The counselor who hit him (none: the police).
+    pub by: Option<Entity>,
     pub stun: Option<Stun>,
     pub from: Vec3,
 }
@@ -1169,10 +1171,12 @@ fn distortion(
     }
 }
 
-/// The counselor's wiggle input (GLB_Wiggle: -1 while E is down) and her grab struggle's minigame (f13-core::stun).
+/// The local counselor's wiggle input (GLB_Wiggle: -1 while E is down), every counselor's (by her entity), and the
+/// grab struggle's minigame (f13-core::stun).
 #[derive(Resource, Default)]
 pub struct Struggle {
     pub input: f32,
+    pub inputs: std::collections::HashMap<Entity, f32>,
     pub wiggle: f13_core::stun::Wiggle,
 }
 /// SCCharacterAIProperties (constructor): an AI character wiggles every Min..MaxWiggleInterval seconds.
@@ -1685,7 +1689,9 @@ pub(crate) fn update_jason(
             commands.trigger(crate::match_flow::JasonDamaged);
             // Her weapon's damage (the item stuns below score their own).
             if matches!(h.stun, None | Some(Stun::Weapon { .. })) {
-                commands.trigger(Score("DamageJason"));
+                if let Some(who) = h.by {
+                    commands.trigger(Score { who, event: "DamageJason" });
+                }
             }
             let can_stun = j.stunnable();
             // Blocking (SCKillerCharacter's TakeDamage 0x14040b600): a hit whose damage type can be blocked
@@ -1703,7 +1709,9 @@ pub(crate) fn update_jason(
                 Some(stun) if can_stun => {
                     info!("Jason: stunned ({stun:?}, {:.0}s)", stun.seconds());
                     if let Some(event) = stun.score_event() {
-                        commands.trigger(Score(event));
+                        if let Some(who) = h.by {
+                            commands.trigger(Score { who, event });
+                        }
                         crate::net_world::shout(&mut commands, crate::net_world::Shout::ActorSound(crate::audio::ActorSound { actor: pe, prop: "VO:JasonStun" }));
                     }
                     if matches!(j.state, JasonState::Holding { .. }) {
@@ -2771,7 +2779,7 @@ pub(crate) fn update_jason(
                 if at >= counselor_model.as_ref().and_then(|c| c.length(GRABBED_ENTER)).unwrap_or(2.0) {
                     commands.entity(pe).insert(PlayAction(GRABBED_IDLE.into()));
                 }
-                let input = struggle.input;
+                let input = struggle.inputs.get(&pe).copied().unwrap_or(0.0);
                 // FUN_1403bc910: her progress per wiggle slowed while she's wounded and against a raged Jason.
                 let combat = &ptuning.counselor.combat;
                 let raged = know.as_ref().is_some_and(|k| k.abilities.rage_active);
@@ -2782,7 +2790,7 @@ pub(crate) fn update_jason(
                     let back = combat.break_free_stamina(&p.counselor.stats);
                     p.counselor.stamina = (p.counselor.stamina + back).min(ptuning.counselor.stamina_max);
                     info!("Vanessa: struggled free after {at:.1}s (stamina +{back:.0})");
-                    commands.trigger(Score(Stun::GrabBreak.score_event().unwrap_or_default()));
+                    commands.trigger(Score { who: pe, event: Stun::GrabBreak.score_event().unwrap_or_default() });
                     let in_water = water.as_ref().is_some_and(|w| w.surface_at(xf.translation + Vec3::Y * t.capsule.half_height).is_some());
                     drop_counselor(&mut pxf, &xf, t.capsule.half_height, in_water, &world);
                     release(&mut commands, pe, GRAB_BREAK, counselor_model.as_deref());
@@ -3007,8 +3015,19 @@ fn snap_rig(rigs: &mut Query<(&mut Rig, &ChildOf, &Transform), (Without<Jason>, 
 /// minigame's tick counts its turning non-zero, so each press of E is a wiggle (at most MaxWigglesPerSecond). Playing
 /// Jason, the keys are his (E is his interact): she doesn't wiggle and frees herself by the stun's time alone
 /// (PLACEHOLDER: the game's offline counselor AI's struggle isn't read).
-pub(crate) fn read_struggle(keys: Res<ButtonInput<KeyCode>>, mut s: ResMut<Struggle>, play_jason: Option<Res<crate::jason_player::PlayJason>>) {
+pub(crate) fn read_struggle(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut s: ResMut<Struggle>,
+    play_jason: Option<Res<crate::jason_player::PlayJason>>,
+    pads: crate::controls::Pads,
+    counselors: Query<(Entity, Has<crate::controls::LocalPlayer>), With<Player>>,
+) {
     s.input = if play_jason.is_none() && keys.pressed(KeyCode::KeyE) { -1.0 } else { 0.0 };
+    s.inputs.clear();
+    for (e, local) in &counselors {
+        let input = if local { s.input } else if pads.pressed(e, crate::controls::Button::Interact) { -1.0 } else { 0.0 };
+        s.inputs.insert(e, input);
+    }
 }
 
 /// CounselorGrabStun_C: the grab is a stun she wiggles out of: TotalStunTime 15 s (lower with Strength 15 and

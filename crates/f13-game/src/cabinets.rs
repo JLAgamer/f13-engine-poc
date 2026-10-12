@@ -314,7 +314,7 @@ pub(crate) fn cabinet_uses(
                                 crate::interact::take_small(&mut commands, &mut visibility, &mut inv, item, e, crate::interact::Swap::Cabinet(u.cabinet, u.slot, rest));
                             }
                             info!("took {} from a cabinet", item.name);
-                            commands.trigger(crate::match_flow::ClassScore::new(&item.class, "PickupScoreEvent"));
+                            commands.trigger(crate::match_flow::ClassScore::new(pe, &item.class, "PickupScoreEvent"));
                         }
                         commands.entity(e).insert(Carried).remove::<InCabinet>();
                         if let Ok(mut v) = visibility.get_mut(e) {
