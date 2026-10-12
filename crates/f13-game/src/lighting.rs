@@ -13,8 +13,11 @@
 //!     conversion), not found in the game's binary; read as lumens, the outro's and the campfires' lights washed
 //!     their scenes out.
 //!   - A light without inverse-square falloff lights `Intensity * (1 - (d/R)^2)^FalloffExponent` lux at distance
-//!     `d` within its radius `R`. Bevy has only the inverse-square law, so that light gets the lumens that match it
-//!     at a third of its radius.
+//!     `d` within its radius `R` (DeferredLightingCommon's RadialAttenuation). Bevy has only the inverse-square law,
+//!     so its point light shading is patched ([`patch_falloff`]): a light whose sphere radius is negative takes that
+//!     falloff, the radius being minus its exponent, and its Bevy intensity is Intensity x 4 pi (lumens over 4 pi:
+//!     Intensity lux). (Matched at a third of the radius instead, as before, the lamps lit what's near them up to 30
+//!     times too bright.)
 //!   - Colours are sRGB; `bUseTemperature` multiplies in the colour temperature (f13-core::light).
 //!   - Lights fade out over their last MaxDistanceFadeRange before MaxDrawDistance from the camera, as Unreal fades
 //!     them.
@@ -146,10 +149,20 @@ impl PlacedLight {
     /// Bevy lumens for a point or spot light (see the module notes).
     pub(crate) fn lumens(&self) -> f32 {
         let intensity = self.num("Intensity", 5000.0);
-        if self.flag("bUseInverseSquaredFalloff", true) {
+        if self.inverse_squared() {
             return inverse_squared_lumens(intensity);
         }
-        unreal_falloff_lumens(intensity, self.radius(), self.num("LightFalloffExponent", 8.0))
+        falloff_lumens(intensity)
+    }
+
+    fn inverse_squared(&self) -> bool {
+        self.flag("bUseInverseSquaredFalloff", true)
+    }
+
+    /// Its Bevy sphere radius: 0, or minus its falloff exponent for a light without inverse-square falloff (the
+    /// patched shading, [`patch_falloff`]).
+    pub(crate) fn sphere_radius(&self) -> f32 {
+        if self.inverse_squared() { 0.0 } else { falloff_radius(self.num("LightFalloffExponent", 8.0)) }
     }
 }
 
@@ -159,11 +172,62 @@ pub(crate) fn inverse_squared_lumens(intensity: f32) -> f32 {
     intensity * 16.0 / 10_000.0 * 4.0 * std::f32::consts::PI
 }
 
-/// Lumens for a light without inverse-square falloff, matching its illuminance at a third of its radius `r` (cm).
-pub(crate) fn unreal_falloff_lumens(intensity: f32, r: f32, exponent: f32) -> f32 {
-    let lux = intensity * (8.0f32 / 9.0).powf(exponent);
-    let d = r / 300.0;
-    lux * d * d * 4.0 * std::f32::consts::PI
+/// Bevy intensity for a light without inverse-square falloff: its Intensity (lux at its centre) x 4 pi, so the
+/// patched shading ([`patch_falloff`]) lights Intensity x (1 - (d/R)^2)^exponent.
+pub(crate) fn falloff_lumens(intensity: f32) -> f32 {
+    intensity * 4.0 * std::f32::consts::PI
+}
+
+/// The sphere radius that marks a light for Unreal's radial falloff: minus its exponent.
+pub(crate) fn falloff_radius(exponent: f32) -> f32 {
+    -exponent.max(1e-3)
+}
+
+/// Unreal 4.18's RadialAttenuation for lights without inverse-square falloff, in Bevy's point light shading
+/// (bevy_pbr::lighting, its source patched once it has loaded): a light with a negative sphere radius gets
+/// pow(saturate(1 - d^2 / R^2), -radius) in place of the inverse square and its range window; the sphere radius of
+/// every light is otherwise taken as at least 0 (only the specular's area light uses it).
+fn patch_falloff(mut done: Local<bool>, assets: Res<AssetServer>, mut shaders: ResMut<Assets<bevy::shader::Shader>>, mut handle: Local<Option<Handle<bevy::shader::Shader>>>) {
+    if *done {
+        return;
+    }
+    let h = handle.get_or_insert_with(|| assets.load("embedded://bevy_pbr/render/pbr_lighting.wgsl")).clone();
+    let Some(shader) = shaders.get(&h) else { return };
+    let bevy::shader::Source::Wgsl(source) = &shader.source else {
+        *done = true;
+        return;
+    };
+    let mut s = source.to_string();
+    let replace = |s: &mut String, a: &str, b: &str, n: usize| {
+        let found = s.matches(a).count();
+        if found != n {
+            error!("lighting: bevy_pbr::lighting isn't as expected ({found} of {a:?}): Unreal's falloff not patched in");
+            return false;
+        }
+        *s = s.replace(a, b);
+        true
+    };
+    let ok = replace(
+        &mut s,
+        "fn getDistanceAttenuation(distanceSquare: f32, inverseRangeSquared: f32) -> f32 {",
+        "fn unrealAttenuation(distanceSquare: f32, inverseRangeSquared: f32, radius: f32) -> f32 {\n    \
+             if radius < 0.0 {\n        return pow(saturate(1.0 - distanceSquare * inverseRangeSquared), -radius);\n    }\n    \
+             return getDistanceAttenuation(distanceSquare, inverseRangeSquared);\n}\n\n\
+         fn getDistanceAttenuation(distanceSquare: f32, inverseRangeSquared: f32) -> f32 {",
+        1,
+    ) && replace(
+        &mut s,
+        "let rangeAttenuation = getDistanceAttenuation(distance_square, (*light).color_inverse_square_range.w);",
+        "let rangeAttenuation = unrealAttenuation(distance_square, (*light).color_inverse_square_range.w, (*light).position_radius.w);",
+        1,
+    ) && replace(&mut s, "        (*light).position_radius.w,\n", "        max((*light).position_radius.w, 0.0),\n", 2)
+        && replace(&mut s, "let light_radius = (*light).position_radius.w;", "let light_radius = max((*light).position_radius.w, 0.0);", 1);
+    *done = true;
+    if let (true, Some(mut shader)) = (ok, shaders.get_mut(&h)) {
+        // Its imports and their handles kept (the function added imports nothing).
+        shader.source = bevy::shader::Source::Wgsl(s.into());
+        info!("lighting: Unreal's radial falloff patched into bevy_pbr::lighting");
+    }
 }
 
 /// Every component the level places whose type `keep` accepts: (type, world transform, properties), the placed
@@ -318,6 +382,7 @@ impl Plugin for LightingPlugin {
             app.insert_resource(Unlit);
         }
         app.add_systems(Startup, spawn_lights)
+            .add_systems(Update, patch_falloff)
             .init_resource::<Cookies>()
             .add_systems(Update, light_cookies)
             .add_systems(Update, (setup_cameras, update_fog, fade_lights, light_functions, shadow_casters, add_flashlight, toggle_flashlight, aim_flashlight).chain());
@@ -461,14 +526,14 @@ fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
                 let xf = Transform::from_translation(at).looking_to(dir, if dir.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y });
                 let e = if l.kind == LightKind::Point {
                     points += 1;
-                    commands.spawn((PointLight { color: l.color().into(), intensity: lumens, range, shadow_maps_enabled: false, ..default() }, xf, fade)).id()
+                    commands.spawn((PointLight { color: l.color().into(), intensity: lumens, range, radius: l.sphere_radius(), shadow_maps_enabled: false, ..default() }, xf, fade)).id()
                 } else {
                     spots += 1;
                     let (inner, outer) = l.cone();
                     let outer = outer.clamp(0.5, 89.0).to_radians();
                     commands
                         .spawn((
-                            SpotLight { color: l.color().into(), intensity: lumens, range, inner_angle: inner.to_radians().min(outer), outer_angle: outer, shadow_maps_enabled: false, ..default() },
+                            SpotLight { color: l.color().into(), intensity: lumens, range, radius: l.sphere_radius(), inner_angle: inner.to_radians().min(outer), outer_angle: outer, shadow_maps_enabled: false, ..default() },
                             xf,
                             fade,
                         ))
@@ -720,7 +785,9 @@ fn add_flashlight(
         color = LinearRgba::rgb(color.red * t[0], color.green * t[1], color.blue * t[2]);
     }
     let (intensity, radius) = (v("FlashlightIntensity", 5000.0), v("FlashlightAttenuationRadius", 1000.0));
-    let lumens = if v("FlashlightInverseSquared", 1.0) > 0.5 { inverse_squared_lumens(intensity) } else { unreal_falloff_lumens(intensity, radius, v("FlashlightFalloffExponent", 8.0)) };
+    let inverse = v("FlashlightInverseSquared", 1.0) > 0.5;
+    let lumens = if inverse { inverse_squared_lumens(intensity) } else { falloff_lumens(intensity) };
+    let sphere = if inverse { 0.0 } else { falloff_radius(v("FlashlightFalloffExponent", 8.0)) };
     let outer = v("FlashlightOuterConeAngle", 44.0).clamp(0.5, 89.0).to_radians();
     let t = FlashlightTuning {
         lumens,
@@ -732,7 +799,7 @@ fn add_flashlight(
     };
     let light = commands
         .spawn((
-            SpotLight { color: t.color.into(), intensity: 0.0, range: t.range, inner_angle: t.inner, outer_angle: t.outer, shadow_maps_enabled: true, ..default() },
+            SpotLight { color: t.color.into(), intensity: 0.0, range: t.range, radius: sphere, inner_angle: t.inner, outer_angle: t.outer, shadow_maps_enabled: true, ..default() },
             Transform::from_translation(xf.translation),
             // Base_Counselor's Flashlight: LightFunctionMaterial M_FlashlightFunction_01 (MODLOG "Night lighting").
             LightCookie(light_function_texture("M_FlashlightFunction_01").unwrap_or_default()),
@@ -801,10 +868,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn falloff_light_matches_at_a_third_of_its_radius() {
-        // 30 lux-units, 15 m, exponent 4 (the flashlight): (8/9)^4 * 30 lux at 5 m.
-        let lm = unreal_falloff_lumens(30.0, 1500.0, 4.0);
-        let lux_at_5m = lm / (4.0 * std::f32::consts::PI) / 25.0;
-        assert!((lux_at_5m - 30.0 * (8.0f32 / 9.0).powi(4)).abs() < 1e-3);
+    fn falloff_light_is_its_intensity_at_the_centre() {
+        // Bevy divides lumens by 4 pi into the shaded colour; the patched falloff is 1 at the light.
+        assert!((falloff_lumens(30.0) / (4.0 * std::f32::consts::PI) - 30.0).abs() < 1e-4);
+        assert_eq!(falloff_radius(4.0), -4.0);
+        assert!(falloff_radius(0.0) < 0.0);
     }
 }

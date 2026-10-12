@@ -131,6 +131,11 @@ impl Widget {
             slot: v["Slot"]["Props"].clone(),
             children: v["Children"].as_array().map_or(vec![], |c| c.iter().map(|c| Self::from_json(dir, c, depth)).collect()),
         };
+        // A canvas draws its children by their slots' ZOrder, then in order (SCanvas's ArrangeChildren sorts its
+        // slots by ZOrder, stable): KillerAbilityWidget's icons (ZOrder 1) over its unlock bars (0) listed after them.
+        if w.kind == "CanvasPanel" {
+            w.children.sort_by_key(|c| c.slot["ZOrder"].as_i64().unwrap_or(0));
+        }
         if let Some(class) = &w.class {
             if depth < 16 {
                 w.children = Self::load_depth(dir, class, depth + 1).into_iter().collect();

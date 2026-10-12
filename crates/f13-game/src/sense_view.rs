@@ -92,7 +92,8 @@ fn sense_light(
     commands.spawn((
         PointLight {
             color: LinearRgba::rgb(c.red * t[0], c.green * t[1], c.blue * t[2]).into(),
-            intensity: crate::lighting::unreal_falloff_lumens(brightness, 1500.0, 2.0),
+            intensity: crate::lighting::falloff_lumens(brightness),
+            radius: crate::lighting::falloff_radius(2.0),
             range: 15.0,
             shadow_maps_enabled: false,
             ..default()

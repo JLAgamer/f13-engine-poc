@@ -371,11 +371,12 @@ pub(crate) fn spawn_car(commands: &mut Commands, export: &crate::ExportRoot, ass
                 intensity: if c.props["bUseInverseSquaredFalloff"].as_bool().unwrap_or(true) {
                     crate::lighting::inverse_squared_lumens(c.props["Intensity"].as_f64().unwrap_or(5000.0) as f32)
                 } else {
-                    crate::lighting::unreal_falloff_lumens(
-                        c.props["Intensity"].as_f64().unwrap_or(5000.0) as f32,
-                        c.props["AttenuationRadius"].as_f64().unwrap_or(1000.0) as f32,
-                        c.props["LightFalloffExponent"].as_f64().unwrap_or(8.0) as f32,
-                    )
+                    crate::lighting::falloff_lumens(c.props["Intensity"].as_f64().unwrap_or(5000.0) as f32)
+                },
+                radius: if c.props["bUseInverseSquaredFalloff"].as_bool().unwrap_or(true) {
+                    0.0
+                } else {
+                    crate::lighting::falloff_radius(c.props["LightFalloffExponent"].as_f64().unwrap_or(8.0) as f32)
                 },
                 range: c.props["AttenuationRadius"].as_f64().unwrap_or(1000.0) as f32 / 100.0,
                 inner_angle: (c.props["InnerConeAngle"].as_f64().unwrap_or(0.0) as f32).to_radians().min(outer),

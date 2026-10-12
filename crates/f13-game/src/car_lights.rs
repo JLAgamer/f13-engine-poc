@@ -95,6 +95,7 @@ pub fn spot_lights(components: &[ComponentInfo]) -> Vec<((CarSpot, SpotLight, Tr
             let spot = SpotLight {
                 color: l.color().into(),
                 intensity: lumens,
+                radius: l.sphere_radius(),
                 range: l.radius() / 100.0,
                 inner_angle: inner.to_radians().min(outer),
                 outer_angle: outer,

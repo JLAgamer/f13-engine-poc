@@ -2239,8 +2239,8 @@ fn draw(
                 // MaxDrawCount) a light of colour Color.rgb x Color.a x ColorScale, radius (|Size.x| + |Size.y|) / 2 x
                 // RadiusScale (Size.y = Size.x for the square alignments), its exponent, at its location; skipped when
                 // both radius and colour are about 0. Unshadowed. Their colour is the deferred light's LightColor
-                // (cm-based inverse square), so Bevy lumens = colour x 4pi / 100^2 (lighting.rs takes a placed
-                // inverse-squared light's Intensity as lumens: LightColor = lumens x 100^2 / 4pi).
+                // (cm-based inverse square: candela = colour / 100^2), so Bevy lumens = colour x 4pi / 100^2; with an
+                // exponent, the radial falloff (lighting.rs's patched shading: the colour as lux at the centre).
                 let square = matches!(e.def.screen_alignment.as_str(), "PSA_FacingCameraPosition" | "PSA_Square" | "PSA_FacingCameraDistanceBlend");
                 let max = e.def.max_draw_count.map_or(usize::MAX, |m| m as usize);
                 let mut lit = e.particles.iter().take(max).filter_map(|p| {
@@ -2259,10 +2259,10 @@ fn draw(
                     let peak = color.max_element().max(1e-6);
                     if let Ok(mut pl) = point_lights.get_mut(l) {
                         pl.color = Color::linear_rgb(color.x / peak, color.y / peak, color.z / peak);
-                        pl.intensity = if p.light_exponent == 0.0 {
-                            peak * 4.0 * std::f32::consts::PI / 10_000.0
+                        (pl.intensity, pl.radius) = if p.light_exponent == 0.0 {
+                            (peak * 4.0 * std::f32::consts::PI / 10_000.0, 0.0)
                         } else {
-                            crate::lighting::unreal_falloff_lumens(peak, radius, p.light_exponent)
+                            (crate::lighting::falloff_lumens(peak), crate::lighting::falloff_radius(p.light_exponent))
                         };
                         pl.range = radius * 0.01;
                     }

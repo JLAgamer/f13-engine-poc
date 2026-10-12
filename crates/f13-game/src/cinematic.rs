@@ -572,9 +572,9 @@ fn start(
                 if kind == LightKind::Spot {
                     let (inner, outer) = l.cone();
                     let outer = outer.clamp(0.5, 89.0).to_radians();
-                    e.insert(SpotLight { color, intensity: lumens, range, inner_angle: inner.to_radians().min(outer), outer_angle: outer, shadow_maps_enabled: false, ..default() });
+                    e.insert(SpotLight { color, intensity: lumens, range, radius: l.sphere_radius(), inner_angle: inner.to_radians().min(outer), outer_angle: outer, shadow_maps_enabled: false, ..default() });
                 } else {
-                    e.insert(PointLight { color, intensity: lumens, range, shadow_maps_enabled: false, ..default() });
+                    e.insert(PointLight { color, intensity: lumens, range, radius: l.sphere_radius(), shadow_maps_enabled: false, ..default() });
                 }
                 e.insert(StagedLight(l));
             }

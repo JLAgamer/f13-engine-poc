@@ -1560,6 +1560,10 @@ fn place_map_icons(
                         Node { position_type: PositionType::Absolute, left, top, width: Val::Px(s.x), height: Val::Px(s.y), ..default() },
                         ImageNode { color, ..ImageNode::new(assets.load(file)) },
                         UiTransform { rotation, ..default() },
+                        // Its own colour under its map's (widget_colors multiplies a changing ancestor's colour over
+                        // this: captured from the node instead, it was the closed map's transparent one, and the icons
+                        // stayed unseen until the map's MapFade had played).
+                        TintBase(brush),
                         MapIconNode,
                         Pickable::IGNORE,
                         ChildOf(panel),
@@ -1816,7 +1820,7 @@ fn jason_hud(
     mut shown: Local<(bool, bool, f32)>,
     (mut morph_map, map_nodes): (Option<ResMut<crate::jason_player::MorphMap>>, Query<(&ComputedNode, &UiGlobalTransform)>),
     mut map_shown: Local<bool>,
-    (mut unlocked, mut ability_state): (Local<[bool; 4]>, Local<[(bool, bool); 4]>),
+    (mut unlocked, mut ability_state): (Local<[Option<Entity>; 4]>, Local<[(bool, bool); 4]>),
     (grab_info, grab_available, asset_server, mut images): (
         Option<Res<crate::jason::GrabKillInfo>>,
         Option<Res<crate::jason::GrabKillsAvailable>>,
@@ -1986,9 +1990,11 @@ fn jason_hud(
         // OnAbilityUnlocked: the unlock bar hidden (its asset gives Morph's the Stalk material, which would otherwise
         // stay drawn over Morph), the bar and the bracket shown, the bracket opaque when the amount is full.
         let i = ability as usize;
-        // (Once its widgets are built: an ability unlocked from the start, Morph, comes before the HUD is.)
-        if a.is_unlocked(ability) && !unlocked[i] && hud.names.contains_key(&format!("KillerAbilityWidget.{n}UnlockBar")) {
-            unlocked[i] = true;
+        // Done once per built HUD (the unlock bar's node it was done to): the HUD is rebuilt as its contents change
+        // (the match's timer after the intro), its widgets back as built, and Morph unlocks before that.
+        let unlock_bar = hud.names.get(&format!("KillerAbilityWidget.{n}UnlockBar")).copied();
+        if a.is_unlocked(ability) && unlock_bar.is_some() && unlocked[i] != unlock_bar {
+            unlocked[i] = unlock_bar;
             for (part, v) in [("UnlockBar", Visibility::Hidden), ("Bar", Visibility::Inherited)] {
                 if let Some(mut w) = hud.names.get(&format!("KillerAbilityWidget.{n}{part}")).and_then(|&e| vis.get_mut(e).ok()) {
                     w.set_if_neq(v);
