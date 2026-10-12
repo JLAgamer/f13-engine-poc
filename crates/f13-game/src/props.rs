@@ -827,6 +827,7 @@ fn spawn_props(
                     follow: Some(root),
                     actor: format!("{root}.{}", c.name),
                     active: c.props["bAutoActivate"].as_bool() != Some(false),
+                    time_dilation: c.props["CustomTimeDilation"].as_f64().map_or(1.0, |d| d as f32),
                 });
             }
             let p = to_transform(&actor.transform).translation;

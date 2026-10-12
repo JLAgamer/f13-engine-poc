@@ -873,6 +873,8 @@ switch (rest[0])
                     names.Add(m.Groups[1].Value);
             // PlayerCameraManager_BP's RainParticleSystem (a soft reference: the camera's rain grid, f13-game particles.rs).
             if (rest.Count == 1) names.Add("P_Rain_Environmental_01A_GPU");
+            // SoundBlip_C's ParticleSystem (Jason_Base's SoundBlipClass: his sound blips, f13-game sound_blips.rs).
+            if (rest.Count == 1) names.Add("P_Sound_Wave_Indicator_01");
             Console.WriteLine($"particles: {ParticleExporter.Write(provider, outDir, names, Queue)} systems written");
             // The impact effects' decal materials (their <surface>Decal's DecalMaterial and SplashDecals' Decals) and textures.
             if (rest.Count == 1 && File.Exists(classesJson))

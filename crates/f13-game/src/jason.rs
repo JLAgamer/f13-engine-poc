@@ -1057,6 +1057,7 @@ pub(crate) fn knife_look(commands: &mut Commands, look: Option<&KnifeLook>, knif
         follow: Some(knife),
         actor: String::new(),
         active: true,
+        time_dilation: 1.0,
     });
     dart
 }

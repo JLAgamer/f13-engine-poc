@@ -165,17 +165,20 @@ pub struct ParticleMaterial {
     distort: bool,
     /// Drawn from `sprites` (a batch) rather than from its mesh's vertices.
     stored: bool,
+    /// The material's bDisableDepthTest: drawn over everything (Jason's sound blips).
+    no_depth_test: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ParticleKey {
     distort: bool,
     stored: bool,
+    no_depth_test: bool,
 }
 
 impl From<&ParticleMaterial> for ParticleKey {
     fn from(m: &ParticleMaterial) -> Self {
-        ParticleKey { distort: m.distort, stored: m.stored }
+        ParticleKey { distort: m.distort, stored: m.stored, no_depth_test: m.no_depth_test }
     }
 }
 
@@ -217,6 +220,11 @@ impl Material for ParticleMaterial {
         if key.bind_group_data.distort {
             if let Some(ds) = descriptor.depth_stencil.as_mut() {
                 ds.depth_write_enabled = Some(false);
+            }
+        }
+        if key.bind_group_data.no_depth_test {
+            if let Some(ds) = descriptor.depth_stencil.as_mut() {
+                ds.depth_compare = Some(bevy::render::render_resource::CompareFunction::Always);
             }
         }
         let l = if key.bind_group_data.stored {
@@ -487,6 +495,8 @@ pub struct ParticleSystemInstance {
     ticked_at: Option<(Vec3, Quat)>,
     /// When it was last drawn in the view (game seconds: the component's LastRenderTime, -1000 until drawn).
     last_render: f32,
+    /// The component's CustomTimeDilation: its tick's time x this (UParticleSystemComponent::TickComponent).
+    time_dilation: f32,
 }
 
 fn rand(state: &mut u64) -> f32 {
@@ -539,6 +549,9 @@ struct MaterialEntry {
     blend: String,
     #[serde(default)]
     master: String,
+    /// Its own JSON (the export's path under the root).
+    #[serde(default)]
+    file: String,
     #[serde(default)]
     scalars: HashMap<String, f32>,
     #[serde(default)]
@@ -828,6 +841,15 @@ impl Materials {
             }
             // M_Blood_Burst_01's shader map (M_Blood_Spray_10's own is the same, diffed; M_Blood_Bursts_03_Inst has none).
             // M_Blood_Squirt_01 has its own permutation (s003 diffed): the same shading, its UV distorted (mode 14).
+            "M_Gradient_Graphic_Ring_01" => {
+                // Jason's sound blips (P_Sound_Wave_Indicator_01). uniexpr.py: cb1[2] ParticleColorParameter.rgb (2), cb1[3]
+                // SelectionColor.rgb (0); its sprite base pass s006 samples Normal_Main (BC1, linear) as colour.
+                let vec = |n: &str, d: [f32; 4]| e.vectors.get(n).or_else(|| master.and_then(|m| m.vectors.get(n))).copied().unwrap_or(d);
+                let (c, sel) = (vec("ParticleColorParameter", [2.0, 2.0, 2.0, 1.0]), vec("SelectionColor", [0.0, 0.0, 0.0, 1.0]));
+                p[2] = Vec4::new(c[0], c[1], c[2], 0.0);
+                p[3] = Vec4::new(sel[0], sel[1], sel[2], 0.0);
+                (15.0, [tex("Normal_Main"), None, None, None])
+            }
             "M_Blood_Burst_01" => {
                 // uniexpr.py M_Blood_Burst_01: [1] (FLIPBOOK_COLUMNS, ROWS), [2] (COLUMNS x ROWS, ROWS), [4].x
                 // -EmissiveHighlightContrast, [6] BloodColor.rgb, [7] SelectionColor.rgb (0), [8..12] below.
@@ -926,6 +948,8 @@ impl Materials {
         };
         let [t0, t1, t2, t3] = t;
         let t0 = t0?;
+        // bDisableDepthTest, from the material's own JSON (materials.json doesn't carry it).
+        let no_depth_test = std::fs::read_to_string(root.join(&e.file)).is_ok_and(|j| j.contains("\"bDisableDepthTest\": true"));
         Some(ParticleMaterial {
             params: ParticleParams { mode: Vec4::new(mode, if additive { 1.0 } else { 0.0 }, 0.0, 0.0), p },
             t1: t1.unwrap_or_else(|| t0.clone()),
@@ -936,6 +960,7 @@ impl Materials {
             alpha,
             distort: false,
             stored: false,
+            no_depth_test,
         })
     }
 }
@@ -1067,7 +1092,7 @@ impl ParticleAssets {
         if emitters.is_empty() {
             return None;
         }
-        let mut inst = ParticleSystemInstance { emitters, location, rotation, scale, max_draw, rng: self.seed, active, actor: actor.to_string(), level: String::new(), parent: None, follow: None, auto_destroy: false, hidden: false, ticked_at: None, last_render: -1000.0 };
+        let mut inst = ParticleSystemInstance { emitters, location, rotation, scale, max_draw, rng: self.seed, active, actor: actor.to_string(), level: String::new(), parent: None, follow: None, auto_destroy: false, hidden: false, ticked_at: None, last_render: -1000.0, time_dilation: 1.0 };
         // WarmupTime: ticked in 0.032 s steps (UParticleSystemComponent's default warmup step).
         let warmup = warmup.unwrap_or(system.warmup);
         let mut t = 0.0;
@@ -1101,6 +1126,8 @@ pub struct SpawnParticles {
     pub follow: Option<Entity>,
     pub actor: String,
     pub active: bool,
+    /// The component's CustomTimeDilation (1 unless its Blueprint sets one).
+    pub time_dilation: f32,
 }
 
 impl SpawnParticles {
@@ -1115,7 +1142,7 @@ impl SpawnParticles {
     }
 
     pub fn at(system: &str, transform: Transform) -> Self {
-        SpawnParticles { system: system.to_string(), transform, follow: None, actor: String::new(), active: true }
+        SpawnParticles { system: system.to_string(), transform, follow: None, actor: String::new(), active: true, time_dilation: 1.0 }
     }
 }
 
@@ -1164,6 +1191,7 @@ fn spawn_requested(
         let Some(mut inst) = pa.instance(&mut commands, &mut meshes, &mut materials, &assets, &r.system, to_unreal(&world), r.active, &r.actor, 0.0, Some(0.0)) else { continue };
         inst.follow = r.follow.map(|e| (e, r.transform));
         inst.auto_destroy = r.follow.is_none();
+        inst.time_dilation = r.time_dilation;
         commands.spawn((inst, Name::new(format!("particles {}", r.system))));
     }
 }
@@ -1199,6 +1227,7 @@ fn spawn_level_particles(
             let Some(mut inst) = pa.instance(&mut commands, &mut meshes, &mut materials, &assets, name, xf, active, &a.name, max_draw, warmup) else { continue };
             inst.parent = c.parent.clone();
             inst.level = a.level.clone();
+            inst.time_dilation = p["CustomTimeDilation"].as_f64().map_or(1.0, |d| d as f32);
             commands.spawn((inst, Name::new(format!("particles {name}"))));
             n += 1;
         }
@@ -1454,6 +1483,7 @@ fn simulate(
     let now = virtual_time.elapsed_secs();
     for mut s in &mut systems {
         let unrendered = now - s.last_render > 0.1;
+        let dt = dt * s.time_dilation;
         tick(&mut s, dt, Some((&trace, views.as_slice(), drop_detail, unrendered)));
     }
 }

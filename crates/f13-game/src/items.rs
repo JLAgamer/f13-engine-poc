@@ -479,7 +479,7 @@ fn wear_on_block(hit: On<BlockedHit>, mut commands: Commands, mut player: Query<
 }
 
 #[derive(Component)]
-struct Firecracker {
+pub(crate) struct Firecracker {
     /// Who threw it.
     by: Entity,
     vel: Vec3,

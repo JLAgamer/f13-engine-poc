@@ -1,6 +1,16 @@
 //! What Jason knows about the counselor (f13-core::perception): what he sees, the sound blips her noise puts on his
 //! screen, and Sense. jason.rs decides what to do with it.
 //!
+//! His sound blips (the killer's blip update FUN_140411740, from his tick while locally controlled, not in a context
+//! kill, and bSoundBlipVisible, which only single player's challenges clear): every living counselor whose next blip
+//! has come, the noise of every thrown firecracker (SCNoiseMaker_Projectile, its own countdown) at 10 (DAT_14207a21c),
+//! each blipping as f13-core::perception says; a blip spawns SoundBlipClass (SoundBlip_C) at her root. SoundBlip_C:
+//! InitialLifeSpan 6, its BeginPlay scales it lerp(0.5, 8, clamp(|killer - blip|, 1, 10000) / 10000) (0 in the
+//! sandbox mode), its ParticleSystem P_Sound_Wave_Indicator_01 at CustomTimeDilation 2. The server runs the update
+//! and sends each blip to whoever plays Jason ([`SoundBlip`]); only the machine playing Jason draws it. The radios'
+//! blips (SCRadio, while playing) wait for the radios. PLACEHOLDER: the firecrackers' first countdown (their
+//! constructor's, unread: 0 here) and the counselor check at vtable +0xc80 (unread; skipped).
+//!
 //! From the game: sight reaches her `MaxVisibilityDistance` (Base_Counselor: 100 m) along an unblocked line
 //! (`SCCharacter::LineOfSight`); blips, Sense radii and timings are the killer's and the counselor's values (see
 //! f13-core::perception); his abilities unlock and recharge as f13-core::killer_abilities (Sense second, 46 s in).
@@ -71,7 +81,6 @@ pub struct Knowledge {
     pub highlight: bool,
     /// Sense shows her indoors: her cabin (match actor index), unless he's in it too (its SetSenseEffects).
     pub sensed_cabin: Option<usize>,
-    next_blip: f32,
     next_sight: f32,
 }
 
@@ -85,7 +94,9 @@ pub struct SensesPlugin;
 
 impl Plugin for SensesPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, setup).add_systems(FixedUpdate, perceive.before(crate::jason::update_jason).run_if(crate::net::simulating));
+        app.add_systems(Update, setup)
+            .add_systems(FixedUpdate, (perceive, blips).chain().before(crate::jason::update_jason).run_if(crate::net::simulating))
+            .add_observer(show_blip);
     }
 }
 
@@ -145,10 +156,90 @@ fn setup(
             sense_shows: None,
             highlight: false,
             sensed_cabin: None,
-            next_blip: 0.0,
             next_sight: 0.0,
         });
     }
+}
+
+/// A sound blip on Jason's screen: where (her root, Bevy space).
+#[derive(Event, Clone, Copy, Debug)]
+pub struct SoundBlip {
+    pub at: Vec3,
+}
+
+/// A firecracker's blips go at this noise (DAT_14207a21c).
+const FIRECRACKER_BLIP_NOISE: f32 = 10.0;
+/// His capsule's half height (Jason_Base, 88 cm): his actor's location above his feet.
+const JASON_HALF_HEIGHT_M: f32 = 0.88;
+
+/// The killer's blip update (FUN_140411740): every counselor's and thrown firecracker's noise, a blip each when due.
+/// The computer Jason hears his target this way.
+#[allow(clippy::too_many_arguments)]
+fn blips(
+    mut commands: Commands,
+    time: Res<Time>,
+    values: Option<Res<SenseValues>>,
+    mut rng: ResMut<crate::GameRng>,
+    mut jasons: Query<(&Jason, &Transform, &mut Knowledge)>,
+    players: Query<(Entity, &Player, &Transform, Option<&Hiding>), Without<Jason>>,
+    firecrackers: Query<(Entity, &Transform), (With<crate::items::Firecracker>, Without<Jason>, Without<Player>)>,
+    target: Option<Res<crate::jason::JasonTarget>>,
+    // Each counselor's next blip (game time; SCCounselorCharacter +0x1178) and each firecracker's countdown (+0x398).
+    mut next: Local<std::collections::HashMap<Entity, f32>>,
+) {
+    let Some(v) = values else { return };
+    let (now, dt) = (time.elapsed_secs(), time.delta_secs());
+    let target = target.and_then(|t| t.0);
+    next.retain(|&e, _| players.contains(e) || firecrackers.contains(e));
+    for (j, jxf, mut k) in &mut jasons {
+        if j.in_context_kill() {
+            continue;
+        }
+        let him = jxf.translation + Vec3::Y * JASON_HALF_HEIGHT_M;
+        let rage = k.abilities.rage_active;
+        let mut delay = || perception::next_blip_delay(&v.hearing, rng.0.frand());
+        for (e, p, xf, hiding) in &players {
+            let c = &p.counselor;
+            if !c.alive() || next.get(&e).is_some_and(|&t| t > now) {
+                continue;
+            }
+            let her = xf.translation + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M;
+            let hidden = hiding.is_some_and(|h| matches!(h.phase, HidePhase::Hidden | HidePhase::Killed));
+            let moving = !hidden && p.velocity.length_squared() > 1.0;
+            let noise = perception::noise_level(&v.noise, &c.stats, c.stance, c.sprinting, c.running, moving);
+            let dist = him.distance(her);
+            if noise <= 0.0 || !perception::makes_blip(&v.hearing, noise, dist * 100.0, rage) {
+                continue;
+            }
+            next.insert(e, now + delay());
+            crate::net_world::shout(&mut commands, crate::net_world::Shout::SoundBlip(SoundBlip { at: her }));
+            if Some(e) == target && !k.sees {
+                debug!("Jason: heard her ({dist:.0} m, noise {noise:.1})");
+                k.last_known = Some((xf.translation, now, Clue::Heard));
+            }
+        }
+        for (e, xf) in &firecrackers {
+            let left = next.entry(e).or_insert(0.0);
+            *left -= dt;
+            if *left > 0.0 || !perception::makes_blip(&v.hearing, FIRECRACKER_BLIP_NOISE, him.distance(xf.translation) * 100.0, rage) {
+                continue;
+            }
+            *left = delay();
+            crate::net_world::shout(&mut commands, crate::net_world::Shout::SoundBlip(SoundBlip { at: xf.translation }));
+        }
+    }
+}
+
+/// SoundBlip_C on the machine playing Jason: P_Sound_Wave_Indicator_01 at the blip, scaled by its distance from him.
+fn show_blip(blip: On<SoundBlip>, play: Option<Res<crate::jason_player::PlayJason>>, jasons: Query<&GlobalTransform, With<Jason>>, mut particles: MessageWriter<crate::particles::SpawnParticles>) {
+    let (Some(_), Some(him)) = (play, jasons.iter().next()) else { return };
+    let d = (him.translation() + Vec3::Y * JASON_HALF_HEIGHT_M).distance(blip.at) * 100.0;
+    let scale = 0.5 + (8.0 - 0.5) * d.clamp(1.0, 10000.0) / 10000.0;
+    debug!("Jason: sound blip {:.0} m away (scale {scale:.2})", d / 100.0);
+    particles.write(crate::particles::SpawnParticles {
+        time_dilation: 2.0,
+        ..crate::particles::SpawnParticles::at("P_Sound_Wave_Indicator_01", Transform::from_translation(blip.at).with_scale(Vec3::splat(scale)))
+    });
 }
 
 /// Whether anything blocks the line between two points.
@@ -161,7 +252,6 @@ pub(crate) fn perceive(
     mut commands: Commands,
     time: Res<Time>,
     values: Option<Res<SenseValues>>,
-    mut rng: ResMut<crate::GameRng>,
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
     mut jasons: Query<(&Jason, &Transform, &mut Knowledge)>,
     players: Query<(&Player, &Transform, Option<&Hiding>), Without<Jason>>,
@@ -233,20 +323,6 @@ pub(crate) fn perceive(
             k.last_known = Some((her, now, Clue::Seen));
             if hiding.is_none() {
                 k.hiding_spot = None;
-            }
-        }
-
-        // Hearing: her noise puts a blip on his screen.
-        if now >= k.next_blip {
-            let moving = !hidden && p.velocity.length_squared() > 1.0;
-            let c = &p.counselor;
-            let noise = perception::noise_level(&v.noise, &c.stats, c.stance, c.sprinting, c.running, moving);
-            if perception::makes_blip(&v.hearing, noise, dist * 100.0, k.abilities.rage_active) {
-                k.next_blip = now + perception::next_blip_delay(&v.hearing, rng.0.frand());
-                if !k.sees {
-                    debug!("Jason: heard her ({dist:.0} m, noise {noise:.1})");
-                    k.last_known = Some((her, now, Clue::Heard));
-                }
             }
         }
 

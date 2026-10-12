@@ -7,7 +7,7 @@ Base content (asset paths in the player's install; all gameplay values come from
 `Characters/Killers/Jason/J2`, the Chevettes (`Blueprints/Vehicles/DriveableVehicles/Cars/Chevette`), the police.
 
 ## Todo
-- [ ] Jason's sound blips (SoundBlip_C, P_Sound_Wave_Indicator_01) on his screen, for every counselor
+- [ ] Radios (SCRadio, BP_Radio_C): playing one, and its sound blips for Jason (FUN_140411740's third loop)
 - [ ] The campfire kill's alignment (reported 2026-10-12; parked)
 - [ ] Bot clients for the scenarios: the bots that set up their scene (teleports, locks) need a server-side hook
       (the net bot plays through its input only)

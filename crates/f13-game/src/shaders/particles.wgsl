@@ -657,6 +657,14 @@ fn ashes(in: VertexOutput) -> vec4<f32> {
 // EHC); emissive that x EmmissiveMultiplier, diffuse it saturated x (1 - MET). Opacity: saturate((mask - dp.x / 19) x
 // (1 + 4 dp.x / 3) - 2 dp.x / 3) x (dp.x + 1.5), clamped 0..4, x saturate(mask x colour.a x the depth fade) x the
 // pixel depth fade, x 0_Opacity_MASTER, saturated.
+// M_Gradient_Graphic_Ring_01 (Jason's sound blips; its sprite base pass s006): emissive max(Normal_Main.rgb x
+// ParticleColorParameter.rgb x the particle's alpha + SelectionColor, 0), additive (opacity 1).
+fn graphic_ring(in: VertexOutput) -> vec4<f32> {
+    let p = params.p;
+    let t = textureSample(t0, s, in.uv).rgb;
+    return vec4(max(t * p[2].xyz * in.color.a + p[3].xyz, vec3(0.0)), 1.0);
+}
+
 fn blood(in: VertexOutput) -> vec4<f32> {
     let p = params.p;
     let uv = in.uv;
@@ -932,6 +940,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         c = blood(in);
     } else if mode == 14u {
         c = blood_squirt(in);
+    } else if mode == 15u {
+        c = graphic_ring(in);
     } else if mode == 31u {
         c = knife_trail(in);
     } else if mode == 33u {
