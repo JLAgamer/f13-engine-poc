@@ -34,7 +34,12 @@ Base content (asset paths in the player's install; all gameplay values come from
       hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold
       for a decision on that
 - [ ] Optimize performance
-- [ ] Blood effects as the game's (which of its blood the port lacks isn't surveyed yet)
+- [ ] Blood: the kills' screen blood (their "Blendable: PP_Player_BloodEffect_01..06" windows)
+- [ ] Blood: Jason's weapon bloodied by a kill (ShowWeaponBlood)
+- [ ] Blood: a hit's blood on the hit bone's clothing ("Trying to apply blood")
+- [ ] Blood: dismemberment (the death's dismember roll, the dismemberment meshes)
+- [ ] Blood: the counselor's gore skin layer (SkinGoreMaster)
+- [ ] Blood: check whether thrown knives and shotgun hits on a character spawn blood in the game
 - [ ] Jason's knife pick-up: the knife in his hand during the take (its Prop: throwing_Dart window, 0.89-2.35 s), and
       the special move's 0.15 s interp and walk to its place (he only turns to it now)
 - [ ] The computer Jason and knife pickups: he takes them in passing (no pick-up move) and doesn't go looking for them
