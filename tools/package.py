@@ -2,6 +2,8 @@
 
     python tools/package.py [--dotnet path/to/dotnet.exe]
 
+Needs cargo-about (`cargo install cargo-about --features cli`) for THIRD-PARTY-NOTICES.md.
+
 It holds f13-installer.exe, f13-game.exe and f13-host.exe (cargo, release), the exporter published self-contained
 (tools/f13-export/: no .NET install needed). No game files: the installer builds the
 export from the player's own copy.
@@ -42,7 +44,9 @@ def main():
          "-o", os.path.join(STAGE, "tools", "f13-export")])
     for exe in ["f13-installer.exe", "f13-game.exe", "f13-host.exe"]:
         shutil.copy2(os.path.join(ROOT, "target", "release", exe), STAGE)
-    for f in ["LICENSE-MIT", "LICENSE-APACHE", "LICENSE"]:
+    # Every bundled library's licence (cargo-about for the crates; the NuGet cache for the exporter's packages).
+    run([sys.executable, os.path.join("tools", "notices.py"), os.path.join(STAGE, "tools", "f13-export"), os.path.join(STAGE, "THIRD-PARTY-NOTICES.md")])
+    for f in ["LICENSE-MIT", "LICENSE-APACHE", "CHANGELOG.md"]:
         if os.path.isfile(os.path.join(ROOT, f)):
             shutil.copy2(os.path.join(ROOT, f), STAGE)
     with open(os.path.join(STAGE, "README.txt"), "w", newline="\r\n") as f:

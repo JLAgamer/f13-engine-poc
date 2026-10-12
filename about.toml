@@ -1,0 +1,3 @@
+# cargo-about: the licences the shipped binaries' crates may carry (tools/package.py writes THIRD-PARTY-NOTICES.md).
+# All permissive; OFL-1.1 and Ubuntu-font-1.0 are egui's bundled fonts.
+accepted = ["MIT", "Apache-2.0", "Unicode-3.0", "Zlib", "BSD-3-Clause", "BSD-2-Clause", "MIT-0", "ISC", "BSL-1.0", "CC0-1.0", "OFL-1.1", "Ubuntu-font-1.0"]

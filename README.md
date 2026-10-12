@@ -20,6 +20,15 @@ You need your own copy of *Friday the 13th: The Game* with its files unpacked (i
 
 The zip contains no game files: everything comes from your copy.
 
+**Requirements:** Windows 10 or 11 (64-bit), a DirectX 12 or Vulkan graphics card, about 6 GB free for the
+export. Supported game build: the Steam release current in October 2026 (see CHANGELOG.md).
+
+**Troubleshooting:** if Install fails, the installer's log (below its buttons) says which step and why; a still-packed
+game folder is the usual cause. `f13-game.exe` writes its log to the console: start it from a terminal to see it.
+Multiplayer is between f13-rs players only (see Playing together); it never connects to the game's own servers.
+
+**Uninstall:** delete the unzipped folder, and `%USERPROFILE%\.f13-rs` (the gameplay values).
+
 ## Building from source
 
 Developers build the same pieces by hand (below), and `python tools/package.py [--dotnet <dotnet.exe>]` builds the
@@ -275,3 +284,19 @@ Commands: `status`, `give <Class>` (one of the match's items into her hands or p
 ```
 cargo test
 ```
+
+## Credits
+
+- Built with [Bevy](https://bevyengine.org), [lightyear](https://github.com/cBournhonesal/lightyear) (networking),
+  [egui](https://github.com/emilk/egui) (the installer), [cpal](https://github.com/RustAudio/cpal) and libopus (voice
+  chat), and [CUE4Parse](https://github.com/FabianFG/CUE4Parse) (reading the game's files in the exporter). Every
+  bundled library's licence is in THIRD-PARTY-NOTICES.md in the release.
+- *Friday the 13th: The Game* is by IllFonic and Gun Media. f13-rs is an unofficial fan reimplementation, not
+  affiliated with or endorsed by them; it ships none of their files and needs your own copy.
+- Made with AI: the code, tools and documentation were written with Claude Code (Anthropic's Claude Opus models),
+  directed and tested by the project's maintainer. No generated art or audio: everything you see and hear comes from
+  your copy of the game.
+
+## License
+
+f13-rs is licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
