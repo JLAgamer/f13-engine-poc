@@ -33,6 +33,10 @@ Base content (asset paths in the player's install; all gameplay values come from
       Its footer is known (an encrypted-index flag, magics 'Atae' and 'kcid', version 5, index offset and size,
       hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold
       for a decision on that
+- [ ] Optimize performance
+- [ ] Knives for Jason to find across the map (their spawners and pickup)
+- [ ] Jason's prompt for destroying doors
+- [ ] Jason's sound blips: a faint square shows around the ring (cause not yet found)
 - [ ] More content, one at a time: maps (with their boat and other escapes), Jasons, counselors, perks, skins,
       emotes, a main menu
 
