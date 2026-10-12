@@ -3,7 +3,7 @@
     python tools/package.py [--dotnet path/to/dotnet.exe]
 
 It holds f13-installer.exe, f13-game.exe and f13-host.exe (cargo, release), the exporter published self-contained
-(tools/f13-export/: no .NET install needed) and tools/extract_tuning.py. No game files: the installer builds the
+(tools/f13-export/: no .NET install needed). No game files: the installer builds the
 export from the player's own copy.
 """
 import argparse, os, shutil, subprocess, sys, zipfile
@@ -16,9 +16,8 @@ ZIP = os.path.join(DIST, "f13-rs-windows-x64.zip")
 PLAYER_README = """f13-rs: Friday the 13th: The Game, rebuilt from your own copy
 
 1. Run f13-installer.exe.
-2. Pick your unpacked Friday the 13th: The Game folder and UAssetGUI.exe, and have Python 3 installed
-   (the installer checks all three and links to what's missing).
-3. Press Install (it takes a while: it reads the map, characters and sounds from your game), then Play.
+2. Pick your unpacked Friday the 13th: The Game folder.
+3. Press Install (a few minutes: it reads the gameplay values, map, characters and sounds from your game), then Play.
 
 Afterwards start f13-game.exe directly. Reinstall after a game update.
 This package contains no game files: everything is read from your copy.
@@ -43,7 +42,6 @@ def main():
          "-o", os.path.join(STAGE, "tools", "f13-export")])
     for exe in ["f13-installer.exe", "f13-game.exe", "f13-host.exe"]:
         shutil.copy2(os.path.join(ROOT, "target", "release", exe), STAGE)
-    shutil.copy2(os.path.join(ROOT, "tools", "extract_tuning.py"), os.path.join(STAGE, "tools"))
     for f in ["LICENSE-MIT", "LICENSE-APACHE", "LICENSE"]:
         if os.path.isfile(os.path.join(ROOT, f)):
             shutil.copy2(os.path.join(ROOT, f), STAGE)

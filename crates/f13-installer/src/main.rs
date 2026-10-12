@@ -1,15 +1,15 @@
 //! f13-installer: sets f13-rs up from the player's own unpacked copy of Friday the 13th: The Game, then plays.
 //!
-//! The player picks the game's folder (its content extracted to loose files under `SummerCamp/Content`) and
-//! UAssetGUI.exe; Install then runs, in order:
-//! 1. `tools/extract_tuning.py` (Python): the gameplay values, into `~/.f13-rs/tuning.json`;
-//! 2. `tools/f13-export/f13-export.exe` (self-contained .NET) `mvp`, `sequences` and `particles`: the map, characters, sounds, HUD, the intro and outro,
-//!    the particle systems, into `export/` next to this executable (where f13-game.exe looks without `--export`).
+//! The player picks the game's folder (its content extracted to loose files under `SummerCamp/Content`); Install then
+//! runs the exporter (`tools/f13-export/f13-export.exe`, self-contained .NET) four times:
+//! 1. `tuning`: the gameplay values, into `~/.f13-rs/tuning.json`;
+//! 2. `mvp`, `sequences` and `particles`: the map, characters, sounds, HUD, the intro and outro, the particle systems,
+//!    into `export/` next to this executable (where f13-game.exe looks without `--export`).
 //!
-//! Play starts f13-game.exe. The folders picked are kept in `installer.json` beside the executable.
+//! Play starts f13-game.exe. The folder picked is kept in `installer.json` beside the executable.
 //!
-//! In the release zip the tools sit in `tools/` next to this executable; run from a source checkout
-//! (`target/release`), the repository's own (`tools/extract_tuning.py`, the exporter's Release build) are used.
+//! In the release zip the exporter sits in `tools/` next to this executable; run from a source checkout
+//! (`target/release`), the exporter's own Release build is used.
 #![windows_subsystem = "windows"]
 
 use eframe::egui;
@@ -18,10 +18,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{channel, Receiver, Sender};
 
-/// The exporter's commands, in order (particles reads the levels mvp writes).
-const EXPORTS: [(&str, &str); 3] = [("mvp", "the map, characters, sounds and HUD"), ("sequences", "the intro and outro"), ("particles", "the particle effects")];
+/// The exporter's commands, in order (particles reads the levels mvp writes), and what each is shown as.
+const STEPS: [(&str, &str); 4] = [
+    ("tuning", "Reading the gameplay values"),
+    ("mvp", "Exporting the map, characters, sounds and HUD"),
+    ("sequences", "Exporting the intro and outro"),
+    ("particles", "Exporting the particle effects"),
+];
 
-/// Windows: the tools' console windows stay hidden (CREATE_NO_WINDOW).
+/// Windows: the exporter's console window stays hidden (CREATE_NO_WINDOW).
 #[cfg(windows)]
 fn hidden(cmd: &mut Command) -> &mut Command {
     use std::os::windows::process::CommandExt;
@@ -37,18 +42,12 @@ fn home() -> PathBuf {
     std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)).unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// A tool: in `tools/` beside the installer (the release zip), else the source checkout's (`target/release` up two).
-fn tool(release: &str, checkout: &str) -> Option<PathBuf> {
-    let h = home();
-    [h.join("tools").join(release), h.join("../..").join(checkout)].into_iter().find(|p| p.is_file())
-}
-
+/// The exporter: in `tools/` beside the installer (the release zip), else the source checkout's (`target/release`
+/// up two).
 fn exporter() -> Option<PathBuf> {
-    tool(if cfg!(windows) { "f13-export/f13-export.exe" } else { "f13-export/f13-export" }, "tools/f13-export/bin/Release/net10.0/f13-export.exe")
-}
-
-fn tuning_script() -> Option<PathBuf> {
-    tool("extract_tuning.py", "tools/extract_tuning.py")
+    let h = home();
+    let release = h.join("tools").join("f13-export").join(if cfg!(windows) { "f13-export.exe" } else { "f13-export" });
+    [release, h.join("../../tools/f13-export/bin/Release/net10.0/f13-export.exe")].into_iter().find(|p| p.is_file())
 }
 
 fn game_exe() -> PathBuf {
@@ -57,18 +56,6 @@ fn game_exe() -> PathBuf {
 
 fn export_dir() -> PathBuf {
     home().join("export")
-}
-
-/// Python 3 on the PATH: the launcher `py -3` (Windows), else `python3` or `python`.
-fn find_python() -> Option<Vec<String>> {
-    let candidates: [&[&str]; 3] = [&["py", "-3"], &["python3"], &["python"]];
-    candidates.into_iter().find_map(|c| {
-        let mut cmd = Command::new(c[0]);
-        cmd.args(&c[1..]).arg("--version").stdout(Stdio::piped()).stderr(Stdio::piped());
-        let out = hidden(&mut cmd).output().ok()?;
-        let v = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
-        (out.status.success() && v.contains("Python 3")).then(|| c.iter().map(|s| s.to_string()).collect())
-    })
 }
 
 /// What the picked game folder holds.
@@ -96,34 +83,22 @@ fn check_game(dir: &str) -> GameFolder {
     }
 }
 
-/// The folders picked, kept in installer.json (two strings: no serde for so little).
-#[derive(Default)]
-struct Settings {
-    game: String,
-    uassetgui: String,
+/// The game folder picked, kept in installer.json (one string: no serde for so little).
+fn load_game_folder() -> String {
+    let text = std::fs::read_to_string(home().join("installer.json")).unwrap_or_default();
+    let field = || {
+        let at = text.find("\"game\"")?;
+        let rest = &text[at + 6..];
+        let start = rest.find('"')? + 1;
+        let end = start + rest[start..].find('"')?;
+        Some(rest[start..end].replace("\\\\", "\\"))
+    };
+    field().unwrap_or_default()
 }
 
-impl Settings {
-    fn path() -> PathBuf {
-        home().join("installer.json")
-    }
-
-    fn load() -> Self {
-        let text = std::fs::read_to_string(Self::path()).unwrap_or_default();
-        let field = |k: &str| {
-            let at = text.find(&format!("\"{k}\""))?;
-            let rest = &text[at + k.len() + 2..];
-            let start = rest.find('"')? + 1;
-            let end = start + rest[start..].find('"')?;
-            Some(rest[start..end].replace("\\\\", "\\"))
-        };
-        Settings { game: field("game").unwrap_or_default(), uassetgui: field("uassetgui").unwrap_or_default() }
-    }
-
-    fn save(&self) {
-        let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "");
-        let _ = std::fs::write(Self::path(), format!("{{\n  \"game\": \"{}\",\n  \"uassetgui\": \"{}\"\n}}\n", esc(&self.game), esc(&self.uassetgui)));
-    }
+fn save_game_folder(game: &str) {
+    let esc = game.replace('\\', "\\\\").replace('"', "");
+    let _ = std::fs::write(home().join("installer.json"), format!("{{\n  \"game\": \"{esc}\"\n}}\n"));
 }
 
 /// A message from the install thread.
@@ -164,16 +139,11 @@ fn run(tx: &Sender<Progress>, ctx: &egui::Context, mut cmd: Command) -> Result<(
     }
 }
 
-fn install(tx: Sender<Progress>, ctx: egui::Context, game: PathBuf, uassetgui: PathBuf, python: Vec<String>) {
+fn install(tx: Sender<Progress>, ctx: egui::Context, game: PathBuf) {
     let result = (|| {
-        let script = tuning_script().ok_or("tools/extract_tuning.py is missing from the install")?;
         let export = exporter().ok_or("tools/f13-export/f13-export.exe is missing from the install")?;
-        let _ = tx.send(Progress::Step(1, "Reading the gameplay values (tuning)".into()));
-        let mut cmd = Command::new(&python[0]);
-        cmd.args(&python[1..]).arg(&script).arg("--game").arg(&game).arg("--uassetgui").arg(&uassetgui);
-        run(&tx, &ctx, cmd)?;
-        for (i, (what, about)) in EXPORTS.iter().enumerate() {
-            let _ = tx.send(Progress::Step(2 + i, format!("Exporting {about}")));
+        for (i, (what, about)) in STEPS.iter().enumerate() {
+            let _ = tx.send(Progress::Step(1 + i, about.to_string()));
             let mut cmd = Command::new(&export);
             cmd.arg("--game").arg(&game).arg("--out").arg(export_dir()).arg(what);
             run(&tx, &ctx, cmd)?;
@@ -185,8 +155,7 @@ fn install(tx: Sender<Progress>, ctx: egui::Context, game: PathBuf, uassetgui: P
 }
 
 struct Installer {
-    settings: Settings,
-    python: Option<Vec<String>>,
+    game: String,
     rx: Option<Receiver<Progress>>,
     step: Option<(usize, String)>,
     log: Vec<String>,
@@ -203,15 +172,14 @@ impl Installer {
     }
 
     fn start(&mut self, ctx: &egui::Context) {
-        let Some(python) = self.python.clone() else { return };
-        self.settings.save();
+        save_game_folder(self.game.trim());
         let (tx, rx) = channel();
         self.rx = Some(rx);
         self.log.clear();
         self.outcome = None;
-        let (game, uassetgui) = (PathBuf::from(self.settings.game.trim()), PathBuf::from(self.settings.uassetgui.trim()));
+        let game = PathBuf::from(self.game.trim());
         let ctx = ctx.clone();
-        std::thread::spawn(move || install(tx, ctx, game, uassetgui, python));
+        std::thread::spawn(move || install(tx, ctx, game));
     }
 
     fn poll(&mut self) {
@@ -251,20 +219,6 @@ impl Installer {
     }
 }
 
-/// A path field with a Browse button.
-fn path_row(ui: &mut egui::Ui, label: &str, value: &mut String, enabled: bool, pick: impl FnOnce() -> Option<PathBuf>) {
-    ui.label(label);
-    ui.horizontal(|ui| {
-        let browse = ui.add_enabled(enabled, egui::Button::new("Browse…"));
-        ui.add_enabled(enabled, egui::TextEdit::singleline(value).desired_width(f32::INFINITY));
-        if browse.clicked() {
-            if let Some(p) = pick() {
-                *value = p.display().to_string();
-            }
-        }
-    });
-}
-
 fn status(ui: &mut egui::Ui, ok: bool, text: &str) {
     let (mark, colour) = if ok { ("✔", egui::Color32::from_rgb(90, 190, 90)) } else { ("✖", egui::Color32::from_rgb(220, 90, 80)) };
     ui.horizontal(|ui| {
@@ -282,48 +236,30 @@ impl eframe::App for Installer {
             ui.add_space(8.0);
             let busy = self.running();
 
-            path_row(ui, "1. Your Friday the 13th: The Game folder (unpacked: its files under SummerCamp/Content)", &mut self.settings.game, !busy, || {
-                rfd::FileDialog::new().set_title("The unpacked game folder (the one with SummerCamp in it)").pick_folder()
+            ui.label("Your Friday the 13th: The Game folder (unpacked: its files under SummerCamp/Content)");
+            ui.horizontal(|ui| {
+                let browse = ui.add_enabled(!busy, egui::Button::new("Browse…"));
+                ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.game).desired_width(f32::INFINITY));
+                if browse.clicked() {
+                    if let Some(p) = rfd::FileDialog::new().set_title("The unpacked game folder (the one with SummerCamp in it)").pick_folder() {
+                        self.game = p.display().to_string();
+                    }
+                }
             });
-            let game = check_game(&self.settings.game);
+            let game = check_game(&self.game);
             match game {
                 GameFolder::Empty => {}
                 GameFolder::Unpacked => status(ui, true, "Unpacked game files found"),
                 GameFolder::Packed => status(ui, false, "This is the game, but its files are still packed: unpack it first (see the README)"),
                 GameFolder::NotTheGame => status(ui, false, "No SummerCamp/Content here: pick the folder that has SummerCamp in it"),
             }
-            ui.add_space(6.0);
-
-            path_row(ui, "2. UAssetGUI.exe (reads the gameplay values)", &mut self.settings.uassetgui, !busy, || {
-                rfd::FileDialog::new().set_title("UAssetGUI.exe").add_filter("UAssetGUI", &["exe"]).pick_file()
-            });
-            let uassetgui = Path::new(self.settings.uassetgui.trim()).is_file();
-            if !self.settings.uassetgui.trim().is_empty() {
-                status(ui, uassetgui, if uassetgui { "UAssetGUI found" } else { "No file there" });
-            }
-            ui.hyperlink_to("Get UAssetGUI (its releases page)", "https://github.com/atenfyr/UAssetGUI/releases");
-            ui.add_space(6.0);
-
-            ui.label("3. Python 3");
-            match &self.python {
-                Some(p) => status(ui, true, &format!("Found ({})", p.join(" "))),
-                None => {
-                    status(ui, false, "Not found: install Python 3 (tick \"Add python.exe to PATH\"), then Check again");
-                    ui.horizontal(|ui| {
-                        ui.hyperlink_to("python.org downloads", "https://www.python.org/downloads/");
-                        if ui.add_enabled(!busy, egui::Button::new("Check again")).clicked() {
-                            self.python = find_python();
-                        }
-                    });
-                }
-            }
-            let tools = exporter().is_some() && tuning_script().is_some();
-            if !tools {
+            let tool = exporter().is_some();
+            if !tool {
                 status(ui, false, "The install is missing its tools folder: unzip the whole release again");
             }
             ui.add_space(10.0);
 
-            let ready = game == GameFolder::Unpacked && uassetgui && self.python.is_some() && tools && !busy;
+            let ready = game == GameFolder::Unpacked && tool && !busy;
             ui.horizontal(|ui| {
                 let label = if Self::installed() { "Reinstall" } else { "Install" };
                 if ui.add_enabled(ready, egui::Button::new(label).min_size(egui::vec2(110.0, 30.0))).clicked() {
@@ -335,7 +271,7 @@ impl eframe::App for Installer {
                 }
                 if let Some((n, what)) = &self.step {
                     ui.spinner();
-                    ui.label(format!("Step {n} of {}: {what}…", 1 + EXPORTS.len()));
+                    ui.label(format!("Step {n} of {}: {what}…", STEPS.len()));
                 }
             });
             match &self.outcome {
@@ -361,21 +297,16 @@ impl eframe::App for Installer {
 }
 
 fn main() -> eframe::Result {
-    // `--install <game folder> <UAssetGUI.exe>`: the same install without the window (its log to stdout; testing and
-    // scripted setups).
+    // `--install <game folder>`: the same install without the window (its log to stdout; testing and scripted setups).
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("--install") {
-        let (Some(game), Some(uassetgui)) = (args.get(1), args.get(2)) else {
-            eprintln!("usage: f13-installer --install <game folder> <UAssetGUI.exe>");
+        let Some(game) = args.get(1) else {
+            eprintln!("usage: f13-installer --install <game folder>");
             std::process::exit(2);
         };
-        let Some(python) = find_python() else {
-            eprintln!("Python 3 not found");
-            std::process::exit(1);
-        };
         let (tx, rx) = channel();
-        let (game, uassetgui) = (PathBuf::from(game), PathBuf::from(uassetgui));
-        std::thread::spawn(move || install(tx, egui::Context::default(), game, uassetgui, python));
+        let game = PathBuf::from(game);
+        std::thread::spawn(move || install(tx, egui::Context::default(), game));
         for p in rx {
             match p {
                 Progress::Step(n, what) => println!("== step {n}: {what}"),
@@ -393,9 +324,9 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("f13-rs setup").with_inner_size([720.0, 560.0]).with_min_inner_size([560.0, 420.0]),
+        viewport: egui::ViewportBuilder::default().with_title("f13-rs setup").with_inner_size([680.0, 420.0]).with_min_inner_size([520.0, 320.0]),
         ..Default::default()
     };
-    let app = Installer { settings: Settings::load(), python: find_python(), rx: None, step: None, log: Vec::new(), outcome: None };
+    let app = Installer { game: load_game_folder(), rx: None, step: None, log: Vec::new(), outcome: None };
     eframe::run_native("f13-rs setup", options, Box::new(|_| Ok(Box::new(app))))
 }

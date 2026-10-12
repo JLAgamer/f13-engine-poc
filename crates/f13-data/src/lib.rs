@@ -1,4 +1,4 @@
-//! Loads `tuning.json` (made by `tools/extract_tuning.py` from the player's own install) into f13-core types.
+//! Loads `tuning.json` (written by tools/f13-export `tuning`, or the installer, from the player's own install) into f13-core types.
 
 pub mod character;
 pub mod classes;
@@ -145,7 +145,7 @@ struct CounselorJson {
     health: HealthJson,
     stumble: StumbleJson,
     dodge: DodgeJson,
-    /// Her combat stats (tools/extract_tuning.py since October 2026; older files have none: neutral values).
+    /// Her combat stats (the tuning export since October 2026; older files have none: neutral values).
     #[serde(default)]
     combat: Option<CombatJson>,
     minigame: MinigameJson,
@@ -305,10 +305,10 @@ pub enum LoadError {
 impl std::fmt::Display for LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LoadError::Io(e) => write!(f, "reading tuning file: {e} (run tools/extract_tuning.py first)"),
+            LoadError::Io(e) => write!(f, "reading tuning file: {e} (run f13-installer, or tools/f13-export `tuning`, first)"),
             LoadError::Json(e) => write!(f, "parsing tuning file: {e}"),
             LoadError::Format(v) => {
-                write!(f, "tuning file has format {v}, this build needs {FORMAT}: run tools/extract_tuning.py again")
+                write!(f, "tuning file has format {v}, this build needs {FORMAT}: run f13-installer (Reinstall), or tools/f13-export `tuning`, again")
             }
             LoadError::MissingCurve(c) => write!(f, "fear event references missing curve {c}"),
             LoadError::Invalid(what) => write!(f, "{what} (re-export it)"),
@@ -474,7 +474,7 @@ pub fn parse(text: &str) -> Result<Tuning, LoadError> {
                 rage_grab_stun_mod: k.rage_grab_stun_mod,
             },
             None => {
-                eprintln!("tuning.json has no combat stats (re-run tools/extract_tuning.py): her hits use flat values");
+                eprintln!("tuning.json has no combat stats (re-run f13-installer, or tools/f13-export `tuning`): her hits use flat values");
                 Default::default()
             }
         },

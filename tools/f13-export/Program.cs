@@ -754,6 +754,8 @@ switch (rest[0])
             wx.Fonts(game!);
         }
         break;
+    case "tuning": // tuning [out file]: the gameplay values (tuning.json; default ~/.f13-rs/tuning.json), (a port of the former tools/extract_tuning.py)
+        return Tuning.Write(provider, game!, rest.Count > 1 ? rest[1] : null);
     case "sounds": // the sounds f13-game plays (sounds/): the counselor's footsteps, the classes' cues, the animations' (anim_sounds.json), Mvp.Sounds
     {
         var sx = new SoundExporter(provider, outDir, ToFile);

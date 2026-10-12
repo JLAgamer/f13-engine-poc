@@ -9,15 +9,13 @@ shipped. They are passed in at runtime, and a loader will read them from the pla
 ## Install
 
 You need your own copy of *Friday the 13th: The Game* with its files unpacked (its content as loose files under
-`SummerCamp/Content`), [UAssetGUI](https://github.com/atenfyr/UAssetGUI/releases) and
-[Python 3](https://www.python.org/downloads/) (tick "Add python.exe to PATH" when installing it).
+`SummerCamp/Content`). Nothing else: the installer brings everything it needs.
 
 1. Download `f13-rs-windows-x64.zip` from the releases page and unzip it anywhere.
 2. Run `f13-installer.exe`.
-3. Pick your game folder (the one with `SummerCamp` in it) and `UAssetGUI.exe`. The installer checks each one and
-   says what's missing.
+3. Pick your game folder (the one with `SummerCamp` in it). The installer checks it and says if it's still packed.
 4. Press **Install**. It reads the gameplay values, the map, characters, sounds and effects from your game into the
-   `export` folder next to it; this takes a while.
+   `export` folder next to it (a few minutes).
 5. Press **Play**. Afterwards, start `f13-game.exe` directly. Run the installer again (Reinstall) after a game update.
 
 The zip contains no game files: everything comes from your copy.
@@ -25,7 +23,7 @@ The zip contains no game files: everything comes from your copy.
 ## Building from source
 
 Developers build the same pieces by hand (below), and `python tools/package.py [--dotnet <dotnet.exe>]` builds the
-release zip into `dist/` (the Rust binaries in release, the exporter published self-contained, the tuning script).
+release zip into `dist/` (the Rust binaries in release, the exporter published self-contained).
 
 ### Crates
 - `f13-core`: engine-independent rules (no Bevy dependency), unit-tested
@@ -46,20 +44,20 @@ release zip into `dist/` (the Rust binaries in release, the exporter published s
 - `f13-bevy`: Bevy 0.19 plugin (`F13GameplayPlugin`) with components, `FixedUpdate` systems and messages
 - `f13-game`: the game client; for now a viewer for the MVP map built from your own export
 - `f13-host`: sends the host's commands to a running f13-game (see Host commands)
-- `f13-installer`: the players' setup window (the tuning script and the exporter, then Play); `--install <game>
-  <UAssetGUI.exe>` runs the same without the window
+- `f13-installer`: the players' setup window (the exporter's tuning and export, then Play); `--install <game>` runs
+  the same without the window
 
 ### Tuning from your own install
 Gameplay values are read from your copy of the game, never shipped here:
 
 ```
-python tools/extract_tuning.py --game "<path to F13Game>" --uassetgui "<path to UAssetGUI.exe>"
+dotnet run --project tools/f13-export -- --game "<path to F13Game>" --out "<export dir>" tuning
 ```
 
-This writes `~/.f13-rs/tuning.json` (`%USERPROFILE%\.f13-rs\tuning.json` on Windows), which `f13_data::load(&f13_data::default_path())` reads.
-Re-run the extractor when a new build reports a different tuning format.
-It needs the main pak extracted to loose files, and it checks the game executable's build before reading
-any constant from it.
+This writes `~/.f13-rs/tuning.json` (`%USERPROFILE%\.f13-rs\tuning.json` on Windows; give a path after `tuning` to
+write elsewhere), which `f13_data::load(&f13_data::default_path())` reads: the Blueprints' class defaults, curves and
+montage lengths, the executable's C++ constructor defaults and DefaultGame.ini. Re-run it when a new build reports a
+different tuning format. It checks the game executable's build before reading any constant from it.
 
 ### Meshes and maps from your own install
 `tools/f13-export` is a small C# tool (.NET 10, using [CUE4Parse](https://github.com/FabianFG/CUE4Parse)) that
