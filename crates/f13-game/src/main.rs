@@ -93,7 +93,7 @@ const LAYOUTS: u32 = 4;
 struct Args {
     /// The netcode role (--server <port>, --connect <host:port>).
     net: Option<net::Role>,
-    /// --bot-net: as a client, the network test bot (net.rs).
+    /// --bot-net: as a client, the network test bot (net.rs); as a lobby's playing server, its lobby part only.
     bot_net: bool,
     /// --bot-spectate: the spectating test (spectate.rs; with --counselors 2).
     bot_spectate: bool,

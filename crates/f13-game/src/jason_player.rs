@@ -106,7 +106,7 @@ impl Plugin for PlayJasonPlugin {
 /// not yet used by a fixed step.
 #[derive(Resource, Default)]
 pub struct JasonControls {
-    keys: ButtonInput<KeyCode>,
+    pub(crate) keys: ButtonInput<KeyCode>,
     mouse: ButtonInput<MouseButton>,
     /// The control rotation (the player camera's, copied each frame).
     pub yaw: f32,

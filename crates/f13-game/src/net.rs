@@ -242,7 +242,8 @@ impl FreeStarts {
 
 pub struct NetPlugin {
     pub role: Role,
-    /// A client: the network test bot ([`net_bot`]), and what it asks the lobby for.
+    /// A client: the network test bot ([`net_bot`]), and what it asks the lobby for. A lobby's server that plays: only
+    /// the lobby's part (it asks and readies up), so a lobby test takes two games, not three.
     pub bot: bool,
     pub prefer: crate::lobby::Preference,
     /// A server: the lobby first (lobby.rs), and whether the server plays no one.
@@ -278,6 +279,10 @@ impl Plugin for NetPlugin {
                 crate::net_world::server(app);
                 if self.lobby {
                     crate::lobby::server(app, self.dedicated, self.name.clone());
+                    if self.bot && !self.dedicated {
+                        app.insert_resource(NetBot { prefer: self.prefer, ..default() })
+                            .add_systems(Update, (net_bot_lobby.before(crate::lobby::Keys), host_bot_jason.run_if(resource_exists::<crate::jason_player::PlayJason>)));
+                    }
                 }
                 crate::lobby::ui(app);
                 app
@@ -753,7 +758,7 @@ fn mirror(
     }
 }
 
-/// The network test bot's state (`--bot-net` on a client).
+/// The network test bot's state (`--bot-net` on a client, or a lobby's playing server).
 #[derive(Resource, Default)]
 struct NetBot {
     step: u8,
@@ -1021,6 +1026,24 @@ fn net_bot_lobby(mut bot: ResMut<NetBot>, mut keys: ResMut<ButtonInput<KeyCode>>
             keys.press(KeyCode::Enter);
             info!("bot: net: ready");
             bot.lobby = 2;
+        }
+        _ => {}
+    }
+}
+
+/// A lobby's playing server, as Jason: he walks a little (W, 3 s), so a client's counselor bot sees him move.
+fn host_bot_jason(mut bot: ResMut<NetBot>, time: Res<Time>, mut controls: ResMut<crate::jason_player::JasonControls>) {
+    bot.t += time.delta_secs();
+    match bot.step {
+        0 if bot.t > 3.0 => {
+            info!("bot: net: the host's Jason walks");
+            controls.keys.press(KeyCode::KeyW);
+            bot.step = 1;
+            bot.t = 0.0;
+        }
+        1 if bot.t > 3.0 => {
+            controls.keys.release(KeyCode::KeyW);
+            bot.step = 2;
         }
         _ => {}
     }
