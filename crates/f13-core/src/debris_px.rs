@@ -36,9 +36,12 @@
 //!   inside it (PointInConvexPolygon2D_OutCodes) and within the contact distance: a contact there with that distance;
 //!   the same for the second's vertices into the first; then the edges crossing in the plane across the normal.
 //!
-//! PLACEHOLDER: the triangle mesh's edge flags (its cooked active edges: every edge here), the contact reduction
-//! (ContactReductionAllIn and Dy::ContactReduction<6>: here at most four per patch: the deepest, the farthest from it,
-//! and the two farthest either side of that line), and the friction anchors (a patch's first contact and its farthest).
+//! - The first pass's reduction (ContactReductionAllIn), the friction patches and their anchors kept from step to step
+//!   (getFrictionPatches, createContactPatches, correlatePatches, growPatches) and the triangle mesh's active edges
+//!   (EdgeListBuilder::computeActiveEdges, as cooking flags them), see their functions.
+//!
+//! PLACEHOLDER: the active edges are worked out from the triangles near the body (an edge whose neighbour isn't among
+//! them counts as a boundary); Dy::ContactReduction<6> (only for several shapes on one actor pair) isn't needed here.
 
 use crate::collision::{Tri, TriSource};
 use glam::{Mat3, Quat, Vec2, Vec3};
@@ -59,6 +62,10 @@ pub struct Params {
     /// so a pair's contact distance twice it, and the rest offset (the APEX template's 0).
     pub contact_offset: f32,
     pub rest_offset: f32,
+    /// PxSceneDesc's frictionOffsetThreshold and frictionCorrelationDistance (PhysX's defaults 0.04 and 0.025 x the
+    /// tolerance length): a contact this near gives a friction anchor; anchors at least this far apart.
+    pub friction_offset_threshold: f32,
+    pub friction_correlation_distance: f32,
     /// PhysX's sleepThreshold (5e-5 x the tolerance speed², p.ToleranceScale_Speed 1000 cm/s: 50 cm²/s²) and the wake
     /// counter (0.4 s).
     pub sleep_threshold: f32,
@@ -81,6 +88,8 @@ impl Default for Params {
             bounce_threshold: 2.0,
             contact_offset: 0.02,
             rest_offset: 0.0,
+            friction_offset_threshold: 0.04,
+            friction_correlation_distance: 0.025,
             sleep_threshold: 50.0e-4,
             wake_time: 0.4,
             position_iterations: 4,
@@ -178,8 +187,61 @@ pub struct Face {
     pub d: f32,
 }
 
+/// QuickHull's post merge (PhysX3Cooking QuickHull::postMergeHull 0x18002a5e0): adjacent faces whose normals are
+/// within MAXDOT_MINANG (0x18003a008: 0.99863, cos 3 degrees) merge, the larger taking the smaller, when
+/// canMergeFaces (0x18002a760) allows it.
+const MAXDOT_MINANG: f32 = 0.998_629_5;
+/// UE's PxCookingParams (FPhysXCooking's setup 0x1411d28a0): planeTolerance 0.0007, eQUICKHULL.
+const PLANE_TOLERANCE: f32 = 0.0007;
+
+/// A polygon's Newell normal and its vertices' mean (QuickHull's computeNormalAndCentroid, as canMergeFaces does it).
+fn polygon_plane(loop_: &[Vec3]) -> (Vec3, Vec3) {
+    let mut n = Vec3::ZERO;
+    for k in 0..loop_.len() {
+        let (a, b) = (loop_[k], loop_[(k + 1) % loop_.len()]);
+        n += Vec3::new((a.y - b.y) * (a.z + b.z), (a.z - b.z) * (a.x + b.x), (a.x - b.x) * (a.y + b.y));
+    }
+    (n.normalize_or_zero(), loop_.iter().sum::<Vec3>() / loop_.len() as f32)
+}
+
+/// Two faces' polygon loops joined across their shared edges (both counter-clockwise about their normals).
+fn join_loops(a: &[usize], b: &[usize]) -> Option<Vec<usize>> {
+    let mut edges: Vec<(usize, usize)> = vec![];
+    for l in [a, b] {
+        for k in 0..l.len() {
+            edges.push((l[k], l[(k + 1) % l.len()]));
+        }
+    }
+    let kept: Vec<(usize, usize)> = edges.iter().copied().filter(|(p, q)| !edges.contains(&(*q, *p))).collect();
+    if kept.len() == edges.len() {
+        return None;
+    }
+    let mut out = vec![kept[0].0];
+    let mut at = kept[0].1;
+    while at != out[0] {
+        if out.len() > kept.len() {
+            return None;
+        }
+        out.push(at);
+        at = kept.iter().find(|e| e.0 == at)?.1;
+    }
+    (out.len() == kept.len()).then_some(out)
+}
+
 impl Hull {
+    /// The hull of `points` as PhysX cooks it, its tolerances from the points themselves.
     pub fn new(points: &[Vec3]) -> Option<Hull> {
+        Hull::cooked(points, points)
+    }
+
+    /// The hull of `points`, with QuickHull's tolerances (computeMinMaxVerts 0x180027ee0) from `cooked`, the points
+    /// as they went to the cooker (their frame, cm): the sum s of their largest |x|, |y|, |z|, mTolerance = max(s x
+    /// 3 FLT_EPSILON, 3 FLT_EPSILON) and mPlaneTolerance = max(s x planeTolerance, planeTolerance).
+    pub fn cooked(points: &[Vec3], cooked: &[Vec3]) -> Option<Hull> {
+        let s = cooked.iter().fold(Vec3::ZERO, |m, p| m.max(p.abs() * 100.0)).element_sum();
+        const EPS3: f32 = 3.576_279_4e-7;
+        let tolerance = (s * EPS3).max(EPS3) / 100.0;
+        let plane_tolerance = (s * PLANE_TOLERANCE).max(PLANE_TOLERANCE) / 100.0;
         let tris = crate::collision::convex_hull(points);
         if tris.len() < 4 {
             return None;
@@ -204,7 +266,7 @@ impl Hull {
                 None => groups.push((t.n, d, ids.to_vec())),
             }
         }
-        let mut faces = vec![];
+        let mut faces: Vec<Face> = vec![];
         for (n, d, mut ids) in groups {
             ids.sort_unstable();
             ids.dedup();
@@ -218,6 +280,50 @@ impl Hull {
             });
             faces.push(Face { verts: ids, n, d });
         }
+        // postMergeHull: each live face in turn takes its neighbours while one qualifies.
+        let area = |f: &Face| {
+            let l: Vec<Vec3> = f.verts.iter().map(|i| verts[*i]).collect();
+            (1..l.len().saturating_sub(1)).map(|k| (l[k] - l[0]).cross(l[k + 1] - l[0]).length()).sum::<f32>() * 0.5
+        };
+        let mut alive = vec![true; faces.len()];
+        for fi in 0..faces.len() {
+            if !alive[fi] {
+                continue;
+            }
+            'merge: loop {
+                for gi in 0..faces.len() {
+                    if gi == fi || !alive[gi] || faces[fi].n.dot(faces[gi].n) <= MAXDOT_MINANG {
+                        continue;
+                    }
+                    let (af, ag) = (area(&faces[fi]), area(&faces[gi]));
+                    if af <= ag && ag != af {
+                        continue;
+                    }
+                    let Some(joined) = join_loops(&faces[fi].verts, &faces[gi].verts) else { continue };
+                    // canMergeFaces: every vertex within mPlaneTolerance of the merged plane, and the polygon convex
+                    // (no vertex past an edge's line by more than mTolerance).
+                    let l: Vec<Vec3> = joined.iter().map(|i| verts[*i]).collect();
+                    let (n, c) = polygon_plane(&l);
+                    let d = n.dot(c);
+                    if l.iter().any(|p| n.dot(*p) - d > plane_tolerance) {
+                        continue;
+                    }
+                    let convex = (0..l.len()).all(|k| {
+                        let (p, q) = (l[k], l[(k + 1) % l.len()]);
+                        let inward = n.cross((q - p).normalize_or_zero());
+                        l.iter().all(|r| -(*r - p).dot(inward) <= tolerance)
+                    });
+                    if !convex {
+                        continue;
+                    }
+                    faces[fi] = Face { verts: joined, n, d };
+                    alive[gi] = false;
+                    continue 'merge;
+                }
+                break;
+            }
+        }
+        let faces: Vec<Face> = faces.into_iter().zip(alive).filter(|(_, a)| *a).map(|(f, _)| f).collect();
         let mut edges: Vec<Edge> = vec![];
         let mut open: std::collections::HashMap<(usize, usize), usize> = std::collections::HashMap::new();
         for (fi, f) in faces.iter().enumerate() {
@@ -260,6 +366,24 @@ pub struct Body {
     pub radius: f32,
     pub asleep: bool,
     sleep_time: f32,
+    /// Its id, and the friction patches it keeps with the world ([`WORLD`]) and with other bodies (by their id).
+    pub id: u64,
+    friction: Vec<(u64, Vec<StoredPatch>)>,
+}
+
+/// The world's id in a body's friction patches.
+const WORLD: u64 = u64::MAX;
+
+static NEXT_BODY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A friction patch kept to the next step (Dy::FrictionPatch): its normal in either body's frame (B's in the world for
+/// the world), its anchors in either frame, and whether it broke (slid) this step.
+#[derive(Clone, Debug)]
+struct StoredPatch {
+    normal_a: Vec3,
+    normal_b: Vec3,
+    anchors: Vec<(Vec3, Vec3)>,
+    broken: bool,
 }
 
 /// A convex hull's volume, centroid and inertia about the centroid for density 1 (the canonical tetrahedron covariance
@@ -301,7 +425,8 @@ impl Body {
         }
         let inertia = inertia * (mass / volume);
         let local: Vec<Vec3> = points.iter().map(|p| *p - com).collect();
-        let hull = Hull::new(&local)?;
+        // Cooked from the chunk's own vertices (its mesh frame), then kept about its centre of mass.
+        let hull = Hull::cooked(&local, &points)?;
         let radius = hull.verts.iter().map(|p| p.length()).fold(0.0, f32::max);
         let body = Body {
             pos: at + rot * com,
@@ -314,6 +439,8 @@ impl Body {
             radius,
             asleep: false,
             sleep_time: 0.0,
+            id: NEXT_BODY.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            friction: vec![],
         };
         Some((body, com))
     }
@@ -376,15 +503,20 @@ fn inside(poly: &[Vec3], p: Vec3, n: Vec3) -> bool {
 fn polygon_polygon(p0: &[Vec3], n0: Vec3, p1: &[Vec3], n1: Vec3, n: Vec3, reach: f32, out: &mut Vec<Contact>) {
     let start = out.len();
     let along1 = n1.dot(n);
+    let mut inside_count = 0;
     if along1.abs() > 1e-6 {
         for v in p0 {
             // v - n t lies on B's plane.
             let t = n1.dot(*v - p1[0]) / along1;
-            if t < reach && inside(p1, *v - n * t, n) {
-                out.push(Contact { point: *v, normal: n, separation: t });
+            if inside(p1, *v - n * t, n) {
+                inside_count += 1;
+                if t < reach {
+                    out.push(Contact { point: *v, normal: n, separation: t });
+                }
             }
         }
     }
+    reduce_all_in(out, start, inside_count == p0.len(), n);
     let along0 = n0.dot(n);
     if along0.abs() > 1e-6 {
         for u in p1 {
@@ -434,9 +566,79 @@ fn polygon_polygon(p0: &[Vec3], n0: Vec3, p1: &[Vec3], n1: Vec3, n: Vec3, reach:
     }
 }
 
-/// The hull face most against a direction (the one whose normal is nearest `-dir`): mSelectClosestEdgeCB.
+/// ContactReductionAllIn (0x18008f820) on the first pass's contacts (`out[start..]`) when over four: with all of the
+/// first polygon's vertices inside, those at 0, n/4, n/2 and 3n/4 and the deepest when it's none of them; otherwise,
+/// of eight directions in the plane (k pi/8), the one along which they spread widest, and the extremes along it and
+/// across it.
+fn reduce_all_in(out: &mut Vec<Contact>, start: usize, all_in: bool, n: Vec3) {
+    let count = out.len() - start;
+    if count <= 4 {
+        return;
+    }
+    let list: Vec<Contact> = out[start..].to_vec();
+    let keep: Vec<usize> = if all_in {
+        let deepest = (0..count).min_by(|a, b| list[*a].separation.total_cmp(&list[*b].separation)).unwrap();
+        let mut k = vec![0, count / 4, count / 2, count * 3 / 4];
+        if !k.contains(&deepest) {
+            k.push(deepest);
+        }
+        k
+    } else {
+        let u = n.any_orthonormal_vector();
+        let w = n.cross(u);
+        let flat: Vec<Vec2> = list.iter().map(|c| Vec2::new(c.point.dot(u), c.point.dot(w))).collect();
+        let dirs: Vec<Vec2> = (0..8).map(|k| Vec2::from_angle(k as f32 * std::f32::consts::FRAC_PI_8)).collect();
+        let spread = |d: Vec2| {
+            let (lo, hi) = flat.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.dot(d)), hi.max(p.dot(d))));
+            hi - lo
+        };
+        let d = *dirs.iter().max_by(|a, b| spread(**a).total_cmp(&spread(**b))).unwrap();
+        let perp = d.perp();
+        let ext = |axis: Vec2, max: bool| {
+            (0..count).max_by(|a, b| {
+                let (x, y) = (flat[*a].dot(axis), flat[*b].dot(axis));
+                if max { x.total_cmp(&y) } else { y.total_cmp(&x) }
+            }).unwrap()
+        };
+        let mut k: Vec<usize> = (0..count).filter(|i| [ext(d, false), ext(d, true), ext(perp, false), ext(perp, true)].contains(i)).collect();
+        k.dedup();
+        k
+    };
+    out.truncate(start);
+    out.extend(keep.iter().map(|i| list[*i]));
+}
+
+/// The hull face most against a direction (SelectClosestEdgeCB_Convex 0x1800a0120 with -dir): the face whose normal
+/// is nearest -dir; but when an edge's two faces' normals, summed, point nearer it than that face's, the nearer of
+/// those two faces.
 fn closest_face(hull: &Hull, rot: Quat, dir: Vec3) -> usize {
-    (0..hull.faces.len()).min_by(|a, b| (rot * hull.faces[*a].n).dot(dir).total_cmp(&(rot * hull.faces[*b].n).dot(dir))).unwrap_or(0)
+    let d = rot.inverse() * -dir;
+    let mut best = 0;
+    let mut best_dot = f32::MIN;
+    for (k, f) in hull.faces.iter().enumerate() {
+        let v = f.n.dot(d);
+        if v > best_dot {
+            best_dot = v;
+            best = k;
+        }
+    }
+    let mut score = best_dot * best_dot;
+    let mut edge = None;
+    for (k, e) in hull.edges.iter().enumerate() {
+        let sum = hull.faces[e.f0].n + hull.faces[e.f1].n;
+        let (len2, along) = (sum.length_squared(), sum.dot(d));
+        if along >= 0.0 && len2 * score < along * along {
+            score = along * along / len2;
+            edge = Some(k);
+        }
+    }
+    match edge {
+        Some(k) => {
+            let e = hull.edges[k];
+            if hull.faces[e.f1].n.dot(d) < hull.faces[e.f0].n.dot(d) { e.f0 } else { e.f1 }
+        }
+        None => best,
+    }
 }
 
 fn face_world(b: &Body, f: usize) -> (Vec<Vec3>, Vec3) {
@@ -498,7 +700,26 @@ pub fn world_contacts(b: &Body, world: &(impl TriSource + ?Sized), p: &Params) -
         polygon_polygon(&face, face_n, &[t.a, t.b, t.c], t.n, n, reach, out);
         out.len() > before
     };
-    for t in &tris {
+    // The mesh's active edges as cooking flags them (Gu::EdgeListBuilder::computeActiveEdges 0x180004cd0, its
+    // angle 0.1 rad from TriangleMeshBuilder::createEdgeList): an edge on one triangle; between two, when the first's
+    // opposite vertex is behind the second's plane (a convex ridge) and their normals part by more than 0.1 rad, or when
+    // they fold back on each other (dot < -0.999).
+    let close = |p: Vec3, q: Vec3| p.distance_squared(q) < 1e-10;
+    let active = |ti: usize, p: Vec3, q: Vec3, opp: Vec3| -> bool {
+        let t = &tris[ti];
+        let Some(o) = tris.iter().enumerate().find(|(oi, o)| {
+            *oi != ti && [o.a, o.b, o.c].iter().any(|v| close(*v, p)) && [o.a, o.b, o.c].iter().any(|v| close(*v, q))
+        }) else {
+            return true;
+        };
+        let o = o.1;
+        if o.n.dot(opp - o.a) < 0.0 {
+            o.n.cross(t.n).length().atan2(o.n.dot(t.n)) > 0.1
+        } else {
+            o.n.dot(t.n) < -0.999
+        }
+    };
+    for (ti, t) in tris.iter().enumerate() {
         // processTriangle: the hull's centre in front of the triangle.
         if t.n.dot(b.pos - t.a) < 0.0 {
             continue;
@@ -506,9 +727,11 @@ pub fn world_contacts(b: &Body, world: &(impl TriSource + ?Sized), p: &Params) -
         let tri = [t.a, t.b, t.c];
         let centroid = (t.a + t.b + t.c) / 3.0;
         // The triangle's edges with their outward directions in its plane.
-        let tri_edges: Vec<(Vec3, Vec3)> = [(t.a, t.b), (t.b, t.c), (t.c, t.a)]
+        // Only the active ones give edge axes (performEETests).
+        let tri_edges: Vec<(Vec3, Vec3)> = [(t.a, t.b, t.c), (t.b, t.c, t.a), (t.c, t.a, t.b)]
             .iter()
-            .map(|(p, q)| {
+            .filter(|(p, q, opp)| active(ti, *p, *q, *opp))
+            .map(|(p, q, _)| {
                 let d = *q - *p;
                 let out = d.cross(t.n);
                 (d, if out.dot(*p - centroid) < 0.0 { -out } else { out })
@@ -531,7 +754,8 @@ pub fn world_contacts(b: &Body, world: &(impl TriSource + ?Sized), p: &Params) -
                     (c.dot(*out) < 0.0).then(|| (dir.cross(*te), false))
                 })
             }));
-        let Some((depth, axis, tri_axis)) = sat(&hull_extent, &|d: Vec3| project(&tri, d), axes, reach, true) else { continue };
+        let r = sat(&hull_extent, &|d: Vec3| project(&tri, d), axes, reach, true);
+        let Some((depth, axis, tri_axis)) = r else { continue };
         if tri_axis {
             if emit(t, axis, &mut out) {
                 for p in tri {
@@ -619,34 +843,105 @@ pub fn pair_contacts(a: &Body, b: &Body, p: &Params) -> Vec<Contact> {
     out
 }
 
-/// Patches of one normal, at most four contacts each (see the module's PLACEHOLDER).
-fn patches(contacts: Vec<Contact>) -> Vec<Vec<Contact>> {
+/// Dy::createContactPatches (0x180094d20): consecutive contacts while their normal stays within 0.999 of the patch's
+/// first's (the contact buffer holding 64).
+fn contact_patches(contacts: &[Contact]) -> Vec<Vec<Contact>> {
     let mut patches: Vec<Vec<Contact>> = vec![];
-    for c in contacts {
-        match patches.iter_mut().find(|p| p[0].normal.dot(c.normal) > 0.999) {
-            Some(p) => {
-                if !p.iter().any(|o| o.point.distance_squared(c.point) < 1e-8) {
-                    p.push(c);
-                }
-            }
-            None => patches.push(vec![c]),
-        }
-    }
-    for patch in &mut patches {
-        if patch.len() > 4 {
-            let deepest = *patch.iter().min_by(|a, b| a.separation.total_cmp(&b.separation)).unwrap();
-            let far = *patch.iter().max_by(|a, b| a.point.distance_squared(deepest.point).total_cmp(&b.point.distance_squared(deepest.point))).unwrap();
-            let axis = (far.point - deepest.point).normalize_or_zero();
-            let off = |c: &Contact| {
-                let d = c.point - deepest.point;
-                (d - axis * d.dot(axis)).dot(deepest.normal.cross(axis))
-            };
-            let side_a = *patch.iter().max_by(|a, b| off(a).total_cmp(&off(b))).unwrap();
-            let side_b = *patch.iter().min_by(|a, b| off(a).total_cmp(&off(b))).unwrap();
-            *patch = vec![deepest, far, side_a, side_b];
+    for c in contacts.iter().take(64) {
+        match patches.last_mut() {
+            Some(p) if p[0].normal.dot(c.normal) >= 0.999 => p.push(*c),
+            _ => patches.push(vec![*c]),
         }
     }
     patches
+}
+
+/// A friction patch this step: its world normal, its contacts, its anchors (world points on A and on B), broken.
+struct FrictionPatch {
+    normal: Vec3,
+    contacts: Vec<Contact>,
+    anchors: Vec<(Vec3, Vec3)>,
+    broken: bool,
+}
+
+fn to_world(b: Option<&Body>, local: Vec3) -> Vec3 {
+    b.map_or(local, |b| b.pos + b.rot * local)
+}
+
+fn to_local(b: Option<&Body>, world: Vec3) -> Vec3 {
+    b.map_or(world, |b| b.rot.inverse() * (world - b.pos))
+}
+
+/// A pair's friction patches as createFinalizeSolverContacts builds them: getFrictionPatches (0x18007b760) keeps last
+/// step's that didn't break, have anchors, whose normals still agree (0.999) and whose anchors haven't parted along the
+/// normal by the correlation distance; correlatePatches (0x180094ec0) adds each contact patch to the one of its normal
+/// (0.999), else a new one (at most 32); growPatches (0x1800953e0) gives one with under two anchors: the first contact
+/// nearer than the friction offset threshold, then the first farther than the correlation distance from it, then any
+/// farther from one than the two are apart taking the other's place.
+fn friction_patches(a: &Body, b: Option<&Body>, kept: &[StoredPatch], contacts: &[Contact], p: &Params) -> Vec<FrictionPatch> {
+    let mut out: Vec<FrictionPatch> = vec![];
+    for k in kept {
+        if k.broken || k.anchors.is_empty() {
+            continue;
+        }
+        let na = a.rot * k.normal_a;
+        let nb = b.map_or(k.normal_b, |b| b.rot * k.normal_b);
+        if na.dot(nb) <= 0.999 {
+            continue;
+        }
+        let anchors: Vec<(Vec3, Vec3)> = k.anchors.iter().map(|(la, lb)| (to_world(Some(a), *la), to_world(b, *lb))).collect();
+        if anchors.iter().any(|(wa, wb)| (*wa - *wb).dot(na).abs() >= p.friction_correlation_distance) {
+            continue;
+        }
+        out.push(FrictionPatch { normal: na, contacts: vec![], anchors, broken: false });
+    }
+    for cp in contact_patches(contacts) {
+        let n = cp[0].normal;
+        match out.iter().position(|f| f.normal.dot(n) >= 0.999) {
+            Some(k) => out[k].contacts.extend(cp),
+            None if out.len() < 32 => out.push(FrictionPatch { normal: n, contacts: cp, anchors: vec![], broken: false }),
+            None => {}
+        }
+    }
+    // A patch no contact joined gives no constraint and isn't kept (setupFinalizeSolverConstraints skips a patch whose
+    // contact count is 0).
+    out.retain(|f| !f.contacts.is_empty());
+    let threshold = p.friction_offset_threshold + p.rest_offset;
+    let corr2 = p.friction_correlation_distance * p.friction_correlation_distance;
+    for f in &mut out {
+        if f.anchors.len() >= 2 {
+            continue;
+        }
+        let mut points: Vec<Vec3> = f.anchors.iter().map(|x| x.0).collect();
+        let mut apart = 0.0f32;
+        for c in f.contacts.iter().filter(|c| c.separation < threshold) {
+            match points.len() {
+                0 => points.push(c.point),
+                1 => {
+                    let d = c.point.distance_squared(points[0]);
+                    if d > corr2 {
+                        points.push(c.point);
+                        apart = d;
+                    }
+                }
+                _ => {
+                    let (d0, d1) = (c.point.distance_squared(points[0]), c.point.distance_squared(points[1]));
+                    if d0 <= d1 {
+                        if apart < d1 {
+                            points[0] = c.point;
+                            apart = d1;
+                        }
+                    } else if apart < d0 {
+                        points[1] = c.point;
+                        apart = d0;
+                    }
+                }
+            }
+        }
+        // A new anchor is where its contact is, on both bodies.
+        f.anchors = points.into_iter().map(|q| (q, q)).collect();
+    }
+    out
 }
 
 struct NormalRow {
@@ -665,6 +960,8 @@ struct FrictionRow {
     rb: Vec3,
     t: Vec3,
     vel_multiplier: f32,
+    /// The anchor's drift along t (on A less on B) x invDt.
+    bias: f32,
     applied: f32,
 }
 
@@ -674,6 +971,9 @@ struct Patch {
     normals: Vec<NormalRow>,
     friction: Vec<FrictionRow>,
     broken: bool,
+    /// To keep: the patch's normal and anchors (world).
+    normal: Vec3,
+    anchors: Vec<(Vec3, Vec3)>,
 }
 
 struct State {
@@ -716,12 +1016,13 @@ pub fn step_all(bodies: &mut [&mut Body], world: &(impl TriSource + ?Sized), p: 
         }
     }
     // Contacts: each awake body with the world; each pair with one awake (waking the other).
-    let mut found: Vec<(usize, Option<usize>, Vec<Vec<Contact>>)> = vec![];
+    let mut found: Vec<(usize, Option<usize>, Vec<FrictionPatch>)> = vec![];
     for i in 0..bodies.len() {
         if !bodies[i].asleep {
             let c = world_contacts(bodies[i], world, p);
             if !c.is_empty() {
-                found.push((i, None, patches(c)));
+                let kept = bodies[i].friction.iter().find(|f| f.0 == WORLD).map_or(&[][..], |f| &f.1[..]);
+                found.push((i, None, friction_patches(bodies[i], None, kept, &c, p)));
             }
         }
     }
@@ -734,7 +1035,9 @@ pub fn step_all(bodies: &mut [&mut Body], world: &(impl TriSource + ?Sized), p: 
             if !c.is_empty() {
                 bodies[i].asleep = false;
                 bodies[j].asleep = false;
-                found.push((i, Some(j), patches(c)));
+                let other = bodies[j].id;
+                let kept = bodies[i].friction.iter().find(|f| f.0 == other).map_or(&[][..], |f| &f.1[..]);
+                found.push((i, Some(j), friction_patches(bodies[i], Some(&*bodies[j]), kept, &c, p)));
             }
         }
     }
@@ -761,7 +1064,7 @@ pub fn step_all(bodies: &mut [&mut Body], world: &(impl TriSource + ?Sized), p: 
             let pa = bodies[a].pos;
             let pb = b.map(|b| bodies[b].pos);
             let mut normals = vec![];
-            for c in &patch {
+            for c in &patch.contacts {
                 let (ra, rb) = (c.point - pa, pb.map_or(Vec3::ZERO, |pb| c.point - pb));
                 let n = c.normal;
                 let vel_multiplier = unit(&state, a, b, ra, rb, n);
@@ -774,21 +1077,27 @@ pub fn step_all(bodies: &mut [&mut Body], world: &(impl TriSource + ?Sized), p: 
                 let unbiased_bias = if bounce { 0.0 } else { scaled.max(0.0) };
                 normals.push(NormalRow { ra, rb, n, vel_multiplier, target, bias, unbiased_bias, applied: 0.0 });
             }
-            let n = patch[0].normal;
-            let first = patch[0].point;
-            let far = patch.iter().max_by(|x, y| x.point.distance_squared(first).total_cmp(&y.point.distance_squared(first))).map_or(first, |c| c.point);
-            let anchors: Vec<Vec3> = if far.distance_squared(first) > 1e-8 { vec![first, far] } else { vec![first] };
+            // The tangents: the relative linear velocity's sliding part when over 0.1 cm²/s² (1e-5 m²/s²), else a
+            // fixed perpendicular of n; then n x t0.
+            let n = patch.normal;
+            let dv = state[a].v - b.map_or(Vec3::ZERO, |b| state[b].v);
+            let slide = dv - n * n.dot(dv);
+            let t0 = if slide.length_squared() > 1e-5 {
+                slide.normalize()
+            } else if n.x.abs() < std::f32::consts::FRAC_1_SQRT_2 {
+                Vec3::new(0.0, -n.z, n.y).normalize()
+            } else {
+                Vec3::new(-n.y, n.x, 0.0).normalize()
+            };
+            let t1 = n.cross(t0);
             let mut friction = vec![];
-            for at in anchors {
-                let (ra, rb) = (at - pa, pb.map_or(Vec3::ZERO, |pb| at - pb));
-                let slide = rel_velocity(&state, a, b, ra, rb);
-                let tangential = slide - n * n.dot(slide);
-                let t0 = if tangential.length_squared() > 1e-10 { tangential.normalize() } else { n.any_orthonormal_vector() };
-                for t in [t0, n.cross(t0)] {
-                    friction.push(FrictionRow { ra, rb, t, vel_multiplier: unit(&state, a, b, ra, rb, t), applied: 0.0 });
+            for (wa, wb) in &patch.anchors {
+                let (ra, rb) = (*wa - pa, pb.map_or(Vec3::ZERO, |pb| *wb - pb));
+                for t in [t0, t1] {
+                    friction.push(FrictionRow { ra, rb, t, vel_multiplier: unit(&state, a, b, ra, rb, t), bias: (*wa - *wb).dot(t) * inv_dt, applied: 0.0 });
                 }
             }
-            rows.push(Patch { a, b, normals, friction, broken: false });
+            rows.push(Patch { a, b, normals, friction, broken: patch.broken, normal: n, anchors: patch.anchors });
         }
     }
     let solve = |s: &mut Vec<State>, rows: &mut Vec<Patch>, biased: bool| {
@@ -807,7 +1116,8 @@ pub fn step_all(bodies: &mut [&mut Body], world: &(impl TriSource + ?Sized), p: 
             let max_dynamic = p.dynamic_friction * sum;
             for row in patch.friction.iter_mut() {
                 let vt = row.t.dot(rel_velocity(s, a, b, row.ra, row.rb));
-                let mut applied = row.applied - row.vel_multiplier * vt;
+                let bias = if biased { row.bias } else { 0.0 };
+                let mut applied = row.applied - row.vel_multiplier * (vt + bias);
                 if applied.abs() > max_static {
                     patch.broken = true;
                 }
@@ -826,6 +1136,33 @@ pub fn step_all(bodies: &mut [&mut Body], world: &(impl TriSource + ?Sized), p: 
     let motion: Vec<(Vec3, Vec3)> = state.iter().map(|s| (s.v, s.w)).collect();
     for _ in 0..p.velocity_iterations {
         solve(&mut state, &mut rows, false);
+    }
+    // The friction patches kept, in either body's frame (before the bodies move: PhysX stores them at the setup).
+    let mut kept: Vec<(usize, u64, StoredPatch)> = vec![];
+    for r in &rows {
+        if r.anchors.is_empty() {
+            continue;
+        }
+        let a = &*bodies[r.a];
+        let b = r.b.map(|b| &*bodies[b]);
+        let key = b.map_or(WORLD, |b| b.id);
+        let stored = StoredPatch {
+            normal_a: a.rot.inverse() * r.normal,
+            normal_b: b.map_or(r.normal, |b| b.rot.inverse() * r.normal),
+            anchors: r.anchors.iter().map(|(wa, wb)| (to_local(Some(a), *wa), to_local(b, *wb))).collect(),
+            broken: r.broken,
+        };
+        kept.push((r.a, key, stored));
+    }
+    for b in bodies.iter_mut().filter(|b| !b.asleep) {
+        b.friction.clear();
+    }
+    for (a, key, stored) in kept {
+        let list = &mut bodies[a].friction;
+        match list.iter_mut().find(|f| f.0 == key) {
+            Some(f) => f.1.push(stored),
+            None => list.push((key, vec![stored])),
+        }
     }
     for (k, b) in bodies.iter_mut().enumerate() {
         if b.asleep {
@@ -898,8 +1235,15 @@ mod tests {
         // triangles, one patch of four), separation 0.
         let (b, _) = Body::new(&cube(0.1), 1.0, Vec3::new(0.0, 0.1, 0.0), Quat::IDENTITY).unwrap();
         let c = world_contacts(&b, &floor(), &Params::default());
-        let p = patches(c.clone());
-        assert_eq!((p.len(), p[0].len()), (1, 4), "{c:?}");
+        let p = contact_patches(&c);
+        assert_eq!(p.len(), 1, "{c:?}");
+        let mut unique: Vec<Vec3> = vec![];
+        for q in &p[0] {
+            if !unique.iter().any(|u| u.distance_squared(q.point) < 1e-10) {
+                unique.push(q.point);
+            }
+        }
+        assert_eq!(unique.len(), 4, "{c:?}");
         assert!(c.iter().all(|c| c.separation.abs() < 1e-4 && c.normal.y > 0.999));
     }
 
@@ -915,6 +1259,42 @@ mod tests {
         // Resting on a face: its centre a half-size above the floor, still.
         assert!((b.pos.y - 0.1).abs() < 0.02, "{:?}", b.pos);
         assert!(b.v.length() < 0.05, "{:?}", b.v);
+    }
+
+    #[test]
+    fn box_holds_on_a_slope() {
+        // 20 degrees: tan 0.36 under the friction 0.7, so the kept anchors hold it (it neither slides nor creeps).
+        let q = Quat::from_rotation_z(20f32.to_radians());
+        let (a, b, c, d) = (q * Vec3::new(-10.0, 0.0, -10.0), q * Vec3::new(10.0, 0.0, -10.0), q * Vec3::new(10.0, 0.0, 10.0), q * Vec3::new(-10.0, 0.0, 10.0));
+        let slope = TriList::new(vec![Tri::new(a, d, c).unwrap(), Tri::new(a, c, b).unwrap()]);
+        let p = Params::default();
+        let (mut body, _) = Body::new(&cube(0.1), 2.0, q * Vec3::new(0.0, 0.1, 0.0), q).unwrap();
+        for _ in 0..30 {
+            step(&mut body, &slope, &p, 1.0 / 60.0);
+        }
+        let start = body.pos;
+        for _ in 0..300 {
+            step(&mut body, &slope, &p, 1.0 / 60.0);
+        }
+        assert!(body.pos.distance(start) < 0.01, "moved {:?}", body.pos - start);
+    }
+
+    #[test]
+    fn active_edges_on_a_flat_floor() {
+        // A box over the floor's middle touches both triangles: their shared diagonal is flat (inactive), so no edge
+        // axis there; the contacts are the face's.
+        let (b, _) = Body::new(&cube(0.1), 1.0, Vec3::new(0.0, 0.095, 0.0), Quat::from_rotation_y(0.4)).unwrap();
+        let c = world_contacts(&b, &floor(), &Params::default());
+        assert!(!c.is_empty() && c.iter().all(|c| c.normal.y > 0.999), "{c:?}");
+    }
+
+    #[test]
+    fn first_pass_reduction() {
+        // Eight contacts with all of the first polygon in: indices 0, 2, 4, 6 and the deepest (5).
+        let mut out: Vec<Contact> = (0..8).map(|k| Contact { point: Vec3::new(k as f32, 0.0, 0.0), normal: Vec3::Y, separation: if k == 5 { -0.1 } else { 0.0 } }).collect();
+        reduce_all_in(&mut out, 0, true, Vec3::Y);
+        let xs: Vec<f32> = out.iter().map(|c| c.point.x).collect();
+        assert_eq!(xs, vec![0.0, 2.0, 4.0, 6.0, 5.0]);
     }
 
     #[test]
