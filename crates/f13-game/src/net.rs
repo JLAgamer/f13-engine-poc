@@ -1031,8 +1031,9 @@ fn net_bot_lobby(mut bot: ResMut<NetBot>, mut keys: ResMut<ButtonInput<KeyCode>>
     }
 }
 
-/// A lobby's playing server, as Jason: he walks a little (W, 3 s), so a client's counselor bot sees him move.
-fn host_bot_jason(mut bot: ResMut<NetBot>, time: Res<Time>, mut controls: ResMut<crate::jason_player::JasonControls>) {
+/// A lobby's playing server, as Jason: he walks a little (W, 3 s), so a client's counselor bot sees him move, then
+/// opens his map.
+fn host_bot_jason(mut bot: ResMut<NetBot>, time: Res<Time>, mut controls: ResMut<crate::jason_player::JasonControls>, mut map: ResMut<crate::jason_player::MorphMap>) {
     bot.t += time.delta_secs();
     match bot.step {
         0 if bot.t > 3.0 => {
@@ -1043,6 +1044,9 @@ fn host_bot_jason(mut bot: ResMut<NetBot>, time: Res<Time>, mut controls: ResMut
         }
         1 if bot.t > 3.0 => {
             controls.keys.release(KeyCode::KeyW);
+            // His map left open (M), to be seen on the host's screen.
+            info!("bot: net: the host's Jason opens his map");
+            map.open = true;
             bot.step = 2;
         }
         _ => {}

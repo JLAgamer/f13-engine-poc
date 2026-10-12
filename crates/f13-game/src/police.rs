@@ -368,7 +368,15 @@ pub(crate) fn spawn_car(commands: &mut Commands, export: &crate::ExportRoot, ass
         commands.spawn((
             SpotLight {
                 color: Color::srgb_u8(byte("R"), byte("G"), byte("B")),
-                intensity: c.props["Intensity"].as_f64().unwrap_or(5000.0) as f32,
+                intensity: if c.props["bUseInverseSquaredFalloff"].as_bool().unwrap_or(true) {
+                    crate::lighting::inverse_squared_lumens(c.props["Intensity"].as_f64().unwrap_or(5000.0) as f32)
+                } else {
+                    crate::lighting::unreal_falloff_lumens(
+                        c.props["Intensity"].as_f64().unwrap_or(5000.0) as f32,
+                        c.props["AttenuationRadius"].as_f64().unwrap_or(1000.0) as f32,
+                        c.props["LightFalloffExponent"].as_f64().unwrap_or(8.0) as f32,
+                    )
+                },
                 range: c.props["AttenuationRadius"].as_f64().unwrap_or(1000.0) as f32 / 100.0,
                 inner_angle: (c.props["InnerConeAngle"].as_f64().unwrap_or(0.0) as f32).to_radians().min(outer),
                 outer_angle: outer,

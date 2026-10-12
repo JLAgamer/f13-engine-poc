@@ -1172,15 +1172,17 @@ fn minimap(
     nodes: Query<&MaterialNode<Minimap>>,
     mut maps: ResMut<Assets<Minimap>>,
 ) {
-    let (Some(map), Some(player), Some(camera)) = (&hud.map, player, camera) else { return };
+    let Some(map) = &hud.map else { return };
     // His map's image (MapImage): the level's KillerMapTexture in place of MiniMap_Mat_Inst's (SCMiniMapBase's
-    // vt+0x4c8 from InitializeMinimap 0x14029c050), across SC_KillerMap_Widget (the click maps across it).
+    // vt+0x4c8 from InitializeMinimap 0x14029c050), across SC_KillerMap_Widget (the click maps across it). Whether or
+    // not a counselor is played here (a client playing Jason has none).
     if let (Some(file), Some(mut img)) = (&map.killer_file, hud.names.get("SC_KillerMap_Widget.Image_0").and_then(|&e| images.get_mut(e).ok())) {
         let handle = asset_server.load(file.clone());
         if img.image != handle {
             img.image = handle;
         }
     }
+    let (Some(player), Some(camera)) = (player, camera) else { return };
     let Some(&e) = hud.names.iter().find(|(k, _)| k.as_str() == MINIMAP_RETAINER).map(|(_, e)| e) else { return };
     let Ok(node) = nodes.get(e) else { return };
     let uv = map_uv(map.area, player.translation);

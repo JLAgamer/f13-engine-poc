@@ -7,7 +7,11 @@
 //!   1.2. That's Bevy's exposure at `ev100 = 0`. Tonemapping is the game's own (tonemap.rs).
 //! - **Lights**:
 //!   - The moon's Intensity is its illuminance (lux).
-//!   - An inverse-square light's Intensity is lumens, as in Bevy.
+//!   - An inverse-square light's Intensity is UE 4.18's legacy unit, 16 / 100^2 candela (the shader's attenuation is
+//!     1 / distance^2 in cm; UE 4.19's ULocalLightComponent::GetUnitsConversionFactor keeps it as Unitless, x16 to
+//!     candela x 100^2): about 1/49.7 lumen ([`inverse_squared_lumens`]). PLACEHOLDER source: the engine's (4.19's
+//!     conversion), not found in the game's binary; read as lumens, the outro's and the campfires' lights washed
+//!     their scenes out.
 //!   - A light without inverse-square falloff lights `Intensity * (1 - (d/R)^2)^FalloffExponent` lux at distance
 //!     `d` within its radius `R`. Bevy has only the inverse-square law, so that light gets the lumens that match it
 //!     at a third of its radius.
@@ -143,10 +147,16 @@ impl PlacedLight {
     pub(crate) fn lumens(&self) -> f32 {
         let intensity = self.num("Intensity", 5000.0);
         if self.flag("bUseInverseSquaredFalloff", true) {
-            return intensity;
+            return inverse_squared_lumens(intensity);
         }
         unreal_falloff_lumens(intensity, self.radius(), self.num("LightFalloffExponent", 8.0))
     }
+}
+
+/// Bevy lumens (a spot's as a point light's: Bevy's cone only masks) for an inverse-square light's Intensity: 16 / 100^2
+/// candela per unit, x 4 pi (see the module notes).
+pub(crate) fn inverse_squared_lumens(intensity: f32) -> f32 {
+    intensity * 16.0 / 10_000.0 * 4.0 * std::f32::consts::PI
 }
 
 /// Lumens for a light without inverse-square falloff, matching its illuminance at a third of its radius `r` (cm).
@@ -710,7 +720,7 @@ fn add_flashlight(
         color = LinearRgba::rgb(color.red * t[0], color.green * t[1], color.blue * t[2]);
     }
     let (intensity, radius) = (v("FlashlightIntensity", 5000.0), v("FlashlightAttenuationRadius", 1000.0));
-    let lumens = if v("FlashlightInverseSquared", 1.0) > 0.5 { intensity } else { unreal_falloff_lumens(intensity, radius, v("FlashlightFalloffExponent", 8.0)) };
+    let lumens = if v("FlashlightInverseSquared", 1.0) > 0.5 { inverse_squared_lumens(intensity) } else { unreal_falloff_lumens(intensity, radius, v("FlashlightFalloffExponent", 8.0)) };
     let outer = v("FlashlightOuterConeAngle", 44.0).clamp(0.5, 89.0).to_radians();
     let t = FlashlightTuning {
         lumens,
