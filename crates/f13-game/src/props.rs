@@ -569,6 +569,15 @@ fn spawn_props(
         });
         if let Some((pivot, pivot_closed)) = pivot {
             let door_interact = info.components.iter().find(|c| c.name == "InteractComponent");
+            if let Some(c) = door_interact {
+                // SCDoor's constructor: bCanHighlight on, HighlightDistance 300 (unless the Blueprint sets them).
+                let mut p = crate::placed_kills::KillPrompt::of(&classes, c);
+                p.can_highlight = c.props["bCanHighlight"].as_bool().unwrap_or(true);
+                if c.props["HighlightDistance"].is_null() {
+                    p.distance_m = 3.0;
+                }
+                commands.entity(root).insert(crate::placed_kills::DoorPrompt(p));
+            }
             commands.entity(root).insert(crate::doors::Door {
                 spots: info.components.iter().filter(|c| c.name.ends_with("_SpecialMoveHandler")).map(|c| (c.name.clone(), local(c))).collect(),
                 break_force: classes.prop(&actor.class, "BreakExplosionForce").as_f64().map_or(5000.0, |v| v as f32),

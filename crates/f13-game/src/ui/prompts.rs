@@ -36,6 +36,7 @@ const CENTRE: f32 = -0.5;
 pub enum PromptSource {
     Counselor,
     PlacedKill,
+    Door,
 }
 
 /// An interactable's prompt as the local player sees it now.
@@ -51,6 +52,8 @@ pub struct Prompt {
     pub icon: Option<String>,
     pub highlighted: bool,
     pub best: bool,
+    /// Widgets in it (by name) shown or hidden by its Blueprint's own visibility bindings.
+    pub shown: Vec<(String, bool)>,
 }
 
 /// The prompts listed this frame (highlighted or best); one missing is neither.
@@ -190,6 +193,11 @@ pub(super) fn prompts(
         let s = ui.shown.get_mut(&p.id).expect("built");
         s.at = p.at;
         update(s, highlight, best, now);
+        for (name, on) in &p.shown {
+            if let Some((_, mut v)) = s.names.get(&format!("{}.{name}", s.widget)).and_then(|&e| nodes.get_mut(e).ok()) {
+                v.set_if_neq(if *on { Visibility::Inherited } else { Visibility::Hidden });
+            }
+        }
     }
     for (id, s) in ui.shown.iter_mut() {
         if !seen.contains(id) {

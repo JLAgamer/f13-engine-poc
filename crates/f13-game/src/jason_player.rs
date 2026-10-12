@@ -116,6 +116,10 @@ pub struct JasonControls {
     pub view: (Vec3, Vec3),
     /// 2: Sense, asked for and not yet used (senses.rs takes it).
     pub sense: bool,
+    /// His map out for a Morph: MorphInput is pushed with bBlockInput (SetupPlayerInputComponent 0x140407900 sets its
+    /// flag, +0x154 bit 0) and AbilitiesInput popped (FUN_1403f9480), so only 1 (KLR_Morph_Cancel) and the click get
+    /// through: no movement, look, attack, interact or other ability.
+    pub(crate) blocked: bool,
 }
 
 #[derive(Clone, Copy, Default, Debug)]
@@ -174,6 +178,10 @@ impl JasonControls {
             }
         }
         let look = Quat::from_euler(EulerRot::YXZ, self.yaw, self.pitch, 0.0) * Vec3::NEG_Z;
+        if self.blocked {
+            let morph = std::mem::take(&mut self.latched).morph;
+            return JasonInput { movement: Vec2::ZERO, forward, look, view: self.view, attack_held: false, knife_held: false, block_held: false, presses: Presses { morph, ..default() } };
+        }
         JasonInput {
             movement: m.normalize_or_zero(),
             forward,
@@ -228,6 +236,7 @@ fn capture(
         c.mouse.release(MouseButton::Left);
         c.mouse.clear_just_pressed(MouseButton::Left);
     }
+    c.blocked = map.morph;
     let locked = cursor.grab_mode == CursorGrabMode::Locked;
     if c.mouse.just_pressed(MouseButton::Left) && !locked && !map.morph {
         // The first click takes the mouse (no swing).
@@ -294,6 +303,10 @@ impl JasonControls {
 /// The presses this frame's keys and buttons make (used up by [`JasonControls::take`]).
 fn latch(c: &mut JasonControls) {
     let p = &mut c.latched;
+    if c.blocked {
+        p.morph |= c.keys.just_pressed(KeyCode::Digit1);
+        return;
+    }
     p.attack |= c.mouse.just_pressed(MouseButton::Left);
     p.grab |= c.mouse.just_pressed(MouseButton::Right);
     p.knife |= c.mouse.just_pressed(MouseButton::Middle);
@@ -341,6 +354,7 @@ fn demo(
     grab_kills: Res<crate::jason::GrabKillsAvailable>,
     (mut tried, doors, mut view): (Local<Option<Entity>>, Query<(Entity, &crate::doors::Door, &GlobalTransform)>, ResMut<DemoView>),
     (mut sense_shot, mut prompt_shot, bot): (Local<bool>, Local<bool>, Option<Res<crate::bot::Bot>>),
+    mut door_shot: Local<(Option<f32>, bool)>,
     placed_kills: Query<&crate::placed_kills::PlacedKill>,
 ) {
     let (Some((j, jxf)), Some(h)) = (jason.iter().next(), her.iter().next()) else { return };
@@ -416,6 +430,16 @@ fn demo(
             info!("jason demo: Morph map click at its centre");
         }
         _ => {}
+    }
+    // A door his best interactable: a screenshot 0.6 s on (temp f13-demo-door.png: its prompt).
+    if !door_shot.1 && j.focus_door().is_some() {
+        let since = *door_shot.0.get_or_insert(now);
+        if now - since > 0.6 {
+            door_shot.1 = true;
+            let path = std::env::temp_dir().join("f13-demo-door.png");
+            info!("jason demo: screenshot {}", path.display());
+            commands.spawn(bevy::render::view::screenshot::Screenshot::primary_window()).observe(bevy::render::view::screenshot::save_to_disk(path));
+        }
     }
     let (knife, swung, last) = &mut *done;
     debug!("jason demo: {:?} at {:.1}, {dist:.1} m from her at {:.1} (going for {shut:.1?}), velocity {:.0}", j.state, jxf.translation, h.translation, j.velocity);

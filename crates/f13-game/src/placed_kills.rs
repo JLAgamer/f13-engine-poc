@@ -39,7 +39,7 @@ impl Plugin for PlacedKillsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_placed_kills)
             .add_systems(FixedUpdate, orient_toward_killer.before(crate::jason::update_jason).run_if(crate::net::simulating))
-            .add_systems(Update, prompts);
+            .add_systems(Update, (prompts, door_prompts));
     }
 }
 
@@ -170,25 +170,47 @@ pub fn placed_kill(classes: &ClassDb, class: &str, t: &Xform, actor_props: &serd
         pitch_limit: interact.props["bUsePitchLimit"].as_bool().unwrap_or(false).then(|| interact.props["MaxPitchOffset"].as_f64().unwrap_or(DEFAULT_MAX_PITCH) as f32),
         only_once: actor_props["bOnlyUseableOnce"].as_bool().or(info.props["bOnlyUseableOnce"].as_bool()).unwrap_or(false),
         used: false,
-        prompt: {
-            let p = &interact.props;
-            let f = |k: &str, d: f32| p[k].as_f64().map_or(d, |v| v as f32);
-            let class = |k: &str| p[k].as_str().map(|s| s.trim_end_matches("_C").to_string());
-            KillPrompt {
-                widget: class("InteractionWidgetClass").unwrap_or_else(|| "SCInteractionWidget".into()),
-                icon: class("InteractionIconWidgetClass"),
-                can_highlight: p["bCanHighlight"].as_bool().unwrap_or(false),
-                distance_m: f("HighlightDistance", 500.0) / 100.0,
-                z_m: p["bUseSeperateZBounds"].as_bool().unwrap_or(false).then(|| f("HighlightZDistance", 100.0) / 100.0),
-                yaw: p["bUseYawHighlightLimit"].as_bool().unwrap_or(false).then(|| f("YawHighlightLimit", 90.0)),
-                occlusion: p["bCheckForOcclusion"].as_bool().unwrap_or(classes.is_child_of(&interact.kind, "SCInteractComponent")),
-                visibility: p["RayTraceChannel"].as_str() == Some("ECC_Visibility"),
-            }
-        },
+        prompt: KillPrompt::of(classes, interact),
         prop,
     };
     k.place(root);
     Some(k)
+}
+
+impl KillPrompt {
+    /// An Interactable's prompt and highlight test from its component's properties (the constructors' defaults
+    /// unless set; bCanHighlight's is off).
+    pub fn of(classes: &ClassDb, interact: &f13_data::level::ComponentInfo) -> Self {
+        let p = &interact.props;
+        let f = |k: &str, d: f32| p[k].as_f64().map_or(d, |v| v as f32);
+        let class = |k: &str| p[k].as_str().map(|s| s.trim_end_matches("_C").to_string());
+        KillPrompt {
+            widget: class("InteractionWidgetClass").unwrap_or_else(|| "SCInteractionWidget".into()),
+            icon: class("InteractionIconWidgetClass"),
+            can_highlight: p["bCanHighlight"].as_bool().unwrap_or(false),
+            distance_m: f("HighlightDistance", 500.0) / 100.0,
+            z_m: p["bUseSeperateZBounds"].as_bool().unwrap_or(false).then(|| f("HighlightZDistance", 100.0) / 100.0),
+            yaw: p["bUseYawHighlightLimit"].as_bool().unwrap_or(false).then(|| f("YawHighlightLimit", 90.0)),
+            occlusion: p["bCheckForOcclusion"].as_bool().unwrap_or(classes.is_child_of(&interact.kind, "SCInteractComponent")),
+            visibility: p["RayTraceChannel"].as_str() == Some("ECC_Visibility"),
+        }
+    }
+
+    /// The highlight test (FUN_140240fb0, after bCanHighlight) of the Interactable at `at` facing `forward`, for a
+    /// character at `center`.
+    pub fn highlights(&self, at: Vec3, forward: Vec3, center: Vec3) -> bool {
+        if !self.can_highlight {
+            return false;
+        }
+        let d = center - at;
+        let near = match self.z_m {
+            Some(z) => d.y.abs() <= z && Vec2::new(d.x, d.z).length() <= self.distance_m,
+            None => d.length() <= self.distance_m,
+        };
+        // The direction from it to him (yaw) within the limit of its facing.
+        let off = |a: f32| ((a + 180.0).rem_euclid(360.0) - 180.0).abs();
+        near && self.yaw.is_none_or(|l| off(d.z.atan2(d.x).to_degrees() - forward.z.atan2(forward.x).to_degrees()) <= l)
+    }
 }
 
 impl PlacedKill {
@@ -232,18 +254,7 @@ impl PlacedKill {
 
     /// The highlight test's distance and facing parts for a character whose capsule's centre is at `center`.
     pub fn highlights(&self, center: Vec3) -> bool {
-        let p = &self.prompt;
-        if !p.can_highlight || (self.used && self.only_once) {
-            return false;
-        }
-        let d = center - self.interact;
-        let near = match p.z_m {
-            Some(z) => d.y.abs() <= z && Vec2::new(d.x, d.z).length() <= p.distance_m,
-            None => d.length() <= p.distance_m,
-        };
-        // The direction from it to him (yaw) within the limit of its facing.
-        let off = |a: f32| ((a + 180.0).rem_euclid(360.0) - 180.0).abs();
-        near && p.yaw.is_none_or(|l| off(d.z.atan2(d.x).to_degrees() - self.forward.z.atan2(self.forward.x).to_degrees()) <= l)
+        !(self.used && self.only_once) && self.prompt.highlights(self.interact, self.forward, center)
     }
 
     pub fn takes(&self) -> (&'static str, &'static str, &'static str) {
@@ -281,14 +292,7 @@ fn prompts(
     jasons: Query<(&crate::jason::Jason, &Transform)>,
     kills: Query<(Entity, &PlacedKill, Option<&Name>)>,
     mut list: ResMut<crate::ui::Prompts>,
-    (collision, dynamic, no_world_dynamic, no_visibility, actor_tris, (not_visibility, not_world_dynamic)): (
-        Option<Res<crate::collision::WorldCollision>>,
-        Res<crate::collision::DynamicColliders>,
-        Query<(), With<crate::collision::NoWorldDynamic>>,
-        Query<(), With<crate::collision::NoVisibility>>,
-        Option<Res<crate::collision::ActorTris>>,
-        (Option<Res<crate::collision::NotVisibility>>, Option<Res<crate::collision::NotWorldDynamic>>),
-    ),
+    occlusion: Occlusion,
 ) {
     use crate::ui::{Prompt, PromptSource};
     let enter = killer.as_ref().and_then(|k| k.length(crate::jason::GRAB_ENTER)).unwrap_or(0.0);
@@ -302,15 +306,7 @@ fn prompts(
     let center = xf.translation + Vec3::Y * half;
     let eyes = center + Vec3::Y * JASON_EYE_HEIGHT_M;
     let view = controls.as_ref().map_or(Vec2::ZERO, |c| Vec2::new(-c.yaw.sin(), -c.yaw.cos()));
-    let occluded = |e: Entity, k: &PlacedKill, name: Option<&Name>| {
-        let Some(world) = collision.as_ref().filter(|_| k.prompt.occlusion) else { return false };
-        let passes = |c: Entity| if k.prompt.visibility { no_visibility.contains(c) } else { no_world_dynamic.contains(c) };
-        let (grid, lists) = world.without(&dynamic, |c| passes(c) || c == e);
-        let own = name.and_then(|n| actor_tris.as_ref()?.0.get(n.as_str()));
-        let glass = if k.prompt.visibility { not_visibility.as_ref().map(|g| &g.0) } else { not_world_dynamic.as_ref().map(|g| &g.0) };
-        let level = crate::collision::Excluding(grid, own);
-        f13_core::collision::segment_hit(&(&crate::collision::Excluding(&level, glass), lists.as_slice()), eyes, k.interact, 1.0).is_some()
-    };
+    let occluded = |e: Entity, k: &PlacedKill, name: Option<&Name>| occlusion.blocked(&k.prompt, e, name, eyes, k.interact);
     // The best: the one he'd use (update_jason takes the first in reach).
     let best = kills.iter().find(|(_, k, _)| k.in_reach(center, view)).map(|(e, _, _)| e);
     let prompts: Vec<Prompt> = kills
@@ -326,10 +322,96 @@ fn prompts(
                 icon: k.prompt.icon.clone(),
                 highlighted,
                 best: is_best,
+                shown: vec![],
             })
         })
         .collect();
     list.set(PromptSource::PlacedKill, prompts);
+}
+
+/// IsOccluded (bCheckForOcclusion): what blocks the Interactable's channel (RayTraceChannel) between the character's
+/// eyes and its point, the actor's own collision aside.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct Occlusion<'w, 's> {
+    collision: Option<Res<'w, crate::collision::WorldCollision>>,
+    dynamic: Res<'w, crate::collision::DynamicColliders>,
+    no_world_dynamic: Query<'w, 's, (), With<crate::collision::NoWorldDynamic>>,
+    no_visibility: Query<'w, 's, (), With<crate::collision::NoVisibility>>,
+    actor_tris: Option<Res<'w, crate::collision::ActorTris>>,
+    not_visibility: Option<Res<'w, crate::collision::NotVisibility>>,
+    not_world_dynamic: Option<Res<'w, crate::collision::NotWorldDynamic>>,
+}
+
+impl Occlusion<'_, '_> {
+    /// Whether `prompt`'s Interactable on `actor` (named `name`) at `at` is occluded from `eyes`.
+    pub fn blocked(&self, prompt: &KillPrompt, actor: Entity, name: Option<&Name>, eyes: Vec3, at: Vec3) -> bool {
+        let Some(world) = self.collision.as_ref().filter(|_| prompt.occlusion) else { return false };
+        let passes = |c: Entity| if prompt.visibility { self.no_visibility.contains(c) } else { self.no_world_dynamic.contains(c) };
+        let (grid, lists) = world.without(&self.dynamic, |c| passes(c) || c == actor);
+        let own = name.and_then(|n| self.actor_tris.as_ref()?.0.get(n.as_str()));
+        let glass = if prompt.visibility { self.not_visibility.as_ref().map(|g| &g.0) } else { self.not_world_dynamic.as_ref().map(|g| &g.0) };
+        let level = crate::collision::Excluding(grid, own);
+        f13_core::collision::segment_hit(&(&crate::collision::Excluding(&level, glass), lists.as_slice()), eyes, at, 1.0).is_some()
+    }
+}
+
+/// A door's InteractComponent's prompt (SCInteractionDoorWidget with DoorInteractionIcons): SCDoor's constructor
+/// (0x140329a10) sets its bCanHighlight (+0x358) and HighlightDistance 300 (the Blueprints' 400 over it).
+#[derive(Component, Debug, Clone)]
+pub struct DoorPrompt(pub KillPrompt);
+
+/// The played Jason's door prompts. SCDoor's CanInteractWith (0x140339f10) gives the killer a closed door (not broken)
+/// while he isn't holding her; highlighted by the door's highlight test from his capsule's centre, occluded as the
+/// placed kills' are; the best his interactable manager's ([`crate::jason::Jason::focus_door`]). SCInteractionDoorWidget
+/// (its Blueprint's Get_ActionMapWidgetUse / Get_ActionMapWidgetAttack_Visibility_0, for a killer): the attack key
+/// when the door's locked or barricaded and his rage isn't on, else the use key.
+#[allow(clippy::type_complexity)]
+fn door_prompts(
+    play: Option<Res<crate::jason_player::PlayJason>>,
+    killer: Option<Res<crate::character::KillerCharacter>>,
+    jasons: Query<(&crate::jason::Jason, &Transform, Option<&crate::senses::Knowledge>)>,
+    doors: Query<(Entity, &crate::doors::Door, &DoorPrompt, &GlobalTransform, Option<&Name>)>,
+    barricades: Query<&crate::windows::Barricade>,
+    mut list: ResMut<crate::ui::Prompts>,
+    occlusion: Occlusion,
+) {
+    use crate::ui::{Prompt, PromptSource};
+    let (Some(_), Some((j, xf, know))) = (play, jasons.iter().next()) else {
+        list.set(PromptSource::Door, []);
+        return;
+    };
+    if j.holding() {
+        list.set(PromptSource::Door, []);
+        return;
+    }
+    let half = killer.as_ref().map_or(0.88, |k| k.info.capsule_half_height / 100.0);
+    let center = xf.translation + Vec3::Y * half;
+    let eyes = center + Vec3::Y * JASON_EYE_HEIGHT_M;
+    let rage = know.is_some_and(|k| k.abilities.rage_active);
+    let best = j.focus_door();
+    let prompts: Vec<Prompt> = doors
+        .iter()
+        .filter(|(_, d, ..)| !d.open && !d.broken)
+        .filter_map(|(e, d, p, g, name)| {
+            let at = g.transform_point(d.interact);
+            let forward = g.rotation() * Vec3::X;
+            let highlighted = p.0.highlights(at, forward, center) && !occlusion.blocked(&p.0, e, name, eyes, at);
+            let is_best = best == Some(e);
+            let barred = barricades.iter().any(|b| b.enabled && b.door == Some(e));
+            let attack = (d.locked || barred) && !rage;
+            (highlighted || is_best).then(|| Prompt {
+                source: PromptSource::Door,
+                id: (e, 0),
+                at,
+                widget: p.0.widget.clone(),
+                icon: p.0.icon.clone(),
+                highlighted,
+                best: is_best,
+                shown: vec![("ActionMapWidgetUse".into(), !attack), ("ActionMapWidgetAttack".into(), attack)],
+            })
+        })
+        .collect();
+    list.set(PromptSource::Door, prompts);
 }
 
 /// APawn's BaseEyeHeight (Jason_Base doesn't set it): his eyes above his capsule's centre.
