@@ -347,13 +347,21 @@ pub struct JasonTarget(pub Option<Entity>);
 
 fn choose_target(
     mut target: ResMut<JasonTarget>,
-    jasons: Query<&Transform, With<Jason>>,
+    jasons: Query<(&Transform, &Jason)>,
     counselors: Query<(Entity, &Player, &Transform, Has<Held>, Has<crate::hiding::Hiding>), (Without<Jason>, Without<crate::vehicle::Escaped>)>,
 ) {
-    let Some(jxf) = jasons.iter().next() else {
+    let Some((jxf, j)) = jasons.iter().next() else {
         target.0 = None;
         return;
     };
+    // What he's doing to her he finishes with her (a kill goes on after she's dead and let go).
+    let busy = matches!(
+        j.state,
+        JasonState::Swinging { .. } | JasonState::Reaching { .. } | JasonState::Holding { .. } | JasonState::Killing { .. } | JasonState::HideKill { .. } | JasonState::Slamming { .. } | JasonState::PullingOut { .. } | JasonState::Throwing { .. } | JasonState::Done
+    );
+    if busy && target.0.is_some_and(|t| counselors.contains(t)) {
+        return;
+    }
     if let Some((e, ..)) = counselors.iter().find(|c| c.3) {
         target.0 = Some(e);
         return;

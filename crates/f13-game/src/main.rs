@@ -29,6 +29,7 @@ mod cinematic;
 mod car_lights;
 mod character;
 mod controls;
+mod lobby;
 mod net;
 mod net_world;
 mod collision;
@@ -93,6 +94,13 @@ struct Args {
     net: Option<net::Role>,
     /// --bot-net: as a client, the network test bot (net.rs).
     bot_net: bool,
+    /// --lobby (a server): the players gather and ready up first (lobby.rs); --dedicated: the server plays no one.
+    lobby: bool,
+    dedicated: bool,
+    /// --name: this player's name in the lobby.
+    name: Option<String>,
+    /// --prefer counselor|none|jason: what the net bot asks the lobby for.
+    prefer: lobby::Preference,
     /// Counselors in the match (--counselors n): the local one and n - 1 others at the next starts (testing).
     counselors: usize,
     export: PathBuf,
@@ -189,6 +197,7 @@ fn parse_args() -> Args {
     let mut bot_heal = false;
     let mut bot_drop = false;
     let mut bot_net = false;
+    let (mut lobby, mut dedicated, mut name, mut prefer) = (false, false, None, lobby::Preference::NoPreference);
     let mut bot_dodge = false;
     let mut bot_door = false;
     let mut bot_jason = false;
@@ -254,6 +263,16 @@ fn parse_args() -> Args {
             "--bot-heal" => bot_heal = true,
             "--bot-drop" => bot_drop = true,
             "--bot-net" => bot_net = true,
+            "--lobby" => lobby = true,
+            "--dedicated" => dedicated = true,
+            "--name" => name = it.next(),
+            "--prefer" => {
+                prefer = match it.next().as_deref() {
+                    Some("counselor") => lobby::Preference::Counselor,
+                    Some("jason") => lobby::Preference::Killer,
+                    _ => lobby::Preference::NoPreference,
+                }
+            }
             "--bot-dodge" => bot_dodge = true,
             "--bot-door" => bot_door = true,
             "--bot-jason" => bot_jason = true,
@@ -348,7 +367,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { net, bot_net, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, camera, round_time, flashlight, rain }
+    Args { net, bot_net, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, camera, round_time, flashlight, rain }
 }
 
 #[derive(Resource)]
@@ -606,7 +625,7 @@ fn main() {
         app.add_plugins(jason_player::PlayJasonPlugin { active: args.play_jason, demo: args.play_jason_demo });
     }
     if let Some(role) = args.net {
-        app.add_plugins(net::NetPlugin { role, bot: args.bot_net });
+        app.add_plugins(net::NetPlugin { role, bot: args.bot_net, prefer: args.prefer, lobby: args.lobby, dedicated: args.dedicated, name: args.name.clone().unwrap_or_else(|| if matches!(role, net::Role::Server(_)) { "host".into() } else { String::new() }) });
     }
     if let Some(port) = args.host.filter(|_| !(args.fly || args.aerial)) {
         app.add_plugins(host::HostPlugin { port });

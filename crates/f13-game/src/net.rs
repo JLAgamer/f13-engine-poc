@@ -33,8 +33,8 @@ const PROTOCOL_ID: u64 = 0x0F13_0003;
 /// PLACEHOLDER: the development key (a backend would sign connect tokens with its own).
 const DEV_KEY: [u8; 32] = [0x13; 32];
 /// How long either side waits without hearing from the other before dropping the connection (netcode's default is
-/// 3 s, which a level still streaming in on either side outlasts).
-const TIMEOUT_SECS: i32 = 30;
+/// 3 s, which a level still streaming in on either side outlasts; several games on one machine stall longer).
+const TIMEOUT_SECS: i32 = 90;
 /// The netcode tick (the game's fixed step).
 const TICK: Duration = Duration::from_micros(15_625);
 
@@ -136,13 +136,13 @@ impl Twins {
 pub struct Mirrored;
 
 /// Whether this process runs the match (not a client). The gameplay systems run only if so.
-pub fn simulating(client: Option<Res<NetClient>>) -> bool {
-    client.is_none()
+pub fn simulating(client: Option<Res<NetClient>>, lobby: Option<Res<crate::lobby::LobbyOpen>>) -> bool {
+    client.is_none() && lobby.is_none()
 }
 
 /// On the server: the link of the player who plays this counselor.
 #[derive(Component)]
-struct PlayedBy(Entity);
+pub(crate) struct PlayedBy(pub Entity);
 
 /// The counselor starts not yet taken (the server hands them to joining players in order).
 #[derive(Resource, Default)]
@@ -150,8 +150,14 @@ pub struct FreeStarts(pub Vec<Vec3>);
 
 pub struct NetPlugin {
     pub role: Role,
-    /// A client: the network test bot ([`net_bot`]).
+    /// A client: the network test bot ([`net_bot`]), and what it asks the lobby for.
     pub bot: bool,
+    pub prefer: crate::lobby::Preference,
+    /// A server: the lobby first (lobby.rs), and whether the server plays no one.
+    pub lobby: bool,
+    pub dedicated: bool,
+    /// This player's name in the lobby.
+    pub name: String,
 }
 
 impl Plugin for NetPlugin {
@@ -178,6 +184,10 @@ impl Plugin for NetPlugin {
                     })
                     .add_systems(Update, apply_inputs);
                 crate::net_world::server(app);
+                if self.lobby {
+                    crate::lobby::server(app, self.dedicated, self.name.clone());
+                }
+                crate::lobby::ui(app);
                 app
                     .add_systems(Startup, spawn_match)
                     .add_systems(PostUpdate, (replicate_bodies, update_bodies, send_match).chain().before(ReplicationSystems::Send));
@@ -193,8 +203,12 @@ impl Plugin for NetPlugin {
                     .add_systems(Update, (send_input, (make_twins, mirror).chain().in_set(Mirrored).before(crate::character::animate)));
                 app.add_systems(Update, receive_match.after(Mirrored));
                 crate::net_world::client(app);
+                crate::lobby::client(app);
+                crate::lobby::ui(app);
+                app.insert_resource(ClientName(self.name.clone()));
                 if self.bot {
-                    app.init_resource::<NetBot>().add_systems(Update, net_bot.before(send_input));
+                    app.insert_resource(NetBot { prefer: self.prefer, ..default() })
+                        .add_systems(Update, (net_bot_lobby, net_bot.run_if(not(resource_exists::<crate::jason_player::PlayJason>)), net_bot_jason.run_if(resource_exists::<crate::jason_player::PlayJason>)).chain().before(send_input).before(crate::lobby::Keys));
                 }
             }
         }
@@ -212,6 +226,7 @@ fn protocol(app: &mut App) {
     app.component::<NetMatch>().replicate();
     app.component::<NetTally>().replicate();
     crate::net_world::protocol(app);
+    crate::lobby::protocol(app);
 }
 
 #[derive(Resource)]
@@ -249,8 +264,13 @@ fn player_joined(
     character: Option<Res<crate::character::CounselorCharacter>>,
     tuning: Res<crate::player::PlayerTuning>,
     mut starts: ResMut<FreeStarts>,
+    lobby: Option<Res<crate::lobby::LobbyOpen>>,
 ) {
     let Ok(id) = links.get(joined.entity) else { return };
+    // In the lobby, she plays once the match starts (lobby.rs).
+    if lobby.is_some() {
+        return;
+    }
     if starts.0.is_empty() {
         warn!("net: player {:?} joined with no counselor start left", id.0);
         return;
@@ -347,7 +367,11 @@ fn update_bodies(
 }
 
 /// Once the level is in (its first frames hitch while it streams), the connection.
-fn connect(mut commands: Commands, server: Res<ServerAddr>, level: Res<crate::Level>, assets: Res<AssetServer>, mut done: Local<bool>) {
+/// On a client: the name it gives the lobby.
+#[derive(Resource)]
+struct ClientName(String);
+
+fn connect(mut commands: Commands, server: Res<ServerAddr>, level: Res<crate::Level>, assets: Res<AssetServer>, name: Res<ClientName>, mut done: Local<bool>) {
     if *done || level.scenes.is_empty() || !level.scenes.iter().all(|h| assets.is_loaded_with_dependencies(h.id())) {
         return;
     }
@@ -355,6 +379,8 @@ fn connect(mut commands: Commands, server: Res<ServerAddr>, level: Res<crate::Le
     // A client id from the clock (PLACEHOLDER: a backend would hand it out with the token).
     let id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64);
     let auth = Authentication::Manual { server_addr: server.0, client_id: id, private_key: DEV_KEY, protocol_id: PROTOCOL_ID };
+    let name = if name.0.is_empty() { format!("player {}", id % 10000) } else { name.0.clone() };
+    commands.insert_resource(crate::lobby::Me { id, name });
     let config = lightyear::prelude::client::NetcodeConfig { client_timeout_secs: TIMEOUT_SECS, ..default() };
     let netcode = match lightyear::prelude::client::NetcodeClient::new(auth, config) {
         Ok(n) => n,
@@ -522,6 +548,9 @@ struct NetBot {
     jason_from: Option<Vec3>,
     clock: Option<i32>,
     failed: Vec<&'static str>,
+    /// What it asks the lobby for, and how far it got there (0 waiting, 1 asked, 2 ready).
+    prefer: crate::lobby::Preference,
+    lobby: u8,
 }
 
 /// How long the bot waits for the server (real seconds) before giving up.
@@ -544,6 +573,10 @@ fn net_bot(
     for k in [KeyCode::KeyW, KeyCode::KeyC] {
         keys.release(k);
     }
+    // Where Jason is first seen (a player playing him may be done walking before her match starts).
+    if bot.jason_from.is_none() {
+        bot.jason_from = jason.single().ok().map(|b| Vec3::from_array(b.pos));
+    }
     let Ok((body, counselor)) = own.single() else {
         if real.elapsed_secs() > NET_BOT_CONNECT_S {
             error!("bot: no counselor from the server");
@@ -552,8 +585,8 @@ fn net_bot(
         return;
     };
     let at = Vec3::from_array(body.pos);
-    if bot.jason_from.is_none() {
-        bot.jason_from = jason.single().ok().map(|b| Vec3::from_array(b.pos));
+    if bot.step == 1 && (bot.t * 2.0).fract() < time.delta_secs() * 2.0 {
+        info!("bot: net: walking at {at}, stance {}", counselor.stance);
     }
     let next = |bot: &mut NetBot| {
         bot.step += 1;
@@ -599,7 +632,13 @@ fn net_bot(
         // Jason moves on the server (it hunts from the start with --jason-delay 0).
         6 => {
             let moved = jason.single().ok().zip(bot.jason_from).map(|(b, from)| Vec3::from_array(b.pos).distance(from));
-            if moved.is_some_and(|m| m > 2.0) || bot.t > 30.0 {
+            // (No Jason in the match: nothing to see.)
+            if bot.jason_from.is_none() {
+                info!("bot: net: no Jason");
+                info!("bot: net: passed");
+                exit.write(AppExit::Success);
+                next(&mut bot);
+            } else if moved.is_some_and(|m| m > 2.0) || bot.t > 30.0 {
                 info!("bot: net: Jason moved {:.1} m", moved.unwrap_or(0.0));
                 if !moved.is_some_and(|m| m > 2.0) {
                     bot.failed.push("Jason");
@@ -728,5 +767,69 @@ fn receive_match(
         let seen = t.popups.len();
         t.popups.extend(n.popups.iter().skip(seen).map(|(t, c)| (t.clone(), c.clone(), now)));
         t.record = f13_core::game_mode::CounselorRecord { dead: n.dead, escaped: n.escaped, taken_damage: n.taken_damage };
+    }
+}
+
+/// The net bot in the lobby: asks for its preference, then readies up once there's another player.
+fn net_bot_lobby(mut bot: ResMut<NetBot>, mut keys: ResMut<ButtonInput<KeyCode>>, lobby: Query<&crate::lobby::NetLobby>) {
+    for k in [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Enter] {
+        keys.release(k);
+    }
+    let Ok(l) = lobby.single() else { return };
+    if !l.open {
+        return;
+    }
+    match bot.lobby {
+        0 => {
+            keys.press(match bot.prefer {
+                crate::lobby::Preference::Counselor => KeyCode::Digit1,
+                crate::lobby::Preference::NoPreference => KeyCode::Digit2,
+                crate::lobby::Preference::Killer => KeyCode::Digit3,
+            });
+            info!("bot: net: asking the lobby for {:?}", bot.prefer);
+            bot.lobby = 1;
+        }
+        // Ready once another player is in (a match needs a counselor and Jason).
+        1 if l.members.len() >= 2 => {
+            keys.press(KeyCode::Enter);
+            info!("bot: net: ready");
+            bot.lobby = 2;
+        }
+        _ => {}
+    }
+}
+
+/// The net bot as Jason: he walks (W, 3 s) through his remote controls and must move on the server.
+fn net_bot_jason(mut bot: ResMut<NetBot>, time: Res<Time>, mut controls: ResMut<crate::jason_player::JasonControls>, own: Query<&NetBody, (With<NetJason>, With<Controlled>)>, mut exit: MessageWriter<AppExit>) {
+    bot.t += time.delta_secs();
+    let Ok(body) = own.single() else { return };
+    let at = Vec3::from_array(body.pos);
+    let (yaw, pitch, view) = (controls.yaw, controls.pitch, controls.view);
+    match bot.step {
+        0 if bot.t > 3.0 => {
+            info!("bot: net: playing Jason at {at}");
+            bot.from = at;
+            bot.step = 1;
+            bot.t = 0.0;
+        }
+        1 if bot.t < 3.0 => controls.apply_remote(1, 0, yaw, pitch, view),
+        1 => {
+            controls.apply_remote(0, 0, yaw, pitch, view);
+            bot.step = 2;
+            bot.t = 0.0;
+        }
+        2 if bot.t > 1.0 => {
+            let moved = (at - bot.from).with_y(0.0).length();
+            info!("bot: net: Jason walked {moved:.1} m on the server");
+            if moved < 1.5 {
+                error!("bot: net: failed [\"Jason walk\"]");
+                exit.write(AppExit::error());
+            } else {
+                info!("bot: net: passed");
+                exit.write(AppExit::Success);
+            }
+            bot.step = 3;
+        }
+        _ => {}
     }
 }

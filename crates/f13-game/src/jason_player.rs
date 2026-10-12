@@ -229,6 +229,63 @@ fn capture(
         c.mouse.release(MouseButton::Left);
         return;
     }
+    latch(c);
+}
+
+/// The keys a remote Jason's player sends held (net.rs), in this order (the bits of [`JasonControls::held`]).
+const NET_KEYS: [KeyCode; 13] = [
+    KeyCode::KeyW,
+    KeyCode::KeyA,
+    KeyCode::KeyS,
+    KeyCode::KeyD,
+    KeyCode::ShiftLeft,
+    KeyCode::KeyC,
+    KeyCode::KeyR,
+    KeyCode::KeyE,
+    KeyCode::Digit1,
+    KeyCode::Digit2,
+    KeyCode::Digit3,
+    KeyCode::Digit4,
+    KeyCode::KeyM,
+];
+const NET_BUTTONS: [MouseButton; 3] = [MouseButton::Left, MouseButton::Right, MouseButton::Middle];
+
+impl JasonControls {
+    /// The keys ([`NET_KEYS`]) and mouse buttons (left, right, middle) held, as bits.
+    pub fn held(&self) -> (u32, u8) {
+        let keys = NET_KEYS.iter().enumerate().filter(|(_, k)| self.keys.pressed(**k)).fold(0, |b, (i, _)| b | 1 << i);
+        let buttons = NET_BUTTONS.iter().enumerate().filter(|(_, m)| self.mouse.pressed(**m)).fold(0, |b, (i, _)| b | 1 << i);
+        (keys, buttons)
+    }
+
+    /// A remote player's frame: the keys and buttons held (what changed since their last is pressed or let go), the
+    /// control rotation and the view, latched as [`capture`] latches the local player's.
+    pub fn apply_remote(&mut self, keys: u32, buttons: u8, yaw: f32, pitch: f32, view: (Vec3, Vec3)) {
+        self.keys.clear();
+        self.mouse.clear();
+        for (i, k) in NET_KEYS.iter().enumerate() {
+            match (keys & 1 << i != 0, self.keys.pressed(*k)) {
+                (true, false) => self.keys.press(*k),
+                (false, true) => self.keys.release(*k),
+                _ => {}
+            }
+        }
+        for (i, m) in NET_BUTTONS.iter().enumerate() {
+            match (buttons & 1 << i != 0, self.mouse.pressed(*m)) {
+                (true, false) => self.mouse.press(*m),
+                (false, true) => self.mouse.release(*m),
+                _ => {}
+            }
+        }
+        self.yaw = yaw;
+        self.pitch = pitch;
+        self.view = view;
+        latch(self);
+    }
+}
+
+/// The presses this frame's keys and buttons make (used up by [`JasonControls::take`]).
+fn latch(c: &mut JasonControls) {
     let p = &mut c.latched;
     p.attack |= c.mouse.just_pressed(MouseButton::Left);
     p.grab |= c.mouse.just_pressed(MouseButton::Right);
