@@ -4,8 +4,8 @@
 
 Needs cargo-about (`cargo install cargo-about --features cli`) for THIRD-PARTY-NOTICES.md.
 
-It holds f13-installer.exe, f13-game.exe and f13-host.exe (cargo, release), the exporter published self-contained
-(tools/f13-export/: no .NET install needed). No game files: the installer builds the
+It holds lakeside-setup.exe, lakeside.exe and lakeside-host.exe (f13-installer, f13-game and f13-host, cargo, release:
+renamed for players) and the exporter published self-contained as tools/lakeside-export/ (no .NET install needed). No game files: the installer builds the
 export from the player's own copy.
 """
 import argparse, os, shutil, subprocess, sys, zipfile
@@ -17,11 +17,11 @@ ZIP = os.path.join(DIST, "lakeside-windows-x64.zip")
 
 PLAYER_README = """Lakeside: a fan reimplementation that runs on your own copy of Friday the 13th: The Game
 
-1. Run f13-installer.exe.
+1. Run lakeside-setup.exe.
 2. Pick your unpacked Friday the 13th: The Game folder.
 3. Press Install (a few minutes: it reads the gameplay values, map, characters and sounds from your game), then Play.
 
-Afterwards start f13-game.exe directly. Reinstall after a game update.
+Afterwards start lakeside.exe directly. Reinstall after a game update.
 This package contains no game files: everything is read from your copy. Lakeside is unofficial: not affiliated
 with or endorsed by IllFonic, Gun Media or the film's rights holders.
 """
@@ -42,11 +42,11 @@ def main():
         shutil.rmtree(STAGE)
     os.makedirs(os.path.join(STAGE, "tools"))
     run([args.dotnet, "publish", os.path.join("tools", "f13-export"), "-c", "Release", "-r", "win-x64", "--self-contained", "true",
-         "-o", os.path.join(STAGE, "tools", "f13-export")])
-    for exe in ["f13-installer.exe", "f13-game.exe", "f13-host.exe"]:
-        shutil.copy2(os.path.join(ROOT, "target", "release", exe), STAGE)
+         "-p:AssemblyName=lakeside-export", "-o", os.path.join(STAGE, "tools", "lakeside-export")])
+    for built, shipped in [("f13-installer.exe", "lakeside-setup.exe"), ("f13-game.exe", "lakeside.exe"), ("f13-host.exe", "lakeside-host.exe")]:
+        shutil.copy2(os.path.join(ROOT, "target", "release", built), os.path.join(STAGE, shipped))
     # Every bundled library's licence (cargo-about for the crates; the NuGet cache for the exporter's packages).
-    run([sys.executable, os.path.join("tools", "notices.py"), os.path.join(STAGE, "tools", "f13-export"), os.path.join(STAGE, "THIRD-PARTY-NOTICES.md")])
+    run([sys.executable, os.path.join("tools", "notices.py"), os.path.join(STAGE, "tools", "lakeside-export"), os.path.join(STAGE, "THIRD-PARTY-NOTICES.md")])
     for f in ["LICENSE-MIT", "LICENSE-APACHE", "CHANGELOG.md"]:
         if os.path.isfile(os.path.join(ROOT, f)):
             shutil.copy2(os.path.join(ROOT, f), STAGE)

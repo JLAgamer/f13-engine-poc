@@ -53,9 +53,9 @@ def nuspec_licence(name, version):
 
 
 def dotnet(published):
-    deps = json.load(open(os.path.join(published, "f13-export.deps.json"), encoding="utf-8"))
+    deps = json.load(open(glob.glob(os.path.join(published, "*.deps.json"))[0], encoding="utf-8"))
     libs = sorted(k for k, v in deps["libraries"].items() if v.get("type") in ("package", "runtimepack"))
-    out = "## .NET packages (tools/f13-export)\n\n"
+    out = "## .NET packages (the exporter)\n\n"
     for lib in libs:
         name, version = lib.split("/")
         # The .NET runtime itself (published self-contained): its pack's own folder.

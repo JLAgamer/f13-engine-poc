@@ -1,12 +1,15 @@
 //! f13-installer: sets Lakeside up from the player's own unpacked copy of Friday the 13th: The Game, then plays.
 //!
 //! The player picks the game's folder (its content extracted to loose files under `SummerCamp/Content`); Install then
-//! runs the exporter (`tools/f13-export/f13-export.exe`, self-contained .NET) four times:
+//! runs the exporter (`tools/lakeside-export/lakeside-export.exe`, self-contained .NET) four times:
 //! 1. `tuning`: the gameplay values, into `~/.f13-rs/tuning.json`;
 //! 2. `mvp`, `sequences` and `particles`: the map, characters, sounds, HUD, the intro and outro, the particle systems,
-//!    into `export/` next to this executable (where f13-game.exe looks without `--export`).
+//!    into `export/` next to this executable (where the game looks without `--export`).
 //!
-//! Play starts f13-game.exe. The folder picked is kept in `installer.json` beside the executable.
+//! Play starts the game. The folder picked is kept in `installer.json` beside the executable.
+//!
+//! The release zip names the programs for players (tools/package.py): lakeside.exe (f13-game), lakeside-setup.exe
+//! (this), lakeside-host.exe, tools/lakeside-export/lakeside-export.exe; a source checkout keeps the f13- names.
 //!
 //! In the release zip the exporter sits in `tools/` next to this executable; run from a source checkout
 //! (`target/release`), the exporter's own Release build is used.
@@ -46,12 +49,19 @@ fn home() -> PathBuf {
 /// up two).
 fn exporter() -> Option<PathBuf> {
     let h = home();
-    let release = h.join("tools").join("f13-export").join(if cfg!(windows) { "f13-export.exe" } else { "f13-export" });
+    let release = h.join("tools").join("lakeside-export").join(if cfg!(windows) { "lakeside-export.exe" } else { "lakeside-export" });
     [release, h.join("../../tools/f13-export/bin/Release/net10.0/f13-export.exe")].into_iter().find(|p| p.is_file())
 }
 
+/// The game: lakeside.exe (the release zip), else f13-game.exe (a source checkout's target/release).
 fn game_exe() -> PathBuf {
-    home().join(if cfg!(windows) { "f13-game.exe" } else { "f13-game" })
+    let ext = if cfg!(windows) { ".exe" } else { "" };
+    let release = home().join(format!("lakeside{ext}"));
+    if release.is_file() {
+        release
+    } else {
+        home().join(format!("f13-game{ext}"))
+    }
 }
 
 fn export_dir() -> PathBuf {
@@ -141,7 +151,7 @@ fn run(tx: &Sender<Progress>, ctx: &egui::Context, mut cmd: Command) -> Result<(
 
 fn install(tx: Sender<Progress>, ctx: egui::Context, game: PathBuf) {
     let result = (|| {
-        let export = exporter().ok_or("tools/f13-export/f13-export.exe is missing from the install")?;
+        let export = exporter().ok_or("tools/lakeside-export/lakeside-export.exe is missing from the install")?;
         for (i, (what, about)) in STEPS.iter().enumerate() {
             let _ = tx.send(Progress::Step(1 + i, about.to_string()));
             let mut cmd = Command::new(&export);
@@ -275,7 +285,7 @@ impl eframe::App for Installer {
                 }
             });
             match &self.outcome {
-                Some(Ok(())) => status(ui, true, "Installed. Press Play (or start f13-game.exe)."),
+                Some(Ok(())) => status(ui, true, "Installed. Press Play (or start lakeside.exe)."),
                 Some(Err(e)) => status(ui, false, &format!("Install failed: {e} (the log below says why)")),
                 None if Self::installed() && !busy => status(ui, true, "Already installed: Play, or Reinstall after a game update."),
                 None => {}

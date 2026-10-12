@@ -13,11 +13,11 @@ You need your own copy of *Friday the 13th: The Game* with its files unpacked (i
 `SummerCamp/Content`). Nothing else: the installer brings everything it needs.
 
 1. Download `lakeside-windows-x64.zip` from the releases page and unzip it anywhere.
-2. Run `f13-installer.exe`.
+2. Run `lakeside-setup.exe`.
 3. Pick your game folder (the one with `SummerCamp` in it). The installer checks it and says if it's still packed.
 4. Press **Install**. It reads the gameplay values, the map, characters, sounds and effects from your game into the
    `export` folder next to it (a few minutes).
-5. Press **Play**. Afterwards, start `f13-game.exe` directly. Run the installer again (Reinstall) after a game update.
+5. Press **Play**. Afterwards, start `lakeside.exe` directly. Run the installer again (Reinstall) after a game update.
 
 The zip contains no game files: everything comes from your copy.
 
@@ -25,7 +25,7 @@ The zip contains no game files: everything comes from your copy.
 export. Supported game build: the Steam release current in October 2026 (see CHANGELOG.md).
 
 **Troubleshooting:** if Install fails, the installer's log (below its buttons) says which step and why; a still-packed
-game folder is the usual cause. `f13-game.exe` writes its log to the console: start it from a terminal to see it.
+game folder is the usual cause. `lakeside.exe` writes its log to the console: start it from a terminal to see it.
 Multiplayer is between Lakeside players only (see Playing together); it never connects to the game's own servers.
 
 **Uninstall:** delete the unzipped folder, and `%USERPROFILE%\.f13-rs` (the gameplay values).
@@ -33,7 +33,9 @@ Multiplayer is between Lakeside players only (see Playing together); it never co
 ## Building from source
 
 Developers build the same pieces by hand (below), and `python tools/package.py [--dotnet <dotnet.exe>]` builds the
-release zip into `dist/` (the Rust binaries in release, the exporter published self-contained).
+release zip into `dist/` (the Rust binaries in release, the exporter published self-contained). The zip names them
+for players: f13-game is `lakeside.exe`, f13-installer `lakeside-setup.exe`, f13-host `lakeside-host.exe`, the
+exporter `tools/lakeside-export/lakeside-export.exe`.
 
 ### Crates
 - `f13-core`: engine-independent rules (no Bevy dependency), unit-tested
