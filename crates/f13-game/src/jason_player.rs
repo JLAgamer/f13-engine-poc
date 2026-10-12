@@ -134,6 +134,8 @@ pub struct Presses {
     pub interact: bool,
     /// 1-4 let go while he holds her: that grab kill slot (jason.rs GRAB_KILL_SLOTS).
     pub kill: Option<usize>,
+    /// Left Shift pressed (Some(true): OnStartFastWalk) or let go (Some(false): OnStopFastWalk), the last of the frame.
+    pub fast_walk: Option<bool>,
 }
 
 /// One fixed step's input.
@@ -141,7 +143,6 @@ pub struct Presses {
 pub struct JasonInput {
     /// Where to walk (world XZ, unit or zero).
     pub movement: Vec2,
-    pub run: bool,
     /// Where he looks: flat (world XZ, unit) and in 3D.
     pub forward: Vec2,
     pub look: Vec3,
@@ -157,6 +158,11 @@ pub struct JasonInput {
 
 impl JasonControls {
     /// This step's input; the presses are used up.
+    /// A press of E (testing bots), as the keyboard's would latch it.
+    pub(crate) fn press_interact(&mut self) {
+        self.latched.interact = true;
+    }
+
     pub fn take(&mut self) -> JasonInput {
         let (sin, cos) = self.yaw.sin_cos();
         let forward = Vec2::new(-sin, -cos);
@@ -170,7 +176,6 @@ impl JasonControls {
         let look = Quat::from_euler(EulerRot::YXZ, self.yaw, self.pitch, 0.0) * Vec3::NEG_Z;
         JasonInput {
             movement: m.normalize_or_zero(),
-            run: self.keys.pressed(KeyCode::ShiftLeft),
             forward,
             look,
             view: self.view,
@@ -297,6 +302,11 @@ fn latch(c: &mut JasonControls) {
     p.stalk |= c.keys.just_pressed(KeyCode::Digit4);
     p.combat |= c.keys.just_pressed(KeyCode::KeyC);
     p.interact |= c.keys.just_pressed(KeyCode::KeyE);
+    if c.keys.just_pressed(KeyCode::ShiftLeft) {
+        p.fast_walk = Some(true);
+    } else if c.keys.just_released(KeyCode::ShiftLeft) {
+        p.fast_walk = Some(false);
+    }
     // The grab kills fire as their key is let go (IE_Released).
     let digits = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4];
     if let Some(i) = digits.iter().position(|&k| c.keys.just_released(k)) {

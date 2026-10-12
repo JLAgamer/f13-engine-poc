@@ -430,7 +430,7 @@ pub(crate) fn move_player(
     time: Res<Time>,
     tuning: Res<PlayerTuning>,
     mut counselors: Query<
-        (Entity, &mut Player, &mut Transform, &Intent, Option<&crate::interact::UsingItem>, Option<&Unsettled>, (Has<crate::jason::Held>, Has<crate::hiding::Hiding>, Has<crate::items::Trapped>, (Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>, Has<crate::interact::BarricadeMove>, Has<crate::interact::MoveToSpot>, Has<crate::cabinets::CabinetUse>)), Has<crate::jason::Staggered>, Option<&crate::items::ItemAction>, Option<&crate::items::GunAim>, Option<&crate::interact::Interaction>),
+        (Entity, &mut Player, &mut Transform, &Intent, Option<&crate::interact::UsingItem>, Option<&Unsettled>, (Has<crate::jason::Held>, Has<crate::hiding::Hiding>, Has<crate::items::Trapped>, (Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>, Has<crate::interact::BarricadeMove>, Has<crate::interact::MoveToSpot>, (Has<crate::cabinets::CabinetUse>, Has<crate::radio::RadioUse>))), Has<crate::jason::Staggered>, Option<&crate::items::ItemAction>, Option<&crate::items::GunAim>, Option<&crate::interact::Interaction>),
         Without<Driving>,
     >,
     collision: Res<crate::collision::WorldCollision>,
@@ -439,7 +439,7 @@ pub(crate) fn move_player(
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
-    for (entity, mut p, mut xf, intent, using, settle, (held, hiding, trapped, (door_move, window_move, barricade_move, sliding, searching)), staggered, item_action, gun_aim, interaction) in &mut counselors {
+    for (entity, mut p, mut xf, intent, using, settle, (held, hiding, trapped, (door_move, window_move, barricade_move, sliding, (searching, radio_use))), staggered, item_action, gun_aim, interaction) in &mut counselors {
         p.hidden = hiding;
         if held || hiding || sliding {
             // In Jason's hands (he places her), in a hiding spot (hiding.rs places her) or sliding onto a move's spot
@@ -456,7 +456,7 @@ pub(crate) fn move_player(
         let item_action = item_action.is_some();
         // Aiming a gun: the controller ignores move input (SetIgnoreMoveInput) and she takes the control yaw (items.rs).
         let aiming = gun_aim.is_some_and(|a| a.aiming);
-        let busy = aiming || !p.counselor.alive() || using.is_some() || repairing || staggered || item_action || trapped || door_move || window_move || barricade_move || sliding || searching;
+        let busy = aiming || !p.counselor.alive() || using.is_some() || repairing || staggered || item_action || trapped || door_move || window_move || barricade_move || sliding || searching || radio_use;
         let wish = match autopilot.get(entity) {
             _ if busy => Vec2::ZERO,
             Ok(a) => a.0.normalize_or_zero(),

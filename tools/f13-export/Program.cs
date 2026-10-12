@@ -1532,6 +1532,8 @@ static class Mvp
         $"{Female}/Combat/Swings/AM_F_combat_stand_2h_axe_attack_heavy",
         $"{Shared}/Interaction/Items/AM_normal_stand_use_firecracker",
         $"{Shared}/Interaction/Items/AM_normal_stand_use_flare",
+        // Turning a radio on or off, changing its song (Counselor_UseRadio).
+        $"{Shared}/Interaction/Items/AM_normal_stand_use_radio",
         "/Game/Characters/Counselors/Base/Male/Animation/Hunter/AM_combat_stand_rifle_fire_01",
         // Aiming a gun (Base_Counselor_AnimBP's RangedAiming machine: the Hunter's enter / exit, the aim idles by
         // GunType) and the AimOffsets poses its RotationOffsetBlendSpace reads at yaw 0 (Aim_C_C its additive base).
@@ -1831,6 +1833,8 @@ static class Mvp
         $"{JasonAnim}/Interaction/AM_Break_Electronic_Box_Machete",
         // Breaking the phone box (Jason_PhoneBox_Destruction_Machete).
         $"{JasonAnim}/Interaction/AM_Break_Phone_Box_Machete",
+        // Breaking a radio (Jason_Radio_Destruction_Axe: his weapon isn't the machete).
+        $"{JasonAnim}/Interaction/AM_Break_Radio_Axe",
         // Pulling the driver out (DriverGrab's paired move); stopping a car dead.
         CarGrab[1],
         $"{JasonAnim}/Car/AM_normal_stand_car_stop_slam",

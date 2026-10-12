@@ -347,6 +347,10 @@ pub(crate) fn is_level_runtime_actor(classes: &ClassDb, class: &str) -> bool {
 }
 
 /// Builds the match world and spawns its runtime actors.
+/// Every spawner spawns (testing: `--override-spawning`; the radios' cabin spawners only spawn so).
+#[derive(Resource)]
+pub struct OverrideSpawning;
+
 fn spawn_props(
     mut commands: Commands,
     assets: Res<AssetServer>,
@@ -354,6 +358,7 @@ fn spawn_props(
     seed: Res<Seed>,
     export: Res<crate::ExportRoot>,
     collision: Option<Res<crate::collision::WorldCollision>>,
+    override_spawning: Option<Res<OverrideSpawning>>,
 ) {
     let classes = match ClassDb::load(&export.0.join("classes.json")) {
         Ok(c) => c,
@@ -363,7 +368,9 @@ fn spawn_props(
         }
     };
     let layouts: &[LevelLayout] = &level.layouts;
-    let settings = f13_data::world::spawn_settings(&MatchWorld::world_settings(layouts));
+    let mut settings = f13_data::world::spawn_settings(&MatchWorld::world_settings(layouts));
+    // Testing (--override-spawning): as if the map's world settings set bOverrideSpawning (every spawner spawns).
+    settings.override_spawning |= override_spawning.is_some();
     let world = MatchWorld::build(layouts, &classes, &settings, seed.0);
 
     let mut scenes: HashMap<String, Handle<WorldAsset>> = HashMap::new();

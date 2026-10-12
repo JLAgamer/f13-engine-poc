@@ -156,6 +156,8 @@ enum Target {
     /// The phone box, to put its fuse in; the phone, to call the police (police.rs).
     PhoneBox(Entity),
     Phone(Entity),
+    /// A radio to turn on or off, or (held while it plays) to change its song (radio.rs).
+    Radio(Entity),
 }
 
 /// A counselor's interaction: what she'd use, and the hold in progress.
@@ -168,6 +170,8 @@ pub struct Interaction {
     hold_done: bool,
     /// How long she's held the drop key (small_items).
     drop_held: Option<f32>,
+    /// How long she's held E on a playing radio (its press or, past HoldTimeLimit, its hold).
+    radio_held: Option<f32>,
 }
 
 impl Interaction {
@@ -766,7 +770,7 @@ fn choose_target(
     windows: Query<(Entity, &Window, &GlobalTransform)>,
     barricades: Query<&Barricade>,
     (spots, fuse_boxes): (Query<(Entity, &crate::hiding::HidingSpot, &GlobalTransform)>, Query<(Entity, &crate::power::FuseBox)>),
-    (phone_boxes, phones): (Query<(Entity, &crate::police::PhoneBox)>, Query<(Entity, &crate::police::Phone)>),
+    (phone_boxes, phones, radios): (Query<(Entity, &crate::police::PhoneBox)>, Query<(Entity, &crate::police::Phone)>, Query<(Entity, &crate::radio::Radio)>),
     (limits, globals, collision, dynamic, parents, no_world_dynamic, (names, actor_tris, no_visibility, (not_visibility, not_world_dynamic))): (
         Query<&InteractLimits>,
         Query<&GlobalTransform>,
@@ -903,6 +907,11 @@ fn choose_target(
             consider(e, "Interactable", p.interact, p.reach, Target::Phone(e));
         }
     }
+    for (e, r) in &radios {
+        if r.usable() {
+            consider(e, "Interactable", r.interact, r.reach, Target::Radio(e));
+        }
+    }
     let target = best.map(|(_, t)| t);
     if target != interaction.target {
         interaction.hold = None;
@@ -926,7 +935,7 @@ fn act(
     mut vehicles: Query<&mut Vehicle>,
     mut doors: Query<(&mut Door, &GlobalTransform)>,
     (windows, mut barricades, (mut phone_boxes, mut phones, mut game, match_tuning), (names, special_moves)): (Query<(&mut Window, &GlobalTransform)>, Query<&mut Barricade>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<ResMut<crate::match_flow::GameMatch>>, Option<Res<crate::match_flow::MatchTuning>>), (Query<&Name>, Option<Res<SpecialMoves>>)),
-    (mut visibility, mut fuse_boxes, mut grids, vehicle_xfs): (Query<&mut Visibility>, Query<&mut crate::power::FuseBox>, Option<ResMut<crate::power::PowerGrids>>, Query<&GlobalTransform, With<Vehicle>>),
+    (mut visibility, mut fuse_boxes, mut grids, vehicle_xfs, radios): (Query<&mut Visibility>, Query<&mut crate::power::FuseBox>, Option<ResMut<crate::power::PowerGrids>>, Query<&GlobalTransform, With<Vehicle>>, Query<&crate::radio::Radio>),
 ) {
     use crate::controls::Button;
     for (player_entity, mut player_xf, mut inv, mut p, sliding, mut interaction) in &mut players {
@@ -1138,6 +1147,43 @@ fn act(
             info!("phone box {}: the phone works", if fixing { "repaired" } else { "fused" });
             commands.trigger(ClassScore::new(player_entity, &pb.class, "RepairScoreEvent"));
             interaction.hold = None;
+            interaction.target = None;
+        }
+        Target::Radio(r) => {
+            // OnInteract: a press turns it on or off; while it plays (CanInteractWith 3: press and hold), the press
+            // comes on letting go before its HoldTimeLimit and the hold, at it, changes the song. Either is her
+            // Counselor_UseRadio move from its spot.
+            let Ok(radio) = radios.get(r) else { continue };
+            if !radio.usable() {
+                interaction.target = None;
+                continue;
+            }
+            let held = pads.pressed(player_entity, Button::Interact);
+            let change = match interaction.radio_held {
+                _ if !radio.playing => pads.just_pressed(player_entity, Button::Interact).then_some(false),
+                None => {
+                    if pads.just_pressed(player_entity, Button::Interact) {
+                        interaction.radio_held = Some(0.0);
+                    }
+                    None
+                }
+                Some(t) if held => {
+                    let t = t + time.delta_secs();
+                    interaction.radio_held = Some(t);
+                    (t >= radio.hold_limit).then_some(true)
+                }
+                Some(_) => Some(false),
+            };
+            let Some(change) = change else { continue };
+            interaction.radio_held = None;
+            if !change && !radio.playing {
+                commands.trigger(ClassScore::new(player_entity, &radio.class, "TurnRadioOnScoreEvent"));
+            }
+            info!("using a radio ({})", if change { "next song" } else if radio.playing { "off" } else { "on" });
+            let to = standing_on(player_xf, radio.use_spot);
+            move_to_spot(&mut commands, player_entity, *player_xf, to, mv(r, "CounselorUse_SpecialMoveHandler"), move |w| {
+                w.entity_mut(player_entity).insert((crate::radio::RadioUse::new(r, change), crate::character::PlayAction(crate::radio::USE_TAKE.into())));
+            });
             interaction.target = None;
         }
         Target::Phone(ph) => {
@@ -1581,7 +1627,7 @@ fn update_prompt(
     (windows, barricades): (Query<&Window>, Query<&Barricade>),
     player: Option<Single<(&Inventory, Has<Driving>, &Transform, Option<&UsingItem>, &Player, Option<&crate::hiding::Hiding>, &Interaction), With<crate::controls::LocalPlayer>>>,
     items: Query<&Item>,
-    (vehicles, phone_boxes, cabinets): (Query<&Vehicle>, Query<&crate::police::PhoneBox>, Query<&Cabinet>),
+    (vehicles, phone_boxes, cabinets, radios): (Query<&Vehicle>, Query<&crate::police::PhoneBox>, Query<&Cabinet>, Query<&crate::radio::Radio>),
     mut text: Single<&mut Text, With<PromptText>>,
     play: Option<Res<crate::jason_player::PlayJason>>,
 ) {
@@ -1657,6 +1703,7 @@ fn update_prompt(
                 Some(h) if h.started => format!("Calling the police: {:.0}%", h.progress(&tuning.minigame) * 100.0),
                 _ => "[Hold E] Call the police".into(),
             }),
+            Some(Target::Radio(r)) => lines.push(if radios.get(r).is_ok_and(|r| r.playing) { "[E] Turn off the radio   [Hold E] Change the song".into() } else { "[E] Turn on the radio".into() }),
             Some(Target::FuseBox(_)) => lines.push(match &interaction.hold {
                 Some(h) if h.started => format!("Repairing the fuse box: {:.0}%", h.progress(&tuning.minigame) * 100.0),
                 _ => "[Hold E] Repair the fuse box".into(),

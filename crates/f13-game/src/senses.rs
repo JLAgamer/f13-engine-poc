@@ -4,11 +4,11 @@
 //! His sound blips (the killer's blip update FUN_140411740, from his tick while locally controlled, not in a context
 //! kill, and bSoundBlipVisible, which only single player's challenges clear): every living counselor whose next blip
 //! has come, the noise of every thrown firecracker (SCNoiseMaker_Projectile, its own countdown) at 10 (DAT_14207a21c),
-//! each blipping as f13-core::perception says; a blip spawns SoundBlipClass (SoundBlip_C) at her root. SoundBlip_C:
+//! and of every playing radio (SCRadio, +0x3b9; its countdown +0x378) at the same 10, each blipping as
+//! f13-core::perception says; a blip spawns SoundBlipClass (SoundBlip_C) at her root. SoundBlip_C:
 //! InitialLifeSpan 6, its BeginPlay scales it lerp(0.5, 8, clamp(|killer - blip|, 1, 10000) / 10000) (0 in the
 //! sandbox mode), its ParticleSystem P_Sound_Wave_Indicator_01 at CustomTimeDilation 2. The server runs the update
-//! and sends each blip to whoever plays Jason ([`SoundBlip`]); only the machine playing Jason draws it. The radios'
-//! blips (SCRadio, while playing) wait for the radios. PLACEHOLDER: the firecrackers' first countdown (their
+//! and sends each blip to whoever plays Jason ([`SoundBlip`]); only the machine playing Jason draws it. PLACEHOLDER: the firecrackers' first countdown (their
 //! constructor's, unread: 0 here) and the counselor check at vtable +0xc80 (unread; skipped).
 //!
 //! From the game: sight reaches her `MaxVisibilityDistance` (Base_Counselor: 100 m) along an unblocked line
@@ -183,6 +183,7 @@ fn blips(
     mut jasons: Query<(&Jason, &Transform, &mut Knowledge)>,
     players: Query<(Entity, &Player, &Transform, Option<&Hiding>), Without<Jason>>,
     firecrackers: Query<(Entity, &Transform), (With<crate::items::Firecracker>, Without<Jason>, Without<Player>)>,
+    mut radios: Query<(&mut crate::radio::Radio, &Transform), (Without<Jason>, Without<Player>)>,
     target: Option<Res<crate::jason::JasonTarget>>,
     // Each counselor's next blip (game time; SCCounselorCharacter +0x1178) and each firecracker's countdown (+0x398).
     mut next: Local<std::collections::HashMap<Entity, f32>>,
@@ -225,6 +226,18 @@ fn blips(
                 continue;
             }
             *left = delay();
+            crate::net_world::shout(&mut commands, crate::net_world::Shout::SoundBlip(SoundBlip { at: xf.translation }));
+        }
+        // Playing radios (SCRadio, bIsPlaying): their own countdown (+0x378), noise 10.
+        for (mut r, xf) in &mut radios {
+            if !r.playing {
+                continue;
+            }
+            r.blip -= dt;
+            if r.blip > 0.0 || !perception::makes_blip(&v.hearing, FIRECRACKER_BLIP_NOISE, him.distance(xf.translation) * 100.0, rage) {
+                continue;
+            }
+            r.blip = delay();
             crate::net_world::shout(&mut commands, crate::net_world::Shout::SoundBlip(SoundBlip { at: xf.translation }));
         }
     }

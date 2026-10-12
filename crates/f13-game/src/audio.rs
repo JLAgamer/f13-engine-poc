@@ -274,6 +274,7 @@ impl Plugin for AudioPlugin {
             .add_observer(actor_sound)
             .add_observer(stop_voice_over)
             .add_observer(actor_loop)
+            .add_observer(actor_cue)
             .add_observer(stop_loop)
             .add_observer(music_stinger)
             .add_observer(dropped);
@@ -351,6 +352,33 @@ pub fn cue_name(v: &serde_json::Value) -> Option<String> {
 pub struct ActorLoop {
     pub actor: Entity,
     pub prop: &'static str,
+}
+
+/// Play `cue` once on `actor` under `prop` (an AudioComponent's SetSound and Play: a radio's song), at `volume` (the
+/// component's VolumeMultiplier); its voices follow the actor and [`StopLoop`] stops them.
+#[derive(Event, Clone, Debug)]
+pub struct ActorCue {
+    pub actor: Entity,
+    pub prop: &'static str,
+    pub cue: String,
+    pub volume: f32,
+}
+
+fn actor_cue(ev: On<ActorCue>, mut commands: Commands, assets: Res<AssetServer>, sounds: Option<ResMut<Sounds>>, mut rng: ResMut<AudioRng>) {
+    let Some(mut sounds) = sounds else { return };
+    let Some((voices, att)) = sounds.play(&ev.cue, &mut || rng.0.frand()) else { return };
+    for v in voices {
+        let volume = v.volume * ev.volume;
+        let settings = PlaybackSettings { mode: mode(&v), speed: v.pitch, volume: Volume::Linear(volume), paused: v.delay > 0.0, ..PlaybackSettings::DESPAWN };
+        let source = AudioPlayer::new(assets.load(format!("sounds/{}", v.file)));
+        let mut e = commands.spawn((source, settings, Transform::IDENTITY, ChildOf(ev.actor), LoopOf(ev.prop), VoiceClass(v.class.clone())));
+        if let Some(att) = att.clone().filter(|a| a.attenuate || a.spatialize) {
+            e.insert((PlaybackSettings { spatial: att.spatialize, spatial_scale: Some(SpatialScale::new(SPATIAL_SCALE)), ..settings }, Emitter { volume, attenuation: att }));
+        }
+        if v.delay > 0.0 {
+            e.insert(StartAfter(v.delay));
+        }
+    }
 }
 
 /// Stop the loop `actor` plays under `prop` (see [`ActorLoop`]).

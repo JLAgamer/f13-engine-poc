@@ -7,7 +7,10 @@ Base content (asset paths in the player's install; all gameplay values come from
 `Characters/Killers/Jason/J2`, the Chevettes (`Blueprints/Vehicles/DriveableVehicles/Cars/Chevette`), the police.
 
 ## Todo
-- [ ] Radios (SCRadio, BP_Radio_C): playing one, and its sound blips for Jason (FUN_140411740's third loop)
+- [ ] Characters appear before the intro plays, and Jason's abilities count from then (Morph ready too soon):
+      spawn them after the intro (reported 2026-10-12)
+- [ ] Car hoods: up while the battery is missing (reported 2026-10-12)
+- [ ] Jason's fast walk while holding her: the user saw none in the game; check a fresh Shift press during the hold
 - [ ] The campfire kill's alignment (reported 2026-10-12; parked)
 - [ ] Bot clients for the scenarios: the bots that set up their scene (teleports, locks) need a server-side hook
       (the net bot plays through its input only)

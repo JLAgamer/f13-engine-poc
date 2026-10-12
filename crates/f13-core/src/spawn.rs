@@ -131,6 +131,9 @@ pub struct SpawnSettings {
     /// The phone boxes' fuses: MaxFuseDistance, MinFuseSpawnDistance.
     pub max_fuse_distance: f32,
     pub min_fuse_spawn_distance: f32,
+    /// The world settings' bOverrideSpawning (+0x7f8): no item lists; every cabinet is filled and every other free
+    /// spawner spawns (the game mode's Init, FUN_140387190's else branch).
+    pub override_spawning: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -194,9 +197,37 @@ pub fn spawn_match(world: &mut SpawnWorld, s: &SpawnSettings, q: &impl ClassQuer
     // A second pass for the phone boxes' fuses, with their own distances.
     let boxes = world.phone_boxes.clone();
     spawn_repair_parts(world, q, rng, &boxes, (s.max_fuse_distance, s.min_fuse_spawn_distance), &mut out);
-    spawn_large_items(world, s, q, rng, &mut out);
-    spawn_small_items(world, s, q, rng, &mut out);
+    if s.override_spawning {
+        spawn_everything(world, q, rng, &mut out);
+    } else {
+        spawn_large_items(world, s, q, rng, &mut out);
+        spawn_small_items(world, s, q, rng, &mut out);
+    }
     out
+}
+
+/// bOverrideSpawning: each cabinet's SpawnItem twice (vt+0x600 with no class: a random entry of its first free slot),
+/// then SpawnActor(no filter) on every spawner the game mode collected (not a cabinet's, nothing spawned yet).
+fn spawn_everything(world: &mut SpawnWorld, q: &impl ClassQuery, rng: &mut Rng, out: &mut Vec<Spawned>) {
+    for c in 0..world.cabinets.len() {
+        for _ in 0..2 {
+            let slot = world.cabinets[c].slots.iter().copied().find(|&s| world.spawners[s].spawned.is_none());
+            if let Some(sp) = slot {
+                if let Some(class) = world.spawners[sp].spawn(None, q, rng) {
+                    out.push(Spawned { spawner: sp, class, kind: SpawnKind::SmallItem });
+                }
+            }
+        }
+    }
+    let in_cabinet: Vec<usize> = world.cabinets.iter().flat_map(|c| c.slots.iter().copied()).collect();
+    for sp in 0..world.spawners.len() {
+        if world.spawners[sp].spawned.is_some() || in_cabinet.contains(&sp) {
+            continue;
+        }
+        if let Some(class) = world.spawners[sp].spawn(None, q, rng) {
+            out.push(Spawned { spawner: sp, class, kind: SpawnKind::LargeItem });
+        }
+    }
 }
 
 /// Returns (vehicle spawner index, class) for each vehicle placed.
@@ -424,6 +455,7 @@ mod tests {
 
     fn settings() -> SpawnSettings {
         SpawnSettings {
+            override_spawning: false,
             vehicles: vec![vec!["CarA".into()], vec!["CarB".into()]],
             large_items: vec![CountedClass { class: "Bat".into(), min: 2, max: 2, min_spawn_distance: 0.0 }],
             small_items: vec![CountedClass { class: "ItemMap".into(), min: 3, max: 3, min_spawn_distance: 1_000.0 }],

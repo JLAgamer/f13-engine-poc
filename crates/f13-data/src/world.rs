@@ -78,6 +78,7 @@ pub fn spawn_settings(world_settings: &serde_json::Value) -> SpawnSettings {
         max_car_part_distance: f("MaxCarPartDistance"),
         max_fuse_distance: f("MaxFuseDistance"),
         min_fuse_spawn_distance: f("MinFuseSpawnDistance"),
+        override_spawning: world_settings["bOverrideSpawning"].as_bool().unwrap_or(false),
     }
 }
 

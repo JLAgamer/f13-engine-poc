@@ -189,8 +189,9 @@ class SoundExporter(IFileProvider provider, string outDir, Func<string, string> 
         var text = string.Join('\n', files.Select(File.ReadAllText));
         var names = System.Text.RegularExpressions.Regex.Matches(text, @"Sound(?:Cue|Wave)'([^']+)'")
             .Select(m => m.Groups[1].Value).Distinct(StringComparer.OrdinalIgnoreCase).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        // Soft references to sounds (an item's DroppedSoundCue: {"AssetPathName": "/Game/Sounds/.../Name.Name"}).
-        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(text, @"/Game/Sounds/[\w/]+\.(\w+)"))
+        // Soft references to sounds (an item's DroppedSoundCue: {"AssetPathName": "/Game/Sounds/.../Name.Name"}; a radio's
+        // Songs and StreamerModeSong: /Game/Music/...).
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(text, @"/Game/(?:Sounds|Music)/[\w/\-]+\.([\w\-]+)"))
             names.Add(m.Groups[1].Value);
         var found = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var key in provider.Files.Keys.Where(k => k.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase)))

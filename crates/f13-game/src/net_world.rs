@@ -123,6 +123,14 @@ pub struct NetFuseBox {
     pub destroyed: bool,
 }
 
+/// A radio's state (SCRadio's replicated bIsPlaying, bIsBroken, and its track): radio.rs plays what follows from it.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct NetRadio {
+    pub playing: bool,
+    pub broken: bool,
+    pub track: usize,
+}
+
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct NetPhoneBox {
     pub repaired: bool,
@@ -203,17 +211,18 @@ pub(crate) fn protocol(app: &mut App) {
     app.component::<NetPhoneBox>().replicate();
     app.component::<NetPhone>().replicate();
     app.component::<NetCabinet>().replicate();
+    app.component::<NetRadio>().replicate();
     app.component::<NetVisual>().replicate();
     app.component::<NetXf>().replicate();
     app.component::<NetPropAnim>().replicate();
 }
 
 pub(crate) fn server(app: &mut App) {
-    app.add_observer(send_heard).add_systems(PostUpdate, (make_proxies, tag_visuals, (send_fixtures, send_items, send_vehicles, send_cabinets, send_visuals)).chain().before(ReplicationSystems::Send));
+    app.add_observer(send_heard).add_systems(PostUpdate, (make_proxies, tag_visuals, (send_fixtures, send_items, send_vehicles, send_cabinets, send_radios, send_visuals)).chain().before(ReplicationSystems::Send));
 }
 
 pub(crate) fn client(app: &mut App) {
-    app.init_resource::<Actors>().add_systems(Update, (index_actors, (apply_fixtures, apply_vehicles, apply_items, apply_traps, apply_cabinets, show_visuals, hear)).chain().after(crate::net::Mirrored));
+    app.init_resource::<Actors>().add_systems(Update, (index_actors, (apply_fixtures, apply_vehicles, apply_items, apply_traps, apply_cabinets, apply_radios, show_visuals, hear)).chain().after(crate::net::Mirrored));
 }
 
 fn xf_array(t: &Transform) -> [f32; 7] {
@@ -237,12 +246,12 @@ fn set<T: PartialEq>(mut c: Mut<T>, v: T) {
 fn make_proxies(
     mut commands: Commands,
     actors: Query<
-        (Entity, &WorldId, (Has<crate::doors::Door>, Has<crate::windows::Window>, Has<crate::windows::Barricade>, Has<crate::props::Item>), (Has<crate::props::Vehicle>, Has<crate::power::FuseBox>, Has<crate::police::PhoneBox>, Has<crate::police::Phone>), Has<crate::cabinets::Cabinet>),
+        (Entity, &WorldId, (Has<crate::doors::Door>, Has<crate::windows::Window>, Has<crate::windows::Barricade>, Has<crate::props::Item>), (Has<crate::props::Vehicle>, Has<crate::power::FuseBox>, Has<crate::police::PhoneBox>, Has<crate::police::Phone>), (Has<crate::cabinets::Cabinet>, Has<crate::radio::Radio>)),
         Without<ProxyLink>,
     >,
 ) {
-    for (e, id, (door, window, barricade, item), (vehicle, fuse, phone_box, phone), cabinet) in &actors {
-        if !(door || window || barricade || item || vehicle || fuse || phone_box || phone || cabinet) {
+    for (e, id, (door, window, barricade, item), (vehicle, fuse, phone_box, phone), (cabinet, radio)) in &actors {
+        if !(door || window || barricade || item || vehicle || fuse || phone_box || phone || cabinet || radio) {
             continue;
         }
         let mut p = commands.spawn((ProxyOf(id.0), Replicate::to_clients(NetworkTarget::All)));
@@ -273,8 +282,28 @@ fn make_proxies(
         if cabinet {
             p.insert(NetCabinet::default());
         }
+        if radio {
+            p.insert(NetRadio::default());
+        }
         let p = p.id();
         commands.entity(e).insert(ProxyLink(p));
+    }
+}
+
+fn send_radios(radios: Query<(&ProxyLink, &crate::radio::Radio)>, mut proxies: Query<&mut NetRadio>) {
+    for (link, r) in &radios {
+        if let Ok(n) = proxies.get_mut(link.0) {
+            set(n, NetRadio { playing: r.playing, broken: r.broken, track: r.track });
+        }
+    }
+}
+
+fn apply_radios(actors: Res<Actors>, proxies: Query<(&ProxyOf, &NetRadio), Changed<NetRadio>>, mut radios: Query<&mut crate::radio::Radio>) {
+    for (of, n) in &proxies {
+        let Some(mut r) = actors.0.get(&of.0).and_then(|&e| radios.get_mut(e).ok()) else { continue };
+        r.playing = n.playing;
+        r.broken = n.broken;
+        r.track = n.track;
     }
 }
 

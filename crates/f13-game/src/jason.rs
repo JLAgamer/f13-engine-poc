@@ -640,6 +640,11 @@ pub struct Jason {
     /// bIsRunning: his fast walk (KLR_FastWalk: OnStart/Stop/ToggleFastWalk -> SetRunning, vt+0xda0) or the AI's
     /// run; his footsteps take the run cue for it (Jason_AnimBP's GetFootstepSound).
     pub running: bool,
+    /// The played Jason's fast walk as SetRunning leaves it (0x1402e99f0): on as Left Shift is pressed (OnStartFastWalk,
+    /// which first leaves combat stance; SetRunning refuses in it), off as it's let go (OnStopFastWalk) and as a grab
+    /// takes her (FinishGrabCounselor 0x1403eb560: SetCombatStance(false), SetRunning(false)), so Shift held through
+    /// the grab doesn't run him; a new press does (his GrabInput binds KLR_FastWalk too).
+    pub fast_walk: bool,
 }
 
 impl Jason {
@@ -1370,6 +1375,7 @@ fn spawn_jason(
                 kill_holds: true,
                 focus: None,
                 running: false,
+                fast_walk: false,
             },
             Transform { translation: feet, rotation, ..default() },
             Visibility::default(),
@@ -1644,11 +1650,11 @@ pub(crate) fn update_jason(
         Option<ResMut<crate::jason_player::MorphMap>>,
         Res<GrabKillsAvailable>,
     ),
-    (inventories, items, mut fuse_boxes, (mut grids, mut phone_boxes, mut phones), vehicles): (
+    (inventories, items, mut fuse_boxes, (mut grids, mut phone_boxes, mut phones, mut radios), vehicles): (
         Query<&crate::interact::Inventory>,
         Query<&crate::props::Item>,
         Query<(Entity, &mut crate::power::FuseBox)>,
-        (Option<ResMut<crate::power::PowerGrids>>, Query<(Entity, &mut crate::police::PhoneBox)>, Query<&mut crate::police::Phone>),
+        (Option<ResMut<crate::power::PowerGrids>>, Query<(Entity, &mut crate::police::PhoneBox)>, Query<&mut crate::police::Phone>, Query<(Entity, &mut crate::radio::Radio)>),
         Query<(&crate::props::Vehicle, &GlobalTransform)>,
     ),
     mut players: Query<(Entity, &mut Player, &mut Transform, Option<&crate::vehicle::Driving>, Option<&mut crate::hiding::Hiding>, Has<crate::items::Blocking>), Without<Jason>>,
@@ -1849,6 +1855,7 @@ pub(crate) fn update_jason(
                         } else {
                             pxf.translation = Vec3::new(door.translation.x, xf.translation.y, door.translation.z);
                             j.state = JasonState::Holding { t: 0.0 };
+                            j.fast_walk = false;
                             commands.entity(je).insert(PlayAction(GRAB_ENTER.into()));
                             commands.entity(pe).insert(PlayAction(GRABBED_ENTER.into()));
                         }
@@ -1951,6 +1958,18 @@ pub(crate) fn update_jason(
                         j.stalk = Some(Stalk::start(t.stalk_active_time));
                         crate::net_world::shout(&mut commands, crate::net_world::Shout::Distortion(crate::jason::Distortion { at: xf.translation, dest: None }));
                     }
+                    // KLR_FastWalk_PC: OnStartFastWalk leaves combat stance, then SetRunning; OnStopFastWalk clears it.
+                    match p.fast_walk {
+                        Some(true) => {
+                            if j.combat {
+                                j.combat = false;
+                                info!("Jason: combat stance false (fast walk)");
+                            }
+                            j.fast_walk = true;
+                        }
+                        Some(false) => j.fast_walk = false,
+                        None => {}
+                    }
                     // GLB_Combat_PC: in or out of combat stance.
                     if p.combat {
                         j.combat = !j.combat;
@@ -2008,6 +2027,16 @@ pub(crate) fn update_jason(
                             continue;
                         }
                         let near = |at: Vec3, reach: f32| Vec2::new(at.x - here.x, at.z - here.z).length() * 100.0 <= reach + 100.0;
+                        // A radio (SCRadio::OnInteract: his Destroy_SpecialMoveHandler; CanInteractWith: not broken).
+                        if let Some((re, r)) = radios.iter().find(|(_, r)| !r.broken && near(r.interact, r.reach)) {
+                            info!("Jason: breaking a radio");
+                            let to = r.interact - xf.translation;
+                            xf.rotation = Quat::from_rotation_y(to.x.atan2(to.z));
+                            j.state = JasonState::BreakingFuse { t: 0.0, fuse: re, done: false };
+                            j.velocity = Vec2::ZERO;
+                            commands.entity(je).insert(PlayAction(crate::radio::BREAK_TAKE.into()));
+                            continue;
+                        }
                         if let Some((be, b)) = phone_boxes.iter().find(|(_, b)| b.breakable() && near(b.interact, b.reach)) {
                             info!("Jason: breaking the phone box");
                             let to = b.interact - xf.translation;
@@ -2076,7 +2105,7 @@ pub(crate) fn update_jason(
                         continue;
                     }
                     // In combat stance he walks at MaxCombatSpeed, facing where the player looks.
-                    let speed = if j.combat { t.combat_speed } else if i.run && t.can_run { t.run_speed } else { t.walk_speed };
+                    let speed = if j.combat { t.combat_speed } else if j.fast_walk && t.can_run { t.run_speed } else { t.walk_speed };
                     j.running = speed == t.run_speed;
                     let face = j.combat.then_some(i.forward);
                     walk(&mut j, &mut xf, i.movement, speed, face, dt, &t, &world);
@@ -2434,7 +2463,10 @@ pub(crate) fn update_jason(
             JasonState::BreakingFuse { t: at, fuse, done } => {
                 let at = at + dt;
                 j.velocity = Vec2::ZERO;
-                let window = killer.info.animations.get(BREAK_FUSE).and_then(|a| a.windows.iter().find(|w| w.name == "Driver: DestroyGenerator")).map_or(1.0, |w| w.start);
+                // A radio's break take (its DestroyRadio driver window: OnBreakRadio), else the fuse box's.
+                let radio = radios.contains(fuse);
+                let (take, driver) = if radio { (crate::radio::BREAK_TAKE, "Driver: DestroyRadio") } else { (BREAK_FUSE, "Driver: DestroyGenerator") };
+                let window = killer.info.animations.get(take).and_then(|a| a.windows.iter().find(|w| w.name == driver)).map_or(1.0, |w| w.start);
                 let mut done = done;
                 if !done && at >= window {
                     done = true;
@@ -2446,8 +2478,12 @@ pub(crate) fn update_jason(
                         crate::police::break_phone_box(&mut b, &mut phones);
                         info!("Jason: broke the phone box");
                     }
+                    if let Ok((_, mut r)) = radios.get_mut(fuse) {
+                        crate::radio::break_radio(&mut r);
+                        info!("Jason: broke a radio");
+                    }
                 }
-                if at >= killer.length(BREAK_FUSE).unwrap_or(2.0) {
+                if at >= killer.length(take).unwrap_or(2.0) {
                     j.state = JasonState::Hunting;
                     commands.entity(je).remove::<(PlayAction, ActionSounds)>();
                 } else {
@@ -2781,6 +2817,7 @@ pub(crate) fn update_jason(
                     // Out of a trap, into his hands.
                     commands.entity(pe).remove::<crate::items::Trapped>();
                     j.state = JasonState::Holding { t: 0.0 };
+                    j.fast_walk = false;
                     j.velocity = Vec2::ZERO;
                     commands.entity(je).insert(PlayAction(GRAB_ENTER.into()));
                     commands.entity(pe).insert((Held, PlayAction(GRABBED_ENTER.into()))).remove::<(Staggered, crate::items::ItemAction)>();
@@ -2826,7 +2863,7 @@ pub(crate) fn update_jason(
                 if at >= success {
                     commands.entity(je).remove::<PlayAction>();
                 }
-                let speed = if j.combat { t.combat_speed } else if player_input.is_some_and(|i| i.run) && t.can_run { t.run_speed } else { t.walk_speed };
+                let speed = if j.combat { t.combat_speed } else if player_input.is_some() && j.fast_walk && t.can_run { t.run_speed } else { t.walk_speed };
                 j.running = speed == t.run_speed;
                 if at - dt < GRAB_SUCCESS_SHAKE.2 && at >= GRAB_SUCCESS_SHAKE.2 {
                     commands.trigger(JasonCameraShake { shake: GRAB_SUCCESS_SHAKE.0, scale: GRAB_SUCCESS_SHAKE.1 });
@@ -2925,6 +2962,7 @@ pub(crate) fn update_jason(
                         snap_rig(&mut rigs, je);
                     }
                     j.state = JasonState::Holding { t: HOLD_AFTER_CAR_GRAB };
+                    j.fast_walk = false;
                     commands.entity(je).remove::<PlayAction>();
                     commands.entity(pe).insert(PlayAction(GRABBED_IDLE.into()));
                 } else {
