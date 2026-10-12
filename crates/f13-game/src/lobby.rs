@@ -276,11 +276,11 @@ fn count_down(
         if Some(id) == killer {
             continue;
         }
-        if starts.0.is_empty() {
+        let occupied: Vec<Vec3> = local.iter().map(|(_, xf)| xf.translation).collect();
+        let Some(at) = starts.take(&occupied, &mut || rng.0.frand()) else {
             warn!("lobby: no counselor start left for {id}");
             continue;
-        }
-        let at = starts.0.remove(0);
+        };
         let c = crate::player::spawn_counselor(&mut commands, &assets, character.as_deref(), &tuning, at);
         commands.entity(c).insert((PlayedBy(l), ControlledBy { owner: l, lifetime: default() }, Name::new(name(id))));
         info!("lobby: {} plays counselor {c} at {at}", name(id));

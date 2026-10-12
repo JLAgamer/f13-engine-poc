@@ -70,8 +70,9 @@ impl Plugin for CounselorCameraPlugin {
     }
 }
 
-/// Her chase (bIsBeingChased, LastChased_Timestamp, ChaseStart_Timestamp).
-#[derive(Resource, Default, Debug)]
+/// Her chase (bIsBeingChased, LastChased_Timestamp, ChaseStart_Timestamp): each counselor's (a component), and the
+/// local one's (the resource: her camera and music).
+#[derive(Resource, Default, Debug, Clone)]
 pub struct Chase {
     pub chased: bool,
     pub last: f32,
@@ -79,6 +80,10 @@ pub struct Chase {
     /// ChasingKillerDistance (cm, flat).
     pub distance: f32,
 }
+
+/// Each counselor's chase.
+#[derive(Component, Default, Debug, Clone)]
+pub struct HerChase(pub Chase);
 
 /// Unreal (cm, Z up) from Bevy (m, Y up), and back.
 pub(crate) fn to_unreal(v: Vec3) -> Vec3 {
@@ -96,21 +101,36 @@ fn value(info: &f13_data::character::CharacterInfo, name: &str, default: f32) ->
 
 /// FUN_1403db8f0 and FUN_1403bd080.
 pub(crate) fn chase(
+    mut commands: Commands,
     time: Res<Time>,
-    mut chase: ResMut<Chase>,
+    mut local_chase: ResMut<Chase>,
     counselor: Option<Res<crate::character::CounselorCharacter>>,
     killer: Option<Res<crate::character::KillerCharacter>>,
-    player: Query<(&Player, &Transform, Has<crate::kill_camera::KillCam>), (Without<crate::jason::Jason>, With<crate::controls::LocalPlayer>)>,
+    mut players: Query<(Entity, &Player, &Transform, Has<crate::kill_camera::KillCam>, Option<&mut HerChase>, Has<crate::controls::LocalPlayer>), Without<crate::jason::Jason>>,
     jasons: Query<(&crate::jason::Jason, &Transform)>,
 ) {
-    let (Some(counselor), Ok((p, xf, in_kill))) = (counselor, player.single()) else { return };
+    let Some(counselor) = counselor else { return };
+    for (pe, p, xf, in_kill, chase, local) in &mut players {
+        let Some(mut chase) = chase else {
+            commands.entity(pe).insert(HerChase::default());
+            continue;
+        };
+        chase_tick(&time, &mut chase.0, &counselor, killer.as_deref(), p, xf, in_kill, &jasons);
+        if local {
+            *local_chase = chase.0.clone();
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn chase_tick(time: &Time, chase: &mut Chase, counselor: &crate::character::CounselorCharacter, killer: Option<&crate::character::KillerCharacter>, p: &Player, xf: &Transform, in_kill: bool, jasons: &Query<(&crate::jason::Jason, &Transform)>) {
     let info = &counselor.info;
     let now = time.elapsed_secs();
     let centre = to_unreal(xf.translation) + Vec3::Z * info.capsule_half_height;
     let jason_hh = killer.as_ref().map_or(90.0, |k| k.info.capsule_half_height);
     let her_velocity = Vec3::new(p.velocity.x, p.velocity.y, p.vel_y * 100.0);
     let mut found = None;
-    for (j, jxf) in &jasons {
+    for (j, jxf) in jasons {
         // A stalking or shifting killer doesn't chase.
         if j.stalking() || j.shifting() {
             continue;

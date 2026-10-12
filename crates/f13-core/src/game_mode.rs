@@ -244,6 +244,10 @@ pub struct ScoreEvent {
     pub all_counselors: bool,
     /// EventDescription: shown with "<exp>" replaced by the XP.
     pub description: String,
+    /// CounselorBadge / JasonBadge: the badge it earns a counselor, or Jason (SCPlayerState's award, FUN_1403bbc80,
+    /// reads it; class names without _C).
+    pub counselor_badge: Option<String>,
+    pub jason_badge: Option<String>,
 }
 
 impl ScoreEvent {
@@ -419,7 +423,7 @@ mod tests {
     }
 
     fn event(xp: i32, once: bool) -> ScoreEvent {
-        ScoreEvent { experience: xp, category: "Defense".into(), only_once: once, all_counselors: false, description: "Ok +<exp>".into() }
+        ScoreEvent { experience: xp, category: "Defense".into(), only_once: once, all_counselors: false, description: "Ok +<exp>".into(), counselor_badge: None, jason_badge: None }
     }
 
     #[test]

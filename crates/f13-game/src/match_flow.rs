@@ -88,6 +88,8 @@ pub struct Tally {
     pub record: CounselorRecord,
     last_health: Option<f32>,
     pub popups: Vec<(String, String, f32)>,
+    /// The badges she earned (her score events' CounselorBadge, once each: FUN_1403aca40).
+    pub badges: Vec<String>,
 }
 
 impl Tally {
@@ -100,6 +102,10 @@ impl Tally {
             let text = event.text(xp);
             info!("match: {who} scored {name}: {text}");
             self.popups.push((text, event.category.clone(), now));
+            if let Some(b) = event.counselor_badge.as_ref().filter(|b| !self.badges.contains(b)) {
+                info!("match: {who} earned the {b} badge");
+                self.badges.push(b.clone());
+            }
         }
     }
 }
@@ -115,6 +121,8 @@ pub struct GameMatch {
     /// Jason's: his score, his score texts, and whether he took damage.
     pub killer_score: PlayerScore,
     pub killer_popups: Vec<(String, String, f32)>,
+    /// His badges (his score events' JasonBadge).
+    pub killer_badges: Vec<String>,
     killer_damaged: bool,
 }
 
@@ -137,6 +145,10 @@ impl GameMatch {
             let text = event.text(xp);
             info!("match: Jason scored {name}: {text}");
             self.killer_popups.push((text, event.category.clone(), now));
+            if let Some(b) = event.jason_badge.as_ref().filter(|b| !self.killer_badges.contains(b)) {
+                info!("match: Jason earned the {b} badge");
+                self.killer_badges.push(b.clone());
+            }
         }
     }
 
@@ -418,6 +430,7 @@ fn update_hud(
     mut overlay_text: Single<&mut Text, (With<MatchOverlayText>, Without<MatchClock>, Without<ScorePopups>)>,
     game_hud: Option<Res<crate::ui::Hud>>,
     play_jason: Option<Res<crate::jason_player::PlayJason>>,
+    names: Query<&Name>,
 ) {
     let m = &game.state;
     // The played character's results: Jason's or hers.
@@ -449,7 +462,22 @@ fn update_hud(
                 s.push_str(&line);
                 s.push('\n');
             }
-            s.push_str(&format!("\nTOTAL XP  {}\n\nclosing in {} s", score.total(), m.remaining_time));
+            s.push_str(&format!("\nTOTAL XP  {}\n", score.total()));
+            let badges = if killer { game.killer_badges.clone() } else { game.mine().map_or(vec![], |t| t.badges.clone()) };
+            if !badges.is_empty() {
+                s.push_str(&format!("BADGES  {}\n", badges.join(", ")));
+            }
+            // Everyone's (SCMatchEndLobbyWidget's players), with more than one counselor or as Jason.
+            if game.counselors.len() > 1 || (killer && !game.counselors.is_empty()) {
+                s.push('\n');
+                for (e, t) in &game.counselors {
+                    let name = names.get(*e).map_or("counselor".to_string(), |n| n.to_string());
+                    let fate = if t.record.escaped { "escaped" } else if t.record.dead { "dead" } else { "survived" };
+                    s.push_str(&format!("{name} ({fate})  {} XP  {}\n", t.score.total(), t.badges.join(", ")));
+                }
+                s.push_str(&format!("Jason  {} XP  {}\n", game.killer_score.total(), game.killer_badges.join(", ")));
+            }
+            s.push_str(&format!("\nclosing in {} s", m.remaining_time));
             s
         }
         _ => String::new(),

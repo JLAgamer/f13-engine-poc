@@ -632,12 +632,12 @@ fn voices(
     time: Res<Time>,
     mut state: Local<HashMap<Entity, VoiceState>>,
     (chase, game, play_jason): (Res<crate::counselor_camera::Chase>, Option<Res<crate::match_flow::GameMatch>>, Option<Res<crate::jason_player::PlayJason>>),
-    players: Query<(Entity, &Player, Option<&crate::character::PlayAction>, Has<crate::jason::Held>, Has<crate::controls::LocalPlayer>), With<ClassSounds>>,
+    players: Query<(Entity, &Player, Option<&crate::character::PlayAction>, Has<crate::jason::Held>, Has<crate::controls::LocalPlayer>, Option<&crate::counselor_camera::HerChase>), With<ClassSounds>>,
     saying_now: Query<(&VoiceOf, &ChildOf)>,
     kills: Query<(), With<crate::kill_camera::KillCam>>,
 ) {
     state.retain(|e, _| players.contains(*e));
-    for (pe, p, action, held, local) in &players {
+    for (pe, p, action, held, local, her_chase) in &players {
     let v = state.entry(pe).or_default();
     let c = &p.counselor;
     let now = (c.health, c.wounded, held, action.map(|a| a.0.clone()), p.montage.clone(), c.alive());
@@ -673,15 +673,13 @@ fn voices(
     }
     // The chase update (FUN_1403db8f0) tells her voice (FUN_140316e40): a chase starting says ChaseStart, once a chase
     // and not before its timer (ChaseStart's cooldown, 15 s from the constructor 0x1402f4760, set as a chase ends) is out.
-    // PLACEHOLDER: the chase is the local counselor's (counselor_camera.rs), so only she says it.
-    if local {
-        if chase.chased && !v.chase_said && t >= v.chase_ready_at {
-            v.chase_said = true;
-            say("VO:ChaseStart");
-        } else if !chase.chased && v.chase_said {
-            v.chase_said = false;
-            v.chase_ready_at = t + CHASE_START_VO_COOLDOWN_S;
-        }
+    let chased = her_chase.map_or(local && chase.chased, |c| c.0.chased);
+    if chased && !v.chase_said && t >= v.chase_ready_at {
+        v.chase_said = true;
+        say("VO:ChaseStart");
+    } else if !chased && v.chase_said {
+        v.chase_said = false;
+        v.chase_ready_at = t + CHASE_START_VO_COOLDOWN_S;
     }
     // SCPlayerController::OnSpawnIntroCompleted: her MatchStartVO (the intro isn't ported: as the match starts), when
     // she's the local player.

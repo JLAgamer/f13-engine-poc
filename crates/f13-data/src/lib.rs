@@ -55,6 +55,11 @@ struct ScoreEventJson {
     category: String,
     only_once: bool,
     all_counselors: bool,
+    /// The badges it earns (older files: none).
+    #[serde(default)]
+    counselor_badge: Option<String>,
+    #[serde(default)]
+    jason_badge: Option<String>,
     description: String,
 }
 
@@ -517,6 +522,8 @@ pub fn parse(text: &str) -> Result<Tuning, LoadError> {
                     category: e.category,
                     only_once: e.only_once,
                     all_counselors: e.all_counselors,
+                    counselor_badge: e.counselor_badge,
+                    jason_badge: e.jason_badge,
                     description: e.description,
                 };
                 (name, event)

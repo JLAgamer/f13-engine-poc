@@ -48,11 +48,10 @@ Server-authoritative netcode, tested with bots, then an 8-player lobby.
 Steps (lightyear 0.30 for the netcode):
 - [ ] Clients interpolate the characters between snapshots (they smooth toward the newest now); the car's
       OnVehicleHit impacts (its light and heavy cues, the heavy one's stall)
-- [ ] The game's choice of counselor start (starts are handed out in order; PLACEHOLDER); the chase (its music and
-      ChaseStart line) per counselor
 - [ ] Bot clients for the scenarios: the bots that set up their scene (teleports, locks) need a server-side hook
       (the net bot plays through its input only)
-- [ ] The lobby's rest: the match-end lobby with its badges (SCMatchEndLobbyWidget), back to the lobby after a match,
+- [ ] The lobby's rest: the match-end lobby as its own screen (its badges' icons and names: SCStatBadge), back to the
+      lobby after a match,
       the counselors' character picks, a full 8-player run (`--lobby` gathers, picks Jason and starts the match now);
       the spectator's HUD (SpectatorHUDWidget) and its unfreeze wait
 

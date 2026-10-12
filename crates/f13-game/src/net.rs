@@ -216,9 +216,30 @@ pub fn simulating(client: Option<Res<NetClient>>, lobby: Option<Res<crate::lobby
 #[derive(Component)]
 pub(crate) struct PlayedBy(pub Entity);
 
-/// The counselor starts not yet taken (the server hands them to joining players in order).
+/// The counselor starts not yet taken.
 #[derive(Resource, Default)]
 pub struct FreeStarts(pub Vec<Vec3>);
+
+/// A character this close to a start occupies it (m; the counselor's capsule, side by side).
+const START_OCCUPIED_M: f32 = 2.0 * crate::player::CAPSULE_RADIUS_M;
+
+impl FreeStarts {
+    /// SCGameMode's ChoosePlayerStart (0x140378140, AGameModeBase's): a random counselor start no one stands on
+    /// (FindTeleportSpot fits her there), else a random one of the rest; it's taken.
+    pub fn take(&mut self, occupied: &[Vec3], frand: &mut dyn FnMut() -> f32) -> Option<Vec3> {
+        let pick = |n: usize, frand: &mut dyn FnMut() -> f32| ((n as f32 * frand()) as usize).min(n.saturating_sub(1));
+        let free: Vec<usize> = (0..self.0.len()).filter(|&i| occupied.iter().all(|o| o.with_y(0.0).distance(self.0[i].with_y(0.0)) > START_OCCUPIED_M)).collect();
+        let i = if free.is_empty() {
+            if self.0.is_empty() {
+                return None;
+            }
+            pick(self.0.len(), frand)
+        } else {
+            free[pick(free.len(), frand)]
+        };
+        Some(self.0.remove(i))
+    }
+}
 
 pub struct NetPlugin {
     pub role: Role,
@@ -337,17 +358,18 @@ fn player_joined(
     tuning: Res<crate::player::PlayerTuning>,
     mut starts: ResMut<FreeStarts>,
     lobby: Option<Res<crate::lobby::LobbyOpen>>,
+    (others, mut rng): (Query<&Transform, With<Player>>, ResMut<crate::GameRng>),
 ) {
     let Ok(id) = links.get(joined.entity) else { return };
     // In the lobby, she plays once the match starts (lobby.rs).
     if lobby.is_some() {
         return;
     }
-    if starts.0.is_empty() {
+    let occupied: Vec<Vec3> = others.iter().map(|t| t.translation).collect();
+    let Some(at) = starts.take(&occupied, &mut || rng.0.frand()) else {
         warn!("net: player {:?} joined with no counselor start left", id.0);
         return;
-    }
-    let at = starts.0.remove(0);
+    };
     let counselor = crate::player::spawn_counselor(&mut commands, &assets, character.as_deref(), &tuning, at);
     commands.entity(counselor).insert((PlayedBy(joined.entity), ControlledBy { owner: joined.entity, lifetime: default() }));
     info!("net: player {:?} joined: counselor {counselor} at {at}", id.0);
@@ -699,6 +721,7 @@ struct NetBot {
     from: Vec3,
     jason_from: Option<Vec3>,
     clock: Option<i32>,
+    tries: u8,
     failed: Vec<&'static str>,
     /// What it asks the lobby for, and how far it got there (0 waiting, 1 asked, 2 ready).
     prefer: crate::lobby::Preference,
@@ -764,6 +787,12 @@ fn net_bot(
         3 if bot.t < 0.3 => keys.press(KeyCode::KeyC),
         3 if bot.t > 1.5 => {
             info!("bot: net: stance {} on the server", counselor.stance);
+            // (Refused where she stands, a slope or a fall: again, a few times.)
+            if counselor.stance != Stance::Combat as u8 && bot.tries < 3 {
+                bot.tries += 1;
+                bot.t = 0.0;
+                return;
+            }
             if counselor.stance != Stance::Combat as u8 {
                 bot.failed.push("combat stance");
             }
@@ -818,6 +847,7 @@ pub struct NetMatch {
     pub police: i32,
     pub killer_awards: Vec<(String, i32)>,
     pub killer_popups: Vec<(String, String)>,
+    pub killer_badges: Vec<String>,
 }
 
 /// A counselor's match: her awards, her score texts (and their category), and what became of her.
@@ -828,6 +858,7 @@ pub struct NetTally {
     pub dead: bool,
     pub escaped: bool,
     pub taken_damage: bool,
+    pub badges: Vec<String>,
 }
 
 const MATCH_STATES: [MatchState; 8] = [
@@ -860,6 +891,7 @@ fn send_match(game: Res<GameMatch>, mut matches: Query<&mut NetMatch>, mut talli
             police: m.police_time_remaining,
             killer_awards: awards(&game.killer_score),
             killer_popups: game.killer_popups.iter().map(|(t, c, _)| (t.clone(), c.clone())).collect(),
+            killer_badges: game.killer_badges.clone(),
         });
     }
     for (e, n) in &mut tallies {
@@ -870,6 +902,7 @@ fn send_match(game: Res<GameMatch>, mut matches: Query<&mut NetMatch>, mut talli
             dead: t.record.dead,
             escaped: t.record.escaped,
             taken_damage: t.record.taken_damage,
+            badges: t.badges.clone(),
         });
     }
 }
@@ -910,6 +943,7 @@ fn receive_match(
         g.state.elapsed_in_progress_time = n.elapsed;
         g.state.police_time_remaining = n.police;
         g.killer_score.awards = n.killer_awards.iter().map(|(e, xp)| f13_core::game_mode::Award { event: e.clone(), xp: *xp }).collect();
+        g.killer_badges = n.killer_badges.clone();
         let seen = g.killer_popups.len();
         g.killer_popups.extend(n.killer_popups.iter().skip(seen).map(|(t, c)| (t.clone(), c.clone(), now)));
     }
@@ -919,6 +953,7 @@ fn receive_match(
         let seen = t.popups.len();
         t.popups.extend(n.popups.iter().skip(seen).map(|(t, c)| (t.clone(), c.clone(), now)));
         t.record = f13_core::game_mode::CounselorRecord { dead: n.dead, escaped: n.escaped, taken_damage: n.taken_damage };
+        t.badges = n.badges.clone();
     }
 }
 

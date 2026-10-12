@@ -443,8 +443,11 @@ def match_section(conv, consts, game):
         if not f.endswith(".uasset"):
             continue
         name = f[:-7]
-        d = props(export_named(conv.load(f"Blueprints/ScoreEvents/{name}"), lambda n: n.startswith("Default__")))
+        asset = conv.load(f"Blueprints/ScoreEvents/{name}")
+        d = props(export_named(asset, lambda n: n.startswith("Default__")))
         val = lambda key, fb: d[(key, 0)]["Value"] if (key, 0) in d else fb
+        # The badges it earns (CounselorBadge / JasonBadge: SCStatBadge classes), by class name without _C.
+        badge = lambda key: (obj_name(asset, val(key, 0)) or "").removesuffix("_C") or None
         text = d.get(("EventDescription", 0), {})
         events[name] = {
             "experience": int(val("Experience", 0)),
@@ -452,6 +455,8 @@ def match_section(conv, consts, game):
             "only_once": bool(val("bOnlyScoreOnce", False)),
             "all_counselors": bool(val("bAllCounselors", False)),
             "description": text.get("CultureInvariantString") or "",
+            "counselor_badge": badge("CounselorBadge"),
+            "jason_badge": badge("JasonBadge"),
         }
     return {
         "round_time": int(round_time),
