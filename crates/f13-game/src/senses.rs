@@ -95,7 +95,7 @@ pub struct SensesPlugin;
 impl Plugin for SensesPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, setup)
-            .add_systems(FixedUpdate, (perceive, blips).chain().before(crate::jason::update_jason).run_if(crate::net::simulating))
+            .add_systems(FixedUpdate, (perceive, blips).chain().before(crate::jason::update_jason).run_if(crate::net::simulating).run_if(crate::match_flow::in_progress))
             .add_observer(show_blip);
     }
 }

@@ -94,10 +94,25 @@ const ACTION_KEYS: &[(&str, &str)] = &[
     ("KLR_KnifeThrow", "MMB"),
     ("KLR_KnifeCancel", "RMB"),
     ("KLR_PlaceTrap", "R"),
+    // Spectating (SPEC_ToggleMode Space, SPEC_ViewNext / Prev left / right click, SPEC_ToggleHUD H).
+    ("SPEC_ToggleMode", "Space"),
+    ("SPEC_ViewNext", "LMB"),
+    ("SPEC_ViewPrev", "RMB"),
+    ("SPEC_ToggleHUD", "H"),
 ];
 
 /// Shows its action's key on an ActionMapWidget (its TextWidget; no glyph image), or hides the widget.
 fn action_keys(w: &mut Widget) {
+    // ActionDisplay's Construct: its ActionMapWidget takes its PrimaryAction, its TitleText its Text.
+    if w.class.as_deref() == Some("ActionDisplay") {
+        let (action, text) = (w.props["PrimaryAction"].clone(), w.props["Text"].clone());
+        if let Some(m) = w.find_mut("ActionMapWidget") {
+            m.props["PrimaryAction"] = action;
+        }
+        if let (Some(t), false) = (w.find_mut("TitleText"), text.is_null()) {
+            t.props["Text"] = text;
+        }
+    }
     if matches!(w.class.as_deref(), Some("ActionMapWidget" | "MinigameActionMapWidget")) {
         let action = w.props["PrimaryAction"].as_str().unwrap_or_default().to_string();
         match ACTION_KEYS.iter().find(|(a, _)| *a == action) {
@@ -132,7 +147,7 @@ impl Plugin for UiPlugin {
             .init_resource::<Prompts>()
             .init_resource::<prompts::PromptUi>()
             .add_systems(Startup, load_hud)
-            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, (map_screen, counselor_map_icons).chain(), jason_hud, ability_popup, rage_hud, noise_meter, xp_lines, wiggle_state.pipe(wiggle_widget)), prompts::prompts, widget_anims, fear_widgets, content_alpha, widget_colors, additive_brushes, hide_for_jason).chain().run_if(resource_exists::<Hud>));
+            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, (map_screen, counselor_map_icons).chain(), jason_hud, ability_popup, rage_hud, noise_meter, xp_lines, wiggle_state.pipe(wiggle_widget)), prompts::prompts, spectator_hud, widget_anims, fear_widgets, content_alpha, widget_colors, additive_brushes, hide_for_jason).chain().run_if(resource_exists::<Hud>));
     }
 }
 
@@ -265,6 +280,8 @@ pub struct Hud {
     hud: Widget,
     /// Jason's (KillerHUDWidget), shown instead when he's played.
     killer: Option<Widget>,
+    /// SpectatorHUDWidget: hers once she's out (spectate.rs SpectatorStatus).
+    spectator: Option<Widget>,
     breath: Option<Widget>,
     dial: Option<Widget>,
     /// SC_WiggleMinigame_Widget, put in the HUD's OverlayWidget.
@@ -284,7 +301,7 @@ pub struct Hud {
     bold: Handle<Font>,
     /// Built for: the window size, her pockets, Jason's HUD, the police timer and the game timer shown, the score
     /// lines shown.
-    built: Option<(Vec2, Vec<String>, bool, (bool, bool), usize)>,
+    built: Option<(Vec2, Vec<String>, bool, (bool, bool, bool), usize)>,
     root: Option<Entity>,
     /// "<user widget class>.<widget name>" -> entity.
     names: HashMap<String, Entity>,
@@ -475,6 +492,10 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         car_objective: Widget::load(dir, "Objective_Car_Widget"),
         police_objective: Widget::load(dir, "Objective_Police_Widget"),
         ability_popup: Widget::load(dir, "AbilityAvailable"),
+        spectator: Widget::load(dir, "SpectatorHUDWidget").map(|mut w| {
+            action_keys(&mut w);
+            w
+        }),
         export: dir.clone(),
         classes: ClassDb::load(&dir.join("classes.json")).unwrap_or_default(),
         textures,
@@ -485,7 +506,7 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         names: HashMap::new(),
         map,
         scale: 1.0,
-        anims: ["SCCounselorTimerWidget", "SCBreathWidget", "KillerHUDWidget", "ObjectivesWidget", "KillerAbilityWidget", "AbilityAvailable", "RageWidget"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
+        anims: ["SCCounselorTimerWidget", "SCBreathWidget", "KillerHUDWidget", "ObjectivesWidget", "KillerAbilityWidget", "AbilityAvailable", "RageWidget", "YouDied", "YouSurvived", "SpectatorHUDWidget"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
         ability_icon_colors: {
             let d = std::fs::read_to_string(dir.join("ui/KillerAbilityWidget.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
             ["IconUsableColor", "IconUnusableColor", "IconLockedColor"].map(|k| color(&d["Defaults"][k], [1.0; 4]))
@@ -504,6 +525,13 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
             None
         }),
     });
+}
+
+impl Hud {
+    /// SpectatorHUDWidget was exported.
+    pub fn has_spectator(&self) -> bool {
+        self.spectator.is_some()
+    }
 }
 
 /// The texture a class property names (`Texture2D'Name'`), as an exported PNG.
@@ -534,9 +562,12 @@ fn build_hud(
     mut maps: ResMut<Assets<Minimap>>,
     play: Option<Res<crate::jason_player::PlayJason>>,
     game: Option<Res<crate::match_flow::GameMatch>>,
+    spectating: Option<Res<crate::spectate::SpectatorStatus>>,
 ) {
     let size = window.size();
     let jason = play.is_some() && hud.killer.is_some();
+    // Out of the match (dead or escaped): her spectator HUD instead (the game's HUD swaps to it as she spectates).
+    let spectator = !jason && hud.spectator.is_some() && spectating.as_ref().is_some_and(|s| s.out);
     // ShowPoliceTimer while they're on their way (HidePoliceTimer once they're here).
     let police = game.as_ref().is_some_and(|g| g.state.police_time_remaining > 0);
     // ShowGameTimer while the time left is within TimeToShow (see `timer`).
@@ -547,12 +578,17 @@ fn build_hud(
     let pockets: Vec<String> = player.as_ref().and_then(|p| **p).map_or(vec![], |inv| inv.pockets.iter().filter_map(|&e| items.get(e).ok()).map(|i| i.class.clone()).collect());
     let selected = player.as_ref().and_then(|p| **p).map_or(0, |inv| inv.selected);
     // Rebuilt when they or the selection change.
-    let pocket_key: Vec<String> = pockets.iter().cloned().chain([format!("#{selected}")]).collect();
+    let mut pocket_key: Vec<String> = pockets.iter().cloned().chain([format!("#{selected}")]).collect();
+    // The spectator HUD's next-mode title is set as it's built (its ActionDisplays share their widgets' names).
+    let next_mode = spectating.as_ref().map_or("", |s| s.next);
+    if spectator {
+        pocket_key = vec![format!("spectator:{next_mode}")];
+    }
     // His score lines on his HUD, hers on hers.
     let score_lines = |g: &crate::match_flow::GameMatch| if jason { g.killer_score_lines().to_vec() } else { g.score_lines().to_vec() };
     let scores = game.as_ref().map_or(vec![], |g| score_lines(g));
     let lines = scores.len();
-    if hud.built.as_ref().is_some_and(|(s, p, j, c, l)| *s == size && *p == pocket_key && *j == jason && *c == (police, game_timer) && *l == lines) {
+    if hud.built.as_ref().is_some_and(|(s, p, j, c, l)| *s == size && *p == pocket_key && *j == jason && *c == (police, game_timer, spectator) && *l == lines) {
         return;
     }
     if let Some(root) = hud.root.take() {
@@ -561,8 +597,19 @@ fn build_hud(
     // The window in design units: scaled to fit 1920×1080, the rest added along the longer side.
     let scale = (size.x / DESIGN.x).min(size.y / DESIGN.y);
     let virt = size / scale;
-    let mut tree = if jason { hud.killer.clone().unwrap_or_else(|| hud.hud.clone()) } else { hud.hud.clone() };
-    if !jason {
+    let mut tree = if jason {
+        hud.killer.clone().unwrap_or_else(|| hud.hud.clone())
+    } else if spectator {
+        hud.spectator.clone().unwrap_or_else(|| hud.hud.clone())
+    } else {
+        hud.hud.clone()
+    };
+    if spectator && !next_mode.is_empty() {
+        if let Some(t) = tree.find_mut("SpectateModeDisplay").and_then(|d| d.find_mut("TitleText")) {
+            t.props["Text"] = json!({ "LocalizedString": next_mode });
+        }
+    }
+    if !jason && !spectator {
         fill_inventory(&hud, &mut tree, &pockets, selected);
     }
     fill_xp_lines(&hud, &mut tree, &scores);
@@ -595,7 +642,7 @@ fn build_hud(
     let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names };
     let full = Rect { x: 0.0, y: 0.0, w: virt.x, h: virt.y };
     let laid = tree.layout(full);
-    b.spawn(&laid, root, full, if jason { "KillerHUDWidget" } else { "CounselorHUDWidget" });
+    b.spawn(&laid, root, full, if jason { "KillerHUDWidget" } else if spectator { "SpectatorHUDWidget" } else { "CounselorHUDWidget" });
     // Her breath meter and interaction dial are hers (Jason's HUD has neither).
     if let Some(breath) = hud.breath.as_ref().filter(|_| !jason) {
         let laid = breath.layout(full);
@@ -617,7 +664,7 @@ fn build_hud(
     hud.names = names;
     hud.root = Some(root);
     hud.scale = scale;
-    hud.built = Some((size, pocket_key, jason, (police, game_timer), lines));
+    hud.built = Some((size, pocket_key, jason, (police, game_timer, spectator), lines));
 }
 
 /// Puts an item widget in the inventory's Grid for each pocket item (SCInventory_Widget does it as items are
@@ -907,11 +954,13 @@ fn widget_anims(time: Res<Time>, hud: Res<Hud>, playing: Res<PlayingAnims>, mut 
     }
 }
 
-/// CounselorHUDWidget's UpdateFearOpacity (its tick, once the match is in progress and MatchStart has played: 5 s):
-/// CounselorFearWidgets (the inventory, the stamina ring; designed at alpha 0, kept at 0 through MatchStart) takes
-/// SCHUDWidget's FearOpacity. Its writer is SCCounselorCharacter's tick (0x1403d8de0 -> 0x140441430: (1, 1, 1, a)):
-/// a FInterpTo at 1 toward 0 while she hides, else HUDOpacityFearCurve(x), x her CosmeticFear (0 dead, escaped, or in
-/// a special move that ends in her death: bDieOnFinish); her death (0x1403c0ac0) sets it to 0. (The minimap takes it
+/// CounselorHUDWidget's UpdateFearOpacity (its tick, once the match is in progress and MatchStart isn't playing):
+/// CounselorFearWidgets (the inventory, the stamina ring) takes SCHUDWidget's FearOpacity. Its writer is
+/// SCCounselorCharacter's tick (0x1403d8de0 -> 0x140441430: (1, 1, 1, a)): a FInterpTo at 1 toward 0 while she hides,
+/// else HUDOpacityFearCurve(x), x her CosmeticFear (0 dead, escaped, or in a special move that ends in her death:
+/// bDieOnFinish); her death (0x1403c0ac0) sets it to 0. MatchStart (which holds them at 0 for 5 s) isn't played on her
+/// HUD: in the game her pockets show as she spawns (seen by the user, 2026-10-12): her HUD is built for her pawn, after
+/// the match's start (OnMatchStarted) went out. (The minimap takes it
 /// too unless NervesOfSteel; left as built.)
 #[allow(clippy::too_many_arguments)]
 fn fear_widgets(
@@ -932,16 +981,97 @@ fn fear_widgets(
             let x = if !alive || escaped.is_some() { 0.0 } else { fear.map_or(0.0, |f| f.0.cosmetic) };
             counselor.as_ref().and_then(|c| c.0.info.curve("HUDOpacityFearCurve")).map_or(1.0, |c| c.eval(x))
         };
-        *alpha = if alive { f13_core::fear::finterp_to(*alpha, target, time.delta_secs(), 1.0) } else { 0.0 };
+        *alpha = match () {
+            _ if !alive => 0.0,
+            _ if p.hidden => f13_core::fear::finterp_to(*alpha, target, time.delta_secs(), 1.0),
+            _ => target,
+        };
     }
     let Some(&e) = hud.names.get("CounselorHUDWidget.CounselorFearWidgets_33") else { return };
     let Ok(mut c) = colors.get_mut(e) else { return };
-    let started = game.is_some_and(|g| g.state.state == f13_core::game_mode::MatchState::InProgress && g.state.elapsed_in_progress_time >= MATCH_START_S);
+    let started = game.is_some_and(|g| g.state.state == f13_core::game_mode::MatchState::InProgress);
     c.set_if_neq(WidgetColor([1.0, 1.0, 1.0, if started { *alpha } else { 0.0 }]));
 }
 
-/// CounselorHUDWidget's MatchStart animation's length (s).
-const MATCH_START_S: i32 = 5;
+
+/// SpectatorHUDWidget (its graph): as she's out, the intro (OnShowSpectatorIntro: SpectatorIntroCanvas, YouDied or
+/// YouSurvived shown and the other at alpha 0, YOUAREDEADCue / YouSurvivedCue); the first toggle ends it
+/// (OnSpectatorIntroFinished, IntroFadeOut, then CheckHUDVisibility: SpectatorCanvas shown, the intro hidden);
+/// OnSpectatorUpdateStatus: StatusText the status, SpectateModeDisplay's TitleText the next mode, NextView and
+/// PreviousView shown while it says "Spectating:" or "Viewing:" (else collapsed).
+fn spectator_hud(
+    mut commands: Commands,
+    hud: Res<Hud>,
+    status: Option<Res<crate::spectate::SpectatorStatus>>,
+    mut nodes: Query<&mut Visibility>,
+    mut colors: Query<&mut WidgetColor>,
+    mut texts: Query<&mut Text>,
+    mut played: Local<Option<bool>>,
+    (time, mut playing): (Res<Time>, ResMut<PlayingAnims>),
+    (mut shown_colors, mut faded): (Local<bool>, Local<bool>),
+    (keys, mut hidden): (Res<ButtonInput<KeyCode>>, Local<bool>),
+) {
+    let Some(st) = status.filter(|s| s.out) else {
+        *played = None;
+        (*shown_colors, *faded, *hidden) = (false, false, false);
+        return;
+    };
+    let get = |n: &str| hud.names.get(&format!("SpectatorHUDWidget.{n}")).copied();
+    let Some(intro) = get("SpectatorIntroCanvas") else { return };
+    // The intro's cue and its widget's OnPlaySpectatorIntro (BackgroundIn, AnimationIn), once.
+    if played.is_none() {
+        *played = Some(st.died);
+        let owner = if st.died { "YouDied" } else { "YouSurvived" };
+        for anim in ["BackgroundIn", "AnimationIn"] {
+            playing.play(owner, anim, time.elapsed_secs(), false);
+        }
+        let cue = hud.classes.prop("SpectatorHUDWidget_C", if st.died { "YOUAREDEADCue" } else { "YouSurvivedCue" });
+        if let Some(c) = crate::audio::cue_name(&cue) {
+            commands.trigger(crate::audio::PlaySound { cue: c, at: None });
+        }
+    }
+    let mut show = |e: Option<Entity>, on: bool| {
+        if let Some(mut v) = e.and_then(|e| nodes.get_mut(e).ok()) {
+            v.set_if_neq(if on { Visibility::Inherited } else { Visibility::Hidden });
+        }
+    };
+    // SPEC_ToggleHUD (H): OnToggleSpecatorHUD, AnimAllHUD forward to hide, reversed to show (once the intro's over).
+    if st.intro_over && keys.just_pressed(KeyCode::KeyH) {
+        *hidden = !*hidden;
+        playing.play("SpectatorHUDWidget", "AnimAllHUD", time.elapsed_secs(), !*hidden);
+    }
+    // CheckHUDVisibility: the intro hidden once it has faded.
+    show(Some(intro), !st.intro_over || !*faded);
+    show(get("SpectatorCanvas"), st.intro_over);
+    let arrows = st.status.contains("Spectating:") || st.status.contains("Viewing:");
+    show(get("NextView"), arrows);
+    show(get("PreviousView"), arrows);
+    if !*shown_colors {
+        *shown_colors = true;
+        for (name, on) in [("YouDied", st.died), ("YouSurvived", !st.died)] {
+            if let Some(mut c) = get(name).and_then(|e| colors.get_mut(e).ok()) {
+                c.set_if_neq(WidgetColor([1.0, 1.0, 1.0, if on { 1.0 } else { 0.0 }]));
+            }
+        }
+        // AnimAllHUD at its start (Border_1 hidden) until the intro's over.
+        playing.play("SpectatorHUDWidget", "AnimAllHUD", time.elapsed_secs(), false);
+    }
+    // OnSpectatorIntroFinished: IntroFadeOut, then (its OnAnimationFinished) AnimAllHUD reversed.
+    if st.intro_over && !*faded {
+        *faded = true;
+        let now = time.elapsed_secs();
+        playing.play("SpectatorHUDWidget", "IntroFadeOut", now, false);
+        playing.play("SpectatorHUDWidget", "AnimAllHUD", now + 0.25, true);
+    }
+    let mut set = |e: Option<Entity>, s: &str| {
+        if let Some(mut t) = e.and_then(|e| texts.get_mut(e).ok()) {
+            if t.0 != s {
+                t.0 = s.to_string();
+            }
+        }
+    };
+    set(get("StatusText"), &st.status);
+}
 
 /// XPDisplayWidget's lines fading: each line's Border_0 content by its FadeIn / FadeOut (an empty line stays at its
 /// design alpha, 0).

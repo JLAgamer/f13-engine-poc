@@ -154,7 +154,7 @@ impl Plugin for PlayerPlugin {
             .add_systems(Startup, spawn_player)
             // Input is read once per frame; one-shot actions stay latched until a fixed step uses them, so a frame
             // that runs several fixed steps (low frame rate, --speed) doesn't repeat a key press.
-            .add_systems(RunFixedMainLoop, read_intent.in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop))
+            .add_systems(RunFixedMainLoop, read_intent.in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop).run_if(crate::match_flow::in_progress))
             // A network client's counselors move on the server (net.rs).
             .add_systems(FixedUpdate, (update_counselor, move_player).chain().run_if(crate::net::simulating))
             .add_systems(Update, (
@@ -604,11 +604,12 @@ fn aim_demo(
 
 /// Third-person camera on a "spring arm": pulled in when the map is between the camera and the counselor.
 /// F3: the debug text (it shows when the game's HUD is missing).
-fn toggle_debug_hud(keys: Res<ButtonInput<KeyCode>>, game_hud: Option<Res<crate::ui::Hud>>, mut hud: Single<&mut Visibility, With<Hud>>) {
-    if keys.just_pressed(KeyCode::F3) || game_hud.is_none() {
-        let v = if game_hud.is_none() || **hud == Visibility::Hidden { Visibility::Inherited } else { Visibility::Hidden };
-        hud.set_if_neq(v);
+/// The debug text (her state, Jason's, the frame rate): hidden until F3.
+fn toggle_debug_hud(keys: Res<ButtonInput<KeyCode>>, mut hud: Single<&mut Visibility, With<Hud>>, mut shown: Local<bool>) {
+    if keys.just_pressed(KeyCode::F3) {
+        *shown = !*shown;
     }
+    hud.set_if_neq(if *shown { Visibility::Inherited } else { Visibility::Hidden });
 }
 
 fn update_hud(

@@ -207,12 +207,41 @@ impl Plugin for MatchPlugin {
             .insert_resource(Leave(self.leave))
             .add_systems(Startup, (load_classes, spawn_hud))
             .add_systems(FixedUpdate, run_match.run_if(crate::net::simulating))
-            .add_systems(Update, update_hud)
+            .add_systems(Update, (update_hud, hold_pawns))
             .add_observer(on_score)
             .add_observer(on_class_score)
             .add_observer(on_killer_score)
             .add_observer(on_context_kill_score)
             .add_observer(|_: On<JasonDamaged>, mut game: ResMut<GameMatch>| game.killer_damaged = true);
+    }
+}
+
+/// The match is in progress (or past it): the game spawns the pawns as it starts (HandleMatchHasStarted, after the
+/// PreMatchIntro), so until then Jason's tick (his ability timers) and their input don't run here and they're hidden
+/// ([`hold_pawns`]). True without match rules.
+pub fn in_progress(game: Option<Res<GameMatch>>, tuning: Option<Res<MatchTuning>>) -> bool {
+    tuning.is_none() || game.is_none_or(|g| !matches!(g.state.state, MatchState::WaitingToStart | MatchState::WaitingPreMatch | MatchState::PreMatchIntro))
+}
+
+/// Hidden until the match starts (see [`in_progress`]).
+#[derive(Component)]
+struct HeldForMatch;
+
+fn hold_pawns(
+    mut commands: Commands,
+    game: Option<Res<GameMatch>>,
+    tuning: Option<Res<MatchTuning>>,
+    mut pawns: Query<(Entity, &mut Visibility, Has<HeldForMatch>), Or<(With<Player>, With<Jason>)>>,
+) {
+    let started = in_progress(game, tuning);
+    for (e, mut v, held) in &mut pawns {
+        if !started && !held {
+            *v = Visibility::Hidden;
+            commands.entity(e).insert(HeldForMatch);
+        } else if started && held {
+            *v = Visibility::Inherited;
+            commands.entity(e).remove::<HeldForMatch>();
+        }
     }
 }
 

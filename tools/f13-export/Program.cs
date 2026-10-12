@@ -733,7 +733,7 @@ switch (rest[0])
         AnimExporter.Write(provider, outDir, Mvp.Montages);
         new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims, Mvp.KeepRoot);
         new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, Mvp.KillerAnims, Mvp.KeepRoot);
-        new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TrapMesh, Mvp.TrapAnims); new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TentMesh, Mvp.TentAnims);
+        new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TrapMesh, Mvp.TrapAnims); new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TentMesh, Mvp.TentAnims); new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.CarMesh, Mvp.CarAnims);
         foreach (var (mesh, anim) in Mvp.PlacedKillProps) new CounselorExporter(provider, outDir, Queue).ExportPropAnims(mesh, [anim]);
         WriteKillCameras();
         WriteWater();
@@ -791,7 +791,7 @@ switch (rest[0])
         WriteKillCameras();
         break;
     case "props": // skeletal props' own animations (props/): the bear trap
-        new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TrapMesh, Mvp.TrapAnims); new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TentMesh, Mvp.TentAnims);
+        new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TrapMesh, Mvp.TrapAnims); new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TentMesh, Mvp.TentAnims); new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.CarMesh, Mvp.CarAnims);
         foreach (var (mesh, anim) in Mvp.PlacedKillProps) new CounselorExporter(provider, outDir, Queue).ExportPropAnims(mesh, [anim]);
         break;
     case "anims":
@@ -1358,6 +1358,10 @@ static class Mvp
         "/Game/UI/HUD/SC_WiggleMinigame_Widget",
         // Jason's, when he's played.
         "/Game/UI/HUD/Killer/KillerHUDWidget",
+        // Hers once she's out (dead or escaped).
+        "/Game/UI/HUD/Spectator/SpectatorHUDWidget",
+        // Its key hints (an ActionMapWidget and a title).
+        "/Game/UI/Controls/ActionDisplay",
         // The minimap's icons (the SCMinimapIconComponents' DefaultIcon, and Jason's KillerIcon).
         "/Game/UI/HUD/Minimap/SC_Cabin_Widget",
         "/Game/UI/HUD/Minimap/SC_Bathroom_Widget",
@@ -1776,6 +1780,13 @@ static class Mvp
         "/Game/Props/SkeletalMeshes/Camp/Animation/cinematic_hidespot_tent_idle",
     ];
     /// The bear trap's own animations (BearTrap_C ArmedAnimation, TriggeredAnimation, EscapedAnimation; its idles).
+    // The Chevette's hood (Chevette_AnimBP: bIsHoodOpen's idle_open loop on the Hood branch; CloseHoodAnim's take).
+    public const string CarMesh = "/Game/Animations/Props/Manmade/Vehicles/A_Vehicle_Chevette_LOD0";
+    public static readonly string[] CarAnims =
+    [
+        "/Game/Props/SkeletalMeshes/Vehicles/Cars/Chevette/normal_stand_car_repair_hood_idle_open",
+        "/Game/Props/SkeletalMeshes/Vehicles/Cars/Chevette/normal_stand_car_repair_hood_close",
+    ];
     public const string TrapMesh = "/Game/Props/SkeletalMeshes/Traps/A_Trap_Bear_01";
     public static readonly string[] TrapAnims =
     [

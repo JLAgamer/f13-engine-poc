@@ -1,7 +1,7 @@
 //! The Chevettes' lights (Chevette_BP, Chevette_2Seat_BP; F13-decomp MODLOG "Car lights"): their Headlights and
 //! TailLights spot lights and the exterior material's lights mask (materials.rs PropExt), by the Blueprints' events:
-//! - BeginPlay: the material's own instance (SetupDynamicMaterial), Headlights 0, Tailights 0; the spot lights keep
-//!   their templates' intensity and visibility;
+//! - BeginPlay: the material's own instance (SetupDynamicMaterial), Headlights 0, Tailights 0; the spot lights off
+//!   (PLACEHOLDER: by what's seen in the game; the Blueprint keeps their templates' intensity and visibility);
 //! - OnStarted (OnRep_IsStarted, now started): both spots visible, intensities 20 and 6; Headlights HeadlightsDefault,
 //!   Tailights TailightsDefault;
 //! - OnStalled (OnRep_IsStarted, now stopped): the Fade Lights timeline (1 s; its curve v, 1 to 0) sets both spots'
@@ -103,7 +103,10 @@ pub fn spot_lights(components: &[ComponentInfo]) -> Vec<((CarSpot, SpotLight, Tr
                 ..default()
             };
             let xf = Transform::from_translation(local.translation).looking_to(dir, Vec3::Y);
-            let visibility = if l.visible() { Visibility::Inherited } else { Visibility::Hidden };
+            // Off until the car first starts (OnStarted shows them). PLACEHOLDER: the Blueprint leaves them at their
+            // template's (visible, 20 / 6) and no native code found hides them, but parked cars are dark in the game
+            // (seen by the user, 2026-10-12).
+            let visibility = Visibility::Hidden;
             // Its LightFunctionMaterial (the headlights'), as a cookie.
             let cookie = l.props.get("LightFunctionMaterial").and_then(|m| m.as_str()).and_then(|m| m.split('\'').nth(1)).and_then(crate::lighting::light_function_texture).map(crate::lighting::LightCookie);
             ((CarSpot { tail: c.name == "TailLights", lumens_per_intensity: if intensity > 0.0 { lumens / intensity } else { 0.0 } }, spot, xf, visibility), cookie)

@@ -7,9 +7,6 @@ Base content (asset paths in the player's install; all gameplay values come from
 `Characters/Killers/Jason/J2`, the Chevettes (`Blueprints/Vehicles/DriveableVehicles/Cars/Chevette`), the police.
 
 ## Todo
-- [ ] Characters appear before the intro plays, and Jason's abilities count from then (Morph ready too soon):
-      spawn them after the intro (reported 2026-10-12)
-- [ ] Car hoods: up while the battery is missing (reported 2026-10-12)
 - [ ] Jason's fast walk while holding her: the user saw none in the game; check a fresh Shift press during the hold
 - [ ] The campfire kill's alignment (reported 2026-10-12; parked)
 - [ ] Bot clients for the scenarios: the bots that set up their scene (teleports, locks) need a server-side hook
@@ -17,7 +14,6 @@ Base content (asset paths in the player's install; all gameplay values come from
 - [ ] The lobby's rest: the match-end lobby as its own screen (SCMatchEndLobbyWidget, its badges' icons and names:
       SCStatBadge; award sites and classes are read, MODLOG), back to the lobby after a match, the counselors'
       character picks, a full 8-player run (`--lobby` gathers, picks Jason and starts the match now)
-- [ ] The spectator's HUD (SpectatorHUDWidget) and its unfreeze wait
 - [ ] The Tommy Jarvis timer, Tommy Jarvis, and Jason dying
 - [ ] Voice chat (cpal and Opus: waiting on permission to download)
 - [ ] Materials: foliage subsurface (its transmission is the deferred light pass's, whose code isn't in the shipped
@@ -31,7 +27,8 @@ Base content (asset paths in the player's install; all gameplay values come from
 - [ ] Lighting: the inverse-squared lights' unit (16/100^2 candela) is from engine memory, PLACEHOLDER until read
 - [ ] The falling rain's simulation on the GPU as the game's (49 systems, about 23k sprites, simulated on the CPU:
       2.5 ms of the main world a frame; their draw is already on the GPU: MODLOG "The rain's draw")
-- [ ] Post-processing: compare against the game's own screenshots
+- [ ] Post-processing and lighting: compare against the game's own screenshots (the user's cabin porch reference,
+      2026-10-12: its wall lamp's spots light sharp bands up and down the logs)
 - [ ] Read the stock pak directly, so users don't need to extract it first (with the host CLI's first-run setup).
       Its footer is known (an encrypted-index flag, magics 'Atae' and 'kcid', version 5, index offset and size,
       hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold

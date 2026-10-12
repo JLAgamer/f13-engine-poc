@@ -331,7 +331,7 @@ impl Plugin for JasonPlugin {
             .init_resource::<JasonTarget>()
             .add_systems(Startup, (spawn_jason, load_knife_look))
             .add_systems(FixedUpdate, choose_target.before(crate::senses::perceive).before(grab_kills_available).before(update_jason).run_if(crate::net::simulating))
-            .add_systems(FixedUpdate, (grab_kills_available.before(update_jason), update_jason, recover_counselor, fly_knives, pick_up_knives).run_if(crate::net::simulating))
+            .add_systems(FixedUpdate, (grab_kills_available.before(update_jason), update_jason, recover_counselor, fly_knives, pick_up_knives).run_if(crate::net::simulating).run_if(crate::match_flow::in_progress))
             .add_observer(spawn_knife)
             .add_observer(distortion)
             .add_observer(car_slam)

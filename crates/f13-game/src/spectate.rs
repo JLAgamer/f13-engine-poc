@@ -22,9 +22,9 @@
 //! SPEC_ViewNext / SPEC_ViewPrev (left and right click) go through the players or the camp cameras.
 //!
 //! PLACEHOLDERS:
-//! - The toggle is allowed once her kill camera is over (the game waits for the controller's unfreeze time).
+//! - The unfreeze wait (1 s) starts as her kill camera ends.
 //! - Jason isn't spectated (not a private match).
-//! - The spectator HUD is a line of text (SpectatorHUDWidget's status and next-mode texts).
+//! - The spectator HUD's intro shows once she's out and her kill camera is over (FUN_1404121c0 runs then).
 
 use crate::controls::LocalPlayer;
 use crate::player::{Player, PlayerCamera};
@@ -34,6 +34,8 @@ use bevy::prelude::*;
 const DEATH_DISTANCE_CM: f32 = 600.0;
 const DEATH_PITCH: f32 = -45.0;
 const DEATH_YAWS: [f32; 8] = [0.0, -180.0, 90.0, -90.0, 45.0, -45.0, 135.0, -135.0];
+/// AGameMode's MinRespawnDelay (s): the controller's unfreeze time after its pawn goes.
+const UNFREEZE_S: f32 = 1.0;
 /// SetViewTargetWithBlend's time into the death and camp cameras (DAT_14209aa80).
 const BLEND_S: f32 = 2.0;
 
@@ -86,6 +88,7 @@ impl Plugin for SpectatePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Spectate>()
             .init_resource::<CampCameras>()
+            .init_resource::<SpectatorStatus>()
             .add_systems(Startup, (load_cameras, spawn_status))
             .add_systems(Update, (toggle, view.after(crate::kill_camera::KillCameraSystems)).chain().after(crate::counselor_camera::counselor_camera))
             .add_systems(Update, status);
@@ -149,10 +152,19 @@ fn toggle(
     players: Query<(Entity, &Player, Has<LocalPlayer>, Has<crate::vehicle::Escaped>)>,
     camera: Single<(&PlayerCamera, &Transform), Without<Player>>,
     (collision, dynamic): (Option<Res<crate::collision::WorldCollision>>, Res<crate::collision::DynamicColliders>),
+    (real, mut out_since): (Res<Time<Real>>, Local<Option<f32>>),
 ) {
     let Ok((p, pxf, escaped, killing)) = me.single() else { return };
     let dead = !p.counselor.alive();
     if !(dead || escaped) || killing {
+        *out_since = None;
+        return;
+    }
+    // The first toggle waits out the controller's unfreeze time (GetTimeUntilUnFreeze: APlayerController's
+    // UnFreeze timer, the game mode's MinRespawnDelay: AGameMode's 1 s, no SC class overrides it). PLACEHOLDER: from
+    // the end of her kill camera (the controller goes inactive as her pawn is let go).
+    let since = *out_since.get_or_insert(real.elapsed_secs());
+    if spec.mode == Mode::None && real.elapsed_secs() - since < UNFREEZE_S {
         return;
     }
     let s = &mut *spec;
@@ -247,13 +259,38 @@ fn spawn_status(mut commands: Commands) {
     ));
 }
 
-/// The status and the next mode (FUN_1404121c0's texts), and the keys.
-fn status(spec: Res<Spectate>, cams: Res<CampCameras>, me: Query<Has<crate::vehicle::Escaped>, With<LocalPlayer>>, names: Query<&Name>, mut text: Single<(&mut Text, &mut Visibility), With<Status>>) {
+/// What the spectator HUD shows (ui.rs, SpectatorHUDWidget): she's out (dead or escaped, her kill camera over:
+/// FUN_1404121c0 then shows its intro), died or escaped, whether the intro is over (the first toggle:
+/// OnSpectatorIntroFinished), and FUN_1404121c0's status and next-mode texts.
+#[derive(Resource, Default, Clone, PartialEq, Debug)]
+pub struct SpectatorStatus {
+    pub out: bool,
+    pub died: bool,
+    pub intro_over: bool,
+    pub status: String,
+    pub next: &'static str,
+}
+
+/// The status and the next mode (FUN_1404121c0's texts), and the keys: for the spectator HUD, and as a line of text
+/// when its widget isn't exported.
+#[allow(clippy::type_complexity)]
+fn status(
+    spec: Res<Spectate>,
+    cams: Res<CampCameras>,
+    me: Query<(&Player, Has<crate::vehicle::Escaped>, Has<crate::kill_camera::KillCam>), With<LocalPlayer>>,
+    names: Query<&Name>,
+    mut text: Single<(&mut Text, &mut Visibility), With<Status>>,
+    hud: Option<Res<crate::ui::Hud>>,
+    mut out: ResMut<SpectatorStatus>,
+) {
     let (ref mut text, ref mut vis) = *text;
-    let escaped = me.single().unwrap_or(false);
+    let (alive, escaped, killing) = me.single().map_or((true, false, false), |(p, e, k)| (p.counselor.alive(), e, k));
+    let widget = hud.is_some_and(|h| h.has_spectator());
+    let mut st = SpectatorStatus { out: (!alive || escaped) && !killing, died: !alive && !escaped, intro_over: spec.mode != Mode::None, ..default() };
     let (now, next) = match spec.mode {
         Mode::None => {
             vis.set_if_neq(Visibility::Hidden);
+            out.set_if_neq(st);
             return;
         }
         Mode::DeadBody if escaped => ("You Escaped!".to_string(), "Spectate Players"),
@@ -274,6 +311,13 @@ fn status(spec: Res<Spectate>, cams: Res<CampCameras>, me: Query<Has<crate::vehi
             if escaped { "Spectate Players" } else { "Your Dead Body" },
         ),
     };
+    st.status = now.clone();
+    st.next = next;
+    out.set_if_neq(st);
+    if widget {
+        vis.set_if_neq(Visibility::Hidden);
+        return;
+    }
     let s = format!("{now}\nSpace: {next}    click: next / previous");
     if text.0 != s {
         text.0 = s;
@@ -319,10 +363,9 @@ fn bot(
             info!("bot: spectate: she dies");
             next(&mut b);
         }
-        1 if b.t > 2.0 => {
-            keys.press(KeyCode::Space);
-            next(&mut b);
-        }
+        // Space until the toggle takes (after the controller's unfreeze time).
+        1 if spec.mode != Mode::None => next(&mut b),
+        1 if b.t > 2.0 => keys.press(KeyCode::Space),
         2 if b.t > BLEND_S + 0.5 => {
             let d = at.distance(pxf.translation + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M);
             info!("bot: spectate: {:?}, the camera {d:.1} m from her body", spec.mode);

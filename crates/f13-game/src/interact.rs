@@ -1640,18 +1640,8 @@ fn update_prompt(
     };
     let (inv, driving, _, using, p, hiding, interaction) = *player;
     let name = |e: Entity| items.get(e).map_or("?".to_string(), |i| i.name.clone());
-    let mut lines = vec![format!(
-        "Hands: {}   Pockets: [{}] ({}/{})",
-        inv.hand.map_or("-".to_string(), name),
-        inv.pockets.iter().map(|&e| name(e)).collect::<Vec<_>>().join(", "),
-        inv.pockets.len(),
-        inv.max_small
-    )];
-    for v in &vehicles {
-        let mut parts: Vec<String> = v.repairs.iter().map(|r| format!("{} {}", r.name.trim_end_matches("Repair"), if r.done { "ok" } else { "--" })).collect();
-        parts.push(format!("Ignition {}", if v.started { "running" } else { "--" }));
-        lines.push(format!("{}: {}", v.class.trim_end_matches("_C"), parts.join(", ")));
-    }
+    // Her prompts only (the pockets and the cars' parts are the game's HUD's: ui.rs).
+    let mut lines: Vec<String> = Vec::new();
     if let Some(h) = hiding {
         lines.push(match h.phase {
             crate::hiding::HidePhase::Hidden => "Hiding   [E] Leave   (mouse: look around)".into(),
