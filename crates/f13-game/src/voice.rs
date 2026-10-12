@@ -103,7 +103,8 @@ fn open_devices(world: &mut World) {
     let mic = Arc::new(Mutex::new(Vec::new()));
     let voices: Voices = Arc::new(Mutex::new(HashMap::new()));
     let tone = std::env::var("F13_VOICE_TONE").ok().map(|_| 0.0);
-    let none = world.contains_resource::<NoDevices>();
+    // F13_NO_VOICE: no microphone or voice output (to compare the game's other sound without them).
+    let none = world.contains_resource::<NoDevices>() || std::env::var("F13_NO_VOICE").is_ok();
     let (input, mic_rate) = match host.default_input_device().filter(|_| tone.is_none() && !none) {
         Some(dev) => match open_input(&dev, mic.clone()) {
             Ok(v) => v,
