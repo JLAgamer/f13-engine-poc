@@ -34,9 +34,8 @@ Moved from Milestone 1 (not tied to gameplay):
 - [ ] Lighting, remaining: Enlighten GI (the map's indirect light: its precomputed systems and probe sets are
       Geomerics' runtime data, undocumented; the solver is in the exe), the local lights' shadow caching and fade
       (which lights qualify is the game's; without the caching only the four nearest whose range reaches the camera render: MODLOG
-      "Local lights' shadows"), the falling rain's cost (49 CPU-simulated systems, about 23k sprites, drawn as one sorted batch built
-      in parallel: draw 5.6 ms and simulate 2.9 ms of the main world a frame, under the render world's ~27; the game's
-      are GPU sprites: MODLOG "Rain")
+      "Local lights' shadows"), the falling rain's simulation on the GPU as the game's (49 systems, about 23k sprites, simulated on the CPU:
+      2.5 ms of the main world a frame; their draw is now expanded on the GPU: MODLOG "The rain's draw")
 - [ ] Read the stock pak directly, so users don't need to extract it first (with the host CLI's first-run setup).
       Its footer is known (an encrypted-index flag, magics 'Atae' and 'kcid', version 5, index offset and size,
       hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold

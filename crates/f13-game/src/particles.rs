@@ -26,6 +26,7 @@ use bevy::mesh::{Indices, MeshVertexAttribute, MeshVertexBufferLayoutRef, Primit
 use bevy::pbr::{ExtendedMaterial, Material, MaterialExtension, MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
+use bevy::render::storage::ShaderBuffer;
 use bevy::shader::ShaderRef;
 use f13_data::particles::{Dist, Emitter, Module, System};
 use std::collections::HashMap;
@@ -42,7 +43,7 @@ impl Plugin for ParticlesPlugin {
         app.add_plugins((MaterialPlugin::<ParticleMaterial>::default(), MaterialPlugin::<MeshParticleMaterial>::default()))
             .add_message::<ParticleActivation>()
             .add_message::<SpawnParticles>()
-            .add_systems(Startup, spawn_level_particles)
+            .add_systems(Startup, (no_sprites, spawn_level_particles))
             .add_systems(Update, test_particles)
             .add_systems(PostUpdate, (rain_drips, rain_grid, rain_mpc_materials, spawn_requested, activate, follow_and_finish, simulate, draw).chain().after(bevy::transform::TransformSystems::Propagate));
     }
@@ -157,20 +158,40 @@ pub struct ParticleMaterial {
     t2: Handle<Image>,
     #[texture(5)]
     t3: Handle<Image>,
+    /// A batch's sprites ([`GpuSprite`]), expanded to their quads by the vertex shader; the others bind [`NO_SPRITES`].
+    #[storage(6, read_only)]
+    sprites: Handle<ShaderBuffer>,
     alpha: AlphaMode,
     distort: bool,
+    /// Drawn from `sprites` (a batch) rather than from its mesh's vertices.
+    stored: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ParticleKey {
     distort: bool,
+    stored: bool,
 }
 
 impl From<&ParticleMaterial> for ParticleKey {
     fn from(m: &ParticleMaterial) -> Self {
-        ParticleKey { distort: m.distort }
+        ParticleKey { distort: m.distort, stored: m.stored }
     }
 }
+
+/// The placeholder sprite buffer the materials drawn from their meshes bind.
+const NO_SPRITES: Handle<ShaderBuffer> = bevy::asset::uuid_handle!("6b1f6a4e-2f0c-4d52-9a35-6f1f0d6f2a11");
+
+fn no_sprites(mut buffers: ResMut<Assets<ShaderBuffer>>) {
+    let _ = buffers.insert(&NO_SPRITES, ShaderBuffer::new(&[0u8; GPU_SPRITE_BYTES], RenderAssetUsages::RENDER_WORLD));
+}
+
+/// One batched sprite as the vertex shader reads it (particles.wgsl `sprite_vertex`), six vec4s: its centre and
+/// rotation; size and pivot; colour; dynamic parameter; velocity direction and alignment (0 facing the view, 1
+/// PSA_Velocity, 2 EPAL_ROTATE_Z); sub-image cell and grid. As UE's sprite vertex factory, each particle goes up once
+/// (FParticleSpriteVertex: position, size, rotation, sub-image, colour) and the GPU expands it to its quad's corners.
+type GpuSprite = [[f32; 4]; 6];
+const GPU_SPRITE_BYTES: usize = std::mem::size_of::<GpuSprite>();
 
 impl Material for ParticleMaterial {
     fn vertex_shader() -> ShaderRef {
@@ -198,12 +219,20 @@ impl Material for ParticleMaterial {
                 ds.depth_write_enabled = Some(false);
             }
         }
-        let l = layout.0.get_layout(&[
-            Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
-            Mesh::ATTRIBUTE_UV_0.at_shader_location(1),
-            Mesh::ATTRIBUTE_COLOR.at_shader_location(2),
-            ATTRIBUTE_DYNAMIC.at_shader_location(3),
-        ])?;
+        let l = if key.bind_group_data.stored {
+            descriptor.vertex.shader_defs.push("PARTICLE_SPRITES".into());
+            if let Some(f) = descriptor.fragment.as_mut() {
+                f.shader_defs.push("PARTICLE_SPRITES".into());
+            }
+            layout.0.get_layout(&[Mesh::ATTRIBUTE_POSITION.at_shader_location(0)])?
+        } else {
+            layout.0.get_layout(&[
+                Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
+                Mesh::ATTRIBUTE_UV_0.at_shader_location(1),
+                Mesh::ATTRIBUTE_COLOR.at_shader_location(2),
+                ATTRIBUTE_DYNAMIC.at_shader_location(3),
+            ])?
+        };
         descriptor.vertex.buffers = vec![l];
         // Sprites have no back (velocity-aligned ones turn either way).
         descriptor.primitive.cull_mode = None;
@@ -383,6 +412,36 @@ fn sprite_quad(e: &EmitterState, p: &Particle, scale: Vec3, view: &SpriteView, l
         dynamic: [dyn_value; 4],
         depth: (center - view.pos).dot(view.fwd),
     }
+}
+
+/// A batched sprite for the GPU ([`GpuSprite`]): what [`sprite_quad`] computes before its corners, and its depth.
+fn gpu_sprite(e: &EmitterState, p: &Particle, scale: Vec3, view: &SpriteView, lock_z: bool) -> (GpuSprite, f32) {
+    let def = &e.def;
+    let [cols, rows] = [def.sub_images[0].max(1), def.sub_images[1].max(1)];
+    let orbit = if p.orbit_offset != Vec3::ZERO {
+        let r = p.orbit_rotation * TAU;
+        Quat::from_euler(EulerRot::ZYX, r.z, r.y, r.x) * p.orbit_offset
+    } else {
+        Vec3::ZERO
+    };
+    let center = to_bevy(p.location + orbit);
+    let size = Vec2::new(p.size.x * scale.x, p.size.y * scale.y) * 0.01;
+    let (align, dir) = match def.screen_alignment.as_str() {
+        "PSA_Velocity" => (1.0, to_bevy(p.velocity).normalize_or_zero()),
+        _ if lock_z => (2.0, Vec3::ZERO),
+        _ => (0.0, Vec3::ZERO),
+    };
+    let image = p.sub_image.max(0.0).floor() as u32 % (cols * rows);
+    let dyn_value = if e.sphere { center.extend(0.5 * size.max_element()).to_array() } else { p.dynamic };
+    let sprite = [
+        center.extend(p.rotation).to_array(),
+        [size.x, size.y, e.pivot.x, e.pivot.y],
+        p.color.to_array(),
+        dyn_value,
+        dir.extend(align).to_array(),
+        [(image % cols) as f32, (image / cols) as f32, cols as f32, rows as f32],
+    ];
+    (sprite, (center - view.pos).dot(view.fwd))
 }
 
 /// One camera-facing quad, world space (Bevy), and its distance along the view.
@@ -873,8 +932,10 @@ impl Materials {
             t2: t2.unwrap_or_else(|| t0.clone()),
             t3: t3.unwrap_or_else(|| t0.clone()),
             t0,
+            sprites: NO_SPRITES,
             alpha,
             distort: false,
+            stored: false,
         })
     }
 }
@@ -2060,7 +2121,9 @@ fn draw(
     mut vis: Query<&mut Visibility>,
     mut slot_xf: Query<&mut Transform>,
     mut point_lights: Query<&mut PointLight>,
-    mut batch_entities: Local<HashMap<AssetId<ParticleMaterial>, (Entity, Handle<Mesh>)>>,
+    mut batch_entities: Local<HashMap<AssetId<ParticleMaterial>, BatchDraw>>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
+    mut materials: ResMut<Assets<ParticleMaterial>>,
     mut mesh_materials: ResMut<Assets<MeshParticleMaterial>>,
     mut slot_meshes: Query<&mut Mesh3d>,
 ) {
@@ -2079,7 +2142,7 @@ fn draw(
     }
     // The batched emitters' quads (world space), built in parallel across the systems.
     let view = SpriteView { pos: cam_pos, right: cam_right, up: cam_up, fwd: cam_fwd };
-    let mut built: bevy::utils::Parallel<Vec<(AssetId<ParticleMaterial>, Quad)>> = bevy::utils::Parallel::default();
+    let mut built: bevy::utils::Parallel<Vec<(AssetId<ParticleMaterial>, (GpuSprite, f32))>> = bevy::utils::Parallel::default();
     systems.par_iter().for_each(|s| {
         let origin = to_bevy(s.location);
         if s.hidden || (s.max_draw > 0.0 && origin.distance(cam_pos) > s.max_draw) {
@@ -2090,7 +2153,7 @@ fn draw(
             let Some(m) = e.material.as_ref().filter(|m| users.get(&m.id()).copied().unwrap_or(0) > 1) else { continue };
             let lock_z = e.def.modules.iter().any(|m| matches!(m, Module::AxisLock(a) if a == "EPAL_ROTATE_Z"));
             let count = e.particles.len().min(e.def.max_draw_count.map_or(usize::MAX, |m| m as usize));
-            out.extend(e.particles[..count].iter().map(|p| (m.id(), sprite_quad(e, p, s.scale, &view, lock_z))));
+            out.extend(e.particles[..count].iter().map(|p| (m.id(), gpu_sprite(e, p, s.scale, &view, lock_z))));
         }
     });
     let mut batches: HashMap<AssetId<ParticleMaterial>, Batch> = HashMap::new();
@@ -2257,12 +2320,11 @@ fn draw(
             }
         }
     }
-    // Each batch's quads by (depth, thread, index) into the threads' lists, gathered after the sort (no copy of the
-    // quads themselves).
-    let locals: Vec<Vec<(AssetId<ParticleMaterial>, Quad)>> = built.iter_mut().map(std::mem::take).collect();
+    // Each batch's sprites by (depth, thread, index) into the threads' lists, gathered after the sort.
+    let locals: Vec<Vec<(AssetId<ParticleMaterial>, (GpuSprite, f32))>> = built.iter_mut().map(std::mem::take).collect();
     let mut keys: Vec<(AssetId<ParticleMaterial>, Vec<(f32, u32, u32)>)> = vec![];
     for (t, list) in locals.iter().enumerate() {
-        for (i, (id, q)) in list.iter().enumerate() {
+        for (i, (id, (_, depth))) in list.iter().enumerate() {
             let k = match keys.iter().position(|k| k.0 == *id) {
                 Some(k) => k,
                 None => {
@@ -2270,60 +2332,88 @@ fn draw(
                     keys.len() - 1
                 }
             };
-            keys[k].1.push((q.depth, t as u32, i as u32));
+            keys[k].1.push((*depth, t as u32, i as u32));
         }
     }
-    // The batches, back to front; a batch with nothing to draw this frame hidden.
+    // The batches, back to front, into their sprite buffers (a fixed capacity, so the GPU buffer and the bind group
+    // stay: Bevy's GpuShaderBuffer rewrites a buffer of the same size in place); a batch with nothing to draw hidden.
     let live: Vec<AssetId<ParticleMaterial>> = batches.keys().copied().collect();
     for (id, b) in batches {
         let mut keyed = keys.iter_mut().find(|k| k.0 == id).map(|k| std::mem::take(&mut k.1)).unwrap_or_default();
         keyed.sort_unstable_by(|a, c| c.0.total_cmp(&a.0));
         let n = keyed.len();
-        let (mut positions, mut uvs, mut colors, mut dynamic, mut indices) = (Vec::with_capacity(n * 4), Vec::with_capacity(n * 4), Vec::with_capacity(n * 4), Vec::with_capacity(n * 4), Vec::with_capacity(n * 6));
-        for (i, q) in keyed.iter().map(|k| &locals[k.1 as usize][k.2 as usize].1).enumerate() {
-            let base = (i * 4) as u32;
-            positions.extend_from_slice(&q.positions);
-            uvs.extend_from_slice(&q.uvs);
-            colors.extend_from_slice(&q.colors);
-            dynamic.extend_from_slice(&q.dynamic);
-            indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
-        }
-        let (entity, mesh) = batch_entities
-            .entry(id)
-            .or_insert_with(|| {
-                let mesh = meshes.add(
-                    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-                        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 4])
-                        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32; 2]; 4])
-                        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; 4])
-                        .with_inserted_attribute(ATTRIBUTE_DYNAMIC, vec![[0.0f32; 4]; 4])
-                        .with_inserted_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3])),
-                );
-                let entity = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(b.material.clone()), Transform::IDENTITY, Visibility::Inherited, NoFrustumCulling, NotShadowCaster, NotShadowReceiver, Name::new("particles batch"))).id();
-                if let Some(d) = &b.distortion {
-                    commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(d.clone()), Transform::default(), Visibility::Inherited, NoFrustumCulling, NotShadowCaster, NotShadowReceiver, ChildOf(entity), Name::new("particles batch distortion")));
+        // A batch's draw: its own copies of the materials, drawn from its sprite buffer, and its quad list; made anew
+        // when it outgrows them (a buffer of another size is a new GPU buffer, which the copies' bind groups only
+        // pick up when they are new assets themselves).
+        let grow = batch_entities.get(&id).is_none_or(|d| n > d.capacity);
+        if grow {
+            let (Some(base), distortion) = (materials.get(&b.material).cloned(), b.distortion.as_ref().and_then(|d| materials.get(d).cloned())) else { continue };
+            let capacity = n.next_power_of_two().max(1024);
+            // (Extraction takes its bytes without copying them; the asset stays for the next frame's.)
+            let sprites = buffers.add(ShaderBuffer::new(&vec![0u8; capacity * GPU_SPRITE_BYTES], RenderAssetUsages::default()));
+            let material = materials.add(ParticleMaterial { sprites: sprites.clone(), stored: true, ..base });
+            let distortion = distortion.map(|d| materials.add(ParticleMaterial { sprites: sprites.clone(), stored: true, ..d }));
+            let mesh = meshes.add(sprite_quads(capacity));
+            match batch_entities.get_mut(&id) {
+                Some(draw) => {
+                    commands.entity(draw.entity).insert((Mesh3d(mesh.clone()), MeshMaterial3d(material)));
+                    if let (Some(child), Some(d)) = (draw.distortion_entity, distortion) {
+                        commands.entity(child).insert((Mesh3d(mesh.clone()), MeshMaterial3d(d)));
+                    }
+                    draw.sprites = sprites;
+                    draw.capacity = capacity;
                 }
-                (entity, mesh)
-            })
-            .clone();
-        if let Some(mut m) = meshes.get_mut(&mesh) {
-            m.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-            m.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-            m.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-            m.insert_attribute(ATTRIBUTE_DYNAMIC, dynamic);
-            m.insert_indices(Indices::U32(indices));
+                None => {
+                    let entity = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material), Transform::IDENTITY, Visibility::Inherited, NoFrustumCulling, NotShadowCaster, NotShadowReceiver, Name::new("particles batch"))).id();
+                    let distortion_entity = distortion.map(|d| commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(d), Transform::default(), Visibility::Inherited, NoFrustumCulling, NotShadowCaster, NotShadowReceiver, ChildOf(entity), Name::new("particles batch distortion"))).id());
+                    batch_entities.insert(id, BatchDraw { entity, distortion_entity, sprites, capacity });
+                }
+            }
         }
-        if let Ok(mut v) = vis.get_mut(entity) {
-            v.set_if_neq(Visibility::Inherited);
+        let Some(draw) = batch_entities.get_mut(&id) else { continue };
+        let mut bytes = vec![0u8; draw.capacity * GPU_SPRITE_BYTES];
+        for (slot, k) in keyed.iter().enumerate() {
+            let sprite = &locals[k.1 as usize][k.2 as usize].1 .0;
+            let at = slot * GPU_SPRITE_BYTES;
+            for (r, row) in sprite.iter().enumerate() {
+                for (c, v) in row.iter().enumerate() {
+                    bytes[at + (r * 4 + c) * 4..at + (r * 4 + c) * 4 + 4].copy_from_slice(&v.to_le_bytes());
+                }
+            }
+        }
+        if let Some(mut buffer) = buffers.get_mut(&draw.sprites) {
+            buffer.data = Some(bytes);
+        }
+        if let Ok(mut v) = vis.get_mut(draw.entity) {
+            v.set_if_neq(if n > 0 { Visibility::Inherited } else { Visibility::Hidden });
         }
     }
-    for (id, (entity, _)) in batch_entities.iter() {
+    for (id, draw) in batch_entities.iter() {
         if !live.contains(id) {
-            if let Ok(mut v) = vis.get_mut(*entity) {
+            if let Ok(mut v) = vis.get_mut(draw.entity) {
                 v.set_if_neq(Visibility::Hidden);
             }
         }
     }
+}
+
+/// A batch's entity (and its distortion pass's), its sprite buffer, and how many sprites it holds.
+struct BatchDraw {
+    entity: Entity,
+    distortion_entity: Option<Entity>,
+    sprites: Handle<ShaderBuffer>,
+    capacity: usize,
+}
+
+/// `count` quads for the vertex shader to place: sprite i's four vertices, their positions (i, corner, 0).
+fn sprite_quads(count: usize) -> Mesh {
+    let indices: Vec<u32> = (0..count as u32).flat_map(|q| {
+        let b = q * 4;
+        [b, b + 2, b + 1, b, b + 3, b + 2]
+    }).collect();
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, (0..count * 4).map(|v| [(v / 4) as f32, (v % 4) as f32, 0.0]).collect::<Vec<_>>())
+        .with_inserted_indices(Indices::U32(indices))
 }
 
 /// TParticleSimulationPS<PCM_DepthBuffer>'s collision (global shader cache), for one particle this tick: radius

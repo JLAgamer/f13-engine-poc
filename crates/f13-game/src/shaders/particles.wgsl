@@ -40,7 +40,17 @@ struct ParticleParams {
 @group(#{MATERIAL_BIND_GROUP}) @binding(3) var t1: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(4) var t2: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(5) var t3: texture_2d<f32>;
+// A batch's sprites (particles.rs GpuSprite: six vec4s each); a placeholder for the others.
+@group(#{MATERIAL_BIND_GROUP}) @binding(6) var<storage, read> sprites: array<vec4<f32>>;
 
+#ifdef PARTICLE_SPRITES
+struct Vertex {
+    @builtin(instance_index) instance_index: u32,
+    // (sprite, corner, 0): the batch's quad list carries them (vertex_index leaves out the mesh's base vertex in
+    // indirect draws on some backends).
+    @location(0) position: vec3<f32>,
+}
+#else
 struct Vertex {
     @builtin(instance_index) instance_index: u32,
     @location(0) position: vec3<f32>,
@@ -48,6 +58,7 @@ struct Vertex {
     @location(2) color: vec4<f32>,
     @location(3) dynamic: vec4<f32>,
 }
+#endif
 
 struct VertexOutput {
     @builtin(position) clip: vec4<f32>,
@@ -60,12 +71,52 @@ struct VertexOutput {
 @vertex
 fn vertex(v: Vertex) -> VertexOutput {
     var out: VertexOutput;
+#ifdef PARTICLE_SPRITES
+    // A batched sprite's corner, as particles.rs sprite_quad places it on the CPU for the unbatched emitters: its
+    // centre, size x (corner + pivot) along the alignment's axes turned by its rotation; its sub-image's cell.
+    let base = u32(v.position.x) * 6u;
+    let k = u32(v.position.y);
+    let corner = vec2(select(0.0, 1.0, k == 1u || k == 2u), select(0.0, 1.0, k >= 2u));
+    let a = sprites[base];
+    let b = sprites[base + 1u];
+    let dir = sprites[base + 4u];
+    let cell = sprites[base + 5u];
+    let center = a.xyz;
+    let view_right = view.world_from_view[0].xyz;
+    let view_up = view.world_from_view[1].xyz;
+    let to_view = view.world_position - center;
+    var right = view_right;
+    var up = view_up;
+    if dir.w == 1.0 {
+        // PSA_Velocity: along its velocity, turned to the camera.
+        up = select(view_up, dir.xyz, dot(dir.xyz, dir.xyz) > 0.0);
+        let r = cross(up, to_view);
+        right = select(view_right, normalize(r), dot(r, r) > 1e-12);
+    } else if dir.w == 2.0 {
+        // EPAL_ROTATE_Z: upright, turned about the world's up to face the camera.
+        up = vec3(0.0, 1.0, 0.0);
+        let r = cross(to_view, up);
+        right = select(view_right, normalize(r), dot(r, r) > 1e-12);
+    }
+    let s = sin(a.w);
+    let c = cos(a.w);
+    let r = right * c + up * s;
+    let u = up * c - right * s;
+    let o = corner + b.zw;
+    let world = center + r * (o.x * b.x) - u * (o.y * b.y);
+    out.clip = position_world_to_clip(world);
+    out.world_position = world;
+    out.uv = (cell.xy + corner) / cell.zw;
+    out.color = sprites[base + 2u];
+    out.dynamic = sprites[base + 3u];
+#else
     let world = (get_world_from_local(v.instance_index) * vec4(v.position, 1.0)).xyz;
     out.clip = position_world_to_clip(world);
     out.world_position = world;
     out.uv = v.uv;
     out.color = v.color;
     out.dynamic = v.dynamic;
+#endif
     return out;
 }
 
