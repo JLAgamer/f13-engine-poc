@@ -146,7 +146,8 @@ enum Target {
     /// A cabinet's drawer (cabinets.rs).
     Cabinet(Entity, usize),
     Repair(Entity, usize),
-    Seat(Entity),
+    /// A car's seat: the driver's (none) or a passenger's.
+    Seat(Entity, Option<usize>),
     Door(Entity),
     Window(Entity),
     Hide(Entity),
@@ -760,7 +761,7 @@ fn choose_target(
     items: Query<(Entity, &Item, &GlobalTransform, Option<&InCabinet>), Without<Carried>>,
     carried: Query<&Item, With<Carried>>,
     cabinets: Query<(Entity, &Cabinet, &GlobalTransform)>,
-    vehicles: Query<(Entity, &Vehicle, &GlobalTransform)>,
+    (vehicles, seated): (Query<(Entity, &Vehicle, &GlobalTransform)>, Query<&Driving>),
     doors: Query<(Entity, &Door, &GlobalTransform)>,
     windows: Query<(Entity, &Window, &GlobalTransform)>,
     barricades: Query<&Barricade>,
@@ -860,8 +861,17 @@ fn choose_target(
             }
         }
         if v.repaired() {
-            // The seat is an SCInteractComponent like any other (its range test and location are the base's).
-            consider(e, "DriverSeat", gxf.transform_point(v.driver_seat), v.seat_reach, Target::Seat(e));
+            // The seats are SCInteractComponents like any other (their range test and location are the base's); a
+            // taken one isn't offered.
+            let free = |seat: Option<usize>| !seated.iter().any(|d| d.vehicle == e && d.seat == seat);
+            if free(None) {
+                consider(e, "DriverSeat", gxf.transform_point(v.driver_seat), v.seat_reach, Target::Seat(e, None));
+            }
+            for (i, s) in v.passengers.iter().enumerate() {
+                if free(Some(i)) {
+                    consider(e, "PassengerSeat", gxf.transform_point(s.at), s.reach, Target::Seat(e, Some(i)));
+                }
+            }
         }
     }
     for (e, d, gxf) in &doors {
@@ -1348,11 +1358,15 @@ fn act(
             }
             interaction.target = None;
         }
-        Target::Seat(v) if pads.just_pressed(player_entity, Button::Interact) => {
-            let d = Driving::enter(v);
+        Target::Seat(v, seat) if pads.just_pressed(player_entity, Button::Interact) => {
+            let right = seat.and_then(|i| vehicles.get(v).ok().and_then(|veh| veh.passengers.get(i).map(|s| s.right))).unwrap_or(false);
+            let d = match seat {
+                Some(i) => Driving::ride(v, i, right),
+                None => Driving::enter(v),
+            };
             let take = d.seat_move.map(|m| m.take()).unwrap_or(crate::vehicle::DRIVE_TAKE);
             commands.entity(player_entity).remove::<RepairAnim>().insert((d, crate::character::PlayAction(take.into())));
-            info!("got in the driver's seat");
+            info!("got in the {}", if seat.is_some() { "passenger's seat" } else { "driver's seat" });
             interaction.target = None;
         }
         _ => {}
@@ -1628,7 +1642,8 @@ fn update_prompt(
                     }
                 }
             }
-            Some(Target::Seat(_)) => lines.push("[E] Get in (driver)".into()),
+            Some(Target::Seat(_, None)) => lines.push("[E] Get in (driver)".into()),
+            Some(Target::Seat(_, Some(_))) => lines.push("[E] Get in (passenger)".into()),
             Some(Target::Hide(_)) => lines.push("[E] Hide".into()),
             Some(Target::PhoneBox(b)) => {
                 let fixing = phone_boxes.get(b).is_ok_and(|b| b.repaired);

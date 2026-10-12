@@ -43,6 +43,8 @@ const BLOCK_HALF_WIDTH_M: f32 = 0.9;
 #[derive(Component)]
 pub struct Driving {
     pub vehicle: Entity,
+    /// A passenger seat (its index in the car's), or none: the driver's.
+    pub seat: Option<usize>,
     /// Holding the ignition (the starter interaction).
     pub starting: Option<HoldInteraction>,
     /// Getting in or out: her take carrying her between the door and the seat.
@@ -52,7 +54,12 @@ pub struct Driving {
 impl Driving {
     /// Getting into `vehicle`'s driver's seat (her enter take).
     pub fn enter(vehicle: Entity) -> Self {
-        Driving { vehicle, starting: None, seat_move: Some(SeatMove { exiting: false, t: 0.0 }) }
+        Driving { vehicle, seat: None, starting: None, seat_move: Some(SeatMove { exiting: false, right: false, t: 0.0 }) }
+    }
+
+    /// Getting into passenger seat `seat` (her enter take on its side).
+    pub fn ride(vehicle: Entity, seat: usize, right: bool) -> Self {
+        Driving { vehicle, seat: Some(seat), starting: None, seat_move: Some(SeatMove { exiting: false, right, t: 0.0 }) }
     }
 }
 
@@ -61,20 +68,39 @@ impl Driving {
 #[derive(Clone, Copy, Debug)]
 pub struct SeatMove {
     pub exiting: bool,
+    /// On the car's right (a right-hand passenger seat).
+    pub right: bool,
     t: f32,
 }
 
 impl SeatMove {
     pub fn take(self) -> &'static str {
-        if self.exiting { EXIT_TAKE } else { ENTER_TAKE }
+        match (self.exiting, self.right) {
+            (false, false) => ENTER_TAKE,
+            (true, false) => EXIT_TAKE,
+            (false, true) => ENTER_RIGHT_TAKE,
+            (true, true) => EXIT_RIGHT_TAKE,
+        }
     }
 }
 
 const ENTER_TAKE: &str = "f_normal_stand_car_enter_left";
 const EXIT_TAKE: &str = "f_normal_sit_car_exit_left";
+/// The passenger's side's (the counselor's AM_normal_stand_car_enter_right / AM_normal_sit_car_exit_right).
+const ENTER_RIGHT_TAKE: &str = "f_normal_stand_car_enter_right";
+const EXIT_RIGHT_TAKE: &str = "f_normal_sit_car_exit_right";
+/// Her take sitting as a passenger.
+pub const RIDE_TAKE: &str = "f_normal_sit_car_ride_idle";
 /// Her take while she drives, and while she steers left or right.
 pub const DRIVE_TAKE: &str = "f_normal_sit_car_drive_forward";
 const STEER_TAKES: [&str; 2] = ["f_normal_sit_car_drive_forward_turnleft", "f_normal_sit_car_drive_forward_turnright"];
+
+/// Whether `at` is in the car's way: in its KillerFront (moving forward) or KillerRear (backing) box.
+fn in_box(rot: Quat, pos: Vec3, speed: f32, at: Vec3) -> bool {
+    let local = rot.inverse() * (at - pos);
+    let ahead = local.x * speed.signum();
+    speed != 0.0 && ahead > 0.0 && ahead < HALF_LENGTH_M + BLOCK_DEPTH_M && local.z.abs() < BLOCK_HALF_WIDTH_M && local.y.abs() < 2.0
+}
 
 /// The counselor has escaped (and how); the match is over for her.
 #[derive(Component)]
@@ -103,14 +129,15 @@ fn drive(
     mut ray_cast: MeshRayCast,
     vehicle_parts: Query<&VehiclePart>,
     player_parts: Query<(), With<PlayerPart>>,
-    jasons: Query<(Entity, &Transform), (With<crate::jason::Jason>, Without<Vehicle>)>,
+    (jasons, walkers): (Query<(Entity, &Transform), (With<crate::jason::Jason>, Without<Vehicle>)>, Query<&Transform, (With<Player>, Without<Driving>, Without<Vehicle>, Without<crate::jason::Jason>)>),
     (collision, dynamic, parents): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, Query<&ChildOf>),
     (no_vehicle, not_vehicle): (Query<(), With<crate::collision::NoVehicle>>, Option<Res<crate::collision::NotVehicle>>),
 ) {
     let dt = time.delta_secs();
     for (driver, mut player, mut inv, p, escaped) in &mut drivers {
     let (player, inv) = (&mut *player, &mut *inv);
-    if player.seat_move.is_some() {
+    // A passenger rides; the driver drives.
+    if player.seat_move.is_some() || player.seat.is_some() {
         continue;
     }
     let Ok((mut v, mut xf)) = vehicles.get_mut(player.vehicle) else { continue };
@@ -225,6 +252,12 @@ fn drive(
             car.velocity = Vec3::ZERO;
             car.angular_velocity = Vec3::ZERO;
         }
+        // A counselor on foot there stops it too (PLACEHOLDER: PhysX's car meets her kinematic capsule, which it can't
+        // push; SCDriveableVehicle::OnVehicleHit leaves characters out, so there's no damage).
+        if walkers.iter().any(|w| in_box(rot, pos, speed, w.translation)) {
+            car.velocity = Vec3::ZERO;
+            car.angular_velocity = Vec3::ZERO;
+        }
         xf.translation = to_bevy(car.position);
         xf.rotation = bevy_quat(car.rotation);
         v.speed = car.forward_speed();
@@ -285,6 +318,10 @@ fn drive(
             v.speed = 0.0;
             continue;
         }
+        if walkers.iter().any(|w| in_box(xf.rotation, xf.translation, v.speed, w.translation)) {
+            v.speed = 0.0;
+            continue;
+        }
     }
     let mut pos = xf.translation + step;
 
@@ -340,9 +377,16 @@ fn follow_vehicle(
     for (pe, mut d, mut xf, action) in &mut drivers {
     let (d, xf) = (&mut *d, &mut *xf);
     let Ok((v, vxf)) = vehicles.get(d.vehicle) else { continue };
-    let seat = *vxf * v.sitting * Transform::from_xyz(0.0, -crate::player::CAPSULE_HALF_HEIGHT_M, 0.0).with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2));
+    let sitting = d.seat.and_then(|i| v.passengers.get(i)).map_or(v.sitting, |s| s.sitting);
+    let seat = *vxf * sitting * Transform::from_xyz(0.0, -crate::player::CAPSULE_HALF_HEIGHT_M, 0.0).with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2));
     let Some(m) = d.seat_move.as_mut() else {
         *xf = seat;
+        if d.seat.is_some() {
+            if action.is_none_or(|a| a.0 != RIDE_TAKE) {
+                commands.entity(pe).insert(crate::character::PlayAction(RIDE_TAKE.into()));
+            }
+            continue;
+        }
         // Steering: her turn take while the wheel is (mostly) over.
         let take = match v.steer {
             s if s < -0.5 => STEER_TAKES[0],
@@ -378,7 +422,7 @@ fn follow_vehicle(
     } else {
         d.seat_move = None;
         *xf = seat;
-        commands.entity(pe).insert(crate::character::PlayAction(DRIVE_TAKE.into()));
+        commands.entity(pe).insert(crate::character::PlayAction(if d.seat.is_some() { RIDE_TAKE } else { DRIVE_TAKE }.into()));
     }
     }
 }
@@ -398,7 +442,8 @@ fn exit_vehicle(
         if v.speed.abs() > 100.0 || d.seat_move.is_some() {
             continue;
         }
-        let m = SeatMove { exiting: true, t: 0.0 };
+        let right = d.seat.and_then(|i| v.passengers.get(i)).is_some_and(|s| s.right);
+        let m = SeatMove { exiting: true, right, t: 0.0 };
         d.seat_move = Some(m);
         d.starting = None;
         commands.entity(entity).insert(crate::character::PlayAction(m.take().into()));

@@ -1617,7 +1617,8 @@ pub(crate) fn update_jason(
     let Some(Ok((pe, mut p, mut pxf, in_car, mut hiding, blocking))) = target.0.map(|t| players.get_mut(t)) else { return };
     let driving = in_car.is_some();
     // Her car's driver door (the game's DriverGrab context kill, where he stands to pull the driver out) and its speed.
-    let car_door = in_car.and_then(|d| vehicles.get(d.vehicle).ok()).map(|(v, g)| {
+    // (The driver's door: only she is pulled out.)
+    let car_door = in_car.filter(|d| d.seat.is_none()).and_then(|d| vehicles.get(d.vehicle).ok()).map(|(v, g)| {
         let at = v.driver_grab.map_or_else(
             || {
                 let seat = v.driver_seat;

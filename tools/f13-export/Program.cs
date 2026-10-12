@@ -1583,13 +1583,15 @@ static class Mvp
         "/Game/Characters/Counselors/Base/Female/Animation/Locomotion/Stop/Run/f_normal_stand_run_forward_stop_rf",
         "/Game/Characters/Counselors/Base/Female/Animation/Locomotion/Stop/Sprint/f_normal_stand_sprint_forward_stop_lf",
         "/Game/Characters/Counselors/Base/Female/Animation/Locomotion/Stop/Sprint/f_normal_stand_sprint_forward_stop_rf",
-        // In the car: sitting (driving, steering, idle), getting in and out on the driver's side.
+        // In the car: sitting (driving, steering, idle), getting in and out on the driver's side and the passenger's.
         "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_drive_forward",
         "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_drive_forward_turnleft",
         "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_drive_forward_turnright",
         "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_ride_idle",
         "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_stand_car_enter_left",
         "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_exit_left",
+        "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_stand_car_enter_right",
+        "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_exit_right",
         // The barricade: pulling it down and pushing it up (Counselor_Barricade_Pulldown / PushUp; their UseBarricade
         // driver windows).
         $"{Shared}/Interaction/Barricade/AM_normal_stand_barricade_pulldown",
@@ -1689,8 +1691,8 @@ static class Mvp
     static string[] JasonKills => [.. PickaxeKills.Select(k => $"{JasonAnim}/Cinematic/AM_cinematic_{k}"), .. PlacedKillsHis.Select(m => $"{JasonAnim}/Cinematic/{m}"), $"{JasonAnim}/Cinematic/AM_Jason_cinematic_hand_choke"];
     const string JasonStun = $"{JasonAnim}/Deaths_HitReacts_Stuns";
     public static string[] PairedKills => [.. CounselorKills, .. JasonKills];
-    /// Getting in and out of the driver's seat (played from the seat's socket).
-    static string[] CarSeat => ["/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_stand_car_enter_left", "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_exit_left"];
+    /// Getting in and out of the driver's seat and the passenger's (played from the seat's socket).
+    static string[] CarSeat => ["/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_stand_car_enter_left", "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_exit_left", "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_stand_car_enter_right", "/Game/Characters/Counselors/Base/Female/Animation/Car/f_normal_sit_car_exit_right"];
     /// The driver pulled out of the car: her side and his (paired, played from DriverGrab).
     static string[] CarGrab => ["/Game/Characters/Counselors/Base/Shared/Car/AM_normal_stand_car_grab_left", $"{JasonAnim}/Car/AM_normal_stand_car_grab_left"];
     /// Through a window: her climb, and the dive and its landing (played from the window's special move spots).

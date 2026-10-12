@@ -60,8 +60,6 @@ Steps (lightyear 0.30 for the netcode):
       the spectator's HUD (SpectatorHUDWidget) and its unfreeze wait
 
 Moved from Milestone 2 (they need more than one counselor):
-- [ ] Fear events near friendlies and corpses (other counselors)
-- [ ] Car passengers, and the car running counselors over
 - [ ] The lobby (with the match's badges: their award sites and classes are read (MODLOG); the game shows them in its
       SCMatchEndLobbyWidget), the Tommy Jarvis timer and Jason dying (killing him needs Tommy and other counselors)
 

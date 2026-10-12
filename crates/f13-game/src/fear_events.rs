@@ -9,11 +9,15 @@
 //! - Jason Spotted while he's in her view (`FUN_1402ec1d0`: within her MaxVisibilityDistance, an unblocked line
 //!   from the camera to him, and more than half the view's 90 degrees, in cm, ahead along the camera; the game
 //!   compares the unnormalised offset, so that's "in front of the camera").
+//! - Near Friendly while another counselor (IsFriendly 0x1402e3470: the same side, alive or not) is within her
+//!   MaxNearbyDistance (SCCharacter's constructor: 1500 cm) and MaxVisibilityDistance (bFriendlysNearby, FUN_1402ec1d0).
+//! - Corpse Spotted when a dead counselor comes into her view (the same sight test as Jason's; OnCharacterInView
+//!   FUN_1403c05e0 pushes it and counts, +0x16d4); one going out of view while dead counts down, popping it at 0
+//!   (FUN_1403c07e0).
 //! - Hidden from going into a hiding spot until she comes out; Grab while Jason holds her.
 //! - Each item she picks up pushes its PickedUpFearEvent (weapons: PickedUpWeaponFearEvent); dropping it pops it.
 //!
-//! Not pushed yet: In Water (swimming isn't in), Near Friendly and Corpse Spotted (no other counselors), Blackout
-//! (power cuts), the custom match option's max fear at the start.
+//! Not pushed yet: the custom match option's max fear at the start.
 
 use bevy::prelude::*;
 use f13_bevy::{CounselorFear, CounselorStats, F13GameplayPlugin};
@@ -90,6 +94,9 @@ pub(crate) struct Pushed {
     hidden: bool,
     grabbed: bool,
     items: Vec<(Entity, String)>,
+    /// The other counselors in her view, and the dead ones counted in (CorpseSpotted, +0x16d4).
+    in_view: Vec<Entity>,
+    corpses: i32,
 }
 
 pub struct FearEventsPlugin {
@@ -181,6 +188,8 @@ fn push_events(
     (time, mut next_log, power): (Res<Time>, Local<f32>, Option<Res<crate::power::PowerGrids>>),
 ) {
     let (Some(t), Some(s)) = (tuning, surroundings) else { return };
+    // Every counselor: where her capsule's centre is, and whether she's alive (for the others' tests).
+    let counselors: Vec<(Entity, Vec3, bool)> = players.iter().map(|(e, p, xf, ..)| (e, xf.translation + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M, p.counselor.alive())).collect();
     let log = time.elapsed_secs() >= *next_log;
     if log {
         *next_log = time.elapsed_secs() + 5.0;
@@ -220,7 +229,9 @@ fn push_events(
     set("IndoorFearEvent", s.indoors(xf.translation), 0.0);
     // In water: the water volume at her (CurrentWaterVolume; she swims there).
     set("InWaterFearEvent", p.counselor.stance == f13_core::counselor::Stance::Swimming, 0.0);
-    set("NearFriendlyFearEvent", false, 0.0);
+    let visibility_cm = cv("MaxVisibilityDistance", 6000.0);
+    let near = counselors.iter().any(|(e, c, _)| *e != pe && c.distance(centre) * 100.0 < MAX_NEARBY_DISTANCE_CM.min(visibility_cm));
+    set("NearFriendlyFearEvent", near, 0.0);
     // A blackout: inside a power grid's volume while its power is out (SCPowerGridVolume FUN_140422a30 pushes its fear
     // event on the counselors overlapping it as the power goes, pops it as it comes back; the event, unset in the
     // map, taken as BlackoutFearEvent).
@@ -254,6 +265,30 @@ fn push_events(
         set("JasonSpottedFearEvent", in_view, 0.0);
         pushed.spotted = in_view;
     }
+    // The other counselors in her view: a dead one coming in is a corpse spotted; one going out while dead counts
+    // down.
+    for &(e, c, alive) in counselors.iter().filter(|(e, ..)| *e != pe) {
+        let seen = view.is_some_and(|(eye, forward)| {
+            c.distance(centre) * 100.0 < visibility_cm && (c - eye).dot(forward) * 100.0 >= VIEW_FOV_DEG * 0.5 && f13_core::collision::segment_hit(&collision.with(&dynamic), eye, c, 4.0).is_none()
+        });
+        let was = pushed.in_view.contains(&e);
+        if seen && !was {
+            pushed.in_view.push(e);
+            if !alive {
+                debug!("fear: a dead counselor in view");
+                set("CorpseSpottedFearEvent", true, 0.0);
+                pushed.corpses += 1;
+            }
+        } else if !seen && was {
+            pushed.in_view.retain(|x| *x != e);
+            if !alive {
+                pushed.corpses -= 1;
+                if pushed.corpses == 0 {
+                    set("CorpseSpottedFearEvent", false, 0.0);
+                }
+            }
+        }
+    }
 
     let hidden = hiding.is_some_and(|h| h.phase != HidePhase::Exiting);
     if hidden != pushed.hidden {
@@ -284,6 +319,9 @@ fn push_events(
     }
     }
 }
+
+/// SCCharacter's MaxNearbyDistance (its constructor; no Blueprint changes it), cm.
+const MAX_NEARBY_DISTANCE_CM: f32 = 1500.0;
 
 /// The view's field of view the game passes to its sight test (a constant for the counselor's view).
 const VIEW_FOV_DEG: f32 = 90.0;

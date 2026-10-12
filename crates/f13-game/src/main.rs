@@ -113,6 +113,8 @@ struct Args {
     near_car: bool,
     bot_escape: bool,
     bot_escape4: bool,
+    /// --bot-passenger (with --counselors 2): the escape bot drives with the other counselor as its passenger.
+    bot_passenger: bool,
     bot_heal: bool,
     bot_drop: bool,
     bot_dodge: bool,
@@ -197,6 +199,7 @@ fn parse_args() -> Args {
     let mut near_car = false;
     let mut bot_escape = false;
     let mut bot_escape4 = false;
+    let mut bot_passenger = false;
     let mut bot_heal = false;
     let mut bot_drop = false;
     let mut bot_net = false;
@@ -264,6 +267,7 @@ fn parse_args() -> Args {
             "--near-car" => near_car = true,
             "--bot-escape" => bot_escape = true,
             "--bot-escape4" => (bot_escape, bot_escape4) = (true, true),
+            "--bot-passenger" => (bot_escape, bot_passenger) = (true, true),
             "--bot-heal" => bot_heal = true,
             "--bot-drop" => bot_drop = true,
             "--bot-net" => bot_net = true,
@@ -372,7 +376,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { net, bot_net, bot_spectate, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, camera, round_time, flashlight, rain }
+    Args { net, bot_net, bot_spectate, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_passenger, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, camera, round_time, flashlight, rain }
 }
 
 #[derive(Resource)]
@@ -544,6 +548,9 @@ fn main() {
             app.add_plugins(bot::BotPlugin(bot::Goal::Escape));
             if args.bot_escape4 {
                 app.insert_resource(bot::FourSeat);
+            }
+            if args.bot_passenger {
+                app.insert_resource(bot::Passenger).add_systems(Update, bot::seat_passenger);
             }
         } else if args.bot_car_grab {
             app.add_plugins(bot::BotPlugin(bot::Goal::CarGrab));

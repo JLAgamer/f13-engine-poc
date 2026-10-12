@@ -217,6 +217,8 @@ pub struct Vehicle {
     pub seat_reach: f32,
     /// Where she sits driving (Bevy local): the driver's seat's AttachSocket on the car's mesh.
     pub sitting: Transform,
+    /// Its passenger seats (the SCVehicleSeatComponents that aren't the driver's).
+    pub passengers: Vec<Seat>,
     /// Where Jason stands to pull the driver out (its DriverGrab context kill, Bevy local).
     pub driver_grab: Option<Transform>,
     pub started: bool,
@@ -232,6 +234,16 @@ pub struct Vehicle {
     /// Its PhysX setup (f13-core vehicle_px), and the car simulated from it once it's first driven.
     pub px: Option<f13_core::vehicle_px::CarSetup>,
     pub sim: Option<f13_core::vehicle_px::Car>,
+}
+
+/// A passenger seat: its interact point (Bevy local) and range (cm), where she sits (its AttachSocket on the car's
+/// mesh), and whether it's on the car's right (its socket's side: her right-hand enter and exit takes).
+#[derive(Debug, Clone)]
+pub struct Seat {
+    pub at: Vec3,
+    pub reach: f32,
+    pub sitting: Transform,
+    pub right: bool,
 }
 
 impl Vehicle {
@@ -750,6 +762,21 @@ fn spawn_props(
                 ignition,
                 driver_seat: seat.map_or(Vec3::ZERO, |c| local(c).translation),
                 seat_reach: seat.map_or(100.0, |c| reach(c, 100.0)),
+                passengers: info
+                    .components
+                    .iter()
+                    .filter(|c| classes.is_child_of(&c.kind, "SCVehicleSeatComponent") && !c.props["bIsDriverSeat"].as_bool().unwrap_or(false))
+                    .map(|s| {
+                        let socket = s.props["AttachSocket"].as_str().unwrap_or("");
+                        let sitting = info
+                            .components
+                            .iter()
+                            .find(|c| Some(&c.name) == s.parent.as_ref())
+                            .and_then(|mesh| Some(local(mesh) * to_transform(mesh.sockets.get(socket)?)))
+                            .unwrap_or_else(|| Transform::from_translation(local(s).translation));
+                        crate::props::Seat { at: local(s).translation, reach: reach(s, 100.0), sitting, right: socket.ends_with('R') }
+                    })
+                    .collect(),
                 driver_grab: info.components.iter().find(|c| c.name == "DriverGrab").map(local),
                 sitting: seat
                     .and_then(|s| {

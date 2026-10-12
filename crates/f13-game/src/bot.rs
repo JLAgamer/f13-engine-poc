@@ -86,6 +86,36 @@ pub struct BotPlugin(pub Goal);
 #[derive(Resource)]
 pub struct FourSeat;
 
+/// The escape bot drives the other counselor as its passenger (`--bot-passenger`).
+#[derive(Resource)]
+pub struct Passenger;
+
+/// `--bot-passenger`: once she's in the driver's seat, the other counselor gets into the first passenger seat; she must
+/// escape with the car too.
+pub(crate) fn seat_passenger(
+    mut commands: Commands,
+    mut bot: ResMut<Bot>,
+    driver: Query<&Driving, With<crate::controls::LocalPlayer>>,
+    others: Query<(Entity, Option<&Driving>, Has<Escaped>), (With<Player>, Without<crate::controls::LocalPlayer>)>,
+    vehicles: Query<&Vehicle>,
+) {
+    let Ok(d) = driver.single() else { return };
+    let Some((e, seated, escaped)) = others.iter().next() else { return };
+    if seated.is_none() && !escaped && d.seat_move.is_none() {
+        let Ok(v) = vehicles.get(d.vehicle) else { return };
+        let Some(seat) = v.passengers.first() else {
+            error!("bot: the car has no passenger seat");
+            return;
+        };
+        info!("bot: the other counselor gets in as the passenger");
+        commands.entity(e).insert((Driving::ride(d.vehicle, 0, seat.right), crate::character::PlayAction("f_normal_stand_car_enter_right".into())));
+    }
+    if escaped && !bot.jason_shots.contains(&"passenger") {
+        info!("bot: the passenger escaped too");
+        bot.jason_shots.push("passenger");
+    }
+}
+
 impl Plugin for BotPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Bot { goal: self.0, ..default() })
@@ -300,12 +330,12 @@ fn run_bot(
         Option<ResMut<crate::match_flow::GameMatch>>,
         Query<&Transform, (With<crate::items::ArmedTrap>, Without<Player>, Without<Vehicle>)>,
     ),
-    (mut exit, play, fuse_boxes, grids, four_seat): (
+    (mut exit, play, fuse_boxes, grids, (four_seat, passenger)): (
         MessageWriter<AppExit>,
         Option<Res<crate::jason_player::PlayJason>>,
         Query<(Entity, &crate::power::FuseBox, &Transform), (Without<Player>, Without<Vehicle>)>,
         Option<Res<crate::power::PowerGrids>>,
-        Option<Res<FourSeat>>,
+        (Option<Res<FourSeat>>, Option<Res<Passenger>>),
     ),
     (collision, dynamic, (mut phone_boxes, mut phones, arrived, police_cars, jason_entities, placed_kills), water, navmesh, moving): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<Res<crate::police::PoliceArrived>>, Query<&Transform, (With<crate::police::PoliceCar>, Without<Player>, Without<Vehicle>)>, Query<Entity, With<crate::jason::Jason>>, Query<(Entity, &crate::placed_kills::PlacedKill)>), Option<Res<crate::water::Water>>, Option<Res<crate::navigation::Navmesh>>, Query<(), (With<Player>, Or<(With<crate::interact::WindowMove>, With<crate::interact::MoveToSpot>, With<crate::interact::DoorMove>)>)>),
 ) {
@@ -725,7 +755,7 @@ fn run_bot(
             let Ok((_, v, vxf, _)) = vehicles.get(bot.vehicle.unwrap()) else { return };
             let seat = vxf.transform_point(v.driver_seat);
             let out = (seat - vxf.translation()).with_y(0.0).normalize_or_zero();
-            place(pxf, seat + out * 0.6 - Vec3::Y * 0.9);
+            place(pxf, seat + out * 0.3 - Vec3::Y * 0.9);
             if bot.timer > 0.3 {
                 keys.press(KeyCode::KeyE);
                 bot.timer = 0.0;
@@ -1783,7 +1813,7 @@ fn run_bot(
             }
             if bot.timer > if bot.goal == Goal::Jason { 4.0 } else { 2.0 } {
                 let ok = match bot.goal {
-                    Goal::Escape => escaped.is_some(),
+                    Goal::Escape => escaped.is_some() && (passenger.is_none() || bot.jason_shots.contains(&"passenger")),
                     // With Jason about, the police must have shot him.
                     Goal::Police => escaped.is_some() && (jasons.is_empty() || bot.jason_shots.contains(&"police stun")),
                     Goal::Heal => p.counselor.health >= 100.0,
