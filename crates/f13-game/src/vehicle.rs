@@ -25,6 +25,7 @@ use crate::props::Item;
 use crate::props::{EscapeZone, Vehicle, VehiclePart};
 use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings};
 use bevy::prelude::*;
+use crate::controls::Button;
 
 /// The game's PhysicsSettings (DefaultEngine.ini): MaxSubstepDeltaTime and MaxSubsteps (bSubstepping on).
 const PHYSICS_MAX_SUBSTEP_DT: f32 = 0.05;
@@ -75,8 +76,8 @@ const EXIT_TAKE: &str = "f_normal_sit_car_exit_left";
 pub const DRIVE_TAKE: &str = "f_normal_sit_car_drive_forward";
 const STEER_TAKES: [&str; 2] = ["f_normal_sit_car_drive_forward_turnleft", "f_normal_sit_car_drive_forward_turnright"];
 
-/// The counselor has escaped; the match is over for them.
-#[derive(Resource)]
+/// The counselor has escaped (and how); the match is over for her.
+#[derive(Component)]
 pub struct Escaped {
     pub how: String,
 }
@@ -92,12 +93,11 @@ impl Plugin for VehiclePlugin {
 #[allow(clippy::too_many_arguments)]
 fn drive(
     mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
+    pads: crate::controls::Pads,
     time: Res<Time>,
-    escaped: Option<Res<Escaped>>,
     tuning: Res<PlayerTuning>,
     mut rng: ResMut<crate::GameRng>,
-    mut player: Single<(Entity, &mut Driving, &mut Inventory, &Player)>,
+    mut drivers: Query<(Entity, &mut Driving, &mut Inventory, &Player, Option<&Escaped>)>,
     items: Query<&Item>,
     mut vehicles: Query<(&mut Vehicle, &mut Transform)>,
     mut ray_cast: MeshRayCast,
@@ -108,16 +108,17 @@ fn drive(
     (no_vehicle, not_vehicle): (Query<(), With<crate::collision::NoVehicle>>, Option<Res<crate::collision::NotVehicle>>),
 ) {
     let dt = time.delta_secs();
-    let (driver, ref mut player, ref mut inv, p) = *player;
+    for (driver, mut player, mut inv, p, escaped) in &mut drivers {
+    let (player, inv) = (&mut *player, &mut *inv);
     if player.seat_move.is_some() {
-        return;
+        continue;
     }
-    let Ok((mut v, mut xf)) = vehicles.get_mut(player.vehicle) else { return };
+    let Ok((mut v, mut xf)) = vehicles.get_mut(player.vehicle) else { continue };
     if !v.started {
         let has_keys = inv.hand.iter().chain(inv.pockets.iter()).any(|&e| items.get(e).is_ok_and(|i| v.ignition.contains(&i.class)));
-        if escaped.is_some() || !has_keys || !keys.pressed(KeyCode::KeyE) {
+        if escaped.is_some() || !has_keys || !pads.pressed(driver, Button::Interact) {
             player.starting = None;
-            return;
+            continue;
         }
         let s = &tuning.vehicle_start;
         let hold = player.starting.get_or_insert_with(|| {
@@ -138,28 +139,28 @@ fn drive(
             commands.trigger(crate::audio::ActorSound { actor: driver, prop: "VO:AppliedLastPart" });
             commands.trigger(crate::audio::ActorLoop { actor: player.vehicle, prop: "EngineCue" });
         }
-        return;
+        continue;
     }
     let (mut throttle, mut steer) = (0.0f32, 0.0f32);
-    if keys.just_pressed(KeyCode::KeyH) {
+    if pads.just_pressed(driver, Button::Horn) {
         commands.trigger(crate::audio::ActorSound { actor: player.vehicle, prop: "HornAudioComponent" });
     }
     if escaped.is_none() {
-        if keys.pressed(KeyCode::KeyW) {
+        if pads.pressed(driver, Button::Forward) {
             throttle += 1.0;
         }
-        if keys.pressed(KeyCode::KeyS) {
+        if pads.pressed(driver, Button::Back) {
             throttle -= 1.0;
         }
-        if keys.pressed(KeyCode::KeyD) {
+        if pads.pressed(driver, Button::Right) {
             steer += 1.0;
         }
-        if keys.pressed(KeyCode::KeyA) {
+        if pads.pressed(driver, Button::Left) {
             steer -= 1.0;
         }
     }
     v.throttle = throttle;
-    v.handbrake = escaped.is_none() && keys.pressed(KeyCode::Space);
+    v.handbrake = escaped.is_none() && pads.pressed(driver, Button::Space);
     if v.px.is_some() {
         let v = &mut *v;
         let me = player.vehicle;
@@ -198,7 +199,7 @@ fn drive(
                 ((1.0 - t) * d.length(), if n.dot(d) > 0.0 { -n } else { n })
             })
         };
-        let handbrake = escaped.is_none() && keys.pressed(KeyCode::Space);
+        let handbrake = escaped.is_none() && pads.pressed(driver, Button::Space);
         // FPhysSubstepTask::UpdateTime (0x141662930) under the game's PhysicsSettings (DefaultEngine.ini:
         // bSubstepping, MaxSubstepDeltaTime 0.05, MaxSubsteps 4): the frame's delta (SetUpForFrame 0x14162f470 keeps
         // it unclamped) capped at MaxSubsteps x MaxSubstepDeltaTime, in ceil(delta / MaxSubstepDeltaTime) equal
@@ -232,7 +233,7 @@ fn drive(
         if v.started {
             commands.entity(player.vehicle).insert(crate::audio::CueParams([("RPM".to_string(), v.drive.rpm)].into()));
         }
-        return;
+        continue;
     }
     // The drivetrain: throttle forward or back (against the motion, the brakes).
     let setup = v.setup.clone();
@@ -263,7 +264,7 @@ fn drive(
         if let Some((_, hit)) = ray_cast.cast_ray(Ray3d::new(origin, dir), &settings).first() {
             if hit.distance < step.length() + 0.1 && hit.normal.y < 0.7 {
                 v.speed = 0.0;
-                return;
+                continue;
             }
         }
     }
@@ -282,7 +283,7 @@ fn drive(
                 commands.trigger(crate::jason::CarSlam { jason: je, car: xf.translation });
             }
             v.speed = 0.0;
-            return;
+            continue;
         }
     }
     let mut pos = xf.translation + step;
@@ -306,6 +307,7 @@ fn drive(
     xf.translation = pos;
     // Pitch about the car's right axis (Bevy +Z before yaw).
     xf.rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_z(pitch);
+    }
 }
 
 fn to_unreal(v: Vec3) -> Vec3 {
@@ -332,14 +334,15 @@ fn follow_vehicle(
     mut commands: Commands,
     time: Res<Time>,
     model: Option<Res<crate::character::CounselorCharacter>>,
-    mut player: Single<(Entity, &mut Driving, &mut Transform, Option<&crate::character::PlayAction>), With<Player>>,
+    mut drivers: Query<(Entity, &mut Driving, &mut Transform, Option<&crate::character::PlayAction>), With<Player>>,
     vehicles: Query<(&Vehicle, &Transform), Without<Player>>,
 ) {
-    let (pe, ref mut d, ref mut xf, action) = *player;
-    let Ok((v, vxf)) = vehicles.get(d.vehicle) else { return };
+    for (pe, mut d, mut xf, action) in &mut drivers {
+    let (d, xf) = (&mut *d, &mut *xf);
+    let Ok((v, vxf)) = vehicles.get(d.vehicle) else { continue };
     let seat = *vxf * v.sitting * Transform::from_xyz(0.0, -crate::player::CAPSULE_HALF_HEIGHT_M, 0.0).with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2));
     let Some(m) = d.seat_move.as_mut() else {
-        **xf = seat;
+        *xf = seat;
         // Steering: her turn take while the wheel is (mostly) over.
         let take = match v.steer {
             s if s < -0.5 => STEER_TAKES[0],
@@ -349,7 +352,7 @@ fn follow_vehicle(
         if action.is_none_or(|a| a.0 != take) {
             commands.entity(pe).insert(crate::character::PlayAction(take.into()));
         }
-        return;
+        continue;
     };
     m.t += time.delta_secs();
     let take = m.take();
@@ -362,65 +365,67 @@ fn follow_vehicle(
         (None, _) => seat,
     };
     if m.t < len {
-        **xf = origin;
-        return;
+        *xf = origin;
+        continue;
     }
     if m.exiting {
         // Standing where the take leaves her, upright.
         let end = roots.map_or(seat, |(_, last)| Transform::from_matrix(origin.to_matrix() * last.to_matrix()));
         let (yaw, _, _) = end.rotation.to_euler(EulerRot::YXZ);
-        **xf = Transform::from_translation(end.translation).with_rotation(Quat::from_rotation_y(yaw));
+        *xf = Transform::from_translation(end.translation).with_rotation(Quat::from_rotation_y(yaw));
         commands.entity(pe).remove::<(Driving, crate::character::PlayAction)>();
         info!("got out of the car");
     } else {
         d.seat_move = None;
-        **xf = seat;
+        *xf = seat;
         commands.entity(pe).insert(crate::character::PlayAction(DRIVE_TAKE.into()));
+    }
     }
 }
 
 /// F: out through the driver's door (her exit take), once the car has (nearly) stopped.
 fn exit_vehicle(
     mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
-    escaped: Option<Res<Escaped>>,
-    mut player: Single<(Entity, &mut Driving), With<Player>>,
+    pads: crate::controls::Pads,
+    mut drivers: Query<(Entity, &mut Driving, Option<&Escaped>), With<Player>>,
     vehicles: Query<&Vehicle>,
 ) {
-    if escaped.is_some() || !keys.just_pressed(KeyCode::KeyF) {
-        return;
+    for (entity, mut d, escaped) in &mut drivers {
+        if escaped.is_some() || !pads.just_pressed(entity, Button::Flashlight) {
+            continue;
+        }
+        let Ok(v) = vehicles.get(d.vehicle) else { continue };
+        if v.speed.abs() > 100.0 || d.seat_move.is_some() {
+            continue;
+        }
+        let m = SeatMove { exiting: true, t: 0.0 };
+        d.seat_move = Some(m);
+        d.starting = None;
+        commands.entity(entity).insert(crate::character::PlayAction(m.take().into()));
     }
-    let (entity, ref mut d) = *player;
-    let Ok(v) = vehicles.get(d.vehicle) else { return };
-    if v.speed.abs() > 100.0 || d.seat_move.is_some() {
-        return;
-    }
-    let m = SeatMove { exiting: true, t: 0.0 };
-    d.seat_move = Some(m);
-    d.starting = None;
-    commands.entity(entity).insert(crate::character::PlayAction(m.take().into()));
 }
 
 fn check_escape(
     mut commands: Commands,
-    escaped: Option<Res<Escaped>>,
-    player: Single<&Driving, With<Player>>,
+    drivers: Query<(Entity, &Driving, Has<crate::controls::LocalPlayer>), (With<Player>, Without<Escaped>)>,
     vehicles: Query<(&Vehicle, &GlobalTransform)>,
     zones: Query<(Entity, &EscapeZone, &GlobalTransform, &Name)>,
 ) {
-    if escaped.is_some() {
-        return;
-    }
-    let Ok((v, vxf)) = vehicles.get(player.vehicle) else { return };
-    if !v.started {
-        return;
-    }
-    for (ze, zone, zxf, name) in &zones {
-        if zone.car && vxf.translation().distance(zxf.translation()) <= zone.radius_m {
-            info!("escaped by car through {name}");
-            commands.trigger(crate::kill_camera::EscapeCamera { zone: ze });
-            commands.insert_resource(Escaped { how: format!("by car ({})", v.class.trim_end_matches("_C")) });
-            return;
+    for (pe, d, local) in &drivers {
+        let Ok((v, vxf)) = vehicles.get(d.vehicle) else { continue };
+        if !v.started {
+            continue;
+        }
+        for (ze, zone, zxf, name) in &zones {
+            if zone.car && vxf.translation().distance(zxf.translation()) <= zone.radius_m {
+                info!("escaped by car through {name}");
+                // The escape view is the local counselor's.
+                if local {
+                    commands.trigger(crate::kill_camera::EscapeCamera { zone: ze });
+                }
+                commands.entity(pe).insert(Escaped { how: format!("by car ({})", v.class.trim_end_matches("_C")) });
+                break;
+            }
         }
     }
 }
@@ -428,8 +433,8 @@ fn check_escape(
 #[derive(Component)]
 struct EscapeBanner;
 
-fn show_escape(mut commands: Commands, escaped: Option<Res<Escaped>>, banner: Query<(), With<EscapeBanner>>) {
-    let Some(e) = escaped else { return };
+fn show_escape(mut commands: Commands, escaped: Query<&Escaped, With<crate::controls::LocalPlayer>>, banner: Query<(), With<EscapeBanner>>) {
+    let Ok(e) = escaped.single() else { return };
     if !banner.is_empty() {
         return;
     }

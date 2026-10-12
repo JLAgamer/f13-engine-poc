@@ -919,7 +919,7 @@ fn fear_widgets(
     hud: Res<Hud>,
     game: Option<Res<crate::match_flow::GameMatch>>,
     counselor: Option<Res<crate::character::CounselorCharacter>>,
-    escaped: Option<Res<crate::vehicle::Escaped>>,
+    escaped: Option<Single<&crate::vehicle::Escaped, With<crate::controls::LocalPlayer>>>,
     players: Query<(&crate::player::Player, Option<&f13_bevy::CounselorFear>)>,
     mut colors: Query<&mut WidgetColor>,
     mut alpha: Local<f32>,
@@ -1167,7 +1167,7 @@ fn minimap(
     asset_server: Res<AssetServer>,
     mut images: Query<&mut ImageNode>,
     hud: Res<Hud>,
-    player: Option<Single<&Transform, With<Player>>>,
+    player: Option<Single<&Transform, (With<Player>, With<crate::controls::LocalPlayer>)>>,
     camera: Option<Single<&GlobalTransform, With<crate::player::PlayerCamera>>>,
     nodes: Query<&MaterialNode<Minimap>>,
     mut maps: ResMut<Assets<Minimap>>,
@@ -1409,14 +1409,14 @@ fn map_screen(
     window: Single<&Window, With<PrimaryWindow>>,
     assets: Res<AssetServer>,
     mut materials: ResMut<Assets<RadialFill>>,
-    player: Query<&Inventory, With<Player>>,
+    player: Query<&Inventory, (With<Player>, With<crate::controls::LocalPlayer>)>,
     items: Query<&Item>,
     (vehicles, boxes, phones, game, escaped): (
         Query<&crate::props::Vehicle>,
         Query<&crate::police::PhoneBox>,
         Query<&crate::police::Phone>,
         Option<Res<crate::match_flow::GameMatch>>,
-        Option<Res<crate::vehicle::Escaped>>,
+        Option<Single<&crate::vehicle::Escaped, With<crate::controls::LocalPlayer>>>,
     ),
     mut vis: Query<&mut Visibility>,
     (time, mut borders, mut colors): (Res<Time>, Query<&mut ContentAlpha>, Query<&mut WidgetColor>),
@@ -1447,7 +1447,7 @@ fn map_screen(
     }
     let size = window.size();
     let has_map = player.single().is_ok_and(|inv| inv.special.iter().any(|&e| items.get(e).is_ok_and(|i| i.kind == crate::props::ItemKind::Map)));
-    let rows = objective_rows(&vehicles, &boxes, &phones, game.as_deref(), escaped.as_deref());
+    let rows = objective_rows(&vehicles, &boxes, &phones, game.as_deref(), escaped.as_ref().map(|e| **e));
     let key: Vec<bool> = [open, has_map].into_iter().chain(rows.iter().flat_map(|(_, d)| d.iter().copied())).collect();
     if ui.built.as_ref().is_some_and(|(s, k)| *s == size && *k == key) {
         return;
@@ -1736,7 +1736,7 @@ fn hide_for_jason(hud: Res<Hud>, play: Option<Res<crate::jason_player::PlayJason
 /// The stamina ring's fill: her stamina.
 fn stamina(
     hud: Res<Hud>,
-    player: Option<Single<&Player>>,
+    player: Option<Single<&Player, With<crate::controls::LocalPlayer>>>,
     tuning: Res<crate::player::PlayerTuning>,
     nodes: Query<&MaterialNode<RadialFill>>,
     mut materials: ResMut<Assets<RadialFill>>,
@@ -2248,7 +2248,7 @@ struct NoisePulse {
 fn noise_meter(
     time: Res<Time>,
     hud: Res<Hud>,
-    player: Option<Single<&Player>>,
+    player: Option<Single<&Player, With<crate::controls::LocalPlayer>>>,
     values: Option<Res<crate::senses::SenseValues>>,
     mut rng: ResMut<crate::GameRng>,
     mut nodes: Query<&mut Node>,

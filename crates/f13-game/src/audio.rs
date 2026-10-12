@@ -636,7 +636,8 @@ fn voices(
     // cooldown's end (+0x200); MatchStartVO said.
     (mut queued, mut chase_said, mut chase_ready_at, mut match_said): (Local<Option<&'static str>>, Local<bool>, Local<f32>, Local<bool>),
     (chase, game, play_jason): (Res<crate::counselor_camera::Chase>, Option<Res<crate::match_flow::GameMatch>>, Option<Res<crate::jason_player::PlayJason>>),
-    players: Query<(Entity, &Player, Option<&crate::character::PlayAction>, Has<crate::jason::Held>), With<ClassSounds>>,
+    // PLACEHOLDER (Milestone 3): the local counselor's lines only; every counselor's needs this state per counselor.
+    players: Query<(Entity, &Player, Option<&crate::character::PlayAction>, Has<crate::jason::Held>), (With<ClassSounds>, With<crate::controls::LocalPlayer>)>,
     saying_now: Query<(&VoiceOf, &ChildOf)>,
     kills: Query<(), With<crate::kill_camera::KillCam>>,
 ) {
@@ -826,9 +827,9 @@ fn counselor_music(
     mut state: ResMut<MusicState>,
     sounds: Option<ResMut<Sounds>>,
     counselor: Option<Res<crate::character::CounselorCharacter>>,
-    (game, escaped): (Option<Res<crate::match_flow::GameMatch>>, Option<Res<crate::vehicle::Escaped>>),
+    (game, escaped): (Option<Res<crate::match_flow::GameMatch>>, Option<Single<&crate::vehicle::Escaped, With<crate::controls::LocalPlayer>>>),
     mut rng: ResMut<AudioRng>,
-    players: Query<&Player>,
+    players: Query<&Player, With<crate::controls::LocalPlayer>>,
     playing: Query<Entity>,
 ) {
     let (Some(mut sounds), Some(counselor)) = (sounds, counselor) else { return };
@@ -919,7 +920,7 @@ fn near_music(
     killer: Option<Res<crate::character::KillerCharacter>>,
     mut rng: ResMut<AudioRng>,
     jasons: Query<(&crate::jason::Jason, &GlobalTransform)>,
-    players: Query<(&Player, &GlobalTransform)>,
+    players: Query<(&Player, &GlobalTransform), With<crate::controls::LocalPlayer>>,
     (mut sinks, mut state): (Query<&mut bevy::audio::AudioSink>, ResMut<MusicState>),
 ) {
     let (Some(mut sounds), Some(killer)) = (sounds, killer) else { return };
@@ -1457,7 +1458,7 @@ fn scary_sounds(
     sounds: Option<ResMut<Sounds>>,
     mut rng: ResMut<AudioRng>,
     (counselor, play_jason, surroundings): (Option<Res<crate::character::CounselorCharacter>>, Option<Res<crate::jason_player::PlayJason>>, Option<Res<crate::fear_events::Surroundings>>),
-    players: Query<(&Player, &Transform)>,
+    players: Query<(&Player, &Transform), With<crate::controls::LocalPlayer>>,
     listener: Query<&GlobalTransform, With<SpatialListener>>,
     playing: Query<(), With<ScaryVoice>>,
     mut state: Local<(f32, f32)>,

@@ -328,13 +328,45 @@ impl Plugin for JasonPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(JasonConfig { delay: self.delay, kill: self.kill })
             .init_resource::<GrabKillsAvailable>()
+            .init_resource::<JasonTarget>()
             .add_systems(Startup, (spawn_jason, load_knife_look))
+            .add_systems(FixedUpdate, choose_target.before(crate::senses::perceive).before(grab_kills_available).before(update_jason))
             .add_systems(FixedUpdate, (grab_kills_available.before(update_jason), update_jason, recover_counselor, fly_knives, pick_up_knives))
             .add_observer(spawn_knife)
             .add_observer(distortion)
             .add_observer(car_slam)
             .add_systems(Update, (tag_jason_parts, animate_jason, grab_layer, jason_mixes, teleport_mix, jason_door_camera, held_knife.after(animate_jason)));
     }
+}
+
+/// The counselor Jason's after this tick (his senses and his update act on her). PLACEHOLDER: the game's Jason AI was
+/// cut (Jason is a player), so this is f13-rs's choice: the counselor in his hands, else the nearest one alive, not
+/// escaped and not hidden (a hidden one only when she's the only one left).
+#[derive(Resource, Default)]
+pub struct JasonTarget(pub Option<Entity>);
+
+fn choose_target(
+    mut target: ResMut<JasonTarget>,
+    jasons: Query<&Transform, With<Jason>>,
+    counselors: Query<(Entity, &Player, &Transform, Has<Held>, Has<crate::hiding::Hiding>), (Without<Jason>, Without<crate::vehicle::Escaped>)>,
+) {
+    let Some(jxf) = jasons.iter().next() else {
+        target.0 = None;
+        return;
+    };
+    if let Some((e, ..)) = counselors.iter().find(|c| c.3) {
+        target.0 = Some(e);
+        return;
+    }
+    let pick = |hidden_ok: bool| {
+        counselors
+            .iter()
+            .filter(|(_, p, _, _, hidden)| p.counselor.alive() && (hidden_ok || !hidden))
+            .min_by(|a, b| a.2.translation.distance_squared(jxf.translation).total_cmp(&b.2.translation.distance_squared(jxf.translation)))
+            .map(|c| c.0)
+    };
+    // (The last counselor standing is still his, alive or not, so the match's end plays out as it did.)
+    target.0 = pick(false).or_else(|| pick(true)).or_else(|| counselors.iter().next().map(|c| c.0));
 }
 
 /// Jason's values from the export (see the module docs).
@@ -1033,7 +1065,8 @@ fn fly_knives(
         let from = xf.translation;
         let to = from + k.vel * dt;
         // Her: the segment passing within her capsule (a 0.3 m radius around her from her feet to 1.8 m).
-        if let Ok((pe, mut p, pxf)) = players.single_mut() {
+        let mut struck = false;
+        for (pe, mut p, pxf) in &mut players {
             let (a, b) = (pxf.translation + Vec3::Y * 0.3, pxf.translation + Vec3::Y * 1.5);
             if p.counselor.alive() && segment_distance(from, to, a, b) < 0.35 {
                 let r = p.counselor.take_damage(Hit { amount: k.damage, blocked_with_weapon: false }, &ptuning.counselor);
@@ -1048,8 +1081,12 @@ fn fly_knives(
                     commands.entity(pe).insert((PlayAction(reaction.into()), Staggered(len))).remove::<crate::items::ItemAction>();
                 }
                 commands.entity(ke).despawn();
-                continue;
+                struck = true;
+                break;
             }
+        }
+        if struck {
+            continue;
         }
         if let Some(f) = f13_core::collision::segment_hit(&world, from, to, 1.0) {
             xf.translation = from + (to - from) * f;
@@ -1119,7 +1156,7 @@ fn distortion(
     mut commands: Commands,
     tuning: Option<Res<KillerTuning>>,
     play: Option<Res<crate::jason_player::PlayJason>>,
-    her: Query<(&Transform, Option<&crate::fear_events::Pushed>), With<Player>>,
+    her: Query<(&Transform, Option<&crate::fear_events::Pushed>), (With<Player>, With<crate::controls::LocalPlayer>)>,
 ) {
     let (Some(t), None, Ok((xf, pushed))) = (tuning, play, her.single()) else { return };
     let flat = |a: Vec3| Vec2::new(a.x - xf.translation.x, a.z - xf.translation.z).length();
@@ -1521,7 +1558,7 @@ fn door_in_way(
 pub(crate) fn update_jason(
     mut commands: Commands,
     (time, anims, water, drown): (Res<Time>, Res<crate::Anims>, Option<Res<crate::water::Water>>, Option<Res<DrownKillCamera>>),
-    tuning: Option<Res<KillerTuning>>,
+    (tuning, target): (Option<Res<KillerTuning>>, Res<JasonTarget>),
     ptuning: Res<PlayerTuning>,
     nav: Option<ResMut<Nav>>,
     (killer, counselor_model): (Option<Res<KillerCharacter>>, Option<Res<crate::character::CounselorCharacter>>),
@@ -1565,7 +1602,7 @@ pub(crate) fn update_jason(
         .collect();
     let (grid, lists) = collision.without(&dynamic, |e| open_leaves.contains(&e));
     let world = (grid, lists.as_slice());
-    let Ok((pe, mut p, mut pxf, in_car, mut hiding, blocking)) = players.single_mut() else { return };
+    let Some(Ok((pe, mut p, mut pxf, in_car, mut hiding, blocking))) = target.0.map(|t| players.get_mut(t)) else { return };
     let driving = in_car.is_some();
     // Her car's driver door (the game's DriverGrab context kill, where he stands to pull the driver out) and its speed.
     let car_door = in_car.and_then(|d| vehicles.get(d.vehicle).ok()).map(|(v, g)| {
@@ -2411,7 +2448,7 @@ pub(crate) fn update_jason(
                     // in this build (MODLOG "Melee hits spawn no impact effects").
                     info!("Jason: hit Vanessa for {:.0}{} (health {:.0})", r.dealt, if blocking { ", blocked" } else { "" }, p.counselor.health);
                     if blocking {
-                        commands.trigger(crate::items::BlockedHit);
+                        commands.trigger(crate::items::BlockedHit(pe));
                         // A heavy attack ends the block (after its blocked damage).
                         if heavy {
                             info!("Jason: his heavy swing broke her block");

@@ -222,9 +222,10 @@ fn run_match(
     time: Res<Time>,
     tuning: Option<Res<MatchTuning>>,
     mut game: ResMut<GameMatch>,
-    player: Query<&Player, Without<Unsettled>>,
+    player: Query<&Player, (Without<Unsettled>, With<crate::controls::LocalPlayer>)>,
     jason: Query<(), With<Jason>>,
-    escaped: Option<Res<Escaped>>,
+    // PLACEHOLDER (Milestone 3): the local counselor's record; one per counselor, and the match's end on all of them.
+    escaped: Option<Single<&Escaped, With<crate::controls::LocalPlayer>>>,
     leave: Res<Leave>,
     host: Option<ResMut<crate::host::HostRequests>>,
     mut exit: MessageWriter<AppExit>,

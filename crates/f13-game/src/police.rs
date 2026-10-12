@@ -497,15 +497,14 @@ fn escape_with_police(
     mut commands: Commands,
     time: Res<Time>,
     arrived: Option<Res<PoliceArrived>>,
-    escaped: Option<Res<crate::vehicle::Escaped>>,
     zones: Query<(&EscapeZone, &GlobalTransform)>,
-    mut player: Single<
-        (Entity, &Transform, &mut crate::player::Player, Option<&mut EscapingOnFoot>),
-        (Without<crate::vehicle::Driving>, Without<crate::jason::Held>, Without<crate::hiding::Hiding>),
+    mut players: Query<
+        (Entity, &Transform, &mut crate::player::Player, Option<&mut EscapingOnFoot>, Has<crate::controls::LocalPlayer>),
+        (Without<crate::vehicle::Driving>, Without<crate::jason::Held>, Without<crate::hiding::Hiding>, Without<crate::vehicle::Escaped>),
     >,
 ) {
-    let (Some(a), None) = (arrived, escaped) else { return };
-    let (pe, xf, ref mut p, ref mut escaping) = *player;
+    let Some(a) = arrived else { return };
+    for (pe, xf, mut p, mut escaping, local) in &mut players {
     if let Some(e) = escaping.as_mut() {
         // Stamina stays full while she leaves (bLockStamina).
         p.counselor.stamina = 100.0;
@@ -518,19 +517,23 @@ fn escape_with_police(
         if e.left <= 0.0 {
             info!("escaped with the police at ({:.1}, {:.1}, {:.1}), {} exit points ahead", xf.translation.x, xf.translation.y, xf.translation.z, e.path.len());
             commands.entity(pe).remove::<(EscapingOnFoot, crate::player::Autopilot)>();
-            commands.insert_resource(crate::vehicle::Escaped { how: "with the police".into() });
+            commands.entity(pe).insert(crate::vehicle::Escaped { how: "with the police".into() });
         }
-        return;
+        continue;
     }
-    let Ok((zone, zxf)) = zones.get(a.zone) else { return };
+    let Ok((zone, zxf)) = zones.get(a.zone) else { continue };
     let d = xf.translation.distance(zxf.translation());
     if !p.counselor.alive() || d > zone.radius_m {
-        return;
+        continue;
     }
     // The path from its point nearest her (in the ground plane) to its end.
     let flat = |q: &Vec3| q.with_y(0.0).distance(xf.translation.with_y(0.0));
     let nearest = zone.exit.iter().enumerate().min_by(|a, b| flat(a.1).total_cmp(&flat(b.1))).map_or(0, |(i, _)| i);
     info!("escaping with the police: {d:.1} m from the volume's centre (radius {:.1}), {} exit points, {:.0} s", zone.radius_m, zone.exit.len() - nearest, zone.delay);
     commands.entity(pe).insert(EscapingOnFoot { path: zone.exit[nearest..].to_vec(), left: zone.delay });
-    commands.trigger(crate::kill_camera::EscapeCamera { zone: a.zone });
+    // The escape view is the local counselor's.
+    if local {
+        commands.trigger(crate::kill_camera::EscapeCamera { zone: a.zone });
+    }
+    }
 }

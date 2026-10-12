@@ -535,7 +535,7 @@ pub(crate) fn move_player(
 fn aim_demo(
     config: Res<PlayerConfig>,
     time: Res<Time>,
-    player: Single<(&Transform, &Player)>,
+    player: Single<(&Transform, &Player), With<crate::controls::LocalPlayer>>,
     mut camera: Single<&mut PlayerCamera>,
     mut ray_cast: MeshRayCast,
     parts: Query<(), With<PlayerPart>>,
@@ -581,7 +581,7 @@ fn toggle_debug_hud(keys: Res<ButtonInput<KeyCode>>, game_hud: Option<Res<crate:
 }
 
 fn update_hud(
-    player: Single<(&Player, &Transform, Option<&crate::hiding::Breathing>, Has<crate::hiding::Hiding>)>,
+    player: Single<(&Player, &Transform, Option<&crate::hiding::Breathing>, Has<crate::hiding::Hiding>), With<crate::controls::LocalPlayer>>,
     jason: Query<(&crate::jason::Jason, &Transform), Without<Player>>,
     tuning: Res<PlayerTuning>,
     diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,

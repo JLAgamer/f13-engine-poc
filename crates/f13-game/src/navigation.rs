@@ -230,7 +230,7 @@ fn check_reach(
     info!("navmesh: Jason reaches {} of {} goals ({:.2} s){}", goals.len() - missed.len(), goals.len(), started.elapsed().as_secs_f32(), if missed.is_empty() { String::new() } else { format!("; not: {}", missed.join(", ")) });
 }
 
-fn draw_navmesh(mut gizmos: Gizmos, navmesh: Option<Res<Navmesh>>, player: Query<&Transform, With<crate::player::Player>>) {
+fn draw_navmesh(mut gizmos: Gizmos, navmesh: Option<Res<Navmesh>>, player: Query<&Transform, (With<crate::player::Player>, With<crate::controls::LocalPlayer>)>) {
     let (Some(nav), Ok(p)) = (navmesh, player.single()) else { return };
     let at = p.translation;
     for poly in &nav.0.polys {

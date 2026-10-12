@@ -100,7 +100,7 @@ pub(crate) fn chase(
     mut chase: ResMut<Chase>,
     counselor: Option<Res<crate::character::CounselorCharacter>>,
     killer: Option<Res<crate::character::KillerCharacter>>,
-    player: Query<(&Player, &Transform, Has<crate::kill_camera::KillCam>), Without<crate::jason::Jason>>,
+    player: Query<(&Player, &Transform, Has<crate::kill_camera::KillCam>), (Without<crate::jason::Jason>, With<crate::controls::LocalPlayer>)>,
     jasons: Query<(&crate::jason::Jason, &Transform)>,
 ) {
     let (Some(counselor), Ok((p, xf, in_kill))) = (counselor, player.single()) else { return };
@@ -403,7 +403,7 @@ pub(crate) fn counselor_camera(
     rig: Option<ResMut<Rig>>,
     chase: Res<Chase>,
     surroundings: Option<Res<crate::fear_events::Surroundings>>,
-    player: Single<(&Player, &Transform, Option<&crate::vehicle::Driving>, Has<crate::jason::Held>, Has<crate::items::Trapped>), Without<PlayerCamera>>,
+    player: Single<(&Player, &Transform, Option<&crate::vehicle::Driving>, Has<crate::jason::Held>, Has<crate::items::Trapped>), (Without<PlayerCamera>, With<crate::controls::LocalPlayer>)>,
     vehicles: Query<&GlobalTransform>,
     mut camera: Single<(&mut PlayerCamera, &mut Transform, &mut Projection)>,
     windows: Query<&Window>,

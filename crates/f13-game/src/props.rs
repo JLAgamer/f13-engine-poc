@@ -285,7 +285,7 @@ impl Plugin for PropsPlugin {
 fn move_near_car(
     mut commands: Commands,
     vehicles: Query<(&Vehicle, &GlobalTransform)>,
-    mut player: Single<&mut Transform, With<crate::player::Player>>,
+    mut player: Single<&mut Transform, (With<crate::player::Player>, With<crate::controls::LocalPlayer>)>,
     mut camera: Single<&mut crate::player::PlayerCamera>,
 ) {
     let Some((v, gxf)) = vehicles.iter().find(|(v, _)| v.class.contains("2Seat")).or_else(|| vehicles.iter().next()) else { return };

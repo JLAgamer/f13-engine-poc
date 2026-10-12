@@ -173,20 +173,24 @@ fn push_events(
     surroundings: Option<Res<Surroundings>>,
     (counselor, killer): (Option<Res<CounselorCharacter>>, Option<Res<KillerCharacter>>),
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
-    mut players: Query<(&mut Player, &Transform, &mut CounselorFear, &mut Pushed, Option<&Inventory>, Option<&Hiding>, Has<Held>, Option<&crate::lighting::Flashlight>), Without<Jason>>,
+    mut players: Query<(Entity, &mut Player, &Transform, &mut CounselorFear, &mut Pushed, Option<&Inventory>, Option<&Hiding>, Has<Held>, Option<&crate::lighting::Flashlight>, Has<crate::controls::LocalPlayer>), Without<Jason>>,
+    pads: crate::controls::Pads,
     jasons: Query<&Transform, (With<Jason>, Without<Player>)>,
     camera: Query<&Transform, (With<PlayerCamera>, Without<Player>, Without<Jason>)>,
     items: Query<&Item>,
     (time, mut next_log, power): (Res<Time>, Local<f32>, Option<Res<crate::power::PowerGrids>>),
 ) {
     let (Some(t), Some(s)) = (tuning, surroundings) else { return };
-    let Ok((mut p, xf, mut fear, mut pushed, inventory, hiding, held, flashlight)) = players.single_mut() else { return };
+    let log = time.elapsed_secs() >= *next_log;
+    if log {
+        *next_log = time.elapsed_secs() + 5.0;
+    }
+    for (pe, mut p, xf, mut fear, mut pushed, inventory, hiding, held, flashlight, local) in &mut players {
     p.fear = fear.0.fear;
     if fear.0.locked {
-        return;
+        continue;
     }
-    if time.elapsed_secs() >= *next_log {
-        *next_log = time.elapsed_secs() + 5.0;
+    if log {
         let active: Vec<&str> = fear.0.events.iter().filter(|e| e.state.active).map(|e| e.key.trim_end_matches("FearEvent")).collect();
         debug!("fear {:.1} ({}) at {:.1}", fear.0.fear, active.join(", "), xf.translation);
     }
@@ -230,13 +234,20 @@ fn push_events(
     }
 
     // Jason in her view.
-    let in_view = jason.zip(camera.iter().next()).is_some_and(|(j, cam)| {
+    // Her view: the local counselor's camera; another's control rotation from her eyes.
+    let view = if local {
+        camera.iter().next().map(|c| (c.translation, c.forward().as_vec3()))
+    } else {
+        let (yaw, pitch) = pads.look(pe);
+        Some((centre + Vec3::Y * crate::interact::BASE_EYE_HEIGHT_M, PlayerCamera { yaw, pitch }.look()))
+    };
+    let in_view = jason.zip(view).is_some_and(|(j, (eye, forward))| {
         let jason_hh = killer.as_ref().map_or(90.0, |k| k.info.capsule_half_height) / 100.0;
         let target = j.translation + Vec3::Y * jason_hh;
-        let ahead = (target - cam.translation).dot(*cam.forward()) * 100.0;
+        let ahead = (target - eye).dot(forward) * 100.0;
         target.distance(centre) * 100.0 < cv("MaxVisibilityDistance", 6000.0)
             && ahead >= VIEW_FOV_DEG * 0.5
-            && f13_core::collision::segment_hit(&collision.with(&dynamic), cam.translation, target, 4.0).is_none()
+            && f13_core::collision::segment_hit(&collision.with(&dynamic), eye, target, 4.0).is_none()
     });
     if in_view != pushed.spotted {
         debug!("fear: Jason {} view", if in_view { "in" } else { "out of" });
@@ -270,6 +281,7 @@ fn push_events(
         let Some(event) = items.get(e).ok().and_then(|i| s.item_events.get(&i.class)) else { continue };
         set(event, true, 0.0);
         pushed.items.push((e, event.clone()));
+    }
     }
 }
 

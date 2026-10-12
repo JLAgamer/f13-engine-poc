@@ -157,7 +157,7 @@ fn blocked(world: &(impl f13_core::collision::TriSource + ?Sized), a: Vec3, b: V
 }
 
 #[allow(clippy::too_many_arguments)]
-fn perceive(
+pub(crate) fn perceive(
     mut commands: Commands,
     time: Res<Time>,
     values: Option<Res<SenseValues>>,
@@ -165,6 +165,7 @@ fn perceive(
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
     mut jasons: Query<(&Jason, &Transform, &mut Knowledge)>,
     players: Query<(&Player, &Transform, Option<&Hiding>), Without<Jason>>,
+    target: Option<Res<crate::jason::JasonTarget>>,
     surroundings: Option<Res<crate::fear_events::Surroundings>>,
     mut controls: Option<ResMut<crate::jason_player::JasonControls>>,
     map: Option<Res<crate::jason_player::MorphMap>>,
@@ -175,7 +176,7 @@ fn perceive(
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
     let world = collision.with(&dynamic);
-    let Ok((p, pxf, hiding)) = players.single() else { return };
+    let Some(Ok((p, pxf, hiding))) = target.and_then(|t| t.0).map(|t| players.get(t)) else { return };
     for (j, jxf, mut k) in &mut jasons {
         // Abilities run from the start of the match.
         let blockers = Blockers { stunned: matches!(j.state, JasonState::Stunned { .. }), underwater: j.underwater, ..default() };

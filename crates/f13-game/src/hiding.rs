@@ -384,12 +384,10 @@ pub fn enter(
     });
 }
 
-fn read_exit(keys: Res<ButtonInput<KeyCode>>, mut hiding: Query<&mut Hiding>) {
-    if keys.just_pressed(KeyCode::KeyE) {
-        for mut h in &mut hiding {
-            if h.phase == HidePhase::Hidden {
-                h.wants_exit = true;
-            }
+fn read_exit(pads: crate::controls::Pads, mut hiding: Query<(Entity, &mut Hiding)>) {
+    for (pe, mut h) in &mut hiding {
+        if h.phase == HidePhase::Hidden && pads.just_pressed(pe, crate::controls::Button::Interact) {
+            h.wants_exit = true;
         }
     }
 }
@@ -427,19 +425,19 @@ fn setup_breath(mut commands: Commands, counselor: Option<Res<CounselorCharacter
 fn breathe(
     mut commands: Commands,
     time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
+    pads: crate::controls::Pads,
     tuning: Option<Res<BreathTuning>>,
     mut players: Query<(Entity, &Player, &GlobalTransform, &mut Breathing, Option<&Hiding>, Option<&crate::fear_events::Pushed>, Option<&crate::audio::ClassSounds>)>,
     mut jasons: Query<(&GlobalTransform, Option<&mut crate::senses::Knowledge>), With<crate::jason::Jason>>,
-    sounds: Option<ResMut<crate::audio::Sounds>>,
+    mut sounds: Option<ResMut<crate::audio::Sounds>>,
 ) {
     let Some(t) = tuning else { return };
-    let Ok((pe, p, pxf, mut b, hiding, pushed, lines)) = players.single_mut() else { return };
+    for (pe, p, pxf, mut b, hiding, pushed, lines) in &mut players {
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
     let hidden = hiding.is_some_and(|h| h.phase == HidePhase::Hidden);
     let say = |commands: &mut Commands, line: &'static str| commands.trigger(crate::audio::ActorSound { actor: pe, prop: line });
-    if hidden && keys.pressed(KeyCode::Space) {
+    if hidden && pads.pressed(pe, crate::controls::Button::Space) {
         if b.breath.hold() {
             info!("holding her breath");
             say(&mut commands, "VO:HoldBreath");
@@ -455,7 +453,7 @@ fn breathe(
         }
     }
     // Her scared line: Jason in view and near, not holding her breath though she could, fear at least 70.
-    let Some((jxf, knowledge)) = jasons.iter_mut().next() else { return };
+    let Some((jxf, knowledge)) = jasons.iter_mut().next() else { continue };
     let distance = jxf.translation().distance(pxf.translation());
     let in_view = pushed.is_some_and(|p| p.spotted);
     if !in_view {
@@ -474,7 +472,7 @@ fn breathe(
         say(&mut commands, "VO:KillerIsNearWhileHiding");
         // He hears it within its audible range: her hiding spot gives itself away.
         let cue = lines.and_then(|l| l.0.get("VO:KillerIsNearWhileHiding")).cloned();
-        let range = sounds.zip(cue).and_then(|(mut s, cue)| s.audible_range(&cue));
+        let range = sounds.as_deref_mut().zip(cue).and_then(|(s, cue)| s.audible_range(&cue));
         if let (Some(range), Some(mut k), Some(h)) = (range, knowledge, hiding) {
             if distance * 100.0 <= range {
                 info!("Jason: heard her in her hiding spot");
@@ -482,6 +480,7 @@ fn breathe(
                 k.last_known = Some((pxf.translation(), now, crate::senses::Clue::Heard));
             }
         }
+    }
     }
 }
 

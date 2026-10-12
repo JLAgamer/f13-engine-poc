@@ -1532,14 +1532,14 @@ fn use_item(
     mut commands: Commands,
     time: Res<Time>,
     tuning: Res<PlayerTuning>,
-    mut player: Single<(Entity, &mut Player, &mut Inventory, Option<&mut UsingItem>), Without<Driving>>,
+    mut players: Query<(Entity, &mut Player, &mut Inventory, Option<&mut UsingItem>), Without<Driving>>,
     items: Query<&Item>,
 ) {
-    let (entity, ref mut p, ref mut inv, ref mut using) = *player;
-    if let Some(u) = using {
+    for (entity, mut p, mut inv, using) in &mut players {
+    if let Some(mut u) = using {
         u.left -= time.delta_secs();
         if u.left > 0.0 {
-            return;
+            continue;
         }
         let healed = p.counselor.heal(tuning.first_aid.health_restored, &tuning.counselor);
         info!("used first aid: +{healed:.0} health");
@@ -1547,17 +1547,18 @@ fn use_item(
         inv.pockets.retain(|&e| e != u.item);
         commands.entity(u.item).despawn();
         commands.entity(entity).remove::<UsingItem>();
-        return;
+        continue;
     }
-    let Some(item) = inv.use_small else { return };
+    let Some(item) = inv.use_small else { continue };
     if !p.counselor.alive() || items.get(item).map_or(true, |i| i.class != FIRST_AID) {
-        return;
+        continue;
     }
     if p.counselor.health >= tuning.counselor.health.max_health {
         info!("already at full health");
-        return;
+        continue;
     }
     commands.entity(entity).insert(UsingItem { item, left: tuning.first_aid.use_length });
+    }
 }
 
 fn update_prompt(

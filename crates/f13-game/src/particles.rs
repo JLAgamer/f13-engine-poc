@@ -1123,7 +1123,7 @@ impl SpawnParticles {
 #[derive(Resource)]
 pub struct TestParticles(pub String);
 
-fn test_particles(test: Option<Res<TestParticles>>, time: Res<Time>, player: Query<&Transform, With<crate::player::Player>>, mut out: MessageWriter<SpawnParticles>, mut next: Local<f32>) {
+fn test_particles(test: Option<Res<TestParticles>>, time: Res<Time>, player: Query<&Transform, (With<crate::player::Player>, With<crate::controls::LocalPlayer>)>, mut out: MessageWriter<SpawnParticles>, mut next: Local<f32>) {
     let Some(test) = test else { return };
     let Ok(xf) = player.single() else { return };
     if time.elapsed_secs() < *next {

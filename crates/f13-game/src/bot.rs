@@ -280,7 +280,7 @@ fn run_bot(
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     (interactions, tuning): (Query<&crate::interact::Interaction, With<crate::controls::LocalPlayer>>, Res<crate::player::PlayerTuning>),
-    mut player: Single<(&mut Transform, &Player, Option<&Inventory>, Has<Driving>, Has<UsingItem>, (Has<crate::jason::Held>, Has<crate::items::ItemAction>, Has<crate::jason::Staggered>, Has<crate::items::Blocking>, Has<crate::items::Trapped>, Option<&crate::hiding::Breathing>), Option<&mut crate::hiding::Hiding>)>,
+    mut player: Single<(&mut Transform, &Player, Option<&Inventory>, Has<Driving>, Has<UsingItem>, (Has<crate::jason::Held>, Has<crate::items::ItemAction>, Has<crate::jason::Staggered>, Has<crate::items::Blocking>, Has<crate::items::Trapped>, Option<&crate::hiding::Breathing>), Option<&mut crate::hiding::Hiding>), With<crate::controls::LocalPlayer>>,
     mut camera: Single<&mut PlayerCamera>,
     items: Query<(Entity, &Item, &GlobalTransform, Option<&InCabinet>), Without<Carried>>,
     carried: Query<&Item, With<Carried>>,
@@ -294,7 +294,7 @@ fn run_bot(
         Query<(&mut crate::jason::Jason, &Transform), (Without<Player>, Without<Vehicle>)>,
     ),
     (escaped, spots, mut knowledge, mut game, traps): (
-        Option<Res<Escaped>>,
+        Option<Single<&Escaped, With<crate::controls::LocalPlayer>>>,
         Query<(Entity, &crate::hiding::HidingSpot, &GlobalTransform)>,
         Query<&mut crate::senses::Knowledge>,
         Option<ResMut<crate::match_flow::GameMatch>>,

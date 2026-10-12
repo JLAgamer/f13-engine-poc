@@ -169,7 +169,7 @@ pub struct Give(pub Vec<String>);
 fn give_items(
     mut commands: Commands,
     give: Option<Res<Give>>,
-    mut player: Query<&mut Inventory, With<Player>>,
+    mut player: Query<&mut Inventory, (With<Player>, With<crate::controls::LocalPlayer>)>,
     items: Query<(Entity, &Item), Without<Carried>>,
     mut visibility: Query<&mut Visibility>,
 ) {
@@ -364,7 +364,7 @@ pub struct Blocking;
 
 /// A hit landed on her block: it wears her weapon.
 #[derive(Event)]
-pub struct BlockedHit;
+pub struct BlockedHit(pub Entity);
 
 /// Wears the weapon in her hands by `amount`; true when it broke (it's gone from her hands).
 fn wear_weapon(commands: &mut Commands, wear: &mut Query<Option<&mut Wear>>, inv: &mut Inventory, weapon: Entity, durability: f32, amount: f32, name: &str) -> bool {
@@ -470,8 +470,8 @@ fn block(
 }
 
 /// A blocked hit wears the weapon in her hands by its BlockingWear.
-fn wear_on_block(_: On<BlockedHit>, mut commands: Commands, mut player: Query<&mut Inventory, With<Player>>, items: Query<&Item>, mut wear: Query<Option<&mut Wear>>) {
-    let Ok(mut inv) = player.single_mut() else { return };
+fn wear_on_block(hit: On<BlockedHit>, mut commands: Commands, mut player: Query<&mut Inventory, With<Player>>, items: Query<&Item>, mut wear: Query<Option<&mut Wear>>) {
+    let Ok(mut inv) = player.get_mut(hit.0) else { return };
     let Some(hand) = inv.hand else { return };
     let Ok(Item { kind: ItemKind::Weapon(stats) | ItemKind::Gun { stats, .. }, name, .. }) = items.get(hand) else { return };
     let (durability, amount, name) = (stats.durability, stats.blocking_wear, name.clone());
@@ -587,31 +587,32 @@ fn shotgun_hold(
     players: Query<(Entity, &Inventory, Option<&GunAim>), With<Player>>,
     rigs: Query<(&ChildOf, &Rig)>,
     mut items: Query<(&Item, &mut HeldAt)>,
-    mut was: Local<bool>,
+    mut was: Local<std::collections::HashMap<Entity, bool>>,
 ) {
     let Some(character) = character else { return };
-    let Ok((pe, inv, aim)) = players.single() else { return };
-    let Some((_, rig)) = rigs.iter().find(|(c, _)| c.parent() == pe) else { return };
-    let (now, before) = (rig.shotgun_hold, std::mem::replace(&mut *was, rig.shotgun_hold));
-    let Some(hand) = inv.hand else { return };
-    let Ok((item, mut at)) = items.get_mut(hand) else { return };
+    for (pe, inv, aim) in &players {
+    let Some((_, rig)) = rigs.iter().find(|(c, _)| c.parent() == pe) else { continue };
+    let (now, before) = (rig.shotgun_hold, was.insert(pe, rig.shotgun_hold).unwrap_or(false));
+    let Some(hand) = inv.hand else { continue };
+    let Ok((item, mut at)) = items.get_mut(hand) else { continue };
     if item.class != "Shotgun_C" {
-        return;
+        continue;
     }
     let socket = match (before, now) {
         (false, true) => "WeaponSocket",
         (true, false) if !aim.is_some_and(|a| a.aiming) => "shotgun_Socket",
-        _ => return,
+        _ => continue,
     };
     if at.0 == socket {
-        return;
+        continue;
     }
-    let Some(s) = character.info.sockets.get(socket) else { return };
-    let Some(&bone) = rig.bones.get(&s.attach) else { return };
+    let Some(s) = character.info.sockets.get(socket) else { continue };
+    let Some(&bone) = rig.bones.get(&s.attach) else { continue };
     let offset = s.transform.as_ref().map(crate::to_transform).unwrap_or_default();
     debug!("shotgun to {socket}");
     at.0 = socket.to_string();
     commands.entity(hand).insert((ChildOf(bone), offset));
+    }
 }
 
 /// Left mouse: use the item in the hands. 1-3: throw a firecracker from that pocket.
@@ -697,9 +698,9 @@ fn tick_action(
     time: Res<Time>,
     camera: Single<(&PlayerCamera, &GlobalTransform)>,
     mut rng: ResMut<crate::GameRng>,
-    mut player: Query<(Entity, &mut ItemAction, &mut Inventory, &Transform, &mut Player)>,
+    mut player: Query<(Entity, &mut ItemAction, &mut Inventory, &Transform, &mut Player, Has<crate::controls::LocalPlayer>)>,
     jasons: Query<(Entity, &Transform), (With<Jason>, Without<Player>)>,
-    (mouse, anims, tuning): (Res<ButtonInput<MouseButton>>, Res<crate::Anims>, Res<crate::player::PlayerTuning>),
+    (pads, anims, tuning): (crate::controls::Pads, Res<crate::Anims>, Res<crate::player::PlayerTuning>),
     mut wear: Query<Option<&mut Wear>>,
     items: Query<&Item>,
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
@@ -707,12 +708,15 @@ fn tick_action(
     (globals, killer, character, rigs, killer_model): (Query<&GlobalTransform>, Option<Res<crate::jason::KillerTuning>>, Option<Res<CounselorCharacter>>, Query<(&ChildOf, &Rig)>, Option<Res<crate::character::KillerCharacter>>),
     sounds: Option<Res<crate::audio::Sounds>>,
 ) {
-    let Ok((pe, mut a, mut inv, xf, mut p)) = player.single_mut() else { return };
+    for (pe, mut a, mut inv, xf, mut p, local) in &mut player {
+    // Her eye and look: the local counselor's camera; another's control rotation from her eyes.
+    let (look_yaw, look_pitch) = pads.look(pe);
+    let (eye, look) = if local { (camera.1.translation(), camera.1.forward().as_vec3()) } else { (xf.translation + Vec3::Y * (crate::player::CAPSULE_HALF_HEIGHT_M + crate::interact::BASE_EYE_HEIGHT_M), PlayerCamera { yaw: look_yaw, pitch: look_pitch }.look()) };
     a.t += time.delta_secs();
     // SCCharacter's tick: held past 0.1 s in combat stance, the light swing becomes the weapon's ForwardAttack
     // (MULTICAST_Attack(true): the anim instance switches to it at the same fraction of the swing).
     if let (Some(h), Use::Swing { stats, heavy: false, .. }) = (a.hold, a.what.clone()) {
-        let held = mouse.pressed(MouseButton::Left) && p.counselor.stance == f13_core::counselor::Stance::Combat;
+        let held = pads.pressed(pe, crate::controls::Button::Primary) && p.counselor.stance == f13_core::counselor::Stance::Combat;
         a.hold = held.then_some(h + time.delta_secs());
         if held && h + time.delta_secs() > HEAVY_HOLD_S && !a.done {
             a.hold = None;
@@ -793,7 +797,6 @@ fn tick_action(
             Use::Fire { kind: ItemKind::Gun { projectile, pellets, spread_deg, velocity, impacts, impact_sounds, impact_decals, .. } } => {
                 a.done = true;
                 // At what the middle of the screen shows: Jason if the camera's ray passes through him, else far out.
-                let (eye, look) = (camera.1.translation(), camera.1.forward().as_vec3());
                 let target = jason
                     .and_then(|(_, jxf)| ray_hits_capsule(eye, look, jxf.translation))
                     .unwrap_or(eye + look * 30.0);
@@ -884,7 +887,7 @@ fn tick_action(
                 inv.pockets.retain(|&e| e != a.item);
                 commands.entity(a.item).despawn();
                 let (mesh, mat) = (assets.0.add(Cuboid::new(0.06, 0.06, 0.14)), assets.1.add(StandardMaterial { base_color: Color::srgb(0.7, 0.05, 0.05), ..default() }));
-                let vel = camera.0.look().with_y(0.0).normalize_or(facing.with_y(0.0).normalize_or_zero()) * THROW_SPEED;
+                let vel = look.with_y(0.0).normalize_or(facing.with_y(0.0).normalize_or_zero()) * THROW_SPEED;
                 let from = hand.map_or(chest + facing * 0.4, |h| h.translation);
                 commands.spawn((Mesh3d(mesh), MeshMaterial3d(mat), Transform::from_translation(from), Firecracker { vel, age: 0.0, stunned: false }));
             }
@@ -907,6 +910,7 @@ fn tick_action(
     }
     if a.t >= a.len {
         commands.entity(pe).remove::<(ItemAction, PlayAction)>();
+    }
     }
 }
 
@@ -1024,14 +1028,18 @@ fn spring_traps(
     jasons: Query<(Entity, &Transform, &Jason)>,
     mut player: Query<(Entity, &Transform, &mut Player, Has<Trapped>, Has<crate::jason::Held>, Has<crate::vehicle::Driving>, Option<&crate::hiding::Hiding>)>,
 ) {
+    let on = |pxf: &Transform, txf: &Transform| {
+        Vec2::new(pxf.translation.x - txf.translation.x, pxf.translation.z - txf.translation.z).length() <= TRAP_RADIUS_M && (pxf.translation.y - txf.translation.y).abs() < 0.6
+    };
     for (te, txf, mut trap) in &mut traps {
-        // Her stepping in.
-        if let Ok((pe, pxf, mut p, trapped, held, driving, hiding)) = player.single_mut() {
+        // Clear once no one's foot is on it (its armer's, as she sets it down).
+        if !player.iter().any(|(_, pxf, ..)| on(pxf, txf)) {
+            trap.clear = true;
+        }
+        // A counselor stepping in.
+        for (pe, pxf, mut p, trapped, held, driving, hiding) in &mut player {
             let d = Vec2::new(pxf.translation.x - txf.translation.x, pxf.translation.z - txf.translation.z);
-            let on = d.length() <= TRAP_RADIUS_M && (pxf.translation.y - txf.translation.y).abs() < 0.6;
-            if !on {
-                trap.clear = true;
-            } else if trap.clear && !trapped && !held && !driving && hiding.is_none() && p.counselor.alive() {
+            if on(pxf, txf) && trap.clear && !trapped && !held && !driving && hiding.is_none() && p.counselor.alive() {
                 // Which foot: the side of her the trap is on.
                 let fwd = pxf.rotation * Vec3::Z;
                 let left = Vec2::new(fwd.x, fwd.z).perp_dot(-d) > 0.0;
@@ -1050,7 +1058,7 @@ fn spring_traps(
                 } else {
                     commands.entity(pe).insert((Trapped { trap: te, left, enter, t: 0.0, wiggle: default(), out: None }, PlayAction(enter.into()))).remove::<(Blocking, ItemAction)>();
                 }
-                continue;
+                break;
             }
         }
         for (je, jxf, j) in jasons.iter().filter(|_| !trap.killer) {
@@ -1073,22 +1081,25 @@ fn struggle_in_trap(
     time: Res<Time>,
     character: Option<Res<CounselorCharacter>>,
     struggle: Res<crate::jason::Struggle>,
-    mut player: Query<(Entity, &mut Trapped, &Player)>,
+    pads: crate::controls::Pads,
+    mut player: Query<(Entity, &mut Trapped, &Player, Has<crate::controls::LocalPlayer>)>,
 ) {
-    let Ok((pe, mut tr, p)) = player.single_mut() else { return };
+    for (pe, mut tr, p, local) in &mut player {
+    // Her wiggle (GLB_Wiggle: -1 while E is down): the local counselor's as read for the struggle (jason.rs).
+    let wiggle = if local { struggle.input } else if pads.pressed(pe, crate::controls::Button::Interact) { -1.0 } else { 0.0 };
     let dt = time.delta_secs();
     let foot = if tr.left { 0 } else { 1 };
     let len = |n: &str| character.as_ref().and_then(|c| c.length(n)).unwrap_or(2.0);
     if !p.counselor.alive() {
         commands.entity(pe).remove::<Trapped>();
-        return;
+        continue;
     }
     if let Some(out) = tr.out.as_mut() {
         *out += dt;
         if *out >= len(TRAP_EXIT[foot]) {
             commands.entity(pe).remove::<(Trapped, PlayAction)>();
         }
-        return;
+        continue;
     }
     let before = tr.t;
     tr.t += dt;
@@ -1096,13 +1107,14 @@ fn struggle_in_trap(
     if before < enter_len && tr.t >= enter_len {
         commands.entity(pe).insert(PlayAction(TRAP_CYCLE[foot].into()));
     }
-    if tr.wiggle.tick(dt, struggle.input, &TRAP_STRUGGLE) {
+    if tr.wiggle.tick(dt, wiggle, &TRAP_STRUGGLE) {
         info!("Vanessa: free of the trap after {:.1}s", tr.t);
         tr.out = Some(0.0);
         commands.entity(pe).insert(PlayAction(TRAP_EXIT[foot].into()));
         if let Ok(mut t) = commands.get_entity(tr.trap) {
             t.insert(crate::prop_anim::PropAnim::new(crate::prop_anim::TRAP_ESCAPED));
         }
+    }
     }
 }
 

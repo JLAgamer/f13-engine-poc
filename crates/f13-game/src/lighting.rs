@@ -700,7 +700,7 @@ fn add_flashlight(
     players: Query<(Entity, &Transform), (With<Player>, Without<Flashlight>)>,
 ) {
     let Some(model) = model else { return };
-    let Ok((pe, xf)) = players.single() else { return };
+    for (pe, xf) in &players {
     let v = |k: &str, d: f32| model.0.info.values.get(k).copied().unwrap_or(d);
     let byte = |k: &str| v(k, 255.0).clamp(0.0, 255.0) as u8;
     let mut color = LinearRgba::from(Color::srgb_u8(byte("FlashlightColorR"), byte("FlashlightColorG"), byte("FlashlightColorB")));
@@ -731,24 +731,26 @@ fn add_flashlight(
     info!("flashlight: {lumens:.0} lm, {:.0} m, cone {:.0}/{:.0} degrees", t.range, t.inner.to_degrees(), t.outer.to_degrees());
     commands.insert_resource(t);
     commands.entity(pe).insert(Flashlight { on: at_start.0, yaw: xf.rotation.to_euler(EulerRot::YXZ).0, light });
+    }
 }
 
 /// F turns it on and off (CSLR_Flashlight); hiding and dying turn it off.
 fn toggle_flashlight(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut players: Query<(&mut Flashlight, &Player, Has<crate::hiding::Hiding>, Has<crate::vehicle::Driving>)>,
+    pads: crate::controls::Pads,
+    mut players: Query<(Entity, &mut Flashlight, &Player, Has<crate::hiding::Hiding>, Has<crate::vehicle::Driving>)>,
 ) {
-    let Ok((mut f, p, hiding, driving)) = players.single_mut() else { return };
-    if hiding || !p.counselor.alive() {
-        if f.on {
-            info!("flashlight off");
+    for (pe, mut f, p, hiding, driving) in &mut players {
+        if hiding || !p.counselor.alive() {
+            if f.on {
+                info!("flashlight off");
+            }
+            f.on = false;
+            continue;
         }
-        f.on = false;
-        return;
-    }
-    if keys.just_pressed(KeyCode::KeyF) && !driving {
-        f.on = !f.on;
-        info!("flashlight {}", if f.on { "on" } else { "off" });
+        if pads.just_pressed(pe, crate::controls::Button::Flashlight) && !driving {
+            f.on = !f.on;
+            info!("flashlight {}", if f.on { "on" } else { "off" });
+        }
     }
 }
 
@@ -762,8 +764,8 @@ fn aim_flashlight(
     mut lights: Query<(&mut SpotLight, &mut Transform)>,
 ) {
     let (Some(t), Some(collision), Some(dynamic)) = (tuning, collision, dynamic) else { return };
-    let Ok((mut f, xf)) = players.single_mut() else { return };
-    let Ok((mut light, mut lxf)) = lights.get_mut(f.light) else { return };
+    for (mut f, xf) in &mut players {
+    let Ok((mut light, mut lxf)) = lights.get_mut(f.light) else { continue };
     // RInterpTo on the yaw: the shortest way round, a step of dt * speed of the remaining angle.
     let target = xf.rotation.to_euler(EulerRot::YXZ).0;
     let delta = (target - f.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
@@ -780,6 +782,7 @@ fn aim_flashlight(
     let intensity = if shine { t.lumens } else { 0.0 };
     if light.intensity != intensity {
         light.intensity = intensity;
+    }
     }
 }
 
