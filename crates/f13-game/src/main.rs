@@ -29,6 +29,7 @@ mod cinematic;
 mod car_lights;
 mod character;
 mod controls;
+mod net;
 mod collision;
 mod doors;
 mod fear_events;
@@ -87,6 +88,8 @@ const MAP: &str = "CrystalLake_Small";
 const LAYOUTS: u32 = 4;
 
 struct Args {
+    /// The netcode role (--server <port>, --connect <host:port>).
+    net: Option<net::Role>,
     /// Counselors in the match (--counselors n): the local one and n - 1 others at the next starts (testing).
     counselors: usize,
     export: PathBuf,
@@ -227,6 +230,7 @@ fn parse_args() -> Args {
     let mut health = None;
     let mut spawn = None;
     let mut counselors = 1usize;
+    let mut net = None;
     let mut tuning = None;
     let mut foliage = true;
     let mut screenshot = None;
@@ -300,6 +304,8 @@ fn parse_args() -> Args {
             "--speed" => speed = it.next().and_then(|v| v.parse().ok()).unwrap_or(1.0f32).clamp(0.1, 16.0),
             "--fear" => fear = Some(it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0f32).clamp(0.0, 100.0)),
             "--health" => health = it.next().and_then(|v| v.parse().ok()),
+            "--server" => net = it.next().and_then(|v| v.parse().ok()).map(net::Role::Server),
+            "--connect" => net = it.next().and_then(|v| std::net::ToSocketAddrs::to_socket_addrs(&v).ok()).and_then(|mut a| a.next()).map(net::Role::Client),
             "--counselors" => counselors = it.next().and_then(|v| v.parse().ok()).unwrap_or(1usize).clamp(1, 8),
             "--spawn" => {
                 let v: Vec<f32> = it.next().unwrap_or_default().split(',').filter_map(|x| x.trim().parse().ok()).collect();
@@ -337,7 +343,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass]");
         std::process::exit(2);
     };
-    Args { counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, camera, round_time, flashlight, rain }
+    Args { net, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, camera, round_time, flashlight, rain }
 }
 
 #[derive(Resource)]
@@ -485,6 +491,7 @@ fn main() {
         })
             .insert_resource(senses::KillerAbilityTuning(tuning.jason.clone()))
             .add_plugins(controls::ControlsPlugin)
+            .insert_resource(net::FreeStarts(counselor_starts(&layouts).into_iter().skip(args.counselors).collect()))
             .add_plugins(player::PlayerPlugin { others: counselor_starts(&layouts).into_iter().skip(1).take(args.counselors - 1).collect(), spawn, capsule: args.capsule, camera: args.camera, demo: args.demo, fear: args.fear.unwrap_or(0.0), health: args.health })
             .add_plugins(fear_events::FearEventsPlugin { locked: args.fear })
             // Playing Jason, the bot playing her doesn't decide when the run ends.
@@ -549,7 +556,9 @@ fn main() {
         }
         // The counselor bots test her alone; --bot-jason tests him.
         let bot_alone = args.bot_escape || args.bot_heal || args.bot_drop || args.bot_dodge || args.bot_door || args.bot_trap;
-        if !args.no_jason && !bot_alone {
+        // A client gets Jason from the server.
+        let client = matches!(args.net, Some(net::Role::Client(_)));
+        if !args.no_jason && !bot_alone && !client {
             app.add_plugins(jason::JasonPlugin { delay: args.jason_delay, kill: args.kill });
         }
     }
@@ -591,6 +600,9 @@ fn main() {
     // the host makes the player Jason.
     if !(args.fly || args.aerial) {
         app.add_plugins(jason_player::PlayJasonPlugin { active: args.play_jason, demo: args.play_jason_demo });
+    }
+    if let Some(role) = args.net {
+        app.add_plugins(net::NetPlugin(role));
     }
     if let Some(port) = args.host.filter(|_| !(args.fly || args.aerial)) {
         app.add_plugins(host::HostPlugin { port });

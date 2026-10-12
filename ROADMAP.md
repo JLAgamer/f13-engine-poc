@@ -46,11 +46,11 @@ Moved from Milestone 1 (not tied to gameplay):
 Server-authoritative netcode, tested with bots, then an 8-player lobby.
 
 Steps (lightyear 0.30 for the netcode):
-- [ ] Several counselors in one match: the counselor (Player) apart from the one this machine controls (LocalPlayer:
-      camera, HUD, listener, keyboard), each counselor's input her own (keyboard, network or bot), the systems that
-      assumed one counselor made per-counselor or local-view, Jason choosing among them
-- [ ] The server/client split: the server runs the match; clients send their input and receive the replicated
-      characters (transform, animation, health, fear), doors, windows, items and cars, interpolated
+- [ ] The server/client split: clients stop simulating the match (they only present it); the server replicates the
+      characters' animation, health and fear, the doors, windows, items and cars, and clients interpolate them
+      (bodies and input already go over the network: `--server <port>`, `--connect <host:port>`)
+- [ ] The game's choice of counselor start (starts are handed out in order; PLACEHOLDER), voice lines and the match
+      record per counselor (still the local one's)
 - [ ] Bot clients for tests: headless clients connecting to a local server and playing the bot scenarios
 - [ ] The 8-player lobby: Jason and counselor picks, ready, start; the match-end lobby with its badges
 

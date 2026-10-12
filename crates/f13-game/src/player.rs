@@ -155,7 +155,8 @@ impl Plugin for PlayerPlugin {
             // Input is read once per frame; one-shot actions stay latched until a fixed step uses them, so a frame
             // that runs several fixed steps (low frame rate, --speed) doesn't repeat a key press.
             .add_systems(RunFixedMainLoop, read_intent.in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop))
-            .add_systems(FixedUpdate, (update_counselor, move_player).chain())
+            // A network client's counselors move on the server (net.rs).
+            .add_systems(FixedUpdate, (update_counselor, move_player).chain().run_if(not(resource_exists::<crate::net::NetClient>)))
             .add_systems(Update, (
                     tag_player_parts,
                     grab_cursor,
@@ -211,23 +212,7 @@ fn spawn_player(
     }
     // The other counselors (--counselors): at their starts, their controls idle (a network or bot player's later).
     for &at in &config.others {
-        let mut counselor = Counselor::new(tuning.stats);
-        counselor.health = tuning.counselor.health.max_health;
-        let other = commands
-            .spawn((
-                Player { counselor, velocity: Vec2::ZERO, walk_toggle: false, fear: 0.0, root_motion: None, montage: None, vel_y: 0.0, grounded: false, hidden: false, swim_accel_sq: 0.0 },
-                Transform::from_translation(at),
-                Visibility::default(),
-                Unsettled,
-                crate::controls::Controls::default(),
-                Intent::default(),
-                Name::new("counselor"),
-            ))
-            .id();
-        if let Some(character) = character.as_deref().filter(|_| !config.capsule) {
-            crate::character::spawn_model(&mut commands, &assets, character, crate::character::Model::Counselor, other, ());
-        }
-        info!("counselor {other} at {at}");
+        spawn_counselor(&mut commands, &assets, character.as_deref().filter(|_| !config.capsule), &tuning, at);
     }
     commands.spawn((
         Camera3d::default(),
@@ -245,6 +230,29 @@ fn spawn_player(
         GlobalZIndex(5),
         Hud,
     ));
+}
+
+/// A counselor other than the local one, at `at`: full health, her controls idle until her player's (a network or
+/// bot player's) come in.
+pub(crate) fn spawn_counselor(commands: &mut Commands, assets: &AssetServer, character: Option<&crate::character::CounselorCharacter>, tuning: &PlayerTuning, at: Vec3) -> Entity {
+    let mut counselor = Counselor::new(tuning.stats);
+    counselor.health = tuning.counselor.health.max_health;
+    let other = commands
+        .spawn((
+            Player { counselor, velocity: Vec2::ZERO, walk_toggle: false, fear: 0.0, root_motion: None, montage: None, vel_y: 0.0, grounded: false, hidden: false, swim_accel_sq: 0.0 },
+            Transform::from_translation(at),
+            Visibility::default(),
+            Unsettled,
+            crate::controls::Controls::default(),
+            Intent::default(),
+            Name::new("counselor"),
+        ))
+        .id();
+    if let Some(character) = character {
+        crate::character::spawn_model(commands, assets, character, crate::character::Model::Counselor, other, ());
+    }
+    info!("counselor {other} at {at}");
+    other
 }
 
 /// Tags everything spawned under the player's model so ray casts can skip it.
