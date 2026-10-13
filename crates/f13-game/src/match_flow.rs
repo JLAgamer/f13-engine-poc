@@ -294,6 +294,7 @@ fn run_match(
     leave: Res<Leave>,
     host: Option<ResMut<crate::host::HostRequests>>,
     mut exit: MessageWriter<AppExit>,
+    (rematch, lobby): (Option<Res<crate::net::Rematch>>, Query<&crate::lobby::NetLobby>),
 ) {
     let Some(t) = tuning else { return };
     if players.is_empty() {
@@ -393,6 +394,15 @@ fn run_match(
                 }
             }
             MatchState::LeavingMap if leave.0 => {
+                // A lobby's server: a new lobby (a new world: no --seed), last match's Jason passed on.
+                if rematch.is_some() {
+                    let args: Vec<String> = std::env::args().skip(1).collect();
+                    let last = lobby.iter().next().and_then(|l| l.jason);
+                    match crate::net::relaunch(&args, &["--seed", "--last-jason"], &last.map(|j| ("--last-jason", j.to_string())).into_iter().collect::<Vec<_>>()) {
+                        Ok(_) => info!("match: back to the lobby"),
+                        Err(e) => warn!("match: can't start the lobby again: {e}"),
+                    }
+                }
                 info!("match: leaving");
                 exit.write(AppExit::Success);
             }

@@ -58,12 +58,23 @@ const WORLD_TELL: &str = "F13 world ";
 
 /// Answers clients' world questions on UDP `port + 1`.
 pub fn serve_world(port: u16, info: WorldInfo) {
-    let Ok(socket) = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port + 1)) else {
-        eprintln!("net: can't answer world questions on UDP {}", port + 1);
-        return;
-    };
     let answer = format!("{WORLD_TELL}{} {} {}", info.seed, info.layout, info.rain);
     std::thread::spawn(move || {
+        // (A rematch's relaunch starts while the last match's server is still letting go of the port: a few tries.)
+        let mut socket = None;
+        for _ in 0..50 {
+            match std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port + 1)) {
+                Ok(s) => {
+                    socket = Some(s);
+                    break;
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(200)),
+            }
+        }
+        let Some(socket) = socket else {
+            eprintln!("net: can't answer world questions on UDP {}", port + 1);
+            return;
+        };
         let mut buf = [0u8; 64];
         while let Ok((n, from)) = socket.recv_from(&mut buf) {
             if &buf[..n] == WORLD_ASK {
@@ -295,7 +306,44 @@ pub struct NetPlugin {
     pub dedicated: bool,
     /// This player's name in the lobby.
     pub name: String,
+    /// A client's netcode id (else one from the clock), and a lobby's last match's Jason (`--net-id`, `--last-jason`:
+    /// a rematch's relaunch keeps them).
+    pub net_id: Option<u64>,
+    pub last_jason: Option<u64>,
 }
+
+/// On a lobby's server: its matches end back in the lobby ([`relaunch`]).
+#[derive(Resource)]
+pub(crate) struct Rematch;
+
+/// This process again with `args` (its own, less `drop`'s flags and their values, plus `add`), and this one leaves: a
+/// lobby's match over, the server starts a new lobby with a new world and the clients join it again (the game travels
+/// everyone back to its lobby map; PLACEHOLDER: a restart stands in for the travel, there being one world per process).
+pub(crate) fn relaunch(args: &[String], drop: &[&str], add: &[(&str, String)]) -> std::io::Result<std::process::Child> {
+    let exe = std::env::current_exe()?;
+    std::process::Command::new(exe).args(relaunch_args(args, drop, add)).spawn()
+}
+
+fn relaunch_args(args: &[String], drop: &[&str], add: &[(&str, String)]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if drop.contains(&a.as_str()) {
+            it.next();
+            continue;
+        }
+        out.push(a.clone());
+    }
+    for (flag, v) in add {
+        out.push(flag.to_string());
+        out.push(v.clone());
+    }
+    out
+}
+
+/// On a client: its netcode id from `--net-id`.
+#[derive(Resource)]
+struct NetId(Option<u64>);
 
 impl Plugin for NetPlugin {
     fn build(&self, app: &mut App) {
@@ -303,6 +351,9 @@ impl Plugin for NetPlugin {
             Role::Server(port) => {
                 app.add_plugins(server::ServerPlugins { tick_duration: TICK });
                 protocol(app);
+                if self.lobby {
+                    app.insert_resource(Rematch).insert_resource(crate::lobby::LastJason(self.last_jason));
+                }
                 app.init_resource::<FreeStarts>()
                     .insert_resource(ServerPort(port))
                     .add_systems(Startup, start_server)
@@ -340,6 +391,7 @@ impl Plugin for NetPlugin {
                 protocol(app);
                 app.insert_resource(NetClient)
                     .insert_resource(ServerAddr(addr))
+                    .insert_resource(NetId(self.net_id))
                     .add_systems(Update, connect)
                     .add_observer(body_gone)
                     .init_resource::<Twins>()
@@ -578,13 +630,14 @@ fn update_bodies(
 #[derive(Resource)]
 struct ClientName(String);
 
-fn connect(mut commands: Commands, server: Res<ServerAddr>, level: Res<crate::Level>, assets: Res<AssetServer>, name: Res<ClientName>, mut done: Local<bool>) {
+#[allow(clippy::too_many_arguments)]
+fn connect(mut commands: Commands, server: Res<ServerAddr>, level: Res<crate::Level>, assets: Res<AssetServer>, name: Res<ClientName>, net_id: Res<NetId>, mut done: Local<bool>) {
     if *done || level.scenes.is_empty() || !level.scenes.iter().all(|h| assets.is_loaded_with_dependencies(h.id())) {
         return;
     }
     *done = true;
     // A client id from the clock (PLACEHOLDER: a backend would hand it out with the token).
-    let id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64);
+    let id = net_id.0.unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64));
     let auth = Authentication::Manual { server_addr: server.0, client_id: id, private_key: DEV_KEY, protocol_id: PROTOCOL_ID };
     let name = if name.0.is_empty() { format!("player {}", id % 10000) } else { name.0.clone() };
     commands.insert_resource(crate::lobby::Me { id, name });
@@ -1078,6 +1131,8 @@ pub struct NetMatch {
     pub killer_awards: Vec<(String, i32)>,
     pub killer_popups: Vec<(String, String)>,
     pub killer_badges: Vec<String>,
+    /// The match ends back in the lobby ([`relaunch`]).
+    pub rematch: bool,
 }
 
 /// A counselor's match: her awards, her score texts (and their category), and what became of her.
@@ -1111,7 +1166,7 @@ fn awards(s: &f13_core::game_mode::PlayerScore) -> Vec<(String, i32)> {
 }
 
 /// The match and each counselor's tally, for the clients.
-fn send_match(game: Res<GameMatch>, mut matches: Query<&mut NetMatch>, mut tallies: Query<(Entity, &mut NetTally)>) {
+fn send_match(game: Res<GameMatch>, mut matches: Query<&mut NetMatch>, mut tallies: Query<(Entity, &mut NetTally)>, rematch: Option<Res<Rematch>>) {
     if let Ok(n) = matches.single_mut() {
         let m = &game.state;
         set(n, NetMatch {
@@ -1122,6 +1177,7 @@ fn send_match(game: Res<GameMatch>, mut matches: Query<&mut NetMatch>, mut talli
             killer_awards: awards(&game.killer_score),
             killer_popups: game.killer_popups.iter().map(|(t, c, _)| (t.clone(), c.clone())).collect(),
             killer_badges: game.killer_badges.clone(),
+            rematch: rematch.is_some(),
         });
     }
     for (e, n) in &mut tallies {
@@ -1150,6 +1206,7 @@ fn receive_match(
     intro: Option<Res<crate::cinematic::IntroEnabled>>,
     leave: Res<crate::match_flow::Leave>,
     mut exit: MessageWriter<AppExit>,
+    me: Option<Res<crate::lobby::Me>>,
 ) {
     let now = time.elapsed_secs();
     let g = &mut *game;
@@ -1162,6 +1219,15 @@ fn receive_match(
                 MatchState::PreMatchIntro if intro.is_some() => commands.insert_resource(crate::cinematic::PlayCinematic(crate::cinematic::INTRO)),
                 MatchState::PostMatchOutro if intro.is_some() => commands.insert_resource(crate::cinematic::PlayCinematic(crate::cinematic::OUTRO)),
                 MatchState::LeavingMap if leave.0 => {
+                    // Back to the lobby with the server (the same netcode id, for its last-Jason rule).
+                    if n.rematch {
+                        let args: Vec<String> = std::env::args().skip(1).collect();
+                        let id = me.as_ref().map(|m| m.id);
+                        match relaunch(&args, &["--net-id"], &id.map(|id| ("--net-id", id.to_string())).into_iter().collect::<Vec<_>>()) {
+                            Ok(_) => info!("match: back to the lobby"),
+                            Err(e) => warn!("match: can't start again for the lobby: {e}"),
+                        }
+                    }
                     info!("match: leaving");
                     exit.write(AppExit::Success);
                 }
@@ -1327,6 +1393,13 @@ mod tests {
         let w = Snapshots([(0.0, Vec3::ZERO, 3.0), (1.0, Vec3::ZERO, -3.0)].into());
         let (_, y) = sample(&w, 0.5).unwrap();
         assert!((y - (3.0 + (std::f32::consts::TAU - 6.0) / 2.0)).abs() < 1e-3, "{y}");
+    }
+
+    #[test]
+    fn a_rematch_starts_again_with_its_flags() {
+        let args: Vec<String> = ["--server", "5013", "--seed", "7", "--lobby", "--last-jason", "3"].iter().map(|s| s.to_string()).collect();
+        let out = relaunch_args(&args, &["--seed", "--last-jason"], &[("--last-jason", "9".into())]);
+        assert_eq!(out, ["--server", "5013", "--lobby", "--last-jason", "9"]);
     }
 
     #[test]

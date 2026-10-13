@@ -110,6 +110,10 @@ pub struct JasonInputMsg {
     pub view: [f32; 6],
 }
 
+/// Last match's Jason (his id: the server's own player 0), out of the draw when anyone else is in.
+#[derive(Resource, Default)]
+pub struct LastJason(pub Option<u64>);
+
 /// The countdown once everyone is ready (s; PLACEHOLDER).
 const COUNTDOWN_S: f32 = 5.0;
 
@@ -241,6 +245,7 @@ fn count_down(
     (assets, character, tuning): (Res<AssetServer>, Option<Res<crate::character::CounselorCharacter>>, Res<crate::player::PlayerTuning>),
     local: Query<(Entity, &Transform), (With<LocalPlayer>, With<Player>)>,
     jason: Query<Entity, With<crate::jason::Jason>>,
+    last: Res<LastJason>,
 ) {
     let Ok(mut lobby) = lobby.single_mut() else { return };
     let ready = !lobby.members.is_empty() && lobby.members.iter().all(|m| m.ready);
@@ -257,7 +262,7 @@ fn count_down(
     }
     // The match: Jason, then the counselors.
     let members: Vec<(u64, Preference)> = lobby.members.iter().map(|m| (m.id, m.preference)).collect();
-    let killer = pick_killer(&members, None, &mut || rng.0.frand());
+    let killer = pick_killer(&members, last.0, &mut || rng.0.frand());
     let name = |id: u64| lobby.members.iter().find(|m| m.id == id).map_or(String::new(), |m| m.name.clone());
     info!("lobby: the match starts: Jason is {}", killer.map_or("nobody".into(), name));
     let link = |id: u64| links.0.iter().find(|(i, _)| *i == id).and_then(|(_, l)| *l);
