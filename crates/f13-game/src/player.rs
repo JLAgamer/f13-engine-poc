@@ -139,7 +139,7 @@ pub struct PlayerPlugin {
 
 #[derive(Resource)]
 pub(crate) struct PlayerConfig {
-    spawn: Vec3,
+    pub(crate) spawn: Vec3,
     others: Vec<Vec3>,
     capsule: bool,
     pub(crate) camera: Option<(Vec3, Vec3)>,

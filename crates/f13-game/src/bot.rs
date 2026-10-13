@@ -387,7 +387,7 @@ fn look_at(camera: &mut PlayerCamera, player: &Transform, target: Vec3) {
 fn run_bot(
     mut commands: Commands,
     mut bot: ResMut<Bot>,
-    (time, real): (Res<Time>, Res<Time<Real>>),
+    (time, real, config): (Res<Time>, Res<Time<Real>>, Option<Res<crate::player::PlayerConfig>>),
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     (interactions, tuning): (Query<&crate::interact::Interaction, With<crate::controls::LocalPlayer>>, Res<crate::player::PlayerTuning>),
@@ -419,7 +419,7 @@ fn run_bot(
         Option<Res<crate::power::PowerGrids>>,
         (Option<Res<FourSeat>>, Option<Res<Passenger>>),
     ),
-    (collision, dynamic, (mut phone_boxes, mut phones, arrived, police_cars, jason_entities, placed_kills), water, navmesh, moving): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<Res<crate::police::PoliceArrived>>, Query<&Transform, (With<crate::police::PoliceCar>, Without<Player>, Without<Vehicle>)>, Query<Entity, With<crate::jason::Jason>>, Query<(Entity, &crate::placed_kills::PlacedKill)>), Option<Res<crate::water::Water>>, Option<Res<crate::navigation::Navmesh>>, Query<(), (With<Player>, Or<(With<crate::interact::WindowMove>, With<crate::interact::MoveToSpot>, With<crate::interact::DoorMove>)>)>),
+    (collision, dynamic, (mut phone_boxes, mut phones, arrived, police_cars, jason_entities, placed_kills), water, navmesh, moving): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<Res<crate::police::PoliceArrived>>, Query<&Transform, (With<crate::police::PoliceCar>, Without<Player>, Without<Vehicle>)>, Query<Entity, With<crate::jason::Jason>>, Query<(Entity, &crate::placed_kills::PlacedKill)>), Option<Res<crate::water::Water>>, Option<Res<crate::navigation::Navmesh>>, Query<(), (With<Player>, Or<(With<crate::interact::WindowMove>, With<crate::interact::MoveToSpot>, With<crate::interact::DoorMove>, With<crate::net::RemoteMove>)>)>),
 ) {
     // The counselor's interaction (none before her inventory is in).
     let idle = crate::interact::Interaction::default();
@@ -507,8 +507,9 @@ fn run_bot(
                 return;
             }
             if bot.goal == Goal::Door {
-                // Nearest lockable door, nearest door with a barricade, nearest window.
-                let me = pxf.translation;
+                // Nearest lockable door, nearest door with a barricade, nearest window: to her own start (a client's
+                // counselor stands where the server put her; the same fixtures as in a game of its own).
+                let me = config.as_ref().map_or(pxf.translation, |c| c.spawn);
                 let near = |p: Vec3| p.distance(me);
                 let barred = |e: Entity| barricades.iter().any(|b| b.door == Some(e));
                 let pick = |want_bar: bool| {

@@ -207,7 +207,13 @@ pub struct NetCounselor {
     pub driving: Option<(u32, Option<u8>, Option<NetHold>)>,
     /// Escaped, and how.
     pub escaped: Option<String>,
+    /// In a move at a door or window, or on her way onto a special move's spot ([`RemoteMove`] on her twin).
+    pub moving: bool,
 }
+
+/// A client's twin of a counselor in a move the server plays (at a door or window, or onto a special move's spot).
+#[derive(Component)]
+pub struct RemoteMove;
 
 /// A hold interaction (f13-core minigame HoldInteraction): its times, and its pips (width, position, state, key).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -415,11 +421,9 @@ fn bot_hooks(
                 crate::bot::BotSetup::Place(at) => {
                     if let Some((e, _, mut xf)) = counselors.iter_mut().find(|(_, by, _)| by.0 == link) {
                         xf.translation = Vec3::from_array(at);
-                        // Out of any move she was in (it would carry her back toward its spot).
-                        commands
-                            .entity(e)
-                            .insert(crate::player::Unsettled)
-                            .remove::<(crate::interact::MoveToSpot, crate::interact::DoorMove, crate::interact::WindowMove, crate::interact::BarricadeMove)>();
+                        // Off any special move's way onto its spot (it would carry her back there). (A door's or window's
+                        // move plays on: its fixture moves with it.)
+                        commands.entity(e).insert(crate::player::Unsettled).remove::<crate::interact::MoveToSpot>();
                     }
                 }
                 crate::bot::BotSetup::Door { at, barred } => {
@@ -789,7 +793,7 @@ fn set<T: PartialEq>(mut c: Mut<T>, v: T) {
 #[allow(clippy::type_complexity)]
 fn update_bodies(
     mut bodies: Query<(&mut NetBody, &Transform, &mut NetAction, Option<&PlayAction>, Has<crate::items::Blocking>)>,
-    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>, Has<crate::voice::Spectating>), (Option<&crate::hiding::Hiding>, Option<&crate::hiding::Breathing>, Option<&crate::interact::Interaction>), (Option<&crate::vehicle::Driving>, Option<&crate::vehicle::Escaped>))>,
+    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>, Has<crate::voice::Spectating>), (Option<&crate::hiding::Hiding>, Option<&crate::hiding::Breathing>, Option<&crate::interact::Interaction>), (Option<&crate::vehicle::Driving>, Option<&crate::vehicle::Escaped>, Has<crate::interact::MoveToSpot>, Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>))>,
     struggle: Option<Res<crate::jason::Struggle>>,
     mut jasons: Query<(&mut NetJason, &crate::jason::Jason, Option<&crate::senses::Knowledge>, Option<&crate::kill_camera::KillCam>)>,
     world_ids: Query<&crate::net_world::WorldId>,
@@ -810,7 +814,7 @@ fn update_bodies(
             a.blocking = blocking;
         }
     }
-    for (n, p, name, controls, (held, trapped, spectating), (hiding, breathing, interaction), (driving, escaped)) in &mut counselors {
+    for (n, p, name, controls, (held, trapped, spectating), (hiding, breathing, interaction), (driving, escaped, to_spot, door_move, window_move)) in &mut counselors {
         let c = &p.counselor;
         set(n, NetCounselor {
             stance: c.stance as u8,
@@ -835,6 +839,7 @@ fn update_bodies(
             hold: interaction.and_then(|i| i.hold.as_ref()).map(NetHold::of),
             driving: driving.and_then(|d| Some((world_ids.get(d.vehicle).ok()?.0, d.seat.map(|s| s as u8), d.starting.as_ref().map(NetHold::of)))),
             escaped: escaped.map(|e| e.how.clone()),
+            moving: to_spot || door_move || window_move,
         });
     }
     for (n, j, know, cam) in &mut jasons {
@@ -1073,14 +1078,14 @@ fn mirror(
     mut commands: Commands,
     (real, clock): (Res<Time<Real>>, Res<ServerClock>),
     mut bodies: Query<(&NetBody, &NetAction, Option<&NetCounselor>, Option<&NetJason>, &mut Twin, Option<&Snapshots>)>,
-    mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>, (Option<&Name>, Option<&mut Controls>, Has<LocalPlayer>, Option<&mut crate::senses::Knowledge>), (Has<crate::jason::Held>, Option<&mut crate::items::Trapped>, Has<crate::voice::Spectating>), (Option<&mut crate::hiding::Hiding>, Option<&mut crate::hiding::Breathing>, Option<&mut crate::interact::Interaction>), (Option<&mut crate::vehicle::Driving>, Has<crate::vehicle::Escaped>))>,
+    mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>, (Option<&Name>, Option<&mut Controls>, Has<LocalPlayer>, Option<&mut crate::senses::Knowledge>), (Has<crate::jason::Held>, Option<&mut crate::items::Trapped>, Has<crate::voice::Spectating>), (Option<&mut crate::hiding::Hiding>, Option<&mut crate::hiding::Breathing>, Option<&mut crate::interact::Interaction>), (Option<&mut crate::vehicle::Driving>, Has<crate::vehicle::Escaped>, Has<RemoteMove>))>,
     mut struggle: Option<ResMut<crate::jason::Struggle>>,
     actors: Res<crate::net_world::Actors>,
     cams: Query<&crate::kill_camera::KillCam>,
 ) {
     let shown_at = clock.now(&real) - INTERP_DELAY_S;
     for (b, a, nc, nj, mut twin, snaps) in &mut bodies {
-        let Ok((mut xf, player, jason, action, blocking, (name, controls, local, know), (held, trapped, spectating), (hiding, breathing, interaction), (driving, escaped))) = twins.get_mut(twin.local) else { continue };
+        let Ok((mut xf, player, jason, action, blocking, (name, controls, local, know), (held, trapped, spectating), (hiding, breathing, interaction), (driving, escaped, remote_move))) = twins.get_mut(twin.local) else { continue };
         let (to, yaw) = snaps.and_then(|s| sample(s, shown_at)).unwrap_or((Vec3::from_array(b.pos), b.yaw));
         xf.translation = to;
         xf.rotation = Quat::from_rotation_y(yaw);
@@ -1151,6 +1156,15 @@ fn mirror(
                     e.remove::<crate::vehicle::Driving>();
                 }
                 (None, None) => {}
+            }
+            match (n.moving, remote_move) {
+                (true, false) => {
+                    e.insert(RemoteMove);
+                }
+                (false, true) => {
+                    e.remove::<RemoteMove>();
+                }
+                _ => {}
             }
             if let (Some(how), false) = (&n.escaped, escaped) {
                 e.insert(crate::vehicle::Escaped { how: how.clone() });

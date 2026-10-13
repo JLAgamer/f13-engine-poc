@@ -7,8 +7,6 @@ Base content (asset paths in the player's install; all gameplay values come from
 `Characters/Killers/Jason/J2`, the Chevettes (`Blueprints/Vehicles/DriveableVehicles/Cars/Chevette`), the police.
 
 ## Todo
-- [ ] Scenario bots on clients: the door bot (every other scenario passes on a client: regress.sh runhook) gets
-      through most of its steps, but a close or a climb sometimes finds the way to its spot blocked on the server
 - [ ] The lobby's rest: the match-end lobby as the game's widget (SCMatchEndLobbyWidget with its badges' icons:
       SCStatBadge; the text overlay stands in, the last match's results on it), the lobby's ready bar
       (LobbyReadyButtonMaterial) and its rows' character select, ping and mute buttons, the counselors' character
