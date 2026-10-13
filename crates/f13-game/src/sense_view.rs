@@ -9,7 +9,7 @@
 //! spot's): senses.rs's `highlight`. Custom depth draws her meshes alone, so the stencil the material reads has her
 //! through walls (stencil 2). Indoors, her cabin's SetSenseEffects (Cabin_Base) calls SetSenseSettings on each of its
 //! child actors that is a door (BP_DoorBase) or window (Cabin_Window_BP): custom depth on all their primitives,
-//! stencil 1 (senses.rs's `sensed_cabin`; not while he's in that cabin too).
+//! stencil 1 (senses.rs's `sensed_cabins`; not while he's in that cabin too).
 //!
 //! Here the custom stencil is a mask: a second camera at his camera's view, drawing copies of those meshes (same mesh
 //! and skin, unlit: red for hers, green for the cabin's) on their own render layer, before his camera. The passes read
@@ -205,12 +205,12 @@ fn mask_camera(
     commands.insert_resource(Mask { image, size, camera });
 }
 
-/// What Sense highlights now: her (outside), and the cabin she's in.
-fn sensed(play: &Option<Res<crate::jason_player::PlayJason>>, knowledge: &Query<&crate::senses::Knowledge>) -> (bool, Option<usize>) {
+/// What Sense highlights now: the counselors outside, and the cabins counselors are in.
+fn sensed(play: &Option<Res<crate::jason_player::PlayJason>>, knowledge: &Query<&crate::senses::Knowledge>) -> (Vec<Entity>, Vec<usize>) {
     if play.is_none() {
-        return (false, None);
+        return (Vec::new(), Vec::new());
     }
-    (knowledge.iter().any(|k| k.highlight), knowledge.iter().find_map(|k| k.sensed_cabin))
+    (knowledge.iter().flat_map(|k| k.highlighted.iter().copied()).collect(), knowledge.iter().flat_map(|k| k.sensed_cabins.iter().copied()).collect())
 }
 
 /// Copies of the highlighted meshes on the mask's layer.
@@ -220,7 +220,7 @@ fn mirrors(
     mut materials: ResMut<Assets<StandardMaterial>>,
     play: Option<Res<crate::jason_player::PlayJason>>,
     knowledge: Query<&crate::senses::Knowledge>,
-    rigs: Query<(Entity, &crate::character::Rig)>,
+    rigs: Query<(Entity, &crate::character::Rig, &ChildOf)>,
     parts: Query<(Entity, &CabinPart)>,
     children: Query<&Children>,
     meshes: Query<(&Mesh3d, Option<&SkinnedMesh>, Option<&MeshMorphWeights>), Without<SenseMirror>>,
@@ -228,8 +228,8 @@ fn mirrors(
     mut mirrored: Local<HashMap<Entity, Entity>>,
     mut colours: Local<Option<(Handle<StandardMaterial>, Handle<StandardMaterial>)>>,
 ) {
-    let (her, cabin) = sensed(&play, &knowledge);
-    let on = her || cabin.is_some();
+    let (lit, cabins) = sensed(&play, &knowledge);
+    let on = !lit.is_empty() || !cabins.is_empty();
     // The mask draws only while there's something to draw.
     for mut c in &mut mask_cameras {
         if c.is_active != on {
@@ -244,16 +244,14 @@ fn mirrors(
         .clone();
     // The meshes to mirror, and their mask colour.
     let mut wanted: HashMap<Entity, Handle<StandardMaterial>> = HashMap::new();
-    if her {
-        for (rig_entity, rig) in &rigs {
-            if matches!(rig.model, crate::character::Model::Counselor) {
-                wanted.extend(children.iter_descendants(rig_entity).filter(|e| meshes.contains(*e)).map(|e| (e, red.clone())));
-            }
+    for (rig_entity, rig, owner) in &rigs {
+        if matches!(rig.model, crate::character::Model::Counselor) && lit.contains(&owner.parent()) {
+            wanted.extend(children.iter_descendants(rig_entity).filter(|e| meshes.contains(*e)).map(|e| (e, red.clone())));
         }
     }
-    if let Some(c) = cabin {
+    if !cabins.is_empty() {
         for (root, part) in &parts {
-            if part.0 == c {
+            if cabins.contains(&part.0) {
                 wanted.extend(children.iter_descendants(root).filter(|e| meshes.contains(*e)).map(|e| (e, green.clone())));
             }
         }
@@ -304,8 +302,8 @@ fn highlight(
     cameras: Query<(Entity, &GlobalTransform, &Projection, Has<SenseHighlight>), With<crate::player::PlayerCamera>>,
     mut smoke: Local<Option<Handle<Image>>>,
 ) {
-    let (her, cabin) = sensed(&play, &knowledge);
-    let on = her || cabin.is_some();
+    let (lit, cabins) = sensed(&play, &knowledge);
+    let on = !lit.is_empty() || !cabins.is_empty();
     for (e, xf, projection, has) in &cameras {
         match mask.as_deref().filter(|_| on) {
             Some(m) => {
@@ -317,7 +315,7 @@ fn highlight(
                     _ => 0.1,
                 };
                 let smoke = smoke.get_or_insert_with(|| assets.load(SMOKE)).clone();
-                commands.entity(e).insert(SenseHighlight { counselor: her, cabin: cabin.is_some(), mask: m.image.clone(), smoke, forward_time, near });
+                commands.entity(e).insert(SenseHighlight { counselor: !lit.is_empty(), cabin: !cabins.is_empty(), mask: m.image.clone(), smoke, forward_time, near });
             }
             None if has => {
                 commands.entity(e).remove::<SenseHighlight>();

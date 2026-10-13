@@ -77,10 +77,11 @@ pub struct Knowledge {
     pub sense_length: f32,
     /// What Sense showed last (logged when it changes).
     sense_shows: Option<Clue>,
-    /// Sense shows her outside and not hiding: her meshes' custom depth is on (FUN_1404111f0; sense_view.rs).
-    pub highlight: bool,
-    /// Sense shows her indoors: her cabin (match actor index), unless he's in it too (its SetSenseEffects).
-    pub sensed_cabin: Option<usize>,
+    /// The counselors Sense shows outside and not hiding: their meshes' custom depth is on (FUN_1404111f0;
+    /// sense_view.rs). Every machine works these out ([`sense_highlights`]).
+    pub highlighted: Vec<Entity>,
+    /// The cabins (match actor indices) Sense shows counselors in, but his own (their SetSenseEffects).
+    pub sensed_cabins: Vec<usize>,
     next_sight: f32,
 }
 
@@ -96,6 +97,7 @@ impl Plugin for SensesPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, setup)
             .add_systems(FixedUpdate, (perceive, blips).chain().before(crate::jason::update_jason).run_if(crate::net::simulating).run_if(crate::match_flow::in_progress))
+            .add_systems(Update, sense_highlights)
             .add_observer(show_blip);
     }
 }
@@ -154,8 +156,8 @@ fn setup(
             sense_until: 0.0,
             sense_length: 0.0,
             sense_shows: None,
-            highlight: false,
-            sensed_cabin: None,
+            highlighted: Vec::new(),
+            sensed_cabins: Vec::new(),
             next_sight: 0.0,
         });
     }
@@ -260,6 +262,59 @@ fn blocked(world: &(impl f13_core::collision::TriSource + ?Sized), a: Vec3, b: V
     f13_core::collision::segment_hit(world, a, b, 4.0).is_some()
 }
 
+/// Sense's highlights (FUN_1404111f0, each tick while it's on, per counselor): within her radius (her fear's; hiding,
+/// only raged, by the hiding curve; 2D) and outside, not hiding: her (custom depth); indoors: her cabin (its
+/// SetSenseEffects), but not the one he's in; hiding: nothing shows (the spots' stencil stays 0). Worked out on every
+/// machine (the game's tick is local), from the Sense timer (the server's; net.rs replicates it).
+#[allow(clippy::type_complexity)]
+fn sense_highlights(
+    time: Res<Time>,
+    values: Option<Res<SenseValues>>,
+    surroundings: Option<Res<crate::fear_events::Surroundings>>,
+    (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
+    mut jasons: Query<(&Transform, &mut Knowledge), With<Jason>>,
+    players: Query<(Entity, &Player, &Transform, Option<&Hiding>), (Without<Jason>, Without<crate::vehicle::Escaped>)>,
+) {
+    let Some(v) = values else { return };
+    let now = time.elapsed_secs();
+    let world = collision.with(&dynamic);
+    let cabin_at = |at: Vec3| surroundings.as_ref().and_then(|s| s.cabin_at(at));
+    for (jxf, mut k) in &mut jasons {
+        let (mut lit, mut cabins) = (Vec::new(), Vec::new());
+        if k.sensing(now) {
+            let his = cabin_at(jxf.translation);
+            for (e, p, xf, hiding) in &players {
+                if !p.counselor.alive() {
+                    continue;
+                }
+                let hidden = hiding.is_some_and(|h| matches!(h.phase, HidePhase::Hidden | HidePhase::Killed));
+                let radius = perception::sense_radius(&v.sense, p.fear, hidden, k.abilities.rage_active, k.abilities.rage_timer) / 100.0;
+                let her = xf.translation;
+                if Vec2::new(her.x - jxf.translation.x, her.z - jxf.translation.z).length() > radius {
+                    continue;
+                }
+                let indoors = surroundings.as_ref().map_or_else(
+                    || f13_core::collision::segment_hit(&world, her + Vec3::Y * 1.7, her + Vec3::Y * INDOORS_ROOF_M, 2.0).is_some(),
+                    |s| s.indoors(her),
+                );
+                if indoors {
+                    if let Some(c) = cabin_at(her).filter(|&c| his != Some(c) && !cabins.contains(&c)) {
+                        cabins.push(c);
+                    }
+                } else if !hidden {
+                    lit.push(e);
+                }
+            }
+        }
+        if k.highlighted != lit {
+            k.highlighted = lit;
+        }
+        if k.sensed_cabins != cabins {
+            k.sensed_cabins = cabins;
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn perceive(
     mut commands: Commands,
@@ -296,8 +351,6 @@ pub(crate) fn perceive(
                 AbilityEvent::RequestRageFromServer => {}
             }
         }
-        k.highlight = false;
-        k.sensed_cabin = None;
         if matches!(j.state, JasonState::Waiting(_) | JasonState::Done) || !p.counselor.alive() {
             k.sees = false;
             continue;
@@ -365,11 +418,6 @@ pub(crate) fn perceive(
                 );
                 let clue = if indoors { Clue::SensedIndoors } else { Clue::Sensed };
                 shows = Some(clue);
-                k.highlight = !indoors && !hidden;
-                if indoors {
-                    let cabin_at = |at: Vec3| surroundings.as_ref().and_then(|s| s.cabin_at(at));
-                    k.sensed_cabin = cabin_at(her).filter(|&c| cabin_at(jxf.translation) != Some(c));
-                }
                 if k.sense_shows != shows {
                     info!("Jason: Sense shows her ({}, {:.0} m, radius {radius:.0} m)", if indoors { "in a cabin" } else { "outside" }, flat.length());
                 }

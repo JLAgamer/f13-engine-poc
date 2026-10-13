@@ -286,6 +286,9 @@ pub struct NetJason {
     /// His map out for a Morph (the player's MorphMap: bIsMorphActive), for the client that plays him.
     #[serde(default)]
     pub morph_map: bool,
+    /// Sense: how long it's still on (s; 0 off) and its length (every machine works out its highlights: senses.rs).
+    #[serde(default)]
+    pub sense: (f32, f32),
 }
 
 /// A character's full-body action ([`PlayAction`]), how often it restarted ([`RestartAction`]), its last seek
@@ -881,6 +884,8 @@ fn update_bodies(
             mask_on: j.mask_on,
             health: j.health,
             morph_map: morph_map.as_ref().is_some_and(|m| m.morph),
+            // (Tenths of a second: an unchanged component doesn't go out again.)
+            sense: know.map_or((0.0, 0.0), |k| (((k.sense_until - fixed.elapsed_secs()).max(0.0) * 10.0).ceil() / 10.0, k.sense_length)),
             state: j.state_name(),
             cooldown: j.cooldown,
             unlocked: a.map_or([false; 4], |a| a.unlocked),
@@ -1136,6 +1141,7 @@ fn mirror(
     mut struggle: Option<ResMut<crate::jason::Struggle>>,
     actors: Res<crate::net_world::Actors>,
     cams: Query<&crate::kill_camera::KillCam>,
+    time: Res<Time>,
 ) {
     let shown_at = clock.now(&real) - INTERP_DELAY_S;
     for (b, a, nc, nj, mut twin, snaps) in &mut bodies {
@@ -1291,6 +1297,13 @@ fn mirror(
                 twin.kill = key;
             }
             if let Some(mut k) = know {
+                let a = &mut k.abilities;
+                // Sense's timer on this clock.
+                let until = time.elapsed_secs() + n.sense.0;
+                if (until - k.sense_until).abs() > 0.25 || n.sense.0 == 0.0 {
+                    k.sense_until = if n.sense.0 > 0.0 { until } else { 0.0 };
+                }
+                k.sense_length = n.sense.1;
                 let a = &mut k.abilities;
                 a.unlocked = n.unlocked;
                 a.recharge_timer = n.recharge;
@@ -1781,7 +1794,8 @@ fn net_bot_jason(
             let seen = match name {
                 "Shift" => nj.shifting || spent(Ability::Shift),
                 "Stalk" => nj.stalking || spent(Ability::Stalk),
-                "Sense" => spent(Ability::Sense),
+                // (And on here: its highlights are worked out on this machine.)
+                "Sense" => spent(Ability::Sense) && know.iter().next().is_some_and(|k| k.sensing(time.elapsed_secs())),
                 _ => nj.state == "Morphing" || spent(Ability::Morph),
             };
             if seen {
