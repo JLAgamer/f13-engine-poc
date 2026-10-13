@@ -1175,6 +1175,8 @@ fn fly_knives(
                         };
                         let axis = from.clamp(a.with_y(a.y.min(b.y)), b.with_y(a.y.max(b.y))).with_x(a.x).with_z(a.z);
                         let out = (from - axis).normalize_or(-dir);
+                        // And the blood on her clothes there (blood.rs).
+                        commands.trigger(crate::blood::ApplyBlood { counselor: pe, at: axis + out * 0.15 });
                         crate::decals::spawn_impact(&mut commands, d, axis + out * 0.15, out, dir.with_y(0.0).normalize_or(Vec3::Z), Some(pe), &mut r, |a, b| {
                             f13_core::collision::segment_hit_tri(&world, a, b, 2.0).map(|(t, n, _)| (a + (b - a) * t, n))
                         });

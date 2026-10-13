@@ -106,6 +106,10 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         /// The character's music object (MusicObjectClass's defaults: MusicData, idle times, warning cues), object
         /// references as their names ("SoundCue'Name'").
         public Newtonsoft.Json.Linq.JObject? Music;
+        /// Her body parts (SCCharacterBodyPartComponent, by component name): the clothes' gore mask each sets
+        /// (TextureParameterName, its LimbUVTexture, CombatDamageGoreInfo's per weapon class) on the body's materials
+        /// (ParentMaterialElementIndices), textures as exported .png paths.
+        public Newtonsoft.Json.Linq.JObject? BodyParts;
         /// The body mesh's physics asset (the ragdoll): one body per simulated bone, and the joints between them.
         public List<RagdollBody>? Ragdoll;
         public List<RagdollJoint>? Joints;
@@ -301,6 +305,7 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         // The HUD's fear opacity (SCCounselorCharacter's tick 0x1403d8de0: HUDOpacityFearCurve(CosmeticFear)).
         if (CurveValue(cls, "HUDOpacityFearCurve") is { } hudFear) (info.Curves ??= new())["HUDOpacityFearCurve"] = hudFear;
         info.Cameras = DynamicCameras(cls);
+        info.BodyParts = BodyParts(cls, queue);
         info.CameraShakes = new Newtonsoft.Json.Linq.JObject();
         foreach (var shake in new[] { "SummerCamp/Content/Cameras/CameraShakes/ED_Shake2" })
             if (provider.LoadPackageObject<UBlueprintGeneratedClass>(shake + "." + shake.Split('/')[^1] + "_C").ClassDefaultObject.Load() is { } shakeCdo)
@@ -738,6 +743,51 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             result["VO:" + name] = $"SoundCue'{path.Split('.')[^1]}'";
         }
         return result;
+    }
+
+    /// Her body parts' gore masks (see Info.BodyParts); the textures queued for export.
+    Newtonsoft.Json.Linq.JObject? BodyParts(UStruct? cls, Action<UObject> queue)
+    {
+        string? Texture(Newtonsoft.Json.Linq.JToken? soft)
+        {
+            var path = soft?["AssetPathName"]?.ToString();
+            if (string.IsNullOrEmpty(path) || path == "None") return null;
+            var pkg = path.Split('.')[0];
+            if (provider.TryLoadPackageObject<UTexture2D>(pkg + "." + pkg.Split('/')[^1], out var tex)) queue(tex);
+            return (pkg.StartsWith("/Game/") ? "SummerCamp/Content/" + pkg["/Game/".Length..] : pkg) + ".png";
+        }
+        // ClothesMultiGore's own textures (its layer functions': Gore_Layer's and Gore_Bright_Layer's UV2_Gore_normal,
+        // Gore_Layer's UV2_Gore_Colormask; Gore_Burn_Layer's Gore_RGB default).
+        foreach (var t in new[] { "/Game/Characters/Counselors/Gore/DismembermentMasks/UV2_Gore_normal", "/Game/Characters/Counselors/Gore/DismembermentMasks/UV2_Gore_Colormask", "/Game/Characters/Counselors/Gore/Textures/gore_burn_RGB_mask_01" })
+            Texture(new Newtonsoft.Json.Linq.JObject { ["AssetPathName"] = t });
+        // They're the character's native default subobjects (SCCounselorCharacter's constructor): each class package's
+        // own exports of them, a subclass's properties over its parents'.
+        var parts = new Dictionary<string, Newtonsoft.Json.Linq.JObject>(StringComparer.OrdinalIgnoreCase);
+        var chain = new List<UStruct>();
+        for (var c = cls; c != null; c = c.SuperStruct?.Load<UStruct>()) chain.Insert(0, c);
+        foreach (var c in chain.OfType<UBlueprintGeneratedClass>())
+            foreach (var e in c.Owner?.GetExports() ?? [])
+                if (e.ExportType == "SCCharacterBodyPartComponent")
+                {
+                    var p = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(e))["Properties"] as Newtonsoft.Json.Linq.JObject ?? new Newtonsoft.Json.Linq.JObject();
+                    if (parts.TryGetValue(e.Name, out var m)) m.Merge(p, new Newtonsoft.Json.Linq.JsonMergeSettings { MergeArrayHandling = Newtonsoft.Json.Linq.MergeArrayHandling.Replace });
+                    else parts[e.Name] = p;
+                }
+        var result = new Newtonsoft.Json.Linq.JObject();
+        foreach (var (name, p) in parts)
+        {
+            var gore = new Newtonsoft.Json.Linq.JObject();
+            foreach (var g in p["CombatDamageGoreInfo"] as Newtonsoft.Json.Linq.JArray ?? new Newtonsoft.Json.Linq.JArray())
+                if (g["WeaponType"]?["ObjectName"]?.ToString().Split('\'')[^2] is { } weapon && Texture(g["BloodMask"]) is { } mask) gore[weapon] = mask;
+            result[name] = new Newtonsoft.Json.Linq.JObject
+            {
+                ["Parameter"] = p["TextureParameterName"],
+                ["Mask"] = Texture(p["LimbUVTexture"]),
+                ["WeaponMasks"] = gore,
+                ["Elements"] = p["ParentMaterialElementIndices"] ?? new Newtonsoft.Json.Linq.JArray(),
+            };
+        }
+        return result.Count > 0 ? result : null;
     }
 
     /// A Blueprint class's ILLDynamicCameraComponents (construction-script nodes of it and its Blueprint parents), by

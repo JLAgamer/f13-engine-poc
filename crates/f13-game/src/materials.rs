@@ -26,6 +26,8 @@ pub(crate) type BlendMaterial = ExtendedMaterial<StandardMaterial, BlendExt>;
 pub(crate) type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainExt>;
 pub(crate) type WaterMaterial = ExtendedMaterial<StandardMaterial, WaterExt>;
 pub(crate) type PropMaterial = ExtendedMaterial<StandardMaterial, PropExt>;
+/// Counselors' clothes (ClothesMultiGore): shaders/clothes.wgsl.
+pub(crate) type ClothesMaterial = ExtendedMaterial<StandardMaterial, ClothesExt>;
 pub(crate) type SkinMaterial = ExtendedMaterial<StandardMaterial, SkinMaskExt>;
 pub(crate) type MasterMaterial = ExtendedMaterial<StandardMaterial, MasterExt>;
 
@@ -57,6 +59,7 @@ impl Plugin for MaterialsPlugin {
         embedded_asset!(app, "shaders/terrain.wgsl");
         embedded_asset!(app, "shaders/water.wgsl");
         embedded_asset!(app, "shaders/prop.wgsl");
+        embedded_asset!(app, "shaders/clothes.wgsl");
         embedded_asset!(app, "shaders/skin.wgsl");
         embedded_asset!(app, "shaders/skin_prepass.wgsl");
         embedded_asset!(app, "shaders/masters.wgsl");
@@ -94,8 +97,9 @@ impl Plugin for MaterialsPlugin {
                 MaterialPlugin::<PropMaterial>::default(),
                 MaterialPlugin::<SkinMaterial>::default(),
                 MaterialPlugin::<MasterMaterial>::default(),
+                MaterialPlugin::<ClothesMaterial>::default(),
             ))
-            .add_systems(Update, ((apply_materials, strip_vertex_colors).chain(), sky_lightning));
+            .add_systems(Update, ((apply_materials, strip_vertex_colors).chain(), sky_lightning, clothes_rain));
     }
 }
 
@@ -167,6 +171,7 @@ enum Built {
     Water(Handle<WaterMaterial>),
     Prop(Handle<PropMaterial>),
     Master(Handle<MasterMaterial>),
+    Clothes(Handle<ClothesMaterial>),
     /// Not drawn: translucent planes with no textures (rain fixes, bed and exit blockers, light planes), which the
     /// game draws invisible (M_rainFix_invisible's compiled shader outputs zero) or as faint effects.
     Hidden,
@@ -189,6 +194,8 @@ pub(crate) struct MaterialIndex {
 struct Fallback {
     white: Handle<Image>,
     black: Handle<Image>,
+    /// All channels 0 (alpha too).
+    clear: Handle<Image>,
     normal: Handle<Image>,
     /// Roughness 1, metallic 0, AO 1, specular 0.5.
     rmas: Handle<Image>,
@@ -205,7 +212,7 @@ impl Fallback {
                 RenderAssetUsages::RENDER_WORLD,
             ))
         };
-        Self { white: px([255; 4]), black: px([0, 0, 0, 255]), normal: px([128, 128, 255, 255]), rmas: px([255, 0, 255, 128]) }
+        Self { white: px([255; 4]), black: px([0, 0, 0, 255]), clear: px([0; 4]), normal: px([128, 128, 255, 255]), rmas: px([255, 0, 255, 128]) }
     }
 }
 
@@ -694,6 +701,93 @@ fn master_material(root: &Path, info: &MaterialInfo, loader: &Loader) -> Option<
     Some(ExtendedMaterial { base, extension: MasterExt { params, tex, tex2, tex3 } })
 }
 
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
+pub(crate) struct ClothesExt {
+    #[uniform(100)]
+    params: ClothesParams,
+    #[texture(101)]
+    #[sampler(102)]
+    gore_normal: Handle<Image>,
+    /// The body parts' damage, combined (character.rs blood; see shaders/clothes.wgsl).
+    #[texture(103)]
+    pub(crate) damage: Handle<Image>,
+    #[texture(104)]
+    gore_rgb: Handle<Image>,
+    #[texture(105)]
+    pattern: Handle<Image>,
+    #[texture(106)]
+    pattern2: Handle<Image>,
+    #[texture(107)]
+    colormask: Handle<Image>,
+    #[texture(108)]
+    rma: Handle<Image>,
+}
+
+#[derive(ShaderType, Reflect, Debug, Clone)]
+struct ClothesParams {
+    hue: Vec4,
+    tile_tint: Vec4,
+    logo_tint: Vec4,
+    extra_tint: Vec4,
+    tints: Vec4,
+    pattern: Vec4,
+    /// addGreenChannel_TP2, TilePatternToggle, RainGloss, Rain_MPC's Rain.
+    more: Vec4,
+    selection: Vec4,
+}
+
+impl MaterialExtension for ClothesExt {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://f13_game/shaders/clothes.wgsl".into()
+    }
+}
+
+/// ClothesMultiGore's textures of its own (its layer functions' samples, the Gore_Layer's and Gore_Burn_Layer's).
+const GORE_NORMAL: &str = "SummerCamp/Content/Characters/Counselors/Gore/DismembermentMasks/UV2_Gore_normal";
+const GORE_COLORMASK: &str = "SummerCamp/Content/Characters/Counselors/Gore/DismembermentMasks/UV2_Gore_Colormask";
+const GORE_RGB: &str = "SummerCamp/Content/Characters/Counselors/Gore/Textures/gore_burn_RGB_mask_01";
+
+/// A ClothesMultiGore instance: its parameters (the master's defaults: uniexpr.py on the master), the cloth's
+/// textures, and no damage yet.
+fn clothes_material(root: &Path, info: &MaterialInfo, loader: &Loader, fallback: &Fallback) -> ClothesMaterial {
+    let v = |name: &str, d: [f32; 4]| info.vectors.get(name).map_or(Vec4::from_array(d), |v| Vec4::from_array(*v));
+    let tex = |name: &str, kind: Tex, d: &Handle<Image>| info.textures.get(name).and_then(|p| loader.load(p, kind)).unwrap_or_else(|| d.clone());
+    let fixed = |path: &str, kind: Tex, d: &Handle<Image>| loader.load(path, kind).unwrap_or_else(|| d.clone());
+    let mut base = standard_material(root, info, loader);
+    // (Its masked opacity, RMA.a with the temporal dither, is 1 on the counselors' clothes: drawn opaque.)
+    base.alpha_mode = AlphaMode::Opaque;
+    ClothesMaterial {
+        base,
+        extension: ClothesExt {
+            params: ClothesParams {
+                hue: v("Cloth_diffuse_HueTint", [0.5, 0.5, 0.5, 1.0]),
+                tile_tint: v("TileTint", [0.87, 0.562009, 0.030654, 1.0]),
+                logo_tint: v("TileTint_logo", [0.87, 0.214361, 0.657086, 1.0]),
+                extra_tint: v("Tint_AdditionalElements", [0.87, 0.214361, 0.657086, 1.0]),
+                tints: Vec4::new(info.scalar("Cloth_Diffuse_Desaturation", 0.0), info.scalar("Cloth_diffuse_LIghtTint", 0.0), info.scalar("Cloth_diffuse_DarkTint", 1.0), info.scalar("TilePatternTile", 1.0)),
+                pattern: Vec4::new(info.scalar("PAttern_IsolationMAsk", 0.0), info.scalar("InvertTilePatternMask", 0.0), info.scalar("addGreenChannel", 0.0), info.scalar("addblueChannel", 0.0)),
+                more: Vec4::new(info.scalar("addGreenChannel_TP2", 0.0), info.scalar("TilePatternToggle", 0.0), info.scalar("RainGloss", 0.4), 0.0),
+                selection: v("SelectionColor", [0.0; 4]).with_w(0.0),
+            },
+            gore_normal: fixed(GORE_NORMAL, Tex::Data, &fallback.normal),
+            damage: fallback.clear.clone(),
+            gore_rgb: tex("Gore_RGB", Tex::Data, &fixed(GORE_RGB, Tex::Data, &fallback.black)),
+            pattern: tex("TilePAttern", Tex::Color, &fallback.white),
+            pattern2: tex("TilePAttern2", Tex::Data, &fallback.white),
+            colormask: fixed(GORE_COLORMASK, Tex::Data, &fallback.black),
+            rma: tex("Clothing RMA", Tex::Data, &fallback.rmas),
+        },
+    }
+}
+
+/// Rain_MPC's Rain on the clothes (Clothes_Layer's Rain: darker, glossier).
+fn clothes_rain(mpc: Option<Res<crate::weather::RainMpc>>, mut materials: ResMut<Assets<ClothesMaterial>>) {
+    let Some(mpc) = mpc.filter(|m| m.is_changed()) else { return };
+    for (_, m) in materials.iter_mut() {
+        m.extension.params.more.w = mpc.rain;
+    }
+}
+
 impl MaterialExtension for PropExt {
     fn fragment_shader() -> ShaderRef {
         "embedded://f13_game/shaders/prop.wgsl".into()
@@ -791,7 +885,7 @@ fn apply_materials(
         ResMut<Assets<WaterMaterial>>,
         ResMut<Assets<Image>>,
     ),
-    (mut props, mut masters): (ResMut<Assets<PropMaterial>>, ResMut<Assets<MasterMaterial>>),
+    (mut props, mut masters, mut clothes): (ResMut<Assets<PropMaterial>>, ResMut<Assets<MasterMaterial>>, ResMut<Assets<ClothesMaterial>>),
     assets: Res<AssetServer>,
 ) {
     let index = &mut *index;
@@ -830,6 +924,8 @@ fn apply_materials(
                 } else if let Some(kind) = blend_kind(&info.master) {
                     // (The POM variant's parallax is not ported: drawn flat.)
                     Built::Blend(blends.add(blend_material(info, kind, &loader, &fallback)))
+                } else if info.master == "ClothesMultiGore" {
+                    Built::Clothes(clothes.add(clothes_material(&index.root, info, &loader, &fallback)))
                 } else if let Some(m) = master_material(&index.root, info, &loader) {
                     Built::Master(masters.add(m))
                 } else if let Some((rma, params, lights)) = prop_params(info, &loader) {
@@ -882,6 +978,9 @@ fn apply_materials(
                 e.remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(h));
             }
             Built::Master(h) => {
+                e.remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(h));
+            }
+            Built::Clothes(h) => {
                 e.remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(h));
             }
             Built::Hidden => {

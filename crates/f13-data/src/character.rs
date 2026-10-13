@@ -50,6 +50,10 @@ pub struct CharacterInfo {
     /// The music object's defaults (MusicData, idle times, warning cues; references as "SoundCue'Name'").
     #[serde(default)]
     pub music: serde_json::Value,
+    /// Her body parts (SCCharacterBodyPartComponent), by component name (Face, Torso, LeftArm, RightArm, LeftLeg,
+    /// RightLeg): the clothes' damage mask each sets.
+    #[serde(default, deserialize_with = "crate::level::null_as_empty")]
+    pub body_parts: HashMap<String, BodyPartInfo>,
     /// The character's dynamic cameras (ILLDynamicCameraComponent), by component name.
     #[serde(default, deserialize_with = "crate::level::null_as_empty")]
     pub cameras: HashMap<String, DynamicCameraInfo>,
@@ -146,6 +150,22 @@ pub fn camera_shake(m: &serde_json::Map<String, serde_json::Value>) -> f13_core:
 }
 
 /// An ILLDynamicCameraComponent as exported: its MovementBasedSettings, bUse2DVelocity and its spring arm's own
+/// A body part's gore (SCCharacterBodyPartComponent): the material parameter it sets (TextureParameterName), its
+/// mask (LimbUVTexture; .png path), the masks by the damage's weapon class (CombatDamageGoreInfo), and the body's
+/// material elements (ParentMaterialElementIndices).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct BodyPartInfo {
+    #[serde(default)]
+    pub parameter: Option<String>,
+    #[serde(default)]
+    pub mask: Option<String>,
+    #[serde(default)]
+    pub weapon_masks: HashMap<String, String>,
+    #[serde(default)]
+    pub elements: Vec<u32>,
+}
+
 /// properties.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "PascalCase")]
