@@ -83,6 +83,9 @@ pub struct MatchRules {
 pub struct Roster {
     /// Counselors alive and not escaped.
     pub counselors_left: u32,
+    /// Tommy is on his way (the hunter's timer runs, he isn't in yet): the Hunt mode doesn't end the match then
+    /// (FUN_14037c700).
+    pub hunter_pending: bool,
     /// Whether Jason is alive.
     /// - `None`: there is no Jason (a test run without him). The game would end such a match at once, so this port
     ///   doesn't end it.
@@ -179,7 +182,7 @@ impl Match {
         }
         if self.state == MatchState::InProgress
             && self.elapsed_in_progress_time > END_CHECK_AFTER
-            && (roster.counselors_left == 0 || roster.killer_alive == Some(false))
+            && ((roster.counselors_left == 0 && !roster.hunter_pending) || roster.killer_alive == Some(false))
         {
             self.end_match(rules, entered);
         }
@@ -378,7 +381,7 @@ mod tests {
         m.start_police_timer(&rules(), 0.5);
         assert_eq!(m.police_time_remaining, 7);
     }
-    const PLAYING: Roster = Roster { counselors_left: 1, killer_alive: Some(true) };
+    const PLAYING: Roster = Roster { counselors_left: 1, hunter_pending: false, killer_alive: Some(true) };
 
     fn run(m: &mut Match, seconds: i32, roster: &Roster) -> Vec<MatchState> {
         (0..seconds).flat_map(|_| m.advance(1.0, &rules(), roster)).collect()
@@ -403,7 +406,7 @@ mod tests {
 
     #[test]
     fn ends_early_once_no_counselor_is_left_but_not_in_the_first_ten_seconds() {
-        let gone = Roster { counselors_left: 0, killer_alive: Some(true) };
+        let gone = Roster { counselors_left: 0, hunter_pending: false, killer_alive: Some(true) };
         let mut m = Match::new();
         run(&mut m, 1, &PLAYING);
         m.start(&rules());
@@ -418,8 +421,8 @@ mod tests {
         let mut m = Match::new();
         run(&mut m, 1, &PLAYING);
         m.start(&rules());
-        assert_eq!(run(&mut m, 15, &Roster { counselors_left: 1, killer_alive: None }), vec![]);
-        assert_eq!(run(&mut m, 1, &Roster { counselors_left: 1, killer_alive: Some(false) }), vec![MatchState::WaitingPostMatchOutro]);
+        assert_eq!(run(&mut m, 15, &Roster { counselors_left: 1, hunter_pending: false, killer_alive: None }), vec![]);
+        assert_eq!(run(&mut m, 1, &Roster { counselors_left: 1, hunter_pending: false, killer_alive: Some(false) }), vec![MatchState::WaitingPostMatchOutro]);
     }
 
     fn event(xp: i32, once: bool) -> ScoreEvent {

@@ -158,6 +158,20 @@ enum Target {
     Phone(Entity),
     /// A radio to turn on or off, or (held while it plays) to change its song (radio.rs).
     Radio(Entity),
+    /// The CB radio, to call Tommy Jarvis (tommy.rs).
+    CbRadio(Entity),
+}
+
+impl Interaction {
+    /// What she'd use, for logs (testing).
+    pub(crate) fn target_name(&self) -> String {
+        format!("{:?}", self.target)
+    }
+
+    /// She'd use the CB radio (testing).
+    pub(crate) fn on_cb_radio(&self) -> bool {
+        matches!(self.target, Some(Target::CbRadio(_)))
+    }
 }
 
 /// A counselor's interaction: what she'd use, and the hold in progress.
@@ -321,6 +335,16 @@ pub struct RepairAnim {
 /// Her take of a repair's part ("start", "cycle", "stop", "cancel"): `{base}_{part}`, except the phone box's
 /// (enter, cycle, exit, fail).
 fn repair_take(base: &str, part: &str) -> String {
+    // The CB radio's montage (AM_normal_stand_use_CB_radio): Enter, Idle (looping) and Exit sections, the exit both
+    // for a done call and a stopped one.
+    if base == crate::tommy::RADIO_TAKE {
+        return match part {
+            "start" => "m_normal_stand_use_radio_enter",
+            "cycle" => "m_normal_stand_use_radio_cycle_01",
+            _ => "f_normal_stand_use_radio_exit",
+        }
+        .to_string();
+    }
     let part = match (base == crate::police::PHONE_BOX_TAKE, part) {
         (true, "start") => "enter",
         (true, "stop") => "exit",
@@ -770,7 +794,7 @@ fn choose_target(
     windows: Query<(Entity, &Window, &GlobalTransform)>,
     barricades: Query<&Barricade>,
     (spots, fuse_boxes): (Query<(Entity, &crate::hiding::HidingSpot, &GlobalTransform)>, Query<(Entity, &crate::power::FuseBox)>),
-    (phone_boxes, phones, radios): (Query<(Entity, &crate::police::PhoneBox)>, Query<(Entity, &crate::police::Phone)>, Query<(Entity, &crate::radio::Radio)>),
+    (phone_boxes, phones, radios, cb_radios): (Query<(Entity, &crate::police::PhoneBox)>, Query<(Entity, &crate::police::Phone)>, Query<(Entity, &crate::radio::Radio)>, Query<(Entity, &crate::tommy::CbRadio)>),
     (limits, globals, collision, dynamic, parents, no_world_dynamic, (names, actor_tris, no_visibility, (not_visibility, not_world_dynamic))): (
         Query<&InteractLimits>,
         Query<&GlobalTransform>,
@@ -907,6 +931,12 @@ fn choose_target(
             consider(e, "Interactable", p.interact, p.reach, Target::Phone(e));
         }
     }
+    // (SCCBRadio::CanInteractWith: nobody on it and not called yet.)
+    for (e, r) in &cb_radios {
+        if !r.called {
+            consider(e, "Interactable", r.interact, r.reach, Target::CbRadio(e));
+        }
+    }
     for (e, r) in &radios {
         if r.usable() {
             consider(e, "Interactable", r.interact, r.reach, Target::Radio(e));
@@ -936,6 +966,7 @@ fn act(
     mut doors: Query<(&mut Door, &GlobalTransform)>,
     (windows, mut barricades, (mut phone_boxes, mut phones, mut game, match_tuning), (names, special_moves)): (Query<(&mut Window, &GlobalTransform)>, Query<&mut Barricade>, (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<ResMut<crate::match_flow::GameMatch>>, Option<Res<crate::match_flow::MatchTuning>>), (Query<&Name>, Option<Res<SpecialMoves>>)),
     (mut visibility, mut fuse_boxes, mut grids, vehicle_xfs, radios): (Query<&mut Visibility>, Query<&mut crate::power::FuseBox>, Option<ResMut<crate::power::PowerGrids>>, Query<&GlobalTransform, With<Vehicle>>, Query<&crate::radio::Radio>),
+    (mut cb_radios, mut hunter): (Query<&mut crate::tommy::CbRadio>, ResMut<crate::tommy::HunterTimer>),
 ) {
     use crate::controls::Button;
     for (player_entity, mut player_xf, mut inv, mut p, sliding, mut interaction) in &mut players {
@@ -1184,6 +1215,39 @@ fn act(
             move_to_spot(&mut commands, player_entity, *player_xf, to, mv(r, "CounselorUse_SpecialMoveHandler"), move |w| {
                 w.entity_mut(player_entity).insert((crate::radio::RadioUse::new(r, change), crate::character::PlayAction(crate::radio::USE_TAKE.into())));
             });
+            interaction.target = None;
+        }
+        Target::CbRadio(r) => {
+            // Calling for Tommy: the radio's hold with its minigame (bShowMinigameProperties), her CB radio take.
+            let Ok(mut radio) = cb_radios.get_mut(r) else { continue };
+            if radio.called || !pads.pressed(player_entity, Button::Interact) {
+                if interaction.hold.take().is_some_and(|h| h.started) {
+                    info!("tommy: the CB radio call stopped");
+                    end_repair_anim(&mut commands, player_entity, Some(&crate::tommy::RADIO_TAKE.to_string()), false);
+                }
+                if radio.called {
+                    interaction.target = None;
+                }
+                continue;
+            }
+            let hold = interaction.hold.get_or_insert_with(|| HoldInteraction::new(radio.hold_time, true));
+            let mut events = Vec::new();
+            for (button, key) in [(Button::Secondary, 0), (Button::Primary, 1)] {
+                if pads.just_pressed(player_entity, button) {
+                    hold.press(key, &tuning.minigame, &mut events);
+                }
+            }
+            hold.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
+            if events.contains(&MinigameEvent::Started) {
+                info!("tommy: calling on the CB radio: {:.1}s", hold.hold_time);
+                commands.entity(player_entity).insert(repair_start(crate::tommy::RADIO_TAKE));
+            }
+            if !events.contains(&MinigameEvent::Completed) {
+                continue;
+            }
+            end_repair_anim(&mut commands, player_entity, Some(&crate::tommy::RADIO_TAKE.to_string()), true);
+            crate::tommy::call_hunter(&mut commands, &mut radio, &mut hunter, player_entity);
+            interaction.hold = None;
             interaction.target = None;
         }
         Target::Phone(ph) => {
@@ -1689,6 +1753,10 @@ fn update_prompt(
                     _ => "[Hold E] Put the fuse in the phone box".into(),
                 });
             }
+            Some(Target::CbRadio(_)) => lines.push(match &interaction.hold {
+                Some(h) if h.started => format!("Calling for help: {:.0}%", h.progress(&tuning.minigame) * 100.0),
+                _ => "[Hold E] Call for help on the CB radio".into(),
+            }),
             Some(Target::Phone(_)) => lines.push(match &interaction.hold {
                 Some(h) if h.started => format!("Calling the police: {:.0}%", h.progress(&tuning.minigame) * 100.0),
                 _ => "[Hold E] Call the police".into(),

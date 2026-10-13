@@ -2,6 +2,7 @@
 //!
 //!   cargo run -p f13-game --release -- --export <dir made by tools/f13-export> [--layout 1-4 (default: the game's random pick)] [--seed n] [--near-car] [--bot-escape] [--bot-heal] [--bot-dodge] [--bot-door] [--grass]
 //!       [--fly] [--capsule] [--demo] [--fear 0-100] [--health 1-100] [--speed x] [--tuning file] [--aerial] [--no-foliage] [--screenshot out.png [--screenshot-after s]]
+//!       [--bot-tommy]  (calls Tommy on the CB radio, dies, comes back as him: with --counselors 3)
 //!       [--counselor <class>]  (the counselor played: Athlete (Vanessa), Hero, Bookworm, ...)
 //!       [--pose <animation>@<seconds>]  (hold the counselor (and Jason) in one exported animation, for screenshots)
 //!       [--no-jason] [--jason-delay s] [--bot-jason]  (Jason hunts the counselor unless left out; counselor bots leave him out)
@@ -70,6 +71,7 @@ mod placed_kills;
 mod police;
 mod power;
 mod radio;
+mod tommy;
 mod voice;
 mod prop_anim;
 mod props;
@@ -202,6 +204,9 @@ struct Args {
     outfit: Option<String>,
     /// The local counselor's class (`--counselor Athlete|Hero|...`; the lobby's pick, C cycles it there).
     counselor_class: String,
+    /// --bot-tommy: she calls Tommy on the CB radio, dies with another counselor and comes back as him (run with
+    /// --counselors 3).
+    bot_tommy: bool,
     /// --fly start: eye position and a point to look at (Bevy space, metres).
     camera: Option<(Vec3, Vec3)>,
     /// --round-time: the match's length (s) instead of the game's.
@@ -283,6 +288,7 @@ fn parse_args() -> Args {
     let mut pose = None;
     let mut outfit = None;
     let mut counselor_class = character::DEFAULT_CLASS.to_string();
+    let mut bot_tommy = false;
     let mut camera = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -334,6 +340,7 @@ fn parse_args() -> Args {
             "--last-match" => last_match = it.next().map(PathBuf::from),
             "--open-mic" => open_mic = true,
             "--bot-radio" => bot_radio = true,
+            "--bot-tommy" => bot_tommy = true,
             "--kill" => {
                 let name = it.next().unwrap_or_default();
                 kill = jason::KILLS.iter().position(|(anim, _, _)| anim.ends_with(name.as_str()));
@@ -413,7 +420,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass] (or run the installer, lakeside-setup-installer)");
         std::process::exit(2);
     };
-    Args { net, bot_net, bot_spectate, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_passenger, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, override_spawning, no_voice, net_id, last_jason, bot_hooks, last_match, open_mic, bot_radio, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, counselor_class, camera, round_time, flashlight, rain }
+    Args { net, bot_net, bot_spectate, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_passenger, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, override_spawning, no_voice, net_id, last_jason, bot_hooks, last_match, open_mic, bot_radio, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, counselor_class, bot_tommy, camera, round_time, flashlight, rain }
 }
 
 #[derive(Resource)]
@@ -582,7 +589,10 @@ fn main() {
             .add_plugins(match_flow::MatchPlugin { leave: !bot || args.play_jason })
             .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone(), outfit: args.outfit.clone() }, collision::CollisionPlugin, audio::AudioPlugin, water::WaterPlugin, power::PowerPlugin { cut: args.cut_power }, kill_camera::KillCameraPlugin, prop_anim::PropAnimPlugin, doors::DebrisPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin, navigation::NavigationPlugin { debug: args.nav_debug }))
             .add_plugins(radio::RadioPlugin)
-            .add_plugins((spectate::SpectatePlugin { bot: args.bot_spectate }, police::PolicePlugin, placed_kills::PlacedKillsPlugin, interaction_camera::InteractionCameraPlugin, counselor_camera::CounselorCameraPlugin, cabinets::CabinetsPlugin, weather::WeatherPlugin, car_lights::CarLightsPlugin, cinematic::CinematicPlugin, hair::HairPlugin, audio_volumes::AudioVolumesPlugin));
+            .add_plugins((spectate::SpectatePlugin { bot: args.bot_spectate }, police::PolicePlugin, tommy::TommyPlugin, placed_kills::PlacedKillsPlugin, interaction_camera::InteractionCameraPlugin, counselor_camera::CounselorCameraPlugin, cabinets::CabinetsPlugin, weather::WeatherPlugin, car_lights::CarLightsPlugin, cinematic::CinematicPlugin, hair::HairPlugin, audio_volumes::AudioVolumesPlugin));
+        if args.bot_tommy {
+            app.init_resource::<tommy::BotTommy>().add_systems(Update, tommy::bot_tommy);
+        }
         // Playing Jason without a --bot-*, she stands idle (time to try him out).
         if args.bot_escape {
             app.add_plugins(bot::BotPlugin(bot::Goal::Escape));

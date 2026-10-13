@@ -382,7 +382,19 @@ fn spawn_props(
     let mut settings = f13_data::world::spawn_settings(&MatchWorld::world_settings(layouts));
     // Testing (--override-spawning): as if the map's world settings set bOverrideSpawning (every spawner spawns).
     settings.override_spawning |= override_spawning.is_some();
-    let world = MatchWorld::build(layouts, &classes, &settings, seed.0);
+    let mut world = MatchWorld::build(layouts, &classes, &settings, seed.0);
+    // Tommy's shotgun (SCGameMode's HunterWeaponClass, Shotgun_C), set aside until he comes (tommy.rs): the same on
+    // every peer (the world's ids), out of sight.
+    let hunter_weapon = world.actors.len();
+    if classes.get("Shotgun_C").is_some() {
+        world.actors.push(f13_data::world::MatchActor {
+            class: "Shotgun_C".into(),
+            transform: Xform { t: [0.0, 0.0, -100000.0], r: [0.0, 0.0, 0.0, 1.0], s: [1.0; 3] },
+            from_level: false,
+            spawned_by: None,
+            kind: Some(SpawnKind::LargeItem),
+        });
+    }
 
     let mut scenes: HashMap<String, Handle<WorldAsset>> = HashMap::new();
     let mut scene = |file: &str| {
@@ -397,6 +409,23 @@ fn spawn_props(
         let Some(info) = classes.get(&actor.class) else { continue };
         let root = commands.spawn((to_transform(&actor.transform), Visibility::default(), Name::new(actor.class.clone()))).id();
         entities.insert(id, root);
+        if id == hunter_weapon {
+            commands.entity(root).insert((crate::tommy::HunterWeapon, crate::interact::Carried, Visibility::Hidden));
+        }
+        // The CB radio (SCCBRadio): its Interactable's hold calls Tommy (tommy.rs).
+        if classes.is_child_of(&actor.class, "SCCBRadio") {
+            if let Some(c) = info.components.iter().find(|c| c.name == "Interactable") {
+                commands.entity(root).insert(crate::tommy::CbRadio {
+                    class: actor.class.clone(),
+                    interact: to_transform(&actor.transform).transform_point(local(c).translation),
+                    reach: reach(c, 120.0),
+                    hold_time: c.props["HoldTimeLimit"].as_f64().map_or(11.0, |v| v as f32),
+                    called: false,
+                });
+                let p = to_transform(&actor.transform).translation;
+                info!("CB radio at ({:.0}, {:.0}, {:.0})", p.x, p.y, p.z);
+            }
+        }
         commands.entity(root).insert(crate::net_world::WorldId(id as u32));
         // The cues its class names (doors, windows, barricades, cars...): audio.rs plays them.
         let sounds: HashMap<String, String> = info

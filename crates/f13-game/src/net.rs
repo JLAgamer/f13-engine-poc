@@ -641,7 +641,7 @@ impl Plugin for NetPlugin {
                     .add_observer(body_gone)
                     .init_resource::<Twins>()
                     .init_resource::<ServerClock>()
-                    .add_systems(Update, (send_input, (make_twins, record_bodies, mirror, hide_jason).chain().in_set(Mirrored).before(crate::character::animate)));
+                    .add_systems(Update, (send_input, (make_twins, record_bodies, mirror, hide_jason, sync_classes).chain().in_set(Mirrored).before(crate::character::animate)));
                 app.add_systems(Update, receive_match.after(Mirrored));
                 crate::net_world::client(app);
                 crate::lobby::client(app);
@@ -925,6 +925,16 @@ fn send_input(local: Query<&Controls, With<LocalPlayer>>, mut senders: Query<&mu
     counts.add(pressed, released);
     for mut s in &mut senders {
         s.send::<InputChannel>(InputMsg { held: c.held(), yaw: c.yaw, pitch: c.pitch, presses: counts.presses, releases: counts.releases });
+    }
+}
+
+/// A counselor's class as the server has it (her lobby pick; Tommy's, revived as him: tommy.rs) on her twin (character.rs
+/// restyles her).
+fn sync_classes(mut commands: Commands, bodies: Query<(&Twin, &NetCounselor), Changed<NetCounselor>>, classes: Query<&crate::character::CounselorClass>) {
+    for (t, n) in &bodies {
+        if !n.class.is_empty() && classes.get(t.local).map_or(true, |c| c.0 != n.class) {
+            commands.entity(t.local).insert(crate::character::CounselorClass(n.class.clone()));
+        }
     }
 }
 

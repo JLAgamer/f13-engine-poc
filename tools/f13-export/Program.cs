@@ -1706,6 +1706,8 @@ static class Mvp
         $"{Shared}/Interaction/Items/AM_normal_stand_drop_item_left",
         // Pulled out of the car by Jason (the driver seat's CounselorGrabbedMontage).
         CarGrab[0],
+        // Calling Tommy on the CB radio (HunterCBRadio_C's Interactable: Enter, Idle, Exit).
+        "/Game/Characters/Counselors/Base/Shared/Interaction/CBRadio/AM_normal_stand_use_CB_radio",
         // The phone box's fuse (AM_normal_stand_repair_phonebox) and calling the police (AM_normal_stand_use_phone).
         "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Repair/Misc/f_normal_stand_repair_phonebox_enter",
         "/Game/Characters/Counselors/Base/Female/Animation/Interaction/Repair/Misc/f_normal_stand_repair_phonebox_cycle",

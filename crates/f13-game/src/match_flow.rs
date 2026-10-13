@@ -294,7 +294,7 @@ fn run_match(
     mut game: ResMut<GameMatch>,
     players: Query<(Entity, &Player, Has<Escaped>, Has<crate::controls::LocalPlayer>, Option<&crate::character::CounselorClass>), Without<Unsettled>>,
     jason: Query<(), With<Jason>>,
-    (leave, character): (Res<Leave>, Option<Res<crate::character::CounselorCharacter>>),
+    (leave, character, hunter): (Res<Leave>, Option<Res<crate::character::CounselorCharacter>>, Option<Res<crate::tommy::HunterTimer>>),
     host: Option<ResMut<crate::host::HostRequests>>,
     mut exit: MessageWriter<AppExit>,
     (rematch, lobby, names): (Option<Res<crate::net::Rematch>>, Query<&crate::lobby::NetLobby>, Query<&Name>),
@@ -336,6 +336,7 @@ fn run_match(
     }
     let roster = Roster {
         counselors_left: left,
+        hunter_pending: hunter.as_ref().is_some_and(|h| h.pending()),
         // Jason can't die yet.
         killer_alive: (!jason.is_empty()).then_some(true),
     };

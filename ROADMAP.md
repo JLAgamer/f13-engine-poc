@@ -9,7 +9,10 @@ Base content (asset paths in the player's install; all gameplay values come from
 ## Todo
 - [ ] The lobby's rest: its counselor pick widget (the pick is C for now; the fourteen counselors play), a full
       8-player run
-- [ ] The Tommy Jarvis timer, Tommy Jarvis, and Jason dying
+- [ ] Jason dying: his mask knocked off (MaskPopOffThreshold: MaskKnockedOffStun, the mask pickup, KnockMaskOff),
+      Pamela's sweater (the item, wearing it, the sweater ability's PamelasSweaterStun), and with both a counselor's
+      melee hit: his JasonKillClass context kill (SCKillerCharacter TakeDamage 0x14040b600; MODLOG "Jason's death")
+- [ ] Tommy Jarvis: his intro at his start (FUN_14040fe60), HunterIntroComplete's pawn setup, a network bot run
 - [ ] Voice chat: push-to-talk in the game's settings menu (no menus yet: P in the lobby stands in)
 - [ ] Materials: foliage subsurface (its transmission is the deferred light pass's, whose code isn't in the shipped
       global shader cache: MODLOG "Foliage subsurface: blocked")
