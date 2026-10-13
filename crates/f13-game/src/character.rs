@@ -104,6 +104,7 @@ impl Plugin for CharacterPlugin {
                 // Every exported counselor's looks (counselors/<Class>_Counselor.json), on the same skeleton and
                 // animations (the female counselors share them).
                 let mut classes = HashMap::new();
+                let mut male: Option<CharacterModel> = None;
                 for e in std::fs::read_dir(export.join("counselors")).into_iter().flatten().flatten() {
                     let path = e.path();
                     let Some(class) = path.file_stem().and_then(|s| s.to_str()).and_then(|s| s.strip_suffix("_Counselor")).map(String::from) else { continue };
@@ -111,6 +112,11 @@ impl Plugin for CharacterPlugin {
                         classes.insert(class, std::sync::Arc::new(c.info.clone()));
                     } else if let Ok(i) = CharacterInfo::load(&path) {
                         if i.bones.iter().map(|b| &b.name).eq(c.info.bones.iter().map(|b| &b.name)) {
+                            // The male counselors' animations: the first male class's (each male class exports the
+                            // same male assets).
+                            if is_male(&i) && male.is_none() {
+                                male = CharacterModel::load(&path, &export, &mut clips, &mut graphs);
+                            }
                             classes.insert(class, std::sync::Arc::new(i));
                         } else {
                             info!("counselor {class}: another skeleton, not playable yet");
@@ -118,7 +124,7 @@ impl Plugin for CharacterPlugin {
                     }
                 }
                 info!("counselors: {:?}", { let mut k: Vec<_> = classes.keys().collect(); k.sort(); k });
-                commands.insert_resource(CounselorCharacter(c, classes));
+                commands.insert_resource(CounselorCharacter(c, classes, male));
             }
             if let Some(c) = CharacterModel::load(&export.join("killers").join(format!("{KILLER}.json")), &export, &mut clips, &mut graphs) {
                 commands.insert_resource(KillerCharacter(c));
@@ -230,7 +236,7 @@ const BLOCK_LAYER_BLEND_S: f32 = 0.1;
 /// The counselor model (its skeleton and animations: Vanessa's), and every playable counselor's looks by class
 /// ("Athlete", "Hero", ...).
 #[derive(Resource, Deref)]
-pub struct CounselorCharacter(#[deref] pub CharacterModel, pub HashMap<String, std::sync::Arc<CharacterInfo>>);
+pub struct CounselorCharacter(#[deref] pub CharacterModel, pub HashMap<String, std::sync::Arc<CharacterInfo>>, pub Option<CharacterModel>);
 
 /// The default counselor class (Vanessa).
 pub const DEFAULT_CLASS: &str = "Athlete";
@@ -248,6 +254,30 @@ impl CounselorCharacter {
     pub fn looks(&self, class: &str) -> std::sync::Arc<CharacterInfo> {
         self.1.get(class).cloned().unwrap_or_else(|| std::sync::Arc::new(self.0.info.clone()))
     }
+
+    /// The model (the animations) a counselor plays: the male counselors' (Base_Counselor_AnimBP's male assets) or
+    /// the female ones' (Vanessa's).
+    pub fn model(&self, male: bool) -> &CharacterModel {
+        if male {
+            self.2.as_ref().unwrap_or(&self.0)
+        } else {
+            &self.0
+        }
+    }
+
+    /// The model for a class's looks, and whether it's the male one.
+    pub fn model_for(&self, looks: &CharacterInfo) -> (&CharacterModel, bool) {
+        let male = is_male(looks) && self.2.is_some();
+        (self.model(male), male)
+    }
+}
+
+/// A counselor's looks are a male counselor's (the export's Gender: bIsFemale off).
+pub fn is_male(looks: &CharacterInfo) -> bool {
+    looks.names.get("Gender").is_some_and(|g| g == "Male")
+}
+
+impl CounselorCharacter {
 }
 
 #[derive(Resource, Deref)]
@@ -402,6 +432,8 @@ pub struct Rig {
     pub model: Model,
     /// Its looks when not the model's own (a counselor class's).
     pub visual: Option<std::sync::Arc<CharacterInfo>>,
+    /// A male counselor: it plays the male model's animations ([`CounselorCharacter::model`]).
+    pub male: bool,
     body: Entity,
     outfit: Vec<Entity>,
     /// Parts hanging off a bone or another part, spawned once the body is in: (part index, entity holding its scene).
@@ -517,8 +549,10 @@ pub fn spawn_model_as(commands: &mut Commands, assets: &AssetServer, character: 
         }
         outfit.push(e.observe(ready).id());
     }
+    let male = model == Model::Counselor && visual.as_deref().is_some_and(is_male);
     commands.entity(rig).insert(Rig {
         model,
+        male,
         visual,
         body,
         outfit,
@@ -572,7 +606,7 @@ fn assemble(
             continue;
         }
         let character = match rig.model {
-            Model::Counselor => counselor.as_deref().map(|c| &c.0),
+            Model::Counselor => counselor.as_deref().map(|c| c.model(rig.male)),
             Model::Killer => killer.as_deref().map(|c| &c.0),
         };
         let Some(model_info) = character.map(|c| &c.info) else { continue };
@@ -653,7 +687,7 @@ pub(crate) fn animate(
             // (As the action, so its props show.)
             rig.action = Some((f.0.clone(), f.1));
             let model = match rig.model {
-                Model::Counselor => &character.0,
+                Model::Counselor => character.model(rig.male),
                 Model::Killer => match killer.as_deref() {
                     Some(k) => &k.0,
                     None => continue,
@@ -666,6 +700,8 @@ pub(crate) fn animate(
     }
     for (parent, mut rig, mut anim) in &mut rigs {
         let Ok((pe, p, xf, using, scripted, blocking, restart, seek, (gun_aim, inv))) = players.get(parent.parent()) else { continue };
+        // Her animations (a male counselor's are the male ones).
+        let character = character.model(rig.male);
         if restart {
             rig.action = None;
             commands.entity(pe).remove::<RestartAction>();
@@ -854,7 +890,7 @@ pub(crate) fn animate(
         }
 
         let synced = |n: &str| MOVE.contains(&n) || SWIM[1..].contains(&n) || n == CROUCH_WALK || COMBAT_WALK.iter().any(|(_, m)| *m == n);
-        rig.drive(&character.0, &targets, &synced, dt, &mut anim);
+        rig.drive(character, &targets, &synced, dt, &mut anim);
         // The block layer while she blocks on the move.
         let block_layer = if blocking && c.stance == Stance::Combat && speed > 1e-4 { 1.0 } else { 0.0 };
         match layers.get_mut(pe) {
@@ -1287,7 +1323,7 @@ fn layered_blend(
             continue;
         }
         let model = match rig.model {
-            Model::Counselor => counselor.as_deref().map(|c| &c.0),
+            Model::Counselor => counselor.as_deref().map(|c| c.model(rig.male)),
             Model::Killer => killer.as_deref().map(|k| &k.0),
         };
         let Some(model) = model else { continue };
@@ -1323,9 +1359,10 @@ fn lean_weights(dir: f32) -> [f32; 5] {
 /// LeanAlpha): each sample's local delta (rotation pose x base^-1, translation pose - base, for the bones retargeted
 /// from the animation), blended by the blend space's weights, applied as FTransform::BlendFromIdentityAndAccumulate.
 fn run_lean(counselor: Option<Res<CounselorCharacter>>, rigs: Query<&Rig>, mut transforms: Query<&mut Transform>, mut restore: ResMut<LayerRestore>) {
-    let Some(model) = counselor.as_deref().map(|c| &c.0) else { return };
-    let Some((base, base_len)) = model.layers.get(LEAN_BASE) else { return };
+    let Some(cc) = counselor.as_deref() else { return };
     for rig in &rigs {
+        let model = cc.model(rig.male);
+        let Some((base, base_len)) = model.layers.get(LEAN_BASE) else { continue };
         if !rig.lean_on || rig.lean_alpha <= 1e-4 || !matches!(rig.model, Model::Counselor) {
             continue;
         }
@@ -1463,8 +1500,9 @@ fn item_hand_layer(
     mut t: Local<f32>,
 ) {
     *t += time.delta_secs();
-    let Some(model) = counselor.as_deref().map(|c| &c.0) else { return };
+    let Some(cc) = counselor.as_deref() else { return };
     for rig in &rigs {
+        let model = cc.model(rig.male);
         let Some(pose) = rig.item_hand.as_deref().filter(|_| rig.action.is_none() && matches!(rig.model, Model::Counselor)) else { continue };
         let Some((data, length)) = model.layers.get(pose) else { continue };
         blend_layer(model, rig, data, *length, *t, ITEM_HAND_FILTERS, false, 1.0, &mut transforms, &mut written.0);
@@ -1483,8 +1521,9 @@ fn item_arm_layer(
     mut t: Local<f32>,
 ) {
     *t += time.delta_secs();
-    let Some(model) = counselor.as_deref().map(|c| &c.0) else { return };
+    let Some(cc) = counselor.as_deref() else { return };
     for rig in &rigs {
+        let model = cc.model(rig.male);
         let Some((pose, weight)) = rig.item_arm.as_ref().filter(|(_, w)| *w > 1e-4 && matches!(rig.model, Model::Counselor)) else { continue };
         let Some((data, length)) = model.layers.get(pose.as_str()) else { continue };
         blend_layer(model, rig, data, *length, *t, ITEM_ARM_FILTERS, true, *weight, &mut transforms, &mut written.0);
@@ -1506,8 +1545,9 @@ fn aim_offset(
     mut transforms: Query<&mut Transform>,
     mut written: ResMut<LayerRestore>,
 ) {
-    let Some(model) = counselor.as_deref().map(|c| &c.0) else { return };
+    let Some(cc) = counselor.as_deref() else { return };
     for rig in &rigs {
+        let model = cc.model(rig.male);
         if !matches!(rig.model, Model::Counselor) || !rig.aim_on || rig.aim_weights[1] >= 1.0 - 1e-5 {
             continue;
         }
@@ -1722,7 +1762,7 @@ fn head_look(
     for (parent, mut rig, rig_xf) in &mut rigs {
         let (model, owner_xf) = match rig.model {
             Model::Counselor => match (counselor.as_deref(), players.get(parent.parent())) {
-                (Some(c), Ok((_, xf, _))) => (&c.0, xf),
+                (Some(c), Ok((_, xf, _))) => (c.model(rig.male), xf),
                 _ => continue,
             },
             Model::Killer => match (killer.as_deref(), jasons.get(parent.parent())) {

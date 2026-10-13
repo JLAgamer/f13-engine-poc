@@ -211,7 +211,9 @@ fn spawn_player(
     info!("counselor class: {}", config.class);
     match character.as_deref().filter(|_| !config.capsule) {
         Some(character) => {
-            crate::character::spawn_model_as(&mut commands, &assets, character, Some(character.looks(&config.class)), crate::character::Model::Counselor, player, PlayerPart);
+            let looks = character.looks(&config.class);
+            let (model, _) = character.model_for(&looks);
+            crate::character::spawn_model_as(&mut commands, &assets, model, Some(looks.clone()), crate::character::Model::Counselor, player, PlayerPart);
         }
         None => {
             let capsule = meshes.add(Capsule3d::new(CAPSULE_RADIUS_M, 2.0 * (CAPSULE_HALF_HEIGHT_M - CAPSULE_RADIUS_M)));
@@ -265,7 +267,9 @@ pub(crate) fn spawn_counselor(commands: &mut Commands, assets: &AssetServer, cha
         ))
         .id();
     if let Some(character) = character {
-        crate::character::spawn_model_as(commands, assets, character, Some(character.looks(class)), crate::character::Model::Counselor, other, ());
+        let looks = character.looks(class);
+        let (model, _) = character.model_for(&looks);
+        crate::character::spawn_model_as(commands, assets, model, Some(looks.clone()), crate::character::Model::Counselor, other, ());
     }
     info!("counselor {other} ({class}) at {at}");
     other
@@ -291,10 +295,11 @@ fn restyle(
         info!("counselor {e}: now {}", class.0);
         p.counselor.stats = tuning.stats_of(&class.0);
         commands.entity(rig).despawn();
+        let (model, _) = character.model_for(&looks);
         if local {
-            crate::character::spawn_model_as(&mut commands, &assets, &character, Some(looks), crate::character::Model::Counselor, e, PlayerPart);
+            crate::character::spawn_model_as(&mut commands, &assets, model, Some(looks.clone()), crate::character::Model::Counselor, e, PlayerPart);
         } else {
-            crate::character::spawn_model_as(&mut commands, &assets, &character, Some(looks), crate::character::Model::Counselor, e, ());
+            crate::character::spawn_model_as(&mut commands, &assets, model, Some(looks.clone()), crate::character::Model::Counselor, e, ());
         }
     }
 }

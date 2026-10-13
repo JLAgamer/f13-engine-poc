@@ -318,23 +318,65 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
 
         AddSockets(info, body, skeleton);
         AddRagdoll(info, body);
-        WriteAnimations(info, skeleton, animations, "anims", keepRoot);
+        // A male counselor (bIsFemale off: Base_Counselor_AnimBP's male assets, which the female classes' anim
+        // Blueprints override): each female animation's male counterpart (Base/Male/Animation, M_/m_ for F_/f_) where
+        // there is one, under the female sequences' names.
+        var female = ClassValue<bool?>(cls, "bIsFemale") != false;
+        (info.Names ??= new())["Gender"] = female ? "Female" : "Male";
+        WriteAnimations(info, skeleton, animations, "anims", keepRoot, female ? null : MaleCounterpart);
         Save(info, "counselors");
     }
 
-    void WriteAnimations(Info info, USkeleton skeleton, IEnumerable<string> animations, string dir, ICollection<string> keepRoot)
+    /// A female counselor animation's male counterpart's path, if the game has one.
+    string? MaleCounterpart(string path)
+    {
+        const string F = "/Counselors/Base/Female/Animation/";
+        if (!path.Contains(F, StringComparison.OrdinalIgnoreCase)) return null;
+        var i = path.LastIndexOf('/');
+        var file = path[(i + 1)..];
+        string? swapped = file.StartsWith("AM_F_", StringComparison.OrdinalIgnoreCase) ? "AM_M_" + file[5..]
+            : file.StartsWith("F_") ? "M_" + file[2..] : file.StartsWith("f_") ? "m_" + file[2..] : null;
+        if (swapped == null) return null;
+        var dir = path[..(i + 1)].Replace("/Female/", "/Male/", StringComparison.OrdinalIgnoreCase);
+        foreach (var name in new[] { swapped, swapped.ToLowerInvariant(), "M_" + file[2..], "m_" + file[2..] })
+        {
+            var candidate = dir + name;
+            var pkg = (candidate.StartsWith("/Game/") ? "SummerCamp/Content/" + candidate["/Game/".Length..] : candidate) + ".uasset";
+            if (provider.Files.Keys.FirstOrDefault(k => k.Equals(pkg, StringComparison.OrdinalIgnoreCase)) is { } found)
+                return "/Game/" + found["SummerCamp/Content/".Length..^".uasset".Length];
+        }
+        return null;
+    }
+
+    void WriteAnimations(Info info, USkeleton skeleton, IEnumerable<string> animations, string dir, ICollection<string> keepRoot, Func<string, string?>? counterpart = null)
     {
         Directory.CreateDirectory(Path.Combine(outDir, dir));
-        foreach (var path in animations)
+        var swapped = 0;
+        foreach (var original in animations)
         {
+            // Its counterpart's sequences under this one's names (by order; the same count, else this one's own).
+            var path = original;
+            var names = new List<string>();
+            if (counterpart?.Invoke(original) is { } other)
+            {
+                var mine = Sequences(original).Select(q => q.Name).ToList();
+                if (mine.Count > 0 && mine.Count == Sequences(other).Count())
+                {
+                    path = other;
+                    names = mine;
+                    swapped++;
+                }
+            }
             var windows = Windows(path);
             var curves = MontageCurves(path);
             var sections = Sections(path);
             var blendIn = (provider.LoadPackageObject(path + "." + path.Split('/')[^1]) as UAnimMontage)?.GetOrDefault<FStructFallback?>("BlendIn")?.GetOrDefault<float?>("BlendTime");
+            var k = 0;
             foreach (var seq in Sequences(path))
             {
+                var key = names.Count > 0 ? names[k++] : seq.Name;
                 // Already written from another montage: still give it this montage's notifies and curves if it has none.
-                if (info.Animations.TryGetValue(seq.Name, out var have))
+                if (info.Animations.TryGetValue(key, out var have))
                 {
                     have.Windows ??= windows;
                     have.Curves ??= curves;
@@ -347,9 +389,10 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
                 a.Curves = curves;
                 a.Sections = sections;
                 a.BlendIn = blendIn;
-                info.Animations[seq.Name] = a;
+                info.Animations[key] = a;
             }
         }
+        if (counterpart != null) Console.WriteLine($"{info.Name}: {swapped} male animations");
     }
 
     /// The body mesh's PhysicsAsset: bodies (the largest shape of each) and constraints.

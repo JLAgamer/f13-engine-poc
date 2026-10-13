@@ -337,7 +337,8 @@ fn lobby_key(keys: &ButtonInput<KeyCode>) -> Option<LobbyMsg> {
 
 /// The counselor after `current` among the playable ones (by class name; the first after the last).
 fn next_class(character: Option<&crate::character::CounselorCharacter>, current: &str) -> String {
-    let mut classes: Vec<&String> = character.map(|c| c.1.keys().collect()).unwrap_or_default();
+    // (Not Tommy: the game mode's HunterCharacterClass, who comes only when called: SCGameMode::SpawnHunter.)
+    let mut classes: Vec<&String> = character.map(|c| c.1.keys().filter(|k| k.as_str() != "Hunter").collect()).unwrap_or_default();
     classes.sort();
     let current = if current.is_empty() { crate::character::DEFAULT_CLASS } else { current };
     let i = classes.iter().position(|c| c.as_str() == current).map_or(0, |i| (i + 1) % classes.len().max(1));
