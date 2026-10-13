@@ -35,7 +35,6 @@ Base content (asset paths in the player's install; all gameplay values come from
 - [ ] Blood: dismemberment (the death's dismember roll, the dismemberment meshes)
 - [ ] Blood: the counselor's gore skin layer (SkinGoreMaster)
 - [ ] Blood: check whether thrown knives and shotgun hits on a character spawn blood in the game
-- [ ] The computer Jason and knife pickups: he takes them in passing (no pick-up move) and doesn't go looking for them
 - [ ] Sound: the thrown knife's ThrowingKnifeImpactConfirmation (SCThrowable JasonImpactNoise: where it plays isn't
       found yet)
 - [ ] Music: Jason's own music (his MusicComponent's JasonsMusic, after a kill's music too), the two-minute warning

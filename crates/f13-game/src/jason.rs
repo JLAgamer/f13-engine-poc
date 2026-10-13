@@ -909,37 +909,13 @@ pub(crate) fn knife_pickup_at(
         .map(|(e, ..)| e)
 }
 
-/// The computer Jason takes the throwing knives he passes within reach of (SCKillerCharacter::AddKnives: NumKnives +=
-/// the pickup's StackSize, no cap): he doesn't go looking for them, nor play the pick-up move. A played Jason presses
-/// E at them (update_jason).
-fn pick_up_knives(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut jasons: Query<(&mut Jason, &Transform)>,
-    pickups: Query<(Entity, &crate::props::KnifePickup, &GlobalTransform), Without<crate::props::PickedUp>>,
-    mut taken: Query<(Entity, &mut crate::props::PickedUp)>,
-    controls: Option<Res<crate::jason_player::JasonControls>>,
-) {
+/// Taken throwing knives go once their lifespan runs out (PerformPickup's SetLifeSpan). Jason takes them with their
+/// pick-up move (update_jason: a played Jason's E; the computer Jason's when he has none).
+fn pick_up_knives(mut commands: Commands, time: Res<Time>, mut taken: Query<(Entity, &mut crate::props::PickedUp)>) {
     for (e, mut t) in &mut taken {
         t.0 -= time.delta_secs();
         if t.0 <= 0.0 {
             commands.entity(e).despawn();
-        }
-    }
-    if controls.is_some() {
-        return;
-    }
-    for (mut j, xf) in &mut jasons {
-        if !matches!(j.state, JasonState::Hunting) {
-            continue;
-        }
-        for (e, p, gxf) in &pickups {
-            let d = gxf.translation() - xf.translation;
-            if Vec2::new(d.x, d.z).length() * 100.0 <= p.reach && d.y.abs() < 2.0 {
-                j.knives += p.count;
-                info!("Jason picked up {} throwing knife(s) ({} now)", p.count, j.knives);
-                commands.entity(e).despawn();
-            }
         }
     }
 }
@@ -1146,7 +1122,7 @@ fn fly_knives(
     (impact, sounds): (Option<Res<KnifeImpact>>, Option<Res<crate::audio::Sounds>>),
 ) {
     // The ImpactTemplate's sound where it hit (heard by everyone: net_world shout).
-    let mut impact_at = |commands: &mut Commands, at: Vec3, surface: u8| {
+    let impact_at = |commands: &mut Commands, at: Vec3, surface: u8| {
         if let Some(cue) = impact.as_ref().and_then(|i| i.sound(surface)) {
             crate::net_world::shout(commands, crate::net_world::Shout::Sound(crate::audio::PlaySound { cue, at: Some(at) }));
         }
@@ -1354,6 +1330,9 @@ pub struct Held;
 #[derive(Component)]
 pub struct Staggered(pub f32);
 
+/// How far the computer Jason goes for throwing knives when he has none (m; PLACEHOLDER: the AI's choice).
+const KNIFE_SEEK_M: f32 = 60.0;
+
 /// His way onto a special move's spot (SCSpecialMove_SoloMontage's interp: from where he stood, its params).
 #[derive(Component, Clone, Copy)]
 pub struct AlignTo {
@@ -1444,7 +1423,8 @@ fn spawn_jason(
                 morphed: false,
                 stalk: None,
                 fade: TeleportFade::default(),
-                knives: tuning.num_knives,
+                // (F13_JASON_KNIVES: another count to start with, testing.)
+                knives: std::env::var("F13_JASON_KNIVES").ok().and_then(|v| v.parse().ok()).unwrap_or(tuning.num_knives),
                 kill: 0,
                 kill_move: (KILLS[0].0, KILLS[0].0, KILLS[0].2),
                 traps: tuning.trap_count,
@@ -2236,7 +2216,44 @@ pub(crate) fn update_jason(
                 // PLACEHOLDER (the AI's choice; the game's Jason is a player): not seeing her, he goes to break a
                 // working phone box (its fuse in) before anything else, as a player would to stop the call.
                 let phone_box = if sees { None } else { phone_boxes.iter().find(|(_, b)| b.breakable()).map(|(e, b)| (e, b.interact, b.reach)) };
-                if let Some((be, at, reach)) = phone_box {
+                // PLACEHOLDER (the AI's choice): out of knives and not seeing her, he goes for the nearest throwing
+                // knives within KNIFE_SEEK_M and takes them as a player does (their AlignmentSpecialMove).
+                // (Not those whose spot he couldn't get onto lately.)
+                let unreachable = j.unreachable.filter(|u| now - u.1 < UNREACHABLE_SECONDS);
+                let knife_post = if sees || phone_box.is_some() || j.knives > 0 {
+                    None
+                } else {
+                    knife_pickups
+                        .iter()
+                        .filter(|(_, _, _, taken)| !taken)
+                        .map(|(e, k, g, _)| (e, g.transform_point(k.interact), k.reach, g.compute_transform() * k.spot))
+                        .filter(|(_, at, _, spot)| at.distance(xf.translation) <= KNIFE_SEEK_M && unreachable.is_none_or(|u| spot.translation.distance(u.0) > 0.5))
+                        .min_by(|a, b| a.1.distance(xf.translation).total_cmp(&b.1.distance(xf.translation)))
+                };
+                if let (None, Some((ke, at, _, spot))) = (phone_box, knife_post) {
+                    if j.target_spot.is_none() && !j.wander.is_some_and(|w| w.0 == spot.translation) {
+                        info!("Jason: going for throwing knives ({:.0} m)", at.distance(xf.translation));
+                        j.wander = Some((spot.translation, now));
+                    }
+                    goal = spot.translation;
+                    following = true;
+                    // Close to the special move's spot: it puts him on it (as a hiding spot's); stuck short of it, he
+                    // leaves them for a while.
+                    let near = Vec2::new(spot.translation.x - xf.translation.x, spot.translation.z - xf.translation.z).length() < SPECIAL_MOVE_REACH_M;
+                    if stalled && !near {
+                        info!("Jason: can't get to the throwing knives");
+                        j.stall = 0.0;
+                        j.unreachable = Some((spot.translation, now));
+                    } else if near {
+                        info!("Jason: picking up throwing knives (AI)");
+                        j.stall = 0.0;
+                        let params = special_moves.as_deref().map_or_else(Default::default, |m| m.of("ThrowingKnifePickup_C", "AlignmentSpecialMove"));
+                        commands.entity(je).insert(AlignTo { from: *xf, to: crate::interact::standing_on(&xf, spot), params });
+                        j.state = JasonState::BreakingFuse { t: -params.interp_time, fuse: ke, done: false };
+                        j.velocity = Vec2::ZERO;
+                        continue;
+                    }
+                } else if let Some((be, at, reach)) = phone_box {
                     if j.target_spot.is_none() && !j.wander.is_some_and(|w| w.0 == at) {
                         info!("Jason: going for the phone box ({:.0} m)", at.distance(xf.translation));
                         j.wander = Some((at, now));
@@ -2597,6 +2614,10 @@ pub(crate) fn update_jason(
                         let near = Vec2::new(xf.translation.x - a.to.translation.x, xf.translation.z - a.to.translation.z).length() <= a.params.threshold_m;
                         if a.params.sweep && sweep(xf.translation, a.to.translation).is_some() && !near {
                             info!("Jason: special move cancelled: blocked on the way to its spot");
+                            // (The computer Jason leaves it for a while.)
+                            if controls.is_none() {
+                                j.unreachable = Some((a.to.translation, now));
+                            }
                             j.state = JasonState::Hunting;
                             continue;
                         }
