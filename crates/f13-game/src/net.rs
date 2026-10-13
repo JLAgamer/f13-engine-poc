@@ -336,7 +336,16 @@ struct ServerPort(u16);
 struct ServerAddr(SocketAddr);
 
 fn start_server(mut commands: Commands, port: Res<ServerPort>) {
-    let config = lightyear::prelude::server::NetcodeConfig { protocol_id: PROTOCOL_ID, private_key: DEV_KEY, client_timeout_secs: TIMEOUT_SECS, ..default() };
+    // No server address check: the server binds 0.0.0.0, which netcode matches only to a loopback token address, so
+    // a client that typed the host's LAN or public address was ignored ("not in connect token whitelist"). The
+    // check guards a token against use on another server; with every build's shared DEV_KEY it guards nothing.
+    let config = lightyear::prelude::server::NetcodeConfig {
+        protocol_id: PROTOCOL_ID,
+        private_key: DEV_KEY,
+        client_timeout_secs: TIMEOUT_SECS,
+        server_addr_check: false,
+        ..default()
+    };
     let server = commands
         .spawn((
             Name::new("server"),
