@@ -148,6 +148,7 @@ impl Plugin for UiPlugin {
             .init_resource::<prompts::PromptUi>()
             .add_systems(Startup, load_hud)
             .init_resource::<MatchEndPage>()
+            .add_systems(Update, lobby_mute_clicks)
             .add_systems(Update, (match_end_page, build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, (map_screen, counselor_map_icons).chain(), jason_hud, ability_popup, morph_cursor, rage_hud, noise_meter, xp_lines, wiggle_state.pipe(wiggle_widget)), prompts::prompts, spectator_hud, widget_anims, fear_widgets, content_alpha, widget_colors, additive_brushes, hide_for_jason).chain().run_if(resource_exists::<Hud>));
     }
 }
@@ -903,6 +904,39 @@ fn category_name(category: &str) -> Option<&'static str> {
         "Sacrifice" => "Sacrifice",
         _ => return None,
     })
+}
+
+/// A lobby row's speaker is its mute button (PlayerSpeakIconMuteButton's MuteButton: a click mutes or unmutes that
+/// player here, not for this player's own row; CanBeMuted). Its rows' speakers take clicks (Interaction).
+fn lobby_mute_clicks(
+    mut commands: Commands,
+    speakers: Query<(Entity, &Name), (Without<Interaction>, With<Node>)>,
+    clicked: Query<(Entity, &Interaction, &Name), Changed<Interaction>>,
+    parents: Query<&ChildOf>,
+    names: Query<&Name>,
+    lobby: Query<&crate::lobby::NetLobby>,
+    (me, client): (Option<Res<crate::lobby::Me>>, Option<Res<crate::net::NetClient>>),
+    mutes: Option<ResMut<crate::voice::VoiceMutes>>,
+) {
+    for (e, n) in &speakers {
+        if n.as_str() == "PlayerSpeakIconMuteButton" {
+            commands.entity(e).try_insert(Interaction::None);
+        }
+    }
+    let (Some(l), Some(mut mutes)) = (lobby.iter().next().filter(|l| l.open), mutes) else { return };
+    let my_id = if client.is_some() { me.map(|m| m.id) } else { Some(0) };
+    for (e, i, n) in &clicked {
+        if *i != Interaction::Pressed || n.as_str() != "PlayerSpeakIconMuteButton" {
+            continue;
+        }
+        // Its row: LobbyRow<i> among its ancestors.
+        let row = parents.iter_ancestors(e).find_map(|a| names.get(a).ok()?.as_str().strip_prefix("LobbyRow")?.parse::<usize>().ok());
+        let Some(m) = row.and_then(|r| l.members.get(r)).filter(|m| Some(m.id) != my_id) else { continue };
+        if !mutes.0.remove(&m.name) {
+            mutes.0.insert(m.name.clone());
+        }
+        info!("lobby: {} {}", m.name, if mutes.0.contains(&m.name) { "muted" } else { "unmuted" });
+    }
 }
 
 /// The match end's page: 0 its XP, then a badge each (Continue: MenuSelect, Enter here), back to 0 for the next match.

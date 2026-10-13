@@ -272,7 +272,15 @@ fn tag_player_parts(
     }
 }
 
-fn grab_cursor(mut cursor: Single<&mut CursorOptions>, mouse: Res<ButtonInput<MouseButton>>, keys: Res<ButtonInput<KeyCode>>) {
+fn grab_cursor(mut cursor: Single<&mut CursorOptions>, mouse: Res<ButtonInput<MouseButton>>, keys: Res<ButtonInput<KeyCode>>, lobby: Query<&crate::lobby::NetLobby>) {
+    // The lobby's a menu: its cursor stays free (its rows' mute buttons).
+    if lobby.iter().any(|l| l.open) {
+        if cursor.grab_mode != CursorGrabMode::None {
+            cursor.visible = true;
+            cursor.grab_mode = CursorGrabMode::None;
+        }
+        return;
+    }
     if mouse.just_pressed(MouseButton::Left) {
         cursor.visible = false;
         cursor.grab_mode = CursorGrabMode::Locked;
