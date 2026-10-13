@@ -184,6 +184,8 @@ pub struct NetCounselor {
     pub held: Option<f32>,
     /// In a bear trap, and its struggle's completion while she's still in it.
     pub trapped: Option<Option<f32>>,
+    /// Dead or escaped (voice.rs: heard only by the others spectating).
+    pub spectating: bool,
 }
 
 /// What Jason's animation reads of his state.
@@ -498,7 +500,7 @@ fn set<T: PartialEq>(mut c: Mut<T>, v: T) {
 #[allow(clippy::type_complexity)]
 fn update_bodies(
     mut bodies: Query<(&mut NetBody, &Transform, &mut NetAction, Option<&PlayAction>, Has<crate::items::Blocking>)>,
-    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>))>,
+    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>, Has<crate::voice::Spectating>))>,
     struggle: Option<Res<crate::jason::Struggle>>,
     mut jasons: Query<(&mut NetJason, &crate::jason::Jason, Option<&crate::senses::Knowledge>, Option<&crate::kill_camera::KillCam>)>,
     world_ids: Query<&crate::net_world::WorldId>,
@@ -519,7 +521,7 @@ fn update_bodies(
             a.blocking = blocking;
         }
     }
-    for (n, p, name, controls, (held, trapped)) in &mut counselors {
+    for (n, p, name, controls, (held, trapped, spectating)) in &mut counselors {
         let c = &p.counselor;
         set(n, NetCounselor {
             stance: c.stance as u8,
@@ -538,6 +540,7 @@ fn update_bodies(
             look: controls.map_or([0.0; 2], |c| [c.yaw, c.pitch]),
             held: held.then(|| struggle.as_ref().map_or(0.0, |s| s.wiggle.completion)),
             trapped: trapped.map(|t| t.struggle()),
+            spectating,
         });
     }
     for (n, j, know, cam) in &mut jasons {
@@ -774,14 +777,14 @@ fn mirror(
     mut commands: Commands,
     (real, clock): (Res<Time<Real>>, Res<ServerClock>),
     mut bodies: Query<(&NetBody, &NetAction, Option<&NetCounselor>, Option<&NetJason>, &mut Twin, Option<&Snapshots>)>,
-    mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>, (Option<&Name>, Option<&mut Controls>, Has<LocalPlayer>, Option<&mut crate::senses::Knowledge>), (Has<crate::jason::Held>, Option<&mut crate::items::Trapped>))>,
+    mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>, (Option<&Name>, Option<&mut Controls>, Has<LocalPlayer>, Option<&mut crate::senses::Knowledge>), (Has<crate::jason::Held>, Option<&mut crate::items::Trapped>, Has<crate::voice::Spectating>))>,
     mut struggle: Option<ResMut<crate::jason::Struggle>>,
     actors: Res<crate::net_world::Actors>,
     cams: Query<&crate::kill_camera::KillCam>,
 ) {
     let shown_at = clock.now(&real) - INTERP_DELAY_S;
     for (b, a, nc, nj, mut twin, snaps) in &mut bodies {
-        let Ok((mut xf, player, jason, action, blocking, (name, controls, local, know), (held, trapped))) = twins.get_mut(twin.local) else { continue };
+        let Ok((mut xf, player, jason, action, blocking, (name, controls, local, know), (held, trapped, spectating))) = twins.get_mut(twin.local) else { continue };
         let (to, yaw) = snaps.and_then(|s| sample(s, shown_at)).unwrap_or((Vec3::from_array(b.pos), b.yaw));
         xf.translation = to;
         xf.rotation = Quat::from_rotation_y(yaw);
@@ -816,6 +819,15 @@ fn mirror(
                     e.remove::<crate::jason::Held>();
                 }
                 (None, false) => {}
+            }
+            match (n.spectating, spectating) {
+                (true, false) => {
+                    e.insert(crate::voice::Spectating);
+                }
+                (false, true) => {
+                    e.remove::<crate::voice::Spectating>();
+                }
+                _ => {}
             }
             match (n.trapped, trapped) {
                 (Some(c), Some(mut t)) => t.set_struggle(c),

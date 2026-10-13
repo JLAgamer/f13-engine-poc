@@ -5,12 +5,15 @@
 //!
 //! The game's voice is open mic by default (DefaultGame.ini bRequiresPushToTalk=false).
 //!
+//! Who hears whom, and how, is the listener's machine's call (SCPlayerState.cpp FUN_1403b8150, for each talker): see
+//! [`route`]. Walkie-talkie carriers further apart than MinVoIPDistance hear each other in 2D (by radio); Jason is
+//! always heard and hears in 3D; the dead and escaped (spectating) are heard only by each other.
+//!
 //! PLACEHOLDERS:
 //! - the attenuation: no attenuation asset or override is set on VoIPAudioComponent by code or Blueprint that was found;
 //!   UE's FSoundAttenuationSettings defaults stand in (linear, full within 400 cm, silent 3600 cm further);
-//! - the walkie-talkies (SCWalkieTalkie MinVoIPDistance 400: carriers further apart hear each other by radio) and who
-//!   hears the dead aren't ported: everyone hears everyone by distance;
-//! - the gate (frames whose RMS is under [`GATE_RMS`] aren't sent), not the engine's.
+//! - the gate (frames whose RMS is under [`GATE_RMS`] aren't sent), not the engine's;
+//! - the Psychic perk's VoIPDistanceModifier (no perks yet).
 
 use bevy::prelude::*;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -27,6 +30,10 @@ const VOLUME: f32 = 1.5;
 /// FSoundAttenuationSettings' defaults (cm): the inner radius and the falloff distance.
 const INNER_CM: f32 = 400.0;
 const FALLOFF_CM: f32 = 3600.0;
+/// SCWalkieTalkie's MinVoIPDistance (WalkieTalkie_C's default, cm): carriers further apart hear each other in 2D.
+const WALKIE_MIN_CM: f32 = 400.0;
+/// The walkie-talkie's class (SCGameState WalkieTalkiePlayers: the counselors carrying one).
+const WALKIE: &str = "WalkieTalkie_C";
 /// Frames quieter than this aren't sent (PLACEHOLDER).
 const GATE_RMS: f32 = 0.01;
 /// Frames buffered before a voice starts playing (jitter).
@@ -60,7 +67,7 @@ pub(crate) fn server(app: &mut App, dedicated: bool) {
     if dedicated {
         app.insert_resource(NoDevices);
     }
-    app.add_systems(Startup, open_devices).add_systems(Update, (capture, relay, play_gains).chain());
+    app.add_systems(Startup, open_devices).add_systems(Update, (mark_spectators, capture, relay, play_gains).chain());
 }
 
 pub(crate) fn client(app: &mut App) {
@@ -378,27 +385,155 @@ fn receive(mut d: NonSendMut<Devices>, mut receivers: Query<&mut MessageReceiver
     }
 }
 
+/// A talker or listener as the voice routing sees them: Jason, spectating (dead or escaped), carrying a walkie-talkie,
+/// and where they hear or talk from (cm).
+#[derive(Clone, Copy, Debug, Default)]
+struct Party {
+    jason: bool,
+    spectating: bool,
+    walkie: bool,
+    at: Vec3,
+}
+
+/// How a talker's voice plays for a listener.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Route {
+    /// From the talker's character (attenuated, panned).
+    Spatial,
+    /// Unpanned at full volume (by radio, before the match, among the dead).
+    Flat,
+    Silent,
+}
+
+/// FUN_1403b8150 (SCPlayerState.cpp, "OSS:" logs): before the match, 2D ("Match isn't in progress"); then both carrying
+/// walkie-talkies further apart than MinVoIPDistance, 2D; either of them Jason, 3D anyway; a spectating talker, 2D and
+/// heard only by a spectating listener ("aren't in the same playing state"); 3D beyond the attenuation's
+/// FalloffDistance (+0xa0), not heard ("aren't in attenuation range").
+fn route(in_progress: bool, talker: Party, listener: Party) -> Route {
+    if !in_progress {
+        return Route::Flat;
+    }
+    let cm = talker.at.distance(listener.at);
+    let mut route = Route::Spatial;
+    if talker.walkie && listener.walkie && cm > WALKIE_MIN_CM {
+        route = Route::Flat;
+    }
+    let in_range = cm < FALLOFF_CM;
+    if talker.jason || listener.jason {
+        route = Route::Spatial;
+    }
+    if talker.spectating {
+        route = if listener.spectating { Route::Flat } else { Route::Silent };
+    }
+    if route == Route::Spatial && !in_range {
+        route = Route::Silent;
+    }
+    route
+}
+
+/// The dead and escaped: their voices reach only each other (the server's; a client's from NetCounselor).
+#[derive(Component)]
+pub(crate) struct Spectating;
+
+/// On the server: the dead and escaped counselors are spectating.
+pub(crate) fn mark_spectators(mut commands: Commands, players: Query<(Entity, &crate::player::Player, Has<crate::vehicle::Escaped>, Has<Spectating>)>) {
+    for (e, p, escaped, marked) in &players {
+        let spectating = !p.counselor.alive() || escaped;
+        if spectating != marked {
+            if spectating {
+                commands.entity(e).insert(Spectating);
+            } else {
+                commands.entity(e).remove::<Spectating>();
+            }
+        }
+    }
+}
+
 /// Each voice's gains from where its talker's character is (the server's id: the twin on a client), heard from the
-/// listener: VolumeMultiplier x the attenuation, panned as the game's other sounds (audio.rs x3d_stereo).
-fn play_gains(d: NonSend<Devices>, listener: Query<&GlobalTransform, With<SpatialListener>>, twins: Option<Res<crate::net::Twins>>, globals: Query<&GlobalTransform>) {
+/// listener as [`route`] has it: 3D is VolumeMultiplier x the attenuation, panned as the game's other sounds (audio.rs
+/// x3d_stereo); 2D is VolumeMultiplier on both sides (as audio.rs plays its 2D sounds).
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn play_gains(
+    d: NonSend<Devices>,
+    listener: Query<&GlobalTransform, With<SpatialListener>>,
+    twins: Option<Res<crate::net::Twins>>,
+    globals: Query<&GlobalTransform>,
+    characters: Query<(Has<crate::jason::Jason>, Has<Spectating>, Option<&crate::interact::Inventory>)>,
+    items: Query<&crate::props::Item>,
+    (local, jasons, play_jason, game, lobby): (
+        Query<Entity, (With<crate::controls::LocalPlayer>, With<crate::player::Player>)>,
+        Query<Entity, With<crate::jason::Jason>>,
+        Option<Res<crate::jason_player::PlayJason>>,
+        Option<Res<crate::match_flow::GameMatch>>,
+        Option<Res<crate::lobby::LobbyOpen>>,
+    ),
+) {
     let Some(ear) = listener.iter().next() else { return };
     let to_listener = ear.affine().inverse();
+    let party = |e: Entity| {
+        let (jason, spectating, inv) = characters.get(e).unwrap_or((false, false, None));
+        let walkie = inv.is_some_and(|i| i.special.iter().any(|&s| items.get(s).is_ok_and(|it| it.class == WALKIE)));
+        let at = globals.get(e).map_or(Vec3::ZERO, |g| g.translation() + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M) * 100.0;
+        Party { jason, spectating, walkie, at }
+    };
+    // The listener: this machine's character (her counselor, or Jason), hearing from its place, or (spectating, or
+    // none) from the camera.
+    let me = if play_jason.is_some() { jasons.iter().next() } else { local.iter().next() };
+    let mut hearer = me.map(party).unwrap_or(Party { spectating: true, ..default() });
+    if hearer.spectating {
+        hearer.at = ear.translation() * 100.0;
+    }
+    let in_progress = lobby.is_none() && game.is_some_and(|g| g.state.state == crate::match_flow::MatchState::InProgress);
     let Ok(mut vs) = d.voices.lock() else { return };
     for (&talker, v) in vs.iter_mut() {
         let entity = match &twins {
             Some(t) => t.of(talker),
             None => Some(Entity::from_bits(talker)),
         };
-        let Some(g) = entity.and_then(|e| globals.get(e).ok()) else {
+        let Some((e, g)) = entity.and_then(|e| Some((e, globals.get(e).ok()?))) else {
             v.gains = (0.0, 0.0);
             continue;
         };
-        let at = g.translation() + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M;
-        let cm = ear.translation().distance(at) * 100.0;
-        let a = (1.0 - (cm - INNER_CM).max(0.0) / FALLOFF_CM).clamp(0.0, 1.0);
-        let local = to_listener.transform_point3(at);
-        let (right, front) = (local.x, -local.z);
-        let (l, r) = crate::audio::x3d_stereo(right.atan2(front), right.hypot(front) <= f32::EPSILON);
-        v.gains = (l * a * VOLUME, r * a * VOLUME);
+        v.gains = match route(in_progress, party(e), hearer) {
+            Route::Silent => (0.0, 0.0),
+            Route::Flat => (VOLUME, VOLUME),
+            Route::Spatial => {
+                let at = g.translation() + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M;
+                let cm = ear.translation().distance(at) * 100.0;
+                let a = (1.0 - (cm - INNER_CM).max(0.0) / FALLOFF_CM).clamp(0.0, 1.0);
+                let local = to_listener.transform_point3(at);
+                let (right, front) = (local.x, -local.z);
+                let (l, r) = crate::audio::x3d_stereo(right.atan2(front), right.hypot(front) <= f32::EPSILON);
+                (l * a * VOLUME, r * a * VOLUME)
+            }
+        };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn voices_route_as_the_game_routes_them() {
+        let at = |x: f32| Party { at: Vec3::X * x, ..default() };
+        let walkie = |x: f32| Party { walkie: true, ..at(x) };
+        // Before the match: 2D.
+        assert_eq!(route(false, at(0.0), at(10000.0)), Route::Flat);
+        // Near: 3D; beyond the falloff: not heard.
+        assert_eq!(route(true, at(0.0), at(1000.0)), Route::Spatial);
+        assert_eq!(route(true, at(0.0), at(5000.0)), Route::Silent);
+        // Both with walkies: by radio past 400 cm, at any range; 3D within it.
+        assert_eq!(route(true, walkie(0.0), walkie(5000.0)), Route::Flat);
+        assert_eq!(route(true, walkie(0.0), walkie(300.0)), Route::Spatial);
+        assert_eq!(route(true, walkie(0.0), at(5000.0)), Route::Silent);
+        // Jason: always 3D (no radio).
+        assert_eq!(route(true, Party { jason: true, ..walkie(0.0) }, walkie(1000.0)), Route::Spatial);
+        // The dead: heard by the dead only, in 2D.
+        let dead = |x: f32| Party { spectating: true, ..at(x) };
+        assert_eq!(route(true, dead(0.0), at(100.0)), Route::Silent);
+        assert_eq!(route(true, dead(0.0), dead(9000.0)), Route::Flat);
+        // A spectator hears the living around their camera.
+        assert_eq!(route(true, at(0.0), dead(100.0)), Route::Spatial);
     }
 }
