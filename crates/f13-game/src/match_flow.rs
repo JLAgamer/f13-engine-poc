@@ -293,7 +293,7 @@ fn run_match(
     tuning: Option<Res<MatchTuning>>,
     mut game: ResMut<GameMatch>,
     players: Query<(Entity, &Player, Has<Escaped>, Has<crate::controls::LocalPlayer>, Option<&crate::character::CounselorClass>), Without<Unsettled>>,
-    jason: Query<(), With<Jason>>,
+    jason: Query<&Jason>,
     (leave, character, hunter): (Res<Leave>, Option<Res<crate::character::CounselorCharacter>>, Option<Res<crate::tommy::HunterTimer>>),
     host: Option<ResMut<crate::host::HostRequests>>,
     mut exit: MessageWriter<AppExit>,
@@ -337,8 +337,8 @@ fn run_match(
     let roster = Roster {
         counselors_left: left,
         hunter_pending: hunter.as_ref().is_some_and(|h| h.pending()),
-        // Jason can't die yet.
-        killer_alive: (!jason.is_empty()).then_some(true),
+        // Killed (jason_death.rs): the match ends.
+        killer_alive: jason.iter().next().map(|j| !matches!(j.state, crate::jason::JasonState::Dead)),
     };
     let mut entered = g.state.advance(time.delta_secs(), &t.rules, &roster);
     // The intro's IntroSequenceCompleted: on to the match; the outro's end: on to the results.

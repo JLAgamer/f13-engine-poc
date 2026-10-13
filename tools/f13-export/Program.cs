@@ -1708,6 +1708,9 @@ static class Mvp
         $"{Shared}/Interaction/Items/AM_normal_stand_drop_item_left",
         // Pulled out of the car by Jason (the driver seat's CounselorGrabbedMontage).
         CarGrab[0],
+        // Killing Jason (JasonDeath_C's Counselor_KillJason_Axe_C / _Machete_C ContextMontages).
+        $"{Shared}/Cinematic/AM_m_cinematic_death_sequence_axe",
+        $"{Shared}/Cinematic/AM_m_cinematic_death_sequence_machete",
         // Calling Tommy on the CB radio (HunterCBRadio_C's Interactable: Enter, Idle, Exit).
         "/Game/Characters/Counselors/Base/Shared/Interaction/CBRadio/AM_normal_stand_use_CB_radio",
         // The phone box's fuse (AM_normal_stand_repair_phonebox) and calling the police (AM_normal_stand_use_phone).
@@ -1920,6 +1923,10 @@ static class Mvp
         // hit reactions.
         $"{JasonStun}/Stun/AM_combat_Falling_stun",
         $"{JasonStun}/Stun/AM_combat_stand_stun_left_01",
+        // His death: his KillStanceMontage (AM_normal_death_sequence) and JasonDeath_C's Jason_Death_* ContextMontages.
+        $"{JasonStun}/AM_normal_death_sequence",
+        $"{JasonAnim}/Cinematic/AM_cinematic_death_sequence_axe",
+        $"{JasonAnim}/Cinematic/AM_cinematic_death_sequence_machete",
         // PamelasSweaterStun_C's JasonStunAnimMontage(2H): he kneels to the sweater.
         $"{JasonAnim}/Interaction/AM_combat_stand_2h_axe_sweater_Stun_Montage",
         $"{JasonAnim}/Interaction/AM_combat_stand_1h_sweater_Stun_Montage",

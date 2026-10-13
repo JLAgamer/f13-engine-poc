@@ -73,6 +73,7 @@ mod power;
 mod radio;
 mod tommy;
 mod sweater;
+mod jason_death;
 mod voice;
 mod prop_anim;
 mod props;
@@ -212,6 +213,8 @@ struct Args {
     bot_tommy: bool,
     /// --bot-sweater: she picks Pamela's sweater up and uses it on Jason.
     bot_sweater: bool,
+    /// --bot-kill-jason (--give CounselorMachete_C --jason-health 5): the sweater, his mask, his kill stance, his death.
+    bot_kill_jason: bool,
     /// --fly start: eye position and a point to look at (Bevy space, metres).
     camera: Option<(Vec3, Vec3)>,
     /// --round-time: the match's length (s) instead of the game's.
@@ -296,6 +299,7 @@ fn parse_args() -> Args {
     let mut counselor_class = character::DEFAULT_CLASS.to_string();
     let mut bot_tommy = false;
     let mut bot_sweater = false;
+    let mut bot_kill_jason = false;
     let mut camera = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -349,6 +353,7 @@ fn parse_args() -> Args {
             "--bot-radio" => bot_radio = true,
             "--bot-tommy" => bot_tommy = true,
             "--bot-sweater" => bot_sweater = true,
+            "--bot-kill-jason" => bot_kill_jason = true,
             "--kill" => {
                 let name = it.next().unwrap_or_default();
                 kill = jason::KILLS.iter().position(|(anim, _, _)| anim.ends_with(name.as_str()));
@@ -429,7 +434,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass] (or run the installer, lakeside-setup-installer)");
         std::process::exit(2);
     };
-    Args { net, bot_net, bot_spectate, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_passenger, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, jason_health, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, override_spawning, no_voice, net_id, last_jason, bot_hooks, last_match, open_mic, bot_radio, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, counselor_class, bot_tommy, bot_sweater, camera, round_time, flashlight, rain }
+    Args { net, bot_net, bot_spectate, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_passenger, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, jason_health, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, override_spawning, no_voice, net_id, last_jason, bot_hooks, last_match, open_mic, bot_radio, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, counselor_class, bot_tommy, bot_sweater, bot_kill_jason, camera, round_time, flashlight, rain }
 }
 
 #[derive(Resource)]
@@ -598,7 +603,10 @@ fn main() {
             .add_plugins(match_flow::MatchPlugin { leave: !bot || args.play_jason })
             .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone(), outfit: args.outfit.clone() }, collision::CollisionPlugin, audio::AudioPlugin, water::WaterPlugin, power::PowerPlugin { cut: args.cut_power }, kill_camera::KillCameraPlugin, prop_anim::PropAnimPlugin, doors::DebrisPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin, navigation::NavigationPlugin { debug: args.nav_debug }))
             .add_plugins(radio::RadioPlugin)
-            .add_plugins((spectate::SpectatePlugin { bot: args.bot_spectate }, police::PolicePlugin, tommy::TommyPlugin, sweater::SweaterPlugin, placed_kills::PlacedKillsPlugin, interaction_camera::InteractionCameraPlugin, counselor_camera::CounselorCameraPlugin, cabinets::CabinetsPlugin, weather::WeatherPlugin, car_lights::CarLightsPlugin, cinematic::CinematicPlugin, hair::HairPlugin, audio_volumes::AudioVolumesPlugin));
+            .add_plugins((spectate::SpectatePlugin { bot: args.bot_spectate }, police::PolicePlugin, tommy::TommyPlugin, sweater::SweaterPlugin, jason_death::JasonDeathPlugin, placed_kills::PlacedKillsPlugin, interaction_camera::InteractionCameraPlugin, counselor_camera::CounselorCameraPlugin, cabinets::CabinetsPlugin, weather::WeatherPlugin, car_lights::CarLightsPlugin, cinematic::CinematicPlugin, hair::HairPlugin, audio_volumes::AudioVolumesPlugin));
+        if args.bot_kill_jason {
+            app.init_resource::<jason_death::BotKillJason>().add_systems(Update, jason_death::bot_kill_jason);
+        }
         if args.bot_sweater {
             app.init_resource::<sweater::BotSweater>().add_systems(Update, sweater::bot_sweater);
         }

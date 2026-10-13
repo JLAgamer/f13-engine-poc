@@ -362,7 +362,7 @@ fn choose_target(
     // What he's doing to her he finishes with her (a kill goes on after she's dead and let go).
     let busy = matches!(
         j.state,
-        JasonState::Swinging { .. } | JasonState::Reaching { .. } | JasonState::Holding { .. } | JasonState::Killing { .. } | JasonState::HideKill { .. } | JasonState::Slamming { .. } | JasonState::PullingOut { .. } | JasonState::Throwing { .. } | JasonState::Done
+        JasonState::Swinging { .. } | JasonState::Reaching { .. } | JasonState::Holding { .. } | JasonState::Killing { .. } | JasonState::HideKill { .. } | JasonState::Slamming { .. } | JasonState::PullingOut { .. } | JasonState::Throwing { .. } | JasonState::Done | JasonState::KillStance { .. } | JasonState::Dying { .. } | JasonState::Dead
     );
     if busy && target.0.is_some_and(|t| counselors.contains(t)) {
         return;
@@ -513,6 +513,14 @@ pub enum JasonState {
     Missed { t: f32 },
     Holding { t: f32 },
     Killing { t: f32 },
+    /// Kneeling in his kill stance (KillStanceMontage AM_normal_death_sequence: entrance, idle, exit), his
+    /// JasonKillObject at him (jason_death.rs): s into it; it lasts PamelasSweaterStun's 10 s (EnterKillStance
+    /// reapplies it).
+    KillStance { t: f32 },
+    /// Being killed (JasonDeath's Jason_Death_* take): s into it, the take, and who kills him.
+    Dying { t: f32, take: &'static str, by: Entity },
+    /// Dead.
+    Dead,
     /// Stunned by a counselor's item (s into it).
     Stunned { t: f32, stun: Stun },
     /// Searching an empty hiding spot (from its search spot): where the search leaves him.
@@ -708,6 +716,16 @@ impl Jason {
     }
 
     /// In a context kill (bInContextKill): a grab, placed or hiding spot kill.
+    /// In his kill stance (a counselor can kill him: jason_death.rs).
+    pub fn kneeling(&self) -> bool {
+        matches!(self.state, JasonState::KillStance { .. })
+    }
+
+    /// Dead (killed: jason_death.rs).
+    pub fn dead(&self) -> bool {
+        matches!(self.state, JasonState::Dying { .. } | JasonState::Dead)
+    }
+
     /// Morphing (bIsMorphActive).
     pub fn morphing(&self) -> bool {
         matches!(self.state, JasonState::Morphing { .. })
@@ -1397,6 +1415,18 @@ const AI_WIGGLE_INTERVAL: (f32, f32) = (0.15, 0.2);
 /// SCCharacter InvulnerableStunDuration (constructor): no new stun this long after one ends.
 const STUN_IMMUNE_SECONDS: f32 = 3.0;
 const FLINCH_FRONT: &str = "combat_stand_hit_reaction_front";
+/// His KillStanceMontage (AM_normal_death_sequence)'s takes: entrance, idle, exit; and how long he kneels
+/// (PamelasSweaterStun's TotalStunTime, which EnterKillStance reapplies).
+const KILL_STANCE: (&str, &str, &str) = ("normal_death_sequence_entrance", "normal_death_sequence_idle", "normal_death_sequence_exit");
+const KILL_STANCE_S: f32 = 10.0;
+
+/// A counselor kills him (jason_death.rs): his take.
+#[derive(Component, Clone, Debug)]
+pub struct KillJason {
+    pub take: &'static str,
+    pub by: Entity,
+}
+
 /// The level's fuse boxes' class (power.rs).
 const FUSE_BOX_CLASS: &str = "PowerGridFuseBox_C";
 /// Jason_AnimBP's BlockMontages (AM_Jason_Combat_Block: its block idle, looped) and BlockingHitMontages (each ends
@@ -1800,7 +1830,7 @@ pub(crate) fn update_jason(
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
     (mut rng, mut struggle, mut controls, config): (ResMut<crate::GameRng>, ResMut<Struggle>, Option<ResMut<crate::jason_player::JasonControls>>, Res<JasonConfig>),
     (mut jasons, morph_points, mut morph_map, grab_kills): (
-        Query<(Entity, &mut Jason, &mut Transform, Option<&HitJason>, Option<&mut crate::senses::Knowledge>), Without<Player>>,
+        Query<(Entity, &mut Jason, &mut Transform, (Option<&HitJason>, Option<&KillJason>), Option<&mut crate::senses::Knowledge>), Without<Player>>,
         Option<Res<MorphPoints>>,
         Option<ResMut<crate::jason_player::MorphMap>>,
         Res<GrabKillsAvailable>,
@@ -1860,7 +1890,8 @@ pub(crate) fn update_jason(
         );
         (at, v.speed)
     });
-    for (je, mut j, mut xf, hit, mut know) in &mut jasons {
+    for (je, mut j, mut xf, (hit, kill_by), mut know) in &mut jasons {
+        let kill_by = kill_by.map(|k| (k.take, k.by));
         let align = aligns.get(je).ok().copied();
         // Under water (his tick 0x14040d900): in the water with his capsule's top under its surface; there he walks
         // the bottom at UnderwaterSpeed scaled by his feet's depth (GetUnderwaterDepthModifier: up to
@@ -1958,12 +1989,24 @@ pub(crate) fn update_jason(
                     stun_now = Some(Stun::MaskOff { left });
                 }
             }
+            // His mask off and the sweater's stun on him (0x1291), her melee hit (not a gun; the damage type's
+            // bCanBeBlocked: not a stun type): his JasonKillObject, his kill stance (TakeDamage 0x14040b600).
+            let melee = h.by.is_some() && h.damage > 0.0 && matches!(h.stun, None | Some(Stun::Weapon { .. }));
+            if melee && !j.mask_on && j.sweater_stunned && !j.dead() {
+                info!("Jason: in his kill stance");
+                j.health = t.min_health;
+                j.state = JasonState::KillStance { t: 0.0 };
+                j.velocity = Vec2::ZERO;
+                commands.entity(je).insert(PlayAction(KILL_STANCE.0.into()));
+                stun_now = None;
+            }
             // (The mask's and the sweater's stuns: ApplyStun with the class, whatever he's doing.)
             let can_stun = can_stun || matches!(stun_now, Some(Stun::MaskOff { .. } | Stun::Sweater));
             if stun_now == Some(Stun::Sweater) {
                 j.sweater_stunned = true;
             }
             match stun_now {
+                _ if j.kneeling() => {}
                 _ if blocked => {
                     let anim = BLOCK_REACTIONS[rng.0.index(BLOCK_REACTIONS.len())];
                     info!("Jason: blocked the hit");
@@ -3392,8 +3435,45 @@ pub(crate) fn update_jason(
                     j.state = JasonState::Flinching { t: at, anim };
                 }
             }
-            JasonState::Done => {
+            JasonState::Done | JasonState::Dead => {
                 walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, None, dt, &t, &world);
+            }
+            JasonState::KillStance { t: at } => {
+                let at = at + dt;
+                let len = |n: &str| killer.length(n).unwrap_or(1.0);
+                let (enter, idle, exit) = KILL_STANCE;
+                // (Its montage has no exit take: the idle holds to the end.)
+                let exit_len = killer.length(exit).unwrap_or(0.0);
+                let exit_at = (KILL_STANCE_S - exit_len).max(len(enter));
+                if let Some((take, by)) = kill_by {
+                    // A counselor's kill (jason_death.rs): his take from where he kneels.
+                    info!("Jason: being killed ({take})");
+                    *xf = killer.place(take, *xf).0;
+                    j.state = JasonState::Dying { t: 0.0, take, by };
+                    commands.entity(je).insert(PlayAction(take.into())).remove::<KillJason>();
+                    snap_rig(&mut rigs, je);
+                } else if at >= exit_at + exit_len {
+                    info!("Jason: rose from his kill stance");
+                    j.sweater_stunned = false;
+                    j.state = JasonState::Hunting;
+                    j.stun_immune = STUN_IMMUNE_SECONDS;
+                    commands.entity(je).remove::<PlayAction>();
+                } else {
+                    let anim = if at < len(enter) { enter } else if at < exit_at || exit_len == 0.0 { idle } else { exit };
+                    commands.entity(je).insert(PlayAction(anim.into()));
+                    j.state = JasonState::KillStance { t: at };
+                }
+            }
+            JasonState::Dying { t: at, take, by } => {
+                let at = at + dt;
+                if at >= killer.length(take).unwrap_or(5.0) {
+                    info!("Jason: dead");
+                    j.state = JasonState::Dead;
+                    // JasonDeath's KillInfo (KillJason_KillInfo_C): its ScoreEvent KillJason to her.
+                    commands.trigger(Score { who: by, event: "KillJason" });
+                } else {
+                    j.state = JasonState::Dying { t: at, take, by };
+                }
             }
         }
     }
