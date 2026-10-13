@@ -605,7 +605,7 @@ fn main() {
             .add_plugins(radio::RadioPlugin)
             .add_plugins((spectate::SpectatePlugin { bot: args.bot_spectate }, police::PolicePlugin, tommy::TommyPlugin, sweater::SweaterPlugin, jason_death::JasonDeathPlugin, placed_kills::PlacedKillsPlugin, interaction_camera::InteractionCameraPlugin, counselor_camera::CounselorCameraPlugin, cabinets::CabinetsPlugin, weather::WeatherPlugin, car_lights::CarLightsPlugin, cinematic::CinematicPlugin, hair::HairPlugin, audio_volumes::AudioVolumesPlugin));
         if args.bot_kill_jason {
-            app.init_resource::<jason_death::BotKillJason>().add_systems(Update, jason_death::bot_kill_jason);
+            app.init_resource::<jason_death::BotKillJason>().add_systems(Update, jason_death::bot_kill_jason.before(jason_death::start_kill));
         }
         if args.bot_sweater {
             app.init_resource::<sweater::BotSweater>().add_systems(Update, sweater::bot_sweater);

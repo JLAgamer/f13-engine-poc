@@ -40,7 +40,7 @@ pub struct KillingJason {
 }
 
 #[allow(clippy::type_complexity)]
-fn start_kill(
+pub(crate) fn start_kill(
     mut commands: Commands,
     pads: crate::controls::Pads,
     mut counselors: Query<(Entity, &mut Transform, &mut Player, &crate::interact::Inventory), Without<KillingJason>>,
@@ -78,8 +78,12 @@ fn hold_killer(mut commands: Commands, time: Res<Time>, mut killers: Query<(Enti
     }
 }
 
+/// Where she stands to swing at him (her machete's reach: from 1.5 m its KillVolume passes 0.3 m short of his bodies).
+const SWING_M: f32 = 0.9;
+
 /// Testing (--bot-kill-jason, with --give CounselorMachete_C --jason-health 5): she picks Pamela's sweater up, knocks
-/// his mask off, stuns him with the sweater, hits him into his kill stance and kills him.
+/// his mask off, stuns him with the sweater, hits him into his kill stance and kills him (run before start_kill, which
+/// reads her E as just pressed).
 #[derive(Resource, Default)]
 pub struct BotKillJason {
     step: u8,
@@ -89,14 +93,13 @@ pub struct BotKillJason {
 
 #[allow(clippy::type_complexity)]
 pub(crate) fn bot_kill_jason(
-    mut commands: Commands,
     mut bot: ResMut<BotKillJason>,
     time: Res<Time>,
     real: Res<Time<bevy::time::Real>>,
     (mut keys, mut mouse): (ResMut<ButtonInput<KeyCode>>, ResMut<ButtonInput<MouseButton>>),
     items: Query<(&crate::props::Item, &GlobalTransform), Without<crate::interact::Carried>>,
-    mut me: Query<(Entity, &mut Transform, Option<&crate::sweater::Sweater>), (With<crate::controls::LocalPlayer>, With<Player>)>,
-    jasons: Query<(Entity, &crate::jason::Jason, &Transform), Without<Player>>,
+    mut me: Query<(&mut Transform, Option<&crate::sweater::Sweater>), (With<crate::controls::LocalPlayer>, With<Player>)>,
+    jasons: Query<(&crate::jason::Jason, &Transform), Without<Player>>,
     mut camera: Query<&mut crate::player::PlayerCamera>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -104,12 +107,8 @@ pub(crate) fn bot_kill_jason(
     keys.release(KeyCode::KeyE);
     keys.release(KeyCode::KeyQ);
     mouse.release(MouseButton::Left);
-    let Ok((me_e, mut xf, sweater)) = me.single_mut() else { return };
-    let Some((je, j, jxf)) = jasons.iter().next() else { return };
-    // Her machete's hit on him (the swing itself: the fight bot's; items.rs).
-    let hit = |commands: &mut Commands, from: Vec3| {
-        commands.entity(je).insert(crate::jason::HitJason { by: Some(me_e), stun: None, from, damage: 10.0 });
-    };
+    let Ok((mut xf, sweater)) = me.single_mut() else { return };
+    let Some((j, jxf)) = jasons.iter().next() else { return };
     let mut face = |xf: &mut Transform, at: Vec3, from: f32| {
         let fwd = jxf.rotation * Vec3::Z;
         xf.translation = Vec3::new(at.x + fwd.x * from, xf.translation.y.max(at.y), at.z + fwd.z * from);
@@ -156,13 +155,13 @@ pub(crate) fn bot_kill_jason(
         }
         // His mask: a swing.
         2 => {
-            face(&mut xf, jxf.translation, 1.5);
+            face(&mut xf, jxf.translation, SWING_M);
             if !j.mask_on {
                 info!("bot: kill jason: his mask is off");
                 next(&mut bot, 3);
-            } else if once(&mut bot) {
-                hit(&mut commands, xf.translation);
-            } else if bot.t > 5.0 {
+            } else if (bot.t * 2.0) as u32 % 2 == 0 {
+                mouse.press(MouseButton::Left);
+            } else if bot.t > 8.0 {
                 fail(&mut exit, "his mask stayed on");
             }
         }
@@ -180,13 +179,13 @@ pub(crate) fn bot_kill_jason(
         }
         // The hit that puts him in his kill stance.
         4 if bot.t > 0.5 => {
-            face(&mut xf, jxf.translation, 1.5);
+            face(&mut xf, jxf.translation, SWING_M);
             if j.kneeling() {
                 info!("bot: kill jason: in his kill stance");
                 next(&mut bot, 5);
-            } else if once(&mut bot) {
-                hit(&mut commands, xf.translation);
-            } else if bot.t > 5.0 {
+            } else if (bot.t * 2.0) as u32 % 2 == 0 {
+                mouse.press(MouseButton::Left);
+            } else if bot.t > 8.0 {
                 fail(&mut exit, "no kill stance");
             }
         }
@@ -199,7 +198,6 @@ pub(crate) fn bot_kill_jason(
             } else if bot.t > 9.0 {
                 fail(&mut exit, "couldn't kill him");
             } else if (bot.t * 4.0) as u32 % 2 == 0 {
-                // (Pressed again: a press the frame after start_kill ran is missed.)
                 keys.press(KeyCode::KeyE);
             }
         }
