@@ -884,7 +884,8 @@ pub struct ShownProps(String, Vec<(usize, Entity)>);
 
 /// SCPropSpawnerNotifyState: while its window lasts, its SkeletalPropMesh on the character's mesh at SocketName (a
 /// socket, else a bone of that name), snapped to it (no offset of its own); gone at its end (or when the action is).
-/// PLACEHOLDER: bHideEquippedItem (every window here has it off).
+/// bHideEquippedItem (its default: true) hides the equipped item meanwhile: Jason's Weapon part (a window with no
+/// mesh only does that: the choke's, bare-handed).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn anim_props(
     mut commands: Commands,
@@ -893,6 +894,7 @@ pub(crate) fn anim_props(
     (counselor, killer): (Option<Res<CounselorCharacter>>, Option<Res<crate::character::KillerCharacter>>),
     rigs: Query<(&ChildOf, &Rig)>,
     mut shown: Query<&mut ShownProps>,
+    mut visibility: Query<&mut Visibility>,
 ) {
     let Some(props) = props else { return };
     for (parent, rig) in &rigs {
@@ -905,6 +907,14 @@ pub(crate) fn anim_props(
         let at = rig.action.as_ref().map_or(0.0, |(_, t)| *t);
         let windows = key.as_ref().and_then(|k| props.0.get(k));
         let want: Vec<usize> = windows.map_or_else(Vec::new, |w| w.iter().enumerate().filter(|(_, w)| w.0 <= at && at < w.1).map(|(i, _)| i).collect());
+        // His weapon hidden while a window says so.
+        if let Some(info) = info {
+            let hide = windows.is_some_and(|w| want.iter().any(|&i| w[i].4));
+            let weapon = rig.attached.iter().find(|(i, _)| info.parts[*i].name == "Weapon").map(|(_, e)| *e);
+            if let Some(mut v) = weapon.and_then(|e| visibility.get_mut(e).ok()) {
+                v.set_if_neq(if hide { Visibility::Hidden } else { Visibility::Inherited });
+            }
+        }
         let Ok(mut have) = shown.get_mut(owner) else {
             if !want.is_empty() {
                 commands.entity(owner).insert(ShownProps::default());
@@ -916,7 +926,7 @@ pub(crate) fn anim_props(
         let stale = have.0 != key;
         have.1.retain(|(i, e)| {
             let keep = !stale && want.contains(i);
-            if !keep {
+            if !keep && *e != Entity::PLACEHOLDER {
                 commands.entity(*e).despawn();
             }
             keep
@@ -928,6 +938,10 @@ pub(crate) fn anim_props(
                 continue;
             }
             let (_, _, mesh, socket, _) = &windows[i];
+            if mesh.is_empty() {
+                have.1.push((i, Entity::PLACEHOLDER));
+                continue;
+            }
             let (bone, offset) = match info.sockets.get(socket) {
                 Some(s) => (rig.bones.get(&s.attach), s.transform.as_ref().map(crate::to_transform).unwrap_or_default()),
                 None => (rig.bones.get(socket), Transform::IDENTITY),

@@ -43,6 +43,16 @@ pub(crate) struct MaterialsPlugin {
 
 impl Plugin for MaterialsPlugin {
     fn build(&self, app: &mut App) {
+        app.add_observer(bloody_weapon);
+        // (F13_WEAPON_BLOOD: his weapon bloodied 8 s in, testing.)
+        if std::env::var("F13_WEAPON_BLOOD").is_ok() {
+            app.add_systems(Update, |mut commands: Commands, time: Res<Time>, mut done: Local<bool>| {
+                if !*done && time.elapsed_secs() > 8.0 {
+                    *done = true;
+                    commands.trigger(BloodyWeapon(1.0));
+                }
+            });
+        }
         embedded_asset!(app, "shaders/blend.wgsl");
         embedded_asset!(app, "shaders/terrain.wgsl");
         embedded_asset!(app, "shaders/water.wgsl");
@@ -449,6 +459,20 @@ struct PropParams {
     lights: Vec4,
 }
 
+/// Jason's weapon bloodied (his AnimNotify_BloodyWeapon: SCKillerCharacter::ApplyBloodToWeapon(0, 'ShowWeaponBlood',
+/// 1) -> MULTICAST_ApplyBloodToWeapon 0x1403f5f40: his weapon's mesh element 0's dynamic material instance's scalar).
+#[derive(Event, Clone, Copy, Debug)]
+pub struct BloodyWeapon(pub f32);
+
+pub(crate) fn bloody_weapon(ev: On<BloodyWeapon>, mut props: ResMut<Assets<PropMaterial>>) {
+    info!("Jason's weapon: ShowWeaponBlood {}", ev.0);
+    for (_, m) in props.iter_mut() {
+        if m.extension.params.extra.w > 0.5 && m.extension.params.extra.z != ev.0 {
+            m.extension.params.extra.z = ev.0;
+        }
+    }
+}
+
 impl PropExt {
     /// M_Prop_Master_Lights' Glow (0 for the other masters).
     pub(crate) fn glow(&self) -> f32 {
@@ -491,6 +515,16 @@ fn prop_params(info: &MaterialInfo, loader: &Loader) -> Option<(Handle<Image>, P
         let lights = (info.master == "M_Vehicle_Chevette_Exterior").then(|| loader.load(CHEVETTE_LIGHTS, Tex::Data)).flatten();
         let l = Vec4::new(info.scalar("Headlights", 0.0), info.scalar("Tailights", 0.0), info.scalar("Backup Lights", 0.0), lights.is_some() as u8 as f32);
         return Some((rma, PropParams { mults, extra: Vec4::new(0.0, glow, 0.0, 0.0), lights: l }, lights));
+    }
+    // Jason's pickaxe (M_JasonV2_PickAxe: its compiled base pass s025, F13-decomp shaders/M_JasonV2_PickAxe): the
+    // prop masters' RMA (unscaled), specular 0.5, and its blood layer (MatLayerBlend_Simple of Blood_Layer) by
+    // WeaponBloodMask.r x ShowWeaponBlood (extra.z; extra.w 1: the mask in the lights' slot).
+    if info.master == "M_JasonV2_PickAxe" {
+        info!("material: Jason's pickaxe, with its blood layer");
+        let rma = loader.load(info.textures.get("RMA")?, Tex::Data)?;
+        let mask = loader.load(info.textures.get("WeaponBloodMask")?, Tex::Data)?;
+        let extra = Vec4::new(0.0, 0.0, info.scalar("ShowWeaponBlood", 0.0), 1.0);
+        return Some((rma, PropParams { mults: Vec4::new(1.0, 1.0, 0.5, 0.0), extra, lights: Vec4::ZERO }, Some(mask)));
     }
     let rss = ["RSS", "RSS Map"].iter().find_map(|k| info.textures.get(*k))?;
     let rss = loader.load(rss, Tex::Data)?;

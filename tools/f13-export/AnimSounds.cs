@@ -84,10 +84,12 @@ static class AnimSounds
             foreach (var n in m.GetOrDefault<FStructFallback[]>("Notifies", []))
             {
                 if (n.GetOrDefault<FPackageIndex>("NotifyStateClass")?.Load() is not { ExportType: "SCPropSpawnerNotifyState" } state) continue;
-                if (state.GetOrDefault<FPackageIndex>("SkeletalPropMesh")?.Load() is not USkeletalMesh mesh) continue;
-                queue(mesh);
+                // (No mesh: the window only hides the equipped item, as the choke's does. bHideEquippedItem's default is
+                // true: SCPropSpawnerNotifyState's constructor 0x1402f44e0.)
+                var mesh = state.GetOrDefault<FPackageIndex>("SkeletalPropMesh")?.Load() as USkeletalMesh;
+                if (mesh != null) queue(mesh);
                 var start = n.GetOrDefault<float>("LinkValue");
-                windows.Add((start, start + n.GetOrDefault<float>("Duration"), meshPath(mesh), state.GetOrDefault<FName>("SocketName").Text, state.GetOrDefault<bool>("bHideEquippedItem")));
+                windows.Add((start, start + n.GetOrDefault<float>("Duration"), mesh == null ? "" : meshPath(mesh), state.GetOrDefault<FName>("SocketName").Text, state.GetOrDefault("bHideEquippedItem", true)));
             }
             if (windows.Count == 0) continue;
             foreach (var slot in m.SlotAnimTracks ?? [])

@@ -4,6 +4,9 @@
 //   exterior lights up by its lights mask: emissive = Diffuse.rgb * dot(mask.rgb, (Headlights, Tailights, Backup)).
 // Mode 1, foliage masters (RSS map): roughness = max(RSS.r * RoughnessMultiplier, RoughnessMin). (RSS.b scales the
 //   subsurface colour, not ported.)
+// Jason's pickaxe (extra.w 1; M_JasonV2_PickAxe's compiled base pass): its blood layer by b = WeaponBloodMask.r x
+//   ShowWeaponBlood (extra.z): base colour saturate(lerp(Diffuse, (0.04, 0.003936, 0), b)), metallic and roughness
+//   saturate(lerp(RMA, 0.2, b)); the mask in the lights' slot.
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
@@ -55,6 +58,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         pbr_input.material.emissive = vec4(c.rgb * c.a * params.extra.y, 1.0);
     }
 #ifdef VERTEX_UVS_A
+    if params.extra.w > 0.5 {
+        let blood = textureSample(lights_mask, lights_sampler, in.uv).r * params.extra.z;
+        let c = pbr_input.material.base_color;
+        pbr_input.material.base_color = vec4(saturate(mix(c.rgb, vec3(0.04, 0.003936, 0.0), blood)), c.a);
+        pbr_input.material.metallic = saturate(mix(pbr_input.material.metallic, 0.2, blood));
+        pbr_input.material.perceptual_roughness = saturate(mix(pbr_input.material.perceptual_roughness, 0.2, blood));
+    }
     if params.lights.w > 0.0 {
         let mask = textureSample(lights_mask, lights_sampler, in.uv).rgb;
         pbr_input.material.emissive = vec4(pbr_input.material.base_color.rgb * dot(mask, params.lights.xyz), 1.0);

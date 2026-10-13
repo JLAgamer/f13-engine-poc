@@ -30,7 +30,6 @@ Base content (asset paths in the player's install; all gameplay values come from
       2026-10-12: its wall lamp's spots light sharp bands up and down the logs)
 - [ ] Optimize performance
 - [ ] Blood: the kills' screen blood (their "Blendable: PP_Player_BloodEffect_01..06" windows)
-- [ ] Blood: Jason's weapon bloodied by a kill (ShowWeaponBlood)
 - [ ] Blood: a hit's blood on the hit bone's clothing ("Trying to apply blood")
 - [ ] Blood: dismemberment (the death's dismember roll, the dismemberment meshes)
 - [ ] Blood: the counselor's gore skin layer (SkinGoreMaster)
