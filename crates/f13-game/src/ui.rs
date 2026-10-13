@@ -569,9 +569,16 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
             w
         }),
         lobby_row: Widget::load(dir, "LobbyPlayerListItem").map(|w| {
-            let v = std::fs::read_to_string(dir.join("ui/LobbyPlayerListItem.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
-            let textures = v["Textures"].as_object().map(|m| m.iter().filter_map(|(k, f)| Some((k.clone(), f.as_str()?.to_string()))).collect()).unwrap_or_default();
-            (w, textures, v["Defaults"].clone())
+            let json = |n: &str| std::fs::read_to_string(dir.join(format!("ui/{n}.json"))).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
+            let (v, speaker, ping) = (json("LobbyPlayerListItem"), json("PlayerSpeakIconMuteButton"), json("PlayerPingDisplayWidget"));
+            // Its own textures and its speaker's (Img_Speaker_On_01 / _Off_01: Get_SpeakingIcon_Brush).
+            let textures = [&v, &speaker].iter().flat_map(|j| j["Textures"].as_object().into_iter().flatten()).filter_map(|(k, f)| Some((k.clone(), f.as_str()?.to_string()))).collect();
+            // Its colours, and its ping's (PingGoodColor, PingBadColor, PingVeryBadColor).
+            let mut defaults = v["Defaults"].clone();
+            for k in ["PingGoodColor", "PingBadColor", "PingVeryBadColor"] {
+                defaults[k] = ping["Defaults"][k]["SpecifiedColor"].clone();
+            }
+            (w, textures, defaults)
         }),
         lobby_map: std::fs::read_to_string(dir.join("ui/map.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default(),
         match_end: Widget::load(dir, "MatchEnd").map(|mut w| {
@@ -661,7 +668,7 @@ fn build_hud(
     game: Option<Res<crate::match_flow::GameMatch>>,
     spectating: Option<Res<crate::spectate::SpectatorStatus>>,
     (lobby, me, client, mut playing, time): (Query<&crate::lobby::NetLobby>, Option<Res<crate::lobby::Me>>, Option<Res<crate::net::NetClient>>, ResMut<PlayingAnims>, Res<Time>),
-    match_tuning: Option<Res<crate::match_flow::MatchTuning>>,
+    (match_tuning, mutes): (Option<Res<crate::match_flow::MatchTuning>>, Option<Res<crate::voice::VoiceMutes>>),
 ) {
     let size = window.size();
     // The lobby while it's open (LobbyWidget, as the game's lobby map shows it).
@@ -698,7 +705,7 @@ fn build_hud(
         pocket_key.push(format!("closing:{}", g.state.remaining_time));
     }
     if let Some(l) = open_lobby {
-        pocket_key = l.members.iter().map(|m| format!("lobby:{}:{}:{}:{:?}", m.id, m.name, m.ready, m.preference)).collect();
+        pocket_key = l.members.iter().map(|m| format!("lobby:{}:{}:{}:{:?}:{}:{}:{}:{}", m.id, m.name, m.ready, m.preference, m.ping, m.talked, m.talking, mutes.as_ref().is_some_and(|x| x.0.contains(&m.name)))).collect();
         pocket_key.push(format!("countdown:{:?}", l.countdown.map(|t| t.ceil() as i32)));
     }
     // His score lines on his HUD, hers on hers.
@@ -732,7 +739,7 @@ fn build_hud(
             playing.play("LobbyWidget", "AnimIn", time.elapsed_secs(), false);
         }
         let mut t = hud.lobby.clone().unwrap_or_else(|| hud.hud.clone());
-        fill_lobby(&hud, &mut t, l, my_id);
+        fill_lobby(&hud, &mut t, l, my_id, mutes.as_deref());
         t
     } else if jason {
         hud.killer.clone().unwrap_or_else(|| hud.hud.clone())
@@ -885,9 +892,9 @@ fn fill_match_end(hud: &Hud, tree: &mut Widget, lines: &[(String, i32)], closing
 /// AddPlayerWidget), each its name (PlayerName), its tint (GetPlayerTint: LocalPlayerColor for this player, else
 /// RemoteUnreadyPlayerColor to RemoteReadyPlayerColor by bIsReady), its ready box (Get_ReadyBoxImage_Brush:
 /// Img_Lobby_ReadyBox_Checked_01 or _Empty_01) and the host's arrow; and the travel countdown (CountdownHorizontalBox,
-/// CountdownText). PLACEHOLDERS: the character select buttons show the preference (Jason's or the counselor's), the
-/// ping and the mute button aren't ported.
-fn fill_lobby(hud: &Hud, tree: &mut Widget, lobby: &crate::lobby::NetLobby, me: Option<u64>) {
+/// CountdownText); each row's ping and speaker. Not ported: the mute button (Shift + its number mutes here), the
+/// connecting spinner, the host's Jason pick.
+fn fill_lobby(hud: &Hud, tree: &mut Widget, lobby: &crate::lobby::NetLobby, me: Option<u64>, mutes: Option<&crate::voice::VoiceMutes>) {
     if let Some(cd) = tree.find_mut("CountdownHorizontalBox") {
         cd.set_visibility(if lobby.countdown.is_some() { Vis::Visible } else { Vis::Hidden });
     }
@@ -935,17 +942,36 @@ fn fill_lobby(hud: &Hud, tree: &mut Widget, lobby: &crate::lobby::NetLobby, me: 
             image.props["Brush"]["ResourceObject"] = json!({ "File": file });
             image.set_visibility(Vis::Visible);
         }
+        // Its ping: "{0}ms" (ILLPlayerState GetPingDisplayText 0x140269480: none at 0), good to 150 ms, bad to 300,
+        // very bad past (Get_PingText_ColorAndOpacity). PLACEHOLDER: the round trip for its Ping (the player state's
+        // replicated ping, x4).
+        if let Some(t) = w.find_mut("PingText") {
+            let ping = m.ping.min(999);
+            let c = color(&defaults[if ping <= 150 { "PingGoodColor" } else if ping <= 300 { "PingBadColor" } else { "PingVeryBadColor" }], [1.0; 4]);
+            t.props["Text"] = json!({ "LocalizedString": if ping == 0 { String::new() } else { format!("{ping}ms") } });
+            t.props["ColorAndOpacity"] = json!({ "SpecifiedColor": { "R": c[0], "G": c[1], "B": c[2], "A": c[3] } });
+        }
+        // Its speaker: on while they talk, its alpha 0.15, 0.35 once they've talked, 0.9 while they talk
+        // (Get_SpeakingIcon_Brush, Get_SpeakingIcon_ColorAndOpacity); muted here, the mute overlay.
+        if let Some(icon) = w.find_mut("SpeakingIcon") {
+            let file = textures.get(if m.talking { "Img_Speaker_On_01" } else { "Img_Speaker_Off_01" });
+            if let Some(file) = file {
+                icon.props["Brush"]["ResourceObject"] = json!({ "File": file });
+            }
+            let a = if m.talking { 0.9 } else if m.talked { 0.35 } else { 0.15 };
+            icon.props["ColorAndOpacity"] = json!({ "R": 1.0, "G": 1.0, "B": 1.0, "A": a });
+        }
+        if let Some(muted) = w.find_mut("MutedIcon") {
+            let shown = Some(m.id) != me && mutes.is_some_and(|x| x.0.contains(&m.name));
+            muted.set_visibility(if shown { Vis::Visible } else { Vis::Hidden });
+        }
         if let Some(h) = w.find_mut("HostArrowImage") {
             h.set_visibility(if m.id == 0 { Vis::Visible } else { Vis::Hidden });
         }
         for (name, shown) in [
             ("ConnectingSpinner", false),
-            ("PlayerSpeakIconMuteButton", false),
-            ("PlayerPingDisplayWidget_274", false),
             ("KillerPickerButtonWidget_0", false),
             ("SelectionBar", Some(m.id) == me),
-            ("JasonButton", m.preference == crate::lobby::Preference::Killer),
-            ("CounselorButton", m.preference == crate::lobby::Preference::Counselor),
         ] {
             if let Some(x) = w.find_mut(name) {
                 x.set_visibility(if shown { Vis::Visible } else { Vis::Hidden });

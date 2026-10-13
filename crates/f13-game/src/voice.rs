@@ -69,6 +69,10 @@ pub(crate) struct OpenMic;
 #[derive(Resource, Default)]
 pub(crate) struct VoiceMutes(pub std::collections::HashSet<String>);
 
+/// The server: when each player last talked (real seconds), by their lobby id (the server's own player: 0).
+#[derive(Resource, Default)]
+pub(crate) struct Talkers(pub std::collections::HashMap<u64, f32>);
+
 /// GLB_Speak (DefaultInput.ini): held to talk.
 const SPEAK: KeyCode = KeyCode::KeyT;
 
@@ -80,7 +84,7 @@ pub(crate) fn server(app: &mut App, dedicated: bool) {
     if dedicated {
         app.insert_resource(NoDevices);
     }
-    app.add_systems(Startup, open_devices).add_systems(Update, (mark_spectators, capture, relay, play_gains).chain());
+    app.init_resource::<Talkers>().add_systems(Startup, open_devices).add_systems(Update, (mark_spectators, capture, relay, play_gains).chain());
 }
 
 pub(crate) fn client(app: &mut App) {
@@ -373,6 +377,7 @@ fn relay(
     mut sender: ServerMultiMessageSender,
     server: Query<&lightyear::prelude::server::Server>,
     remotes: Query<&RemoteId>,
+    (mut talkers, real): (ResMut<Talkers>, Res<Time<Real>>),
 ) {
     let Ok(server) = server.single() else { return };
     // A link's character: her counselor, or Jason when they play him.
@@ -380,6 +385,9 @@ fn relay(
     let mut out: Vec<(u64, Vec<u8>, Option<Entity>)> = Vec::new();
     for (link, mut r) in &mut links {
         let frames: Vec<VoiceUp> = r.receive().collect();
+        if let (false, Ok(id)) = (frames.is_empty(), remotes.get(link)) {
+            talkers.0.insert(crate::lobby::peer_id(id), real.elapsed_secs());
+        }
         if let Some(p) = pawn(link) {
             out.extend(frames.into_iter().map(|f| (p.to_bits(), f.0, Some(link))));
         }
@@ -387,6 +395,9 @@ fn relay(
     // The server's own player's voice.
     let own = local_counselor.iter().next().or_else(|| play_jason.as_ref().and_then(|_| jasons.iter().next()));
     let local = talking(frames(&mut d), &keys, open.is_some());
+    if !local.is_empty() {
+        talkers.0.insert(0, real.elapsed_secs());
+    }
     if let Some(p) = own {
         out.extend(local.into_iter().map(|f| (p.to_bits(), f, None)));
     }

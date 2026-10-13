@@ -69,12 +69,17 @@ pub struct LobbyChannel;
 
 /// A member as the players see them: their id (the netcode client id; 0 the server's own player), name, preference,
 /// and whether they're ready.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct Member {
     pub id: u64,
     pub name: String,
     pub preference: Preference,
     pub ready: bool,
+    /// Their round trip to the server (ms; the server's own player: 0), and whether they've talked and talk now
+    /// (the row's ping and speaker: PlayerPingDisplayWidget, PlayerSpeakIconMuteButton).
+    pub ping: u32,
+    pub talked: bool,
+    pub talking: bool,
 }
 
 /// The lobby as the players see it: open, its members, the countdown to the match (s), and who plays Jason once it's
@@ -171,7 +176,7 @@ pub(crate) fn server(app: &mut App, dedicated: bool, name: String, last_match: O
     let mut lobby = NetLobby { open: true, last_match, ..default() };
     let mut links = Links::default();
     if !dedicated {
-        lobby.members.push(Member { id: 0, name, preference: Preference::NoPreference, ready: false });
+        lobby.members.push(Member { id: 0, name, ..default() });
         links.0.push((0, None));
     }
     app.insert_resource(LobbyOpen)
@@ -181,8 +186,35 @@ pub(crate) fn server(app: &mut App, dedicated: bool, name: String, last_match: O
         })
         .add_observer(joined)
         .add_observer(left)
-        .add_systems(Update, (receive, local_keys.in_set(Keys).run_if(move || !dedicated), count_down).chain().run_if(resource_exists::<LobbyOpen>))
+        .add_systems(Update, (receive, local_keys.in_set(Keys).run_if(move || !dedicated), count_down, member_stats).chain().run_if(resource_exists::<LobbyOpen>))
         .add_systems(Update, apply_jason_input.run_if(resource_exists::<JasonPlayer>));
+}
+
+/// Each member's ping (their link's round trip) and voice (talked, and within the last 0.3 s: PLACEHOLDER, the
+/// game's IsPlayerTalking is its VoIP's own), written when they change (by 10 ms for the ping).
+fn member_stats(
+    pings: Query<(&RemoteId, &lightyear::prelude::PingManager), With<LinkOf>>,
+    talkers: Option<Res<crate::voice::Talkers>>,
+    real: Res<Time<Real>>,
+    mut lobby: Query<&mut NetLobby>,
+) {
+    let Ok(mut lobby) = lobby.single_mut() else { return };
+    let now = real.elapsed_secs();
+    let stats: Vec<(u32, bool, bool)> = lobby
+        .members
+        .iter()
+        .map(|m| {
+            let ping = pings.iter().find(|(id, _)| peer_id(id) == m.id).map_or(0, |(_, p)| p.rtt().as_millis() as u32);
+            let last = talkers.as_ref().and_then(|t| t.0.get(&m.id).copied());
+            (ping, last.is_some(), last.is_some_and(|t| now - t < 0.3))
+        })
+        .collect();
+    let changed = lobby.members.iter().zip(&stats).any(|(m, (ping, talked, talking))| m.ping.abs_diff(*ping) >= 10 || m.talked != *talked || m.talking != *talking);
+    if changed {
+        for (m, (ping, talked, talking)) in lobby.members.iter_mut().zip(stats) {
+            (m.ping, m.talked, m.talking) = (ping, talked, talking);
+        }
+    }
 }
 
 /// The lobby's keys are read (a bot presses them before).
@@ -231,7 +263,7 @@ fn voice_keys(
     }
 }
 
-fn peer_id(id: &RemoteId) -> u64 {
+pub(crate) fn peer_id(id: &RemoteId) -> u64 {
     match id.0 {
         PeerId::Netcode(n) => n,
         other => other.to_bits(),
@@ -242,7 +274,7 @@ fn joined(joined: On<Add, Connected>, ids: Query<&RemoteId, With<LinkOf>>, mut l
     let (Some(_), Ok(id), Ok(mut lobby)) = (open, ids.get(joined.entity), lobby.single_mut()) else { return };
     let id = peer_id(id);
     links.0.push((id, Some(joined.entity)));
-    lobby.members.push(Member { id, name: format!("player {}", id % 10000), preference: Preference::NoPreference, ready: false });
+    lobby.members.push(Member { id, name: format!("player {}", id % 10000), ..default() });
     info!("lobby: {id} joined ({} in the lobby)", lobby.members.len());
 }
 

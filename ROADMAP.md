@@ -8,9 +8,8 @@ Base content (asset paths in the player's install; all gameplay values come from
 
 ## Todo
 - [ ] The lobby's rest: the match end's badges and unlocks screens (MatchEnd_Badges, MatchEnd_Unlocks: SCStatBadge
-      icons), the last match's results back in the lobby as widgets (text stands in), the lobby's rows'
-      character select, ping and mute buttons, the counselors' character
-      picks (one counselor exported so far), a full 8-player run
+      icons), the last match's results back in the lobby as widgets (text stands in), the counselors'
+      character picks (one counselor exported so far), a full 8-player run
 - [ ] The Tommy Jarvis timer, Tommy Jarvis, and Jason dying
 - [ ] Voice chat: VoIPAudioComponent's real attenuation (UE's defaults stand in); the settings and mutes in the game's
       own menus (the lobby's keys stand in: P push-to-talk, Shift + n mute)
