@@ -653,6 +653,9 @@ fn main() {
             // On a client, the server's Jason goes too (a game of its own ignores it).
             bot::setup(bot::BotSetup::NoJason);
         }
+        if args.cut_power {
+            bot::setup(bot::BotSetup::CutPower);
+        }
         if !args.no_jason && !bot_alone {
             app.add_plugins(jason::JasonPlugin { delay: args.jason_delay, kill: args.kill });
         }

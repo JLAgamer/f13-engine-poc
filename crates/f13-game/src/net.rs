@@ -354,6 +354,7 @@ fn bot_hooks(
     (own, mut starts, mut dropped): (Query<(Entity, &Transform), (With<LocalPlayer>, With<Player>, Without<PlayedBy>)>, ResMut<FreeStarts>, Local<bool>),
     mut players: Query<(&PlayedBy, &mut Player)>,
     jason_entities: Query<Entity, With<crate::jason::Jason>>,
+    (mut fuse_boxes, mut grids): (Query<&mut crate::power::FuseBox>, Option<ResMut<crate::power::PowerGrids>>),
 ) {
     for (link, mut r) in &mut links {
         for BotSetupMsg(change) in r.receive() {
@@ -403,6 +404,14 @@ fn bot_hooks(
                 crate::bot::BotSetup::Health(h) => {
                     if let Some((_, mut p)) = players.iter_mut().find(|(by, _)| by.0 == link) {
                         p.counselor.health = h.clamp(1.0, p.counselor.health.max(100.0));
+                    }
+                }
+                crate::bot::BotSetup::CutPower => {
+                    for mut f in &mut fuse_boxes {
+                        f.destroyed = true;
+                        if let (Some(g), Some(grids)) = (f.grid, grids.as_mut()) {
+                            grids.grids[g].on = false;
+                        }
                     }
                 }
                 crate::bot::BotSetup::NoJason => {

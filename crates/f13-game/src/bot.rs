@@ -321,6 +321,8 @@ pub enum BotSetup {
     Health(f32),
     /// No Jason (the bots that test her alone).
     NoJason,
+    /// Every fuse box destroyed (`--cut-power`).
+    CutPower,
 }
 
 static SETUP: std::sync::Mutex<Vec<BotSetup>> = std::sync::Mutex::new(Vec::new());
