@@ -218,6 +218,8 @@ pub(crate) const NATIVE_PARENTS: &[(&str, &str)] = &[
     ("SCZeus", "Actor"),
     // Not in the reflection dump (no reflected properties); parents inferred from how the game uses them.
     ("SCSpecialItem", "SCItem"),
+    // Its constructor (0x14036dc80) calls SCSpecialItem's (0x14036e720) first.
+    ("SCPamelaSweater", "SCSpecialItem"),
     ("SCWalkieTalkie", "SCSpecialItem"),
     ("SCPocketKnife", "SCItem"),
     ("SCVehicleStarterComponent", "SCRepairComponent"),
