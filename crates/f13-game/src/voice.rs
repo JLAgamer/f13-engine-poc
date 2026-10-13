@@ -13,11 +13,10 @@
 //!
 //! The attenuation is VoIPAudioComponent's override (Base_Counselor's and Jason_Base's, bOverrideAttenuation): a
 //! Custom distance model on its external VoIPAttenuationCurve (x2 at the inner radius, cubic down to x0.01 at the
-//! falloff's end), FalloffDistance 4000 cm, the shape's default sphere (400 cm).
+//! falloff's end), FalloffDistance 4000 cm, the shape's default sphere (400 cm). Its occlusion (bEnableOcclusion on
+//! WorldDynamic) keeps the settings' defaults, a 20 kHz low pass and x1 volume: nothing to a 16 kHz voice, not traced.
 //!
 //! PLACEHOLDERS:
-//! - its occlusion (bEnableOcclusion on WorldDynamic, with the settings' default filter and volume: 20 kHz, x1) isn't
-//!   traced;
 //! - the gate (frames whose RMS is under [`GATE_RMS`] aren't sent), not the engine's;
 //! - the Psychic perk's VoIPDistanceModifier (no perks yet).
 
