@@ -395,6 +395,8 @@ fn bot_hooks(
     jason_entities: Query<Entity, With<crate::jason::Jason>>,
     (mut fuse_boxes, mut grids): (Query<&mut crate::power::FuseBox>, Option<ResMut<crate::power::PowerGrids>>),
     (drivers, mut cars): (Query<(&PlayedBy, &crate::vehicle::Driving)>, Query<&mut Transform, (With<crate::props::Vehicle>, Without<PlayedBy>, Without<Player>)>),
+    (mut phone_boxes, mut phones, mut game): (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<ResMut<crate::match_flow::GameMatch>>),
+    mut jason_xfs: Query<&mut Transform, (With<crate::jason::Jason>, Without<PlayedBy>, Without<Player>, Without<crate::props::Vehicle>)>,
 ) {
     for (link, mut r) in &mut links {
         for BotSetupMsg(change) in r.receive() {
@@ -462,6 +464,21 @@ fn bot_hooks(
                     if let Some(mut xf) = drivers.iter().find(|(by, _)| by.0 == link).and_then(|(_, d)| cars.get_mut(d.vehicle).ok()) {
                         xf.translation = Vec3::from_array(at);
                         xf.rotation = Quat::from_rotation_y(yaw);
+                    }
+                }
+                crate::bot::BotSetup::PlaceJason(at) => {
+                    for mut xf in &mut jason_xfs {
+                        xf.translation = Vec3::from_array(at);
+                    }
+                }
+                crate::bot::BotSetup::BreakPhoneBox => {
+                    if let Some(mut b) = phone_boxes.iter_mut().find(|b| b.phone.is_some()) {
+                        crate::police::break_phone_box(&mut b, &mut phones);
+                    }
+                }
+                crate::bot::BotSetup::PoliceSoon => {
+                    if let Some(g) = game.as_mut() {
+                        g.state.police_time_remaining = g.state.police_time_remaining.min(10);
                     }
                 }
                 crate::bot::BotSetup::NoJason => {

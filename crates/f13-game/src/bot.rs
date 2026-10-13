@@ -327,6 +327,12 @@ pub enum BotSetup {
     CutPower,
     /// The car she drives stands here, turned to this yaw.
     PlaceCar { at: [f32; 3], yaw: f32 },
+    /// The phone box with the phone broken (as Jason's DestroyBox does).
+    BreakPhoneBox,
+    /// The police due in 10 s at most.
+    PoliceSoon,
+    /// Jason stands here.
+    PlaceJason([f32; 3]),
 }
 
 static SETUP: std::sync::Mutex<Vec<BotSetup>> = std::sync::Mutex::new(Vec::new());
@@ -1291,6 +1297,7 @@ fn run_bot(
                 if let Some(mut b) = phone_boxes.iter_mut().find(|b| b.phone.is_some()) {
                     bot.jason_shots.push("box broken");
                     crate::police::break_phone_box(&mut b, &mut phones);
+                    setup(BotSetup::BreakPhoneBox);
                     info!("bot: the phone box is broken; repairing it");
                     bot.step = Step::Police(1);
                     bot.timer = 0.0;
@@ -1359,6 +1366,7 @@ fn run_bot(
                             info!("bot: police called after {:.1}s; cutting the countdown from {} s to 10", bot.timer, g.state.police_time_remaining);
                             g.state.police_time_remaining = g.state.police_time_remaining.min(10);
                         }
+                        setup(BotSetup::PoliceSoon);
                         bot.step = Step::Police(3);
                         bot.timer = 0.0;
                         return;
@@ -1405,8 +1413,11 @@ fn run_bot(
                             bot.timer = 0.0;
                             info!("bot: dropping Jason into the police's escape");
                             commands.entity(je).insert(Transform { translation: zxf.translation() + Vec3::Y * 1.0, ..*jxf });
+                            setup(BotSetup::PlaceJason((zxf.translation() + Vec3::Y * 1.0).to_array()));
                         }
-                        if matches!(j.state, crate::jason::JasonState::Stunned { stun: crate::jason::Stun::Police, .. }) && !bot.jason_shots.contains(&"police stun") {
+                        // (On a client his state comes as its name: a stun there is the police's.)
+                        let police_stun = if ON_CLIENT.load(std::sync::atomic::Ordering::Relaxed) { j.remote_state == "Stunned" } else { matches!(j.state, crate::jason::JasonState::Stunned { stun: crate::jason::Stun::Police, .. }) };
+                        if police_stun && !bot.jason_shots.contains(&"police stun") {
                             bot.jason_shots.push("police stun");
                             info!("bot: Jason stunned by the police {:.1} m from their volume's centre (radius {:.1})", jxf.translation.distance(zxf.translation()), zone.radius_m);
                         }

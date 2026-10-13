@@ -50,7 +50,7 @@ pub struct PolicePlugin;
 
 impl Plugin for PolicePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_phones).add_systems(Update, (arrive.run_if(crate::net::simulating), turn_back_jason.run_if(crate::net::simulating), escape_with_police.run_if(crate::net::simulating), turn_lights, report_car.run_if(crate::net::simulating), box_look).chain());
+        app.add_systems(Startup, spawn_phones).add_systems(Update, (arrive.run_if(crate::net::simulating), remote_arrive.run_if(not(crate::net::simulating)), turn_back_jason.run_if(crate::net::simulating), escape_with_police.run_if(crate::net::simulating), turn_lights, report_car.run_if(crate::net::simulating), box_look).chain());
     }
 }
 
@@ -328,19 +328,41 @@ fn arrive(
             info!("police: {} is obstructed", s.zone);
             continue;
         }
-        zone.active = true;
         info!("police: arrived at {name} ({:.0}, {:.0}, {:.0}); escape at {}", xf.translation.x, xf.translation.y, xf.translation.z, s.zone);
         spawn_car(&mut commands, &export, &assets, &s.car_class, *xf);
-        for (_, b) in BLOCKERS.iter().filter(|(sp, _)| *sp == name.as_str()) {
-            for (_, mut v) in blockers.iter_mut().filter(|(n, _)| n.as_str() == *b) {
-                *v = Visibility::Hidden;
-                info!("police: {b} down");
-            }
-        }
-        commands.insert_resource(PoliceArrived { zone: ze });
+        open_escape(&mut commands, ze, &mut zone, name, &mut blockers);
         return;
     }
     warn!("police: all police spawners reported unable to spawn");
+}
+
+/// The police there: their escape volume open, the spawner's blockers down.
+fn open_escape(commands: &mut Commands, ze: Entity, zone: &mut EscapeZone, spawner: &Name, blockers: &mut Query<(&Name, &mut Visibility), With<Blocker>>) {
+    zone.active = true;
+    for (_, b) in BLOCKERS.iter().filter(|(sp, _)| *sp == spawner.as_str()) {
+        for (_, mut v) in blockers.iter_mut().filter(|(n, _)| n.as_str() == *b) {
+            *v = Visibility::Hidden;
+            info!("police: {b} down");
+        }
+    }
+    commands.insert_resource(PoliceArrived { zone: ze });
+}
+
+/// A client: the server's police car came (net_world.rs shows it): the escape and blockers of the spawner it stands
+/// at, as the server opened them.
+fn remote_arrive(
+    mut commands: Commands,
+    cars: Query<&Transform, Added<PoliceCar>>,
+    spawners: Query<(&PoliceSpawner, &Transform, &Name), Without<PoliceCar>>,
+    mut blockers: Query<(&Name, &mut Visibility), With<Blocker>>,
+    mut zones: Query<(Entity, &mut EscapeZone, &GlobalTransform, &Name)>,
+) {
+    for car in &cars {
+        let Some((s, _, name)) = spawners.iter().min_by(|a, b| a.1.translation.distance(car.translation).total_cmp(&b.1.translation.distance(car.translation))) else { continue };
+        let Some((ze, mut zone, _, _)) = zones.iter_mut().find(|z| z.3.as_str() == s.zone) else { continue };
+        info!("police: the server's arrived at {name}; escape at {}", s.zone);
+        open_escape(&mut commands, ze, &mut zone, name, &mut blockers);
+    }
 }
 
 /// The police car (Police_C): its meshes, and its siren looping.
