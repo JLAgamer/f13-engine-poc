@@ -73,6 +73,17 @@ pub enum PipState {
     Missed,
 }
 
+impl PipState {
+    /// As a number (for the network) and back.
+    pub fn index(self) -> u8 {
+        self as u8
+    }
+
+    pub fn from_index(i: u8) -> Self {
+        [Self::Waiting, Self::Active, Self::Hit, Self::Missed][(i as usize).min(3)]
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Pip {
     /// Degrees.
@@ -156,6 +167,11 @@ pub struct HoldInteraction {
 impl HoldInteraction {
     pub fn new(hold_time: f32, has_pips: bool) -> Self {
         Self { hold_time, timer: 0.0, started: false, bonus: 1.0, has_pips, pips: vec![], current: None, last_hit_end: 0.0, fails: 0.0 }
+    }
+
+    /// Another machine's (a client's copy of the server's: what its dial shows; the server ticks it).
+    pub fn remote(hold_time: f32, timer: f32, started: bool, bonus: f32, has_pips: bool, pips: Vec<Pip>, current: Option<usize>) -> Self {
+        Self { hold_time, timer, started, bonus, has_pips, pips, current, last_hit_end: 0.0, fails: 0.0 }
     }
 
     /// 0..1 once started.

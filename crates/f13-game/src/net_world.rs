@@ -510,7 +510,7 @@ fn apply_fixtures(
     mut doors: Query<&mut crate::doors::Door>,
     mut windows: Query<&mut crate::windows::Window>,
     mut barricades: Query<&mut crate::windows::Barricade>,
-    mut fuses: Query<&mut crate::power::FuseBox>,
+    (mut fuses, mut grids): (Query<&mut crate::power::FuseBox>, Option<ResMut<crate::power::PowerGrids>>),
     mut phone_boxes: Query<&mut crate::police::PhoneBox>,
     mut phones: Query<&mut crate::police::Phone>,
 ) {
@@ -534,8 +534,12 @@ fn apply_fixtures(
         if let (Some(n), Ok(mut b)) = (nb.filter(|n| n.is_changed()), barricades.get_mut(e)) {
             b.enabled = n.enabled;
         }
+        // Its grid with it (the lights it feeds).
         if let (Some(n), Ok(mut f)) = (nf.filter(|n| n.is_changed()), fuses.get_mut(e)) {
-            f.destroyed = n.destroyed;
+            match grids.as_deref_mut() {
+                Some(g) if f.destroyed != n.destroyed => crate::power::set_destroyed(&mut f, n.destroyed, g),
+                _ => f.destroyed = n.destroyed,
+            }
         }
         if let (Some(n), Ok(mut b)) = (npb.filter(|n| n.is_changed()), phone_boxes.get_mut(e)) {
             b.repaired = n.repaired;

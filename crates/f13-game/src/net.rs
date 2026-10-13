@@ -201,6 +201,40 @@ pub struct NetCounselor {
     pub hiding: Option<(u32, u8, u8)>,
     /// Her breath (hiding.rs Breathing): how much is left and whether she holds it.
     pub breath: (f32, bool),
+    /// Her hold interaction (a repair's dial and its pips: her client's dial shows it, her presses go to the server).
+    pub hold: Option<NetHold>,
+}
+
+/// A hold interaction (f13-core minigame HoldInteraction): its times, and its pips (width, position, state, key).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct NetHold {
+    pub hold_time: f32,
+    pub timer: f32,
+    pub started: bool,
+    pub bonus: f32,
+    pub has_pips: bool,
+    pub pips: Vec<(f32, f32, u8, u8)>,
+    pub current: Option<u8>,
+}
+
+impl NetHold {
+    fn of(h: &f13_core::minigame::HoldInteraction) -> Self {
+        Self {
+            hold_time: h.hold_time,
+            timer: h.timer,
+            started: h.started,
+            bonus: h.bonus,
+            has_pips: h.has_pips,
+            pips: h.pips.iter().map(|p| (p.width, p.position, p.state.index(), p.key)).collect(),
+            current: h.current.map(|c| c as u8),
+        }
+    }
+
+    fn hold(&self) -> f13_core::minigame::HoldInteraction {
+        use f13_core::minigame::{HoldInteraction, Pip, PipState};
+        let pips = self.pips.iter().map(|&(width, position, state, key)| Pip { width, position, state: PipState::from_index(state), key }).collect();
+        HoldInteraction::remote(self.hold_time, self.timer, self.started, self.bonus, self.has_pips, pips, self.current.map(|c| c as usize))
+    }
 }
 
 /// What Jason's animation reads of his state.
@@ -408,9 +442,9 @@ fn bot_hooks(
                 }
                 crate::bot::BotSetup::CutPower => {
                     for mut f in &mut fuse_boxes {
-                        f.destroyed = true;
-                        if let (Some(g), Some(grids)) = (f.grid, grids.as_mut()) {
-                            grids.grids[g].on = false;
+                        match grids.as_deref_mut() {
+                            Some(g) => crate::power::set_destroyed(&mut f, true, g),
+                            None => f.destroyed = true,
                         }
                     }
                 }
@@ -709,7 +743,7 @@ fn set<T: PartialEq>(mut c: Mut<T>, v: T) {
 #[allow(clippy::type_complexity)]
 fn update_bodies(
     mut bodies: Query<(&mut NetBody, &Transform, &mut NetAction, Option<&PlayAction>, Has<crate::items::Blocking>)>,
-    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>, Has<crate::voice::Spectating>), (Option<&crate::hiding::Hiding>, Option<&crate::hiding::Breathing>))>,
+    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>, Has<crate::voice::Spectating>), (Option<&crate::hiding::Hiding>, Option<&crate::hiding::Breathing>, Option<&crate::interact::Interaction>))>,
     struggle: Option<Res<crate::jason::Struggle>>,
     mut jasons: Query<(&mut NetJason, &crate::jason::Jason, Option<&crate::senses::Knowledge>, Option<&crate::kill_camera::KillCam>)>,
     world_ids: Query<&crate::net_world::WorldId>,
@@ -730,7 +764,7 @@ fn update_bodies(
             a.blocking = blocking;
         }
     }
-    for (n, p, name, controls, (held, trapped, spectating), (hiding, breathing)) in &mut counselors {
+    for (n, p, name, controls, (held, trapped, spectating), (hiding, breathing, interaction)) in &mut counselors {
         let c = &p.counselor;
         set(n, NetCounselor {
             stance: c.stance as u8,
@@ -752,6 +786,7 @@ fn update_bodies(
             spectating,
             hiding: hiding.and_then(|h| Some((world_ids.get(h.spot).ok()?.0, h.side as u8, h.phase.index()))),
             breath: breathing.map_or((0.0, false), |b| (b.breath.current, b.breath.holding)),
+            hold: interaction.and_then(|i| i.hold.as_ref()).map(NetHold::of),
         });
     }
     for (n, j, know, cam) in &mut jasons {
@@ -989,14 +1024,14 @@ fn mirror(
     mut commands: Commands,
     (real, clock): (Res<Time<Real>>, Res<ServerClock>),
     mut bodies: Query<(&NetBody, &NetAction, Option<&NetCounselor>, Option<&NetJason>, &mut Twin, Option<&Snapshots>)>,
-    mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>, (Option<&Name>, Option<&mut Controls>, Has<LocalPlayer>, Option<&mut crate::senses::Knowledge>), (Has<crate::jason::Held>, Option<&mut crate::items::Trapped>, Has<crate::voice::Spectating>), (Option<&mut crate::hiding::Hiding>, Option<&mut crate::hiding::Breathing>))>,
+    mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>, (Option<&Name>, Option<&mut Controls>, Has<LocalPlayer>, Option<&mut crate::senses::Knowledge>), (Has<crate::jason::Held>, Option<&mut crate::items::Trapped>, Has<crate::voice::Spectating>), (Option<&mut crate::hiding::Hiding>, Option<&mut crate::hiding::Breathing>, Option<&mut crate::interact::Interaction>))>,
     mut struggle: Option<ResMut<crate::jason::Struggle>>,
     actors: Res<crate::net_world::Actors>,
     cams: Query<&crate::kill_camera::KillCam>,
 ) {
     let shown_at = clock.now(&real) - INTERP_DELAY_S;
     for (b, a, nc, nj, mut twin, snaps) in &mut bodies {
-        let Ok((mut xf, player, jason, action, blocking, (name, controls, local, know), (held, trapped, spectating), (hiding, breathing))) = twins.get_mut(twin.local) else { continue };
+        let Ok((mut xf, player, jason, action, blocking, (name, controls, local, know), (held, trapped, spectating), (hiding, breathing, interaction))) = twins.get_mut(twin.local) else { continue };
         let (to, yaw) = snaps.and_then(|s| sample(s, shown_at)).unwrap_or((Vec3::from_array(b.pos), b.yaw));
         xf.translation = to;
         xf.rotation = Quat::from_rotation_y(yaw);
@@ -1049,6 +1084,9 @@ fn mirror(
             }
             if let Some(mut b) = breathing {
                 (b.breath.current, b.breath.holding) = n.breath;
+            }
+            if let Some(mut i) = interaction {
+                i.hold = n.hold.as_ref().map(NetHold::hold);
             }
             match (n.spectating, spectating) {
                 (true, false) => {
