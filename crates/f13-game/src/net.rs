@@ -918,6 +918,8 @@ struct NetBot {
     clock: Option<i32>,
     tries: u8,
     failed: Vec<&'static str>,
+    /// The first thrown knife seen: its entity, where it was first, and the furthest it went from there.
+    knife: Option<(Entity, Vec3, f32)>,
     /// What it asks the lobby for, and how far it got there (0 waiting, 1 asked, 2 ready).
     prefer: crate::lobby::Preference,
     lobby: u8,
@@ -938,8 +940,23 @@ fn net_bot(
     jason: Query<&NetBody, With<NetJason>>,
     game: Res<GameMatch>,
     mut exit: MessageWriter<AppExit>,
+    knives: Query<(Entity, &crate::net_world::NetVisual, &Transform)>,
 ) {
     bot.t += time.delta_secs();
+    // A thrown knife the server sent: how far it goes here.
+    for (e, v, xf) in &knives {
+        if !matches!(v, crate::net_world::NetVisual::Knife { .. }) {
+            continue;
+        }
+        match &mut bot.knife {
+            Some((k, from, far)) if *k == e => *far = far.max(xf.translation.distance(*from)),
+            Some(_) => {}
+            None => {
+                info!("bot: net: a knife at {}", xf.translation);
+                bot.knife = Some((e, xf.translation, 0.0));
+            }
+        }
+    }
     for k in [KeyCode::KeyW, KeyCode::KeyC] {
         keys.release(k);
     }
@@ -1018,6 +1035,12 @@ fn net_bot(
                 info!("bot: net: Jason moved {:.1} m", moved.unwrap_or(0.0));
                 if !moved.is_some_and(|m| m > 2.0) {
                     bot.failed.push("Jason");
+                }
+                if let Some((_, _, far)) = bot.knife {
+                    info!("bot: net: his knife flew {far:.1} m here");
+                    if far < 2.0 {
+                        bot.failed.push("knife");
+                    }
                 }
                 if bot.failed.is_empty() {
                     info!("bot: net: passed");
@@ -1183,7 +1206,13 @@ fn net_bot_lobby(mut bot: ResMut<NetBot>, mut keys: ResMut<ButtonInput<KeyCode>>
 
 /// A lobby's playing server, as Jason: he walks a little (W, 3 s), so a client's counselor bot sees him move, then
 /// opens his map.
-fn host_bot_jason(mut bot: ResMut<NetBot>, time: Res<Time>, mut controls: ResMut<crate::jason_player::JasonControls>, mut map: ResMut<crate::jason_player::MorphMap>) {
+fn host_bot_jason(
+    mut bot: ResMut<NetBot>,
+    time: Res<Time>,
+    mut controls: ResMut<crate::jason_player::JasonControls>,
+    mut map: ResMut<crate::jason_player::MorphMap>,
+    mut camera: Single<&mut crate::player::PlayerCamera>,
+) {
     bot.t += time.delta_secs();
     match bot.step {
         0 if bot.t > 3.0 => {
@@ -1192,12 +1221,29 @@ fn host_bot_jason(mut bot: ResMut<NetBot>, time: Res<Time>, mut controls: ResMut
             bot.step = 1;
             bot.t = 0.0;
         }
+        // A knife (middle mouse held aims, let go throws), for the client to see fly.
         1 if bot.t > 3.0 => {
             controls.keys.release(KeyCode::KeyW);
+            info!("bot: net: the host's Jason aims a knife");
+            // Back the way he came (he walked up to his shack's wall), level.
+            camera.yaw += std::f32::consts::PI;
+            camera.pitch = 0.0;
+            controls.press_knife();
+            bot.step = 2;
+            bot.t = 0.0;
+        }
+        2 if bot.t < 1.5 => {}
+        2 => {
+            info!("bot: net: the host's Jason throws it");
+            controls.release_knife();
+            bot.step = 3;
+            bot.t = 0.0;
+        }
+        3 if bot.t > 2.0 => {
             // His map left open (M), to be seen on the host's screen.
             info!("bot: net: the host's Jason opens his map");
             map.open = true;
-            bot.step = 2;
+            bot.step = 4;
         }
         _ => {}
     }

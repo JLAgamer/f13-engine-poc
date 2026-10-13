@@ -267,6 +267,18 @@ const NET_KEYS: [KeyCode; 13] = [
 const NET_BUTTONS: [MouseButton; 3] = [MouseButton::Left, MouseButton::Right, MouseButton::Middle];
 
 impl JasonControls {
+    /// Scripted input (testing): KLR_KnifeThrow pressed and held, as the demo presses it (latched, since capture
+    /// takes a frame's presses from the window only).
+    pub(crate) fn press_knife(&mut self) {
+        self.latched.knife = true;
+        self.mouse.press(MouseButton::Middle);
+    }
+
+    /// Scripted input (testing): KLR_KnifeThrow let go (the knife thrown).
+    pub(crate) fn release_knife(&mut self) {
+        self.mouse.release(MouseButton::Middle);
+    }
+
     /// The keys ([`NET_KEYS`]) and mouse buttons (left, right, middle) held, as bits.
     pub fn held(&self) -> (u32, u8) {
         let keys = NET_KEYS.iter().enumerate().filter(|(_, k)| self.keys.pressed(**k)).fold(0, |b, (i, _)| b | 1 << i);

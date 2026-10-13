@@ -1166,6 +1166,9 @@ fn fly_knives(
         if let Some(f) = f13_core::collision::segment_hit(&world, from, to, 1.0) {
             xf.translation = from + (to - from) * f;
             k.stuck = true;
+            let n = f13_core::collision::segment_hit_normal(&world, from, to, 1.0).map_or(Vec3::ZERO, |h| h.1);
+            let fixed = f13_core::collision::segment_hit(world.0, from, to, 1.0).is_some();
+            info!("Jason's knife stuck at {} after {:.2} s (from {from}, normal {n}, {})", xf.translation, k.age, if fixed { "the level" } else { "a prop" });
             // OnProjectileStop: the dart shows.
             if let Some(d) = k.dart {
                 commands.entity(d).insert(Visibility::Inherited);
