@@ -278,6 +278,11 @@ pub struct NetJason {
     pub rage: (bool, f32),
     /// The kill camera running (kill_camera.rs): its kill, origin (translation, rotation) and whether at the root.
     pub kill_cam: Option<(String, [f32; 7], bool)>,
+    /// His mask on (bMaskOn) and his health.
+    #[serde(default)]
+    pub mask_on: bool,
+    #[serde(default)]
+    pub health: f32,
 }
 
 /// A character's full-body action ([`PlayAction`]), how often it restarted ([`RestartAction`]), its last seek
@@ -866,6 +871,8 @@ fn update_bodies(
             door: j.door_move().and_then(|(d, m)| Some((world_ids.get(d).ok()?.0, m))),
             knives: j.knives,
             traps: j.traps,
+            mask_on: j.mask_on,
+            health: j.health,
             state: j.state_name(),
             cooldown: j.cooldown,
             unlocked: a.map_or([false; 4], |a| a.unlocked),
@@ -1235,6 +1242,8 @@ fn mirror(
             }
             j.underwater = n.underwater;
             j.knives = n.knives;
+            j.mask_on = n.mask_on;
+            j.health = n.health;
             j.traps = n.traps;
             j.remote = Some(crate::jason::RemoteView {
                 shifting: n.shifting,

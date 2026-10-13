@@ -316,19 +316,23 @@ pub struct JasonPlugin {
     pub delay: f32,
     /// The grab kill he always does (an index into [`KILLS`]; `--kill <name>`), else one at random.
     pub kill: Option<usize>,
+    /// Testing (--jason-health): his health at the start.
+    pub health: Option<f32>,
 }
 
 #[derive(Resource)]
 pub(crate) struct JasonConfig {
     delay: f32,
     kill: Option<usize>,
+    health: Option<f32>,
 }
 
 impl Plugin for JasonPlugin {
     fn build(&self, app: &mut App) {
         crate::net_world::sounds(app);
-        app.insert_resource(JasonConfig { delay: self.delay, kill: self.kill })
+        app.insert_resource(JasonConfig { delay: self.delay, kill: self.kill, health: self.health })
             .init_resource::<GrabKillsAvailable>()
+            .add_systems(Update, show_mask)
             .init_resource::<JasonTarget>()
             .add_systems(Startup, (spawn_jason, load_knife_look))
             .add_systems(FixedUpdate, choose_target.before(crate::senses::perceive).before(grab_kills_available).before(update_jason).run_if(crate::net::simulating))
@@ -410,6 +414,12 @@ pub struct KillerTuning {
     pub knife_damage: f32,
     pub trap_count: u32,
     pub trap_placement_m: f32,
+    /// His health (TakeDamage 0x14040b600): MaxHealth, MinimumHealth (damage never takes him lower), the mask's
+    /// MaskPopOffThreshold, and a blocked hit's BlockedHitDamageModifier.
+    pub max_health: f32,
+    pub min_health: f32,
+    pub mask_threshold: f32,
+    pub blocked_damage: f32,
     /// MaxAttackInteractAngle (degrees) and MaxAttackInteractCounselorDistance (m): the attack's break-down checks
     /// ([`attack_interact`]).
     pub attack_interact_angle: f32,
@@ -462,6 +472,10 @@ impl KillerTuning {
             knife_damage: v("ThrowingKnifeDamage", 30.0),
             trap_count: v("InitialTrapCount", 5.0) as u32,
             trap_placement_m: v("TrapPlacementDistance", 75.0) / CM,
+            max_health: v("MaxHealth", 100.0),
+            min_health: v("MinimumHealth", 1.0),
+            mask_threshold: v("MaskPopOffThreshold", 30.0),
+            blocked_damage: v("BlockedHitDamageModifier", 1.0),
             attack_interact_angle: v("MaxAttackInteractAngle", 45.0),
             attack_interact_counselor_m: v("MaxAttackInteractCounselorDistance", 200.0) / CM,
             shift_speed: v("ShiftSpeed", 1000.0),
@@ -585,6 +599,9 @@ pub struct Jason {
     unstick: Option<(Vec2, f32)>,
     /// Seconds left of immunity to stuns.
     stun_immune: f32,
+    /// His health and whether his mask is on (bMaskOn).
+    pub health: f32,
+    pub mask_on: bool,
     /// The hiding spot he's going to search, the ones he searched, the last clue he followed up (its time), and the
     /// place he's wandering to (with when he picked it).
     target_spot: Option<Entity>,
@@ -809,6 +826,8 @@ pub enum Stun {
     BearTrap,
     /// PoliceShootJasonStun_C: the police turned him back from their escape.
     Police,
+    /// MaskKnockedOffStun_C: his mask knocked off (3 s, its directional montages, no minigame).
+    MaskOff { left: bool },
 }
 
 impl Stun {
@@ -819,6 +838,7 @@ impl Stun {
             Stun::Firecracker => 4.0,
             Stun::PocketKnife | Stun::GrabBreak | Stun::Police => 6.0,
             Stun::BearTrap => 10.0,
+            Stun::MaskOff { .. } => 3.0,
         }
     }
 
@@ -836,7 +856,7 @@ impl Stun {
             Stun::Firecracker => "FirecrackerJasonStun",
             Stun::BearTrap => "Trapper",
             Stun::PocketKnife | Stun::GrabBreak => "EscapeJasonGrab",
-            Stun::Police => return None,
+            Stun::Police | Stun::MaskOff { .. } => return None,
         })
     }
 
@@ -848,7 +868,7 @@ impl Stun {
             Stun::Flare => "Brush Off",
             Stun::BearTrap => "Open Trap",
             Stun::Police => "Resist",
-            Stun::Firecracker | Stun::PocketKnife | Stun::GrabBreak => return None,
+            Stun::Firecracker | Stun::PocketKnife | Stun::GrabBreak | Stun::MaskOff { .. } => return None,
         })
     }
 
@@ -860,7 +880,7 @@ impl Stun {
             Stun::Weapon { .. } => 0.3,
             Stun::Flare | Stun::Shotgun | Stun::Police => 0.2,
             Stun::BearTrap => 0.02,
-            Stun::Firecracker | Stun::PocketKnife | Stun::GrabBreak => return None,
+            Stun::Firecracker | Stun::PocketKnife | Stun::GrabBreak | Stun::MaskOff { .. } => return None,
         };
         Some(f13_core::stun::WiggleTuning { total_time: self.seconds(), percent_per_wiggle: 5.0, depletion_rate })
     }
@@ -868,8 +888,8 @@ impl Stun {
     /// Enter, loop (until the exit is due) and exit animations; a single animation plays once and holds.
     fn anims(self) -> (&'static str, Option<&'static str>, Option<&'static str>) {
         match self {
-            Stun::Weapon { left: true } => ("combat_stand_stunned_left_enter_01", Some("combat_stand_stunned_left_loop_01"), Some("combat_stand_stunned_left_exit_01")),
-            Stun::Weapon { left: false } => ("combat_stand_stunned_right_enter_01", Some("combat_stand_stunned_right_loop_01"), Some("combat_stand_stunned_right_exit_01")),
+            Stun::Weapon { left: true } | Stun::MaskOff { left: true } => ("combat_stand_stunned_left_enter_01", Some("combat_stand_stunned_left_loop_01"), Some("combat_stand_stunned_left_exit_01")),
+            Stun::Weapon { left: false } | Stun::MaskOff { left: false } => ("combat_stand_stunned_right_enter_01", Some("combat_stand_stunned_right_loop_01"), Some("combat_stand_stunned_right_exit_01")),
             Stun::Flare => ("combat_stand_stunned_back_enter_01", Some("combat_stand_stunned_back_loop_01"), Some("combat_stand_stunned_back_exit_01")),
             Stun::Shotgun => ("combat_stand_stunned_down_enter_01", Some("combat_stand_stunned_down_loop_01"), Some("combat_stand_stunned_down_exit_01")),
             Stun::Firecracker => ("combat_stand_stunned_firecracker_enter_01", Some("combat_stand_stunned_firecracker_loop_01"), Some("combat_stand_stunned_firecracker_exit_01")),
@@ -1251,6 +1271,23 @@ fn segment_distance(p0: Vec3, p1: Vec3, q0: Vec3, q1: Vec3) -> f32 {
     (p0 + d1 * s).distance(q0 + d2 * t)
 }
 
+/// His mask (the Mask part, JasonSkeletalMask) hidden once it's knocked off.
+fn show_mask(jasons: Query<(Entity, &Jason), Changed<Jason>>, children: Query<&Children>, parts: Query<&crate::character::PartOf>, mut vis: Query<&mut Visibility>) {
+    for (je, j) in &jasons {
+        for c in children.iter_descendants(je) {
+            if parts.get(c).is_ok_and(|p| p.0 == "Mask") {
+                if let Ok(mut v) = vis.get_mut(c) {
+                    let want = if j.mask_on { Visibility::Inherited } else { Visibility::Hidden };
+                    if *v != want {
+                        *v = want;
+                        info!("Jason: his mask {}", if j.mask_on { "shown" } else { "hidden" });
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// A counselor's item hit Jason (items.rs): `stun` if it stunned him, else he flinches.
 #[derive(Component, Clone, Debug)]
 pub struct HitJason {
@@ -1258,6 +1295,8 @@ pub struct HitJason {
     pub by: Option<Entity>,
     pub stun: Option<Stun>,
     pub from: Vec3,
+    /// Its damage (a weapon's; the stuns' own, 0, PLACEHOLDER).
+    pub damage: f32,
 }
 
 /// SCKillerCharacter::PlayDistortionEffect (0x1403ffd50), from OnRep_Teleport (a Morph starting and ending) and
@@ -1443,6 +1482,8 @@ fn spawn_jason(
                 progress: (feet, 0.0),
                 unstick: None,
                 stun_immune: 0.0,
+                health: config.health.unwrap_or(tuning.max_health),
+                mask_on: true,
                 target_spot: None,
                 target_side: None,
                 searched: Vec::new(),
@@ -1886,7 +1927,26 @@ pub(crate) fn update_jason(
             // BlockedHitDamageModifier of its damage (his health isn't modelled), and plays one of his
             // BlockingHitMontages (FUN_1402fdbb0 with BlockData.bIsBlocking).
             let blocked = j.blocking && matches!(h.stun, None | Some(Stun::Weapon { .. }));
-            match h.stun {
+            // His health: the hit's damage (blocked: x BlockedHitDamageModifier), down to MinimumHealth; the mask
+            // pops off once the hit takes him to MaskPopOffThreshold: MaskKnockedOffStun, KnockMaskOff to her.
+            let damage = h.damage * if blocked { t.blocked_damage } else { 1.0 };
+            let mut stun_now = h.stun;
+            if damage > 0.0 {
+                let pops = j.mask_on && j.health - damage <= t.mask_threshold;
+                j.health = (j.health - damage).clamp(t.min_health, t.max_health);
+                info!("Jason: {damage:.1} damage (health {:.1})", j.health);
+                if pops {
+                    j.mask_on = false;
+                    info!("Jason: his mask knocked off");
+                    if let Some(who) = h.by {
+                        commands.trigger(Score { who, event: "KnockMaskOff" });
+                    }
+                    let left = matches!(h.stun, Some(Stun::Weapon { left: true }));
+                    stun_now = Some(Stun::MaskOff { left });
+                }
+            }
+            let can_stun = can_stun || matches!(stun_now, Some(Stun::MaskOff { .. }));
+            match stun_now {
                 _ if blocked => {
                     let anim = BLOCK_REACTIONS[rng.0.index(BLOCK_REACTIONS.len())];
                     info!("Jason: blocked the hit");

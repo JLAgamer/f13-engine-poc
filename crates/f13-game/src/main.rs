@@ -182,6 +182,8 @@ struct Args {
     no_intro: bool,
     /// Seconds before Jason starts hunting.
     jason_delay: f32,
+    /// --jason-health: his health at the start (testing his mask).
+    jason_health: Option<f32>,
     unlit: bool,
     grass: bool,
     aerial: bool,
@@ -266,6 +268,7 @@ fn parse_args() -> Args {
     let mut no_jason = false;
     let mut no_intro = false;
     let mut jason_delay = 0.0;
+    let mut jason_health = None;
     let mut unlit = false;
     let mut round_time = None;
     let mut rain = None;
@@ -369,6 +372,7 @@ fn parse_args() -> Args {
             "--map-open" => map_open = true,
             "--no-jason" => no_jason = true,
             "--no-intro" => no_intro = true,
+            "--jason-health" => jason_health = it.next().and_then(|v| v.parse().ok()),
             "--jason-delay" => jason_delay = it.next().and_then(|v| v.parse().ok()).unwrap_or(0.0f32).max(0.0),
             "--grass" => grass = true,
             "--aerial" => aerial = true,
@@ -420,7 +424,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass] (or run the installer, lakeside-setup-installer)");
         std::process::exit(2);
     };
-    Args { net, bot_net, bot_spectate, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_passenger, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, override_spawning, no_voice, net_id, last_jason, bot_hooks, last_match, open_mic, bot_radio, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, counselor_class, bot_tommy, camera, round_time, flashlight, rain }
+    Args { net, bot_net, bot_spectate, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_passenger, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, jason_health, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, override_spawning, no_voice, net_id, last_jason, bot_hooks, last_match, open_mic, bot_radio, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, counselor_class, bot_tommy, camera, round_time, flashlight, rain }
 }
 
 #[derive(Resource)]
@@ -675,7 +679,7 @@ fn main() {
             bot::setup(bot::BotSetup::CutPower);
         }
         if !args.no_jason && !bot_alone {
-            app.add_plugins(jason::JasonPlugin { delay: args.jason_delay, kill: args.kill });
+            app.add_plugins(jason::JasonPlugin { delay: args.jason_delay, kill: args.kill, health: args.jason_health });
         }
     }
     if let Some(path) = args.screenshot.clone() {

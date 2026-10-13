@@ -241,6 +241,10 @@ pub struct CounselorCharacter(#[deref] pub CharacterModel, pub HashMap<String, s
 /// The default counselor class (Vanessa).
 pub const DEFAULT_CLASS: &str = "Athlete";
 
+/// A master-pose part's name (its scene's root: the outfit, Jason's mask).
+#[derive(Component, Clone, Debug)]
+pub struct PartOf(pub String);
+
 /// The local player's counselor pick (--counselor).
 #[derive(Resource, Clone, Debug)]
 pub struct LocalClass(pub String);
@@ -543,7 +547,7 @@ pub fn spawn_model_as(commands: &mut Commands, assets: &AssetServer, character: 
     let body = body.observe(ready).id();
     let mut outfit = Vec::new();
     for p in info.parts.iter().filter(|p| p.master_pose()) {
-        let mut e = commands.spawn((WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(p.file.clone()))), ChildOf(rig)));
+        let mut e = commands.spawn((WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(p.file.clone()))), ChildOf(rig), PartOf(p.name.clone())));
         if let Some(o) = crate::materials::MaterialOverrides::new(&p.material_map) {
             e.insert(o);
         }

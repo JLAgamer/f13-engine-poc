@@ -571,6 +571,10 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             values[name] = ClassValue<float?>(cls, name) ?? fallback;
         // A combat kill's dismember roll (SCCharacter's TakeDamage, FUN_1403d7410; the constructor sets none).
         values["CombatDismemberChance"] = ClassValue<int?>(cls, "CombatDismemberChance") ?? 0;
+        // His health and mask (TakeDamage 0x14040b600; defaults: SCCharacter's constructor MaxHealth 100,
+        // SCKillerCharacter's MinimumHealth 1, MaskPopOffThreshold 30, StunDamageModifier 0.2).
+        foreach (var (name, fallback) in new[] { ("MaxHealth", 100f), ("MinimumHealth", 1f), ("MaskPopOffThreshold", 30f), ("BlockedHitDamageModifier", 1f), ("StunDamageModifier", 0.2f) })
+            values[name] = ClassValue<float?>(cls, name) ?? fallback;
         var move = Component(cdo, "CharacterMovement");
         foreach (var (name, fallback) in new[] { ("MaxWalkSpeed", 104f), ("MaxRunSpeed", 280f), ("MaxSprintSpeed", 450f), ("MaxCombatSpeed", 104f), ("MaxAcceleration", 2048f), ("MaxSlowRunSpeed", 200f) })
             values[name] = Inherited<float?>(move, name) ?? fallback;
