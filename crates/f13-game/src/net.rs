@@ -983,7 +983,7 @@ struct NetBot {
     clock: Option<i32>,
     tries: u8,
     failed: Vec<&'static str>,
-    /// The first thrown knife seen: its entity, where it was first, and the furthest it went from there.
+    /// The first thrown knife seen: its entity, where Jason stood then, and the furthest it went from there.
     knife: Option<(Entity, Vec3, f32)>,
     /// What it asks the lobby for, and how far it got there (0 waiting, 1 asked, 2 ready).
     prefer: crate::lobby::Preference,
@@ -1013,12 +1013,14 @@ fn net_bot(
         if !matches!(v, crate::net_world::NetVisual::Knife { .. }) {
             continue;
         }
+        // (From where Jason stood as it showed up: a knife can arrive here already stuck.)
+        let jason_at = jason.single().ok().map_or(xf.translation, |b| Vec3::from_array(b.pos));
         match &mut bot.knife {
             Some((k, from, far)) if *k == e => *far = far.max(xf.translation.distance(*from)),
             Some(_) => {}
             None => {
-                info!("bot: net: a knife at {}", xf.translation);
-                bot.knife = Some((e, xf.translation, 0.0));
+                info!("bot: net: a knife at {} (Jason at {jason_at})", xf.translation);
+                bot.knife = Some((e, jason_at, xf.translation.distance(jason_at)));
             }
         }
     }
@@ -1102,7 +1104,7 @@ fn net_bot(
                     bot.failed.push("Jason");
                 }
                 if let Some((_, _, far)) = bot.knife {
-                    info!("bot: net: his knife flew {far:.1} m here");
+                    info!("bot: net: his knife went {far:.1} m from him here");
                     if far < 2.0 {
                         bot.failed.push("knife");
                     }

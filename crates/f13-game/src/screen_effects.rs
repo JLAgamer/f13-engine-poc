@@ -36,21 +36,26 @@ impl Plugin for ScreenEffectsPlugin {
         embedded_asset!(app, "shaders/vhs.wgsl");
         embedded_asset!(app, "shaders/shift.wgsl");
         embedded_asset!(app, "shaders/stun.wgsl");
+        embedded_asset!(app, "shaders/blood.wgsl");
         app.add_plugins((
             ExtractComponentPlugin::<VhsGlitch>::default(),
             UniformComponentPlugin::<VhsUniform>::default(),
             ExtractComponentPlugin::<ShiftBlur>::default(),
             ExtractComponentPlugin::<StunEffect>::default(),
             UniformComponentPlugin::<StunUniform>::default(),
+            ExtractComponentPlugin::<BloodScreen>::default(),
+            UniformComponentPlugin::<BloodUniform>::default(),
         ))
-        .add_systems(Update, (teleport_static, shift_blur, stun_effect));
+        .add_systems(Startup, load_blendables)
+        .add_systems(Update, (teleport_static, shift_blur, stun_effect, screen_blood));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else { return };
         render_app
             .init_gpu_resource::<SpecializedRenderPipelines<VhsPipeline>>()
             .init_gpu_resource::<SpecializedRenderPipelines<ShiftPipeline>>()
             .init_gpu_resource::<SpecializedRenderPipelines<StunPipeline>>()
-            .add_systems(RenderStartup, (init_pipeline, init_shift_pipeline, init_stun_pipeline))
-            .add_systems(Render, (prepare_pipelines, prepare_shift_pipelines, prepare_stun_pipelines).in_set(RenderSystems::Prepare))
+            .init_gpu_resource::<SpecializedRenderPipelines<BloodPipeline>>()
+            .add_systems(RenderStartup, (init_pipeline, init_shift_pipeline, init_stun_pipeline, init_blood_pipeline))
+            .add_systems(Render, (prepare_pipelines, prepare_shift_pipelines, prepare_stun_pipelines, prepare_blood_pipelines).in_set(RenderSystems::Prepare))
             // The volume's blendables in the order they were added: the stun's (from the start), then Shift's.
             .add_systems(
                 Core3d,
@@ -58,6 +63,8 @@ impl Plugin for ScreenEffectsPlugin {
                     vhs.after(crate::tonemap::game_tonemap),
                     shift.after(crate::tonemap::game_tonemap).before(vhs),
                     stun.after(crate::tonemap::game_tonemap).before(shift),
+                    // (The camera's own blendables, after the volume's.)
+                    blood.after(vhs),
                 )
                     .in_set(Core3dSystems::PostProcess),
             );
@@ -510,4 +517,261 @@ pub(crate) fn vhs(
     pass.set_pipeline(render_pipeline);
     pass.set_bind_group(0, &bind_group, &[index.index()]);
     pass.draw(0..3, 0..1);
+}
+
+/// A kill montage's SCPostProcessBlendableNotify window (anim_blendables.json; s in its take).
+#[derive(serde::Deserialize, Clone, Debug)]
+#[serde(rename_all = "PascalCase")]
+struct BlendWindow {
+    start: f32,
+    end: f32,
+    material: String,
+    textures: std::collections::HashMap<String, String>,
+    scalars: std::collections::HashMap<String, f32>,
+    blend_in: f32,
+    blend_out: f32,
+    min: f32,
+    max: f32,
+    hooks: Vec<(String, bool, bool)>,
+}
+
+impl BlendWindow {
+    /// The notify's intensity `t` s into it, and whether its blend-in phase (NotifyBegin 0x1403155e0, NotifyTick
+    /// 0x1403164e0): MinIntensity to MaxIntensity over BlendInTime, MaxIntensity, back to MinIntensity over the last
+    /// BlendOutTime.
+    fn intensity(&self, t: f32) -> (f32, bool) {
+        let fade = (self.end - self.start - self.blend_out).max(0.0);
+        if t < self.blend_in && self.blend_in > 0.0 {
+            ((self.max - self.min) * (t / self.blend_in) + self.min, true)
+        } else if t > fade && self.blend_out > 0.0 {
+            (((t - fade) / self.blend_out) * (self.min - self.max) + self.max, false)
+        } else {
+            (self.max, false)
+        }
+    }
+
+    /// A scalar parameter's value `t` s in: its intensity hook's (UseBlendIn while blending in, UseBlendOut after), else
+    /// the material's own.
+    fn scalar(&self, name: &str, t: f32) -> f32 {
+        let (v, blending_in) = self.intensity(t);
+        match self.hooks.iter().find(|h| h.0 == name) {
+            Some(h) if (blending_in && h.1) || (!blending_in && h.2) => v,
+            _ => self.scalars.get(name).copied().unwrap_or(0.0),
+        }
+    }
+}
+
+/// The animations' screen blendables: "killer/<take>" (Jason's) or "counselor/<take>" -> their windows.
+#[derive(Resource, Default)]
+struct AnimBlendables(std::collections::HashMap<String, Vec<BlendWindow>>);
+
+fn load_blendables(mut commands: Commands, export: Res<crate::ExportRoot>) {
+    let b = std::fs::read_to_string(export.0.join("anim_blendables.json")).ok().and_then(|t| serde_json::from_str(&t).ok());
+    if b.is_none() {
+        warn!("no anim_blendables.json (re-export: f13-export sounds): the kills' screen blood isn't shown");
+    }
+    commands.insert_resource(AnimBlendables(b.unwrap_or_default()));
+}
+
+/// The screen blood on a camera: its BloodTexture01 and bloodContrast.
+#[derive(Component, Clone)]
+pub struct BloodScreen {
+    pub texture: Handle<Image>,
+    pub contrast: f32,
+}
+
+#[derive(Component, ShaderType, Clone)]
+pub struct BloodUniform {
+    v: Vec4,
+}
+
+impl SyncComponent for BloodScreen {
+    type Target = (BloodScreen, BloodUniform);
+}
+
+impl ExtractComponent for BloodScreen {
+    type QueryData = &'static BloodScreen;
+    type QueryFilter = ();
+    type Out = (BloodScreen, BloodUniform);
+
+    fn extract_component(b: bevy::ecs::query::QueryItem<'_, '_, Self::QueryData>) -> Option<Self::Out> {
+        Some((b.clone(), BloodUniform { v: Vec4::new(b.contrast, 0.0, 0.0, 0.0) }))
+    }
+}
+
+/// The local player's character's take's blood window, on their camera: the montage's owner locally controlled (its
+/// PlayForAllClients is off in every kill), its MID's BloodTexture01 and its bloodContrast hook.
+#[allow(clippy::type_complexity)]
+fn screen_blood(
+    mut commands: Commands,
+    assets: Res<AssetServer>,
+    blendables: Option<Res<AnimBlendables>>,
+    play: Option<Res<crate::jason_player::PlayJason>>,
+    rigs: Query<(&ChildOf, &crate::character::Rig)>,
+    (local, jasons): (Query<(), (With<crate::controls::LocalPlayer>, With<crate::player::Player>)>, Query<(), With<crate::jason::Jason>>),
+    cameras: Query<(Entity, Option<&BloodScreen>), With<crate::player::PlayerCamera>>,
+) {
+    let Some(blendables) = blendables else { return };
+    let mine = |owner: Entity| if play.is_some() { jasons.contains(owner) } else { local.contains(owner) };
+    let mut screen = None;
+    for (parent, rig) in &rigs {
+        if !mine(parent.parent()) {
+            continue;
+        }
+        let Some((take, at)) = rig.action.as_ref() else { continue };
+        let side = if jasons.contains(parent.parent()) { "killer" } else { "counselor" };
+        let Some(windows) = blendables.0.get(&format!("{side}/{take}")) else { continue };
+        for w in windows.iter().filter(|w| w.start <= *at && *at < w.end && w.material.starts_with("PP_Player_BloodEffect")) {
+            let Some(tex) = w.textures.get("BloodTexture01") else { continue };
+            screen = Some((tex.clone(), w.scalar("bloodContrast", at - w.start)));
+        }
+    }
+    for (e, have) in &cameras {
+        match &screen {
+            Some((tex, contrast)) => {
+                let texture = match have {
+                    Some(b) if assets.get_path(b.texture.id()).is_some_and(|p| p.path().to_string_lossy() == tex.as_str()) => b.texture.clone(),
+                    _ => assets.load(tex.clone()),
+                };
+                commands.entity(e).insert(BloodScreen { texture, contrast: *contrast });
+            }
+            None if have.is_some() => {
+                commands.entity(e).remove::<BloodScreen>();
+            }
+            None => {}
+        }
+    }
+}
+
+#[derive(Resource)]
+struct BloodPipeline {
+    layout: BindGroupLayoutDescriptor,
+    sampler: Sampler,
+    wrap: Sampler,
+    fullscreen_shader: FullscreenShader,
+    shader: Handle<Shader>,
+}
+
+fn init_blood_pipeline(mut commands: Commands, device: Res<RenderDevice>, fullscreen_shader: Res<FullscreenShader>, asset_server: Res<AssetServer>) {
+    let layout = BindGroupLayoutDescriptor::new(
+        "blood_layout",
+        &BindGroupLayoutEntries::sequential(
+            ShaderStages::FRAGMENT,
+            (
+                texture_2d(TextureSampleType::Float { filterable: true }),
+                sampler(SamplerBindingType::Filtering),
+                uniform_buffer::<BloodUniform>(true),
+                texture_2d(TextureSampleType::Float { filterable: true }),
+                sampler(SamplerBindingType::Filtering),
+            ),
+        ),
+    );
+    let sampler = device.create_sampler(&SamplerDescriptor {
+        address_mode_u: AddressMode::ClampToEdge,
+        address_mode_v: AddressMode::ClampToEdge,
+        mag_filter: FilterMode::Linear,
+        min_filter: FilterMode::Linear,
+        ..default()
+    });
+    // The material's texture sample: wrapped, trilinear.
+    let wrap = device.create_sampler(&SamplerDescriptor {
+        address_mode_u: AddressMode::Repeat,
+        address_mode_v: AddressMode::Repeat,
+        mag_filter: FilterMode::Linear,
+        min_filter: FilterMode::Linear,
+        mipmap_filter: MipmapFilterMode::Linear,
+        ..default()
+    });
+    commands.insert_resource(BloodPipeline { layout, sampler, wrap, fullscreen_shader: fullscreen_shader.clone(), shader: load_embedded_asset!(asset_server.as_ref(), "shaders/blood.wgsl") });
+}
+
+#[derive(Component)]
+struct BloodPipelineId(CachedRenderPipelineId);
+
+impl SpecializedRenderPipeline for BloodPipeline {
+    type Key = TextureFormat;
+
+    fn specialize(&self, format: TextureFormat) -> RenderPipelineDescriptor {
+        RenderPipelineDescriptor {
+            label: Some("blood".into()),
+            layout: vec![self.layout.clone()],
+            vertex: self.fullscreen_shader.to_vertex_state(),
+            fragment: Some(FragmentState {
+                shader: self.shader.clone(),
+                targets: vec![Some(ColorTargetState { format, blend: None, write_mask: ColorWrites::ALL })],
+                ..default()
+            }),
+            ..default()
+        }
+    }
+}
+
+fn prepare_blood_pipelines(
+    mut commands: Commands,
+    cache: Res<PipelineCache>,
+    mut pipelines: ResMut<SpecializedRenderPipelines<BloodPipeline>>,
+    pipeline: Res<BloodPipeline>,
+    views: Query<(Entity, &ExtractedView), With<BloodScreen>>,
+) {
+    for (e, view) in &views {
+        let id = pipelines.specialize(&cache, &pipeline, view.target_format);
+        commands.entity(e).insert(BloodPipelineId(id));
+    }
+}
+
+fn blood(
+    view: ViewQuery<(&ViewTarget, &BloodScreen, &BloodPipelineId, &DynamicUniformIndex<BloodUniform>)>,
+    pipeline: Res<BloodPipeline>,
+    cache: Res<PipelineCache>,
+    images: Res<RenderAssets<GpuImage>>,
+    uniforms: Res<ComponentUniforms<BloodUniform>>,
+    mut ctx: RenderContext,
+) {
+    let (target, effect, id, index) = view.into_inner();
+    let (Some(render_pipeline), Some(texture), Some(binding)) = (cache.get_render_pipeline(id.0), images.get(&effect.texture), uniforms.binding()) else {
+        return;
+    };
+    let post = target.post_process_write();
+    let bind_group = ctx.render_device().create_bind_group(
+        None,
+        &cache.get_bind_group_layout(&pipeline.layout),
+        &BindGroupEntries::sequential((post.source, &pipeline.sampler, binding.clone(), &texture.texture_view, &pipeline.wrap)),
+    );
+    let mut pass = ctx.command_encoder().begin_render_pass(&RenderPassDescriptor {
+        label: Some("blood"),
+        color_attachments: &[Some(RenderPassColorAttachment { view: post.destination, depth_slice: None, resolve_target: None, ops: Operations::default() })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    pass.set_pipeline(render_pipeline);
+    pass.set_bind_group(0, &bind_group, &[index.index()]);
+    pass.draw(0..3, 0..1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blood_blends_in_and_out() {
+        let w = BlendWindow {
+            start: 3.0,
+            end: 5.0,
+            material: "PP_Player_BloodEffect_01".into(),
+            textures: Default::default(),
+            scalars: [("bloodContrast".to_string(), 1.7)].into(),
+            blend_in: 0.25,
+            blend_out: 0.5,
+            min: 0.0,
+            max: 1.0,
+            hooks: vec![("bloodContrast".into(), true, true)],
+        };
+        assert!((w.scalar("bloodContrast", 0.125) - 0.5).abs() < 1e-5);
+        assert_eq!(w.scalar("bloodContrast", 1.0), 1.0);
+        assert!((w.scalar("bloodContrast", 1.75) - 0.5).abs() < 1e-5);
+        // A parameter without a hook keeps the material's.
+        assert_eq!(w.scalar("other", 1.0), 0.0);
+    }
 }

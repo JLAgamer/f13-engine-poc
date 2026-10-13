@@ -116,6 +116,85 @@ static class AnimSounds
         return json;
     }
 
+    /// Each montage's SCPostProcessBlendableNotify windows (a post-process material on the owner's camera while it lasts),
+    /// keyed as [`Props`]: [{Start, End, Material, Textures {param: texture path}, Scalars {param: default}, BlendIn,
+    /// BlendOut, Min, Max, Hooks [[param, UseBlendIn, UseBlendOut]]}...] in that sequence's time; the textures (overrides
+    /// and the material's own) go to `queue`. Unset properties are the constructor's (0x1402f4460: BlendInTime and
+    /// BlendOutTime 0.25, MinIntensity 0, MaxIntensity 1, PlayForAllClients off).
+    public static JObject Blendables(IFileProvider provider, IEnumerable<string> animations, Action<UObject> queue, Func<UObject, string> texturePath)
+    {
+        var json = new JObject();
+        foreach (var path in animations)
+        {
+            if (Load(provider, path) is not UAnimMontage m) continue;
+            var windows = new List<(float Start, float End, JObject Info)>();
+            foreach (var n in m.GetOrDefault<FStructFallback[]>("Notifies", []))
+            {
+                if (n.GetOrDefault<FPackageIndex>("NotifyStateClass")?.Load() is not { ExportType: "SCPostProcessBlendableNotify" } state) continue;
+                if (state.GetOrDefault<FPackageIndex>("MaterialInstance")?.Load() is not { } material) continue;
+                var start = n.GetOrDefault<float>("LinkValue");
+                // The material's own parameters (its expressions' defaults), then the notify's overrides.
+                var textures = new JObject();
+                var scalars = new JObject();
+                foreach (var e in material.Owner!.GetExports())
+                {
+                    var name = e.GetOrDefault<FName>("ParameterName").Text;
+                    if (name is null or "None") continue;
+                    if (e.ExportType == "MaterialExpressionScalarParameter") scalars[name] = e.GetOrDefault<float>("DefaultValue");
+                    if (e.ExportType.StartsWith("MaterialExpressionTextureSampleParameter") && e.GetOrDefault<FPackageIndex>("Texture")?.Load() is { } t)
+                    {
+                        queue(t);
+                        textures[name] = texturePath(t);
+                    }
+                }
+                foreach (var o in state.GetOrDefault<FStructFallback[]>("OverrideTextures", []))
+                {
+                    if (o.GetOrDefault<FPackageIndex>("Texture")?.Load() is not { } t) continue;
+                    queue(t);
+                    textures[o.GetOrDefault<FName>("ParameterName").Text] = texturePath(t);
+                }
+                var hooks = new JArray(state.GetOrDefault<FStructFallback[]>("IntensityHooks", [])
+                    .Select(h => new JArray(h.GetOrDefault<FName>("ParameterName").Text, h.GetOrDefault<bool>("UseBlendIn"), h.GetOrDefault<bool>("UseBlendOut"))));
+                windows.Add((start, start + n.GetOrDefault<float>("Duration"), new JObject
+                {
+                    ["Material"] = material.Name,
+                    ["Textures"] = textures,
+                    ["Scalars"] = scalars,
+                    ["BlendIn"] = state.GetOrDefault("BlendInTime", 0.25f),
+                    ["BlendOut"] = state.GetOrDefault("BlendOutTime", 0.25f),
+                    ["Min"] = state.GetOrDefault("MinIntensity", 0f),
+                    ["Max"] = state.GetOrDefault("MaxIntensity", 1f),
+                    ["ForAll"] = state.GetOrDefault("PlayForAllClients", false),
+                    ["Hooks"] = hooks,
+                }));
+            }
+            if (windows.Count == 0) continue;
+            foreach (var slot in m.SlotAnimTracks ?? [])
+            {
+                foreach (var seg in slot.AnimTrack.AnimSegments ?? [])
+                {
+                    if (seg.AnimReference.ResolvedObject?.Name.Text is not { } seq) continue;
+                    var rate = seg.AnimPlayRate == 0 ? 1f : Math.Abs(seg.AnimPlayRate);
+                    var end = seg.StartPos + (seg.AnimEndTime - seg.AnimStartTime) / rate * Math.Max(seg.LoopingCount, 1);
+                    var mine = windows.Where(w => w.Start < end && w.End > seg.StartPos).Select(w =>
+                    {
+                        var j = (JObject)w.Info.DeepClone();
+                        j["Start"] = seg.AnimStartTime + (Math.Max(w.Start, seg.StartPos) - seg.StartPos) * rate;
+                        j["End"] = seg.AnimStartTime + (Math.Min(w.End, end) - seg.StartPos) * rate;
+                        return j;
+                    }).ToList();
+                    if (mine.Count == 0) continue;
+                    var names = new List<string>();
+                    if (path.Contains("/Characters/Killers/", StringComparison.OrdinalIgnoreCase)) names.Add($"killer/{seq}");
+                    if (path.Contains("/Characters/Counselors/", StringComparison.OrdinalIgnoreCase)) names.Add($"counselor/{seq}");
+                    foreach (var name in names)
+                        if (!json.ContainsKey(name)) json[name] = new JArray(mine);
+                }
+            }
+        }
+        return json;
+    }
+
     static string Bare(string name) => Regex.Replace(name, "^(AM_)?[fFmM]_", "");
     /// Without its take number (`_01`, `_02`: a female take and the montage's male one are numbered apart).
     static string Unnumbered(string name) => Regex.Replace(Bare(name), @"_\d\d$", "");

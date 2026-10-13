@@ -85,6 +85,10 @@ List<string> WriteAnimSounds()
     var props = AnimSounds.Props(provider, Mvp.CounselorAnims.Concat(Mvp.KillerAnims), Queue, m => new SkinnedAssetExporter(m).SavePath + ".glb");
     File.WriteAllText(Path.Combine(outDir, "anim_props.json"), props.ToString(Newtonsoft.Json.Formatting.Indented));
     Console.WriteLine($"anim props: {props.Count} animations");
+    // And their post-process blendables (anim_blendables.json: SCPostProcessBlendableNotify: the kills' screen blood).
+    var blendables = AnimSounds.Blendables(provider, Mvp.CounselorAnims.Concat(Mvp.KillerAnims), Queue, t => t.GetPathName().Split('.')[0].TrimStart('/').Replace("Game/", "SummerCamp/Content/") + ".dds");
+    File.WriteAllText(Path.Combine(outDir, "anim_blendables.json"), blendables.ToString(Newtonsoft.Json.Formatting.Indented));
+    Console.WriteLine($"anim blendables: {blendables.Count} animations");
     return cues;
 }
 // Simple collision of every exported static mesh, by glTF path (collision.json).
