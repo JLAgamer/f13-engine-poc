@@ -325,6 +325,16 @@ static SETUP: std::sync::Mutex<Vec<BotSetup>> = std::sync::Mutex::new(Vec::new()
 pub(crate) static ON_CLIENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub(crate) fn setup(s: BotSetup) {
+    // (A bot that keeps putting her at the same place sends it once: each one re-settles her on the server.)
+    static LAST_PLACE: std::sync::Mutex<Option<[f32; 3]>> = std::sync::Mutex::new(None);
+    if let BotSetup::Place(at) = &s {
+        if let Ok(mut last) = LAST_PLACE.lock() {
+            if last.is_some_and(|l| Vec3::from_array(l).distance(Vec3::from_array(*at)) < 0.02) {
+                return;
+            }
+            *last = Some(*at);
+        }
+    }
     if let Ok(mut q) = SETUP.lock() {
         q.push(s);
     }

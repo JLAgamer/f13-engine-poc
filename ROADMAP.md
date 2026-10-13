@@ -7,8 +7,10 @@ Base content (asset paths in the player's install; all gameplay values come from
 `Characters/Killers/Jason/J2`, the Chevettes (`Blueprints/Vehicles/DriveableVehicles/Cars/Chevette`), the police.
 
 ## Todo
-- [ ] Scenario bots on clients: the rest of the scenarios over the network (`--bot-hooks` carries the locked-in
-      one's scene changes: placing her, a door, Jason's hearing and abilities; the others change more: cars, items)
+- [ ] Scenario bots on clients, the rest (regress.sh runhook: locked, barred, raged, abilities, hide, drown, trap,
+      jason pass; block, drop, dodge pass too): door, heal, power and fight need hooks for --health and the cut power
+      and waits that allow for the network (their steps check the client's state right after acting); escapes,
+      police, car grab, placed kill, spectate and passenger untried
 - [ ] The lobby's rest: its screens as the game's widgets (the lobby and the match-end lobby, SCMatchEndLobbyWidget
       with its badges' icons: SCStatBadge; the text overlay stands in, the last match's results on it), the
       counselors' character picks (one counselor exported so far), a full 8-player run
