@@ -629,7 +629,7 @@ pub(crate) fn animate(
         }
         // Paired takes (kills, the car grab: the same names on both) sound from Jason's side; her lines are hers.
         let paired = rig.action.as_ref().is_some_and(|(a, _)| a.starts_with("cinematic_"));
-        crate::audio::play_anim_sounds(&mut commands, anim_sounds.as_deref(), rig.action_span(dt), xf.translation, Some(pe), paired);
+        crate::audio::play_anim_sounds(&mut commands, anim_sounds.as_deref(), rig.action_span(dt), xf.translation, Some(pe), Some(pe), paired);
 
         // The gun branch: the gun in her hands (two-handed, a flare gun), standing.
         let held = inv.and_then(|i| i.hand).and_then(|h| items.get(h).ok());
@@ -844,7 +844,7 @@ pub(crate) fn animate(
                 let spans: &[(f32, f32)] = if after >= before { &[(before, after)] } else { &[(before, 1.0), (-1.0, after)] };
                 for &(a, b) in spans {
                     let from = if a < 0.0 { -1.0 } else { a * len };
-                    crate::audio::play_anim_sounds(&mut commands, anim_sounds.as_deref(), Some((name.as_str(), from, b * len)), xf.translation, Some(pe), false);
+                    crate::audio::play_anim_sounds(&mut commands, anim_sounds.as_deref(), Some((name.as_str(), from, b * len)), xf.translation, Some(pe), Some(pe), false);
                 }
             }
             if let Some(info) = main.and_then(|n| character.info.animations.get(&n)) {

@@ -277,6 +277,7 @@ impl Plugin for AudioPlugin {
             .add_observer(actor_cue)
             .add_observer(stop_loop)
             .add_observer(music_stinger)
+            .add_observer(kill_music)
             .add_observer(dropped);
     }
 
@@ -298,6 +299,11 @@ pub struct PlaySound {
 pub struct AnimSounds(HashMap<String, Vec<(f32, String)>>);
 
 impl AnimSounds {
+    /// Whether `take` has sounds (an entry of its own).
+    pub fn has(&self, take: &str) -> bool {
+        self.0.contains_key(take)
+    }
+
     /// The cues `take` plays after `from` (s; negative from its start), up to `to`.
     pub fn passed<'a>(&'a self, take: &str, from: f32, to: f32) -> impl Iterator<Item = &'a str> + 'a {
         self.0.get(take).into_iter().flatten().filter(move |(t, _)| from < *t && *t <= to).map(|(_, c)| c.as_str())
@@ -305,11 +311,19 @@ impl AnimSounds {
 }
 
 /// Plays the cues a character's action passed this frame, where it stands.
-/// Its SCAnimNotify_PlayCounselorVO notifies ("VO:<line>") are said by `actor`'s voice (PlayVoiceOver); the other
-/// cues play unless `voice_only` (a paired take, whose sounds come from the other side).
-pub fn play_anim_sounds(commands: &mut Commands, sounds: Option<&AnimSounds>, span: Option<(&str, f32, f32)>, at: Vec3, actor: Option<Entity>, voice_only: bool) {
+/// Its SCAnimNotify_PlayCounselorVO notifies ("VO:<line>") are said by `actor`'s voice (PlayVoiceOver); its
+/// SCAnimNotify_PlayCinematicMusic notifies ("MUSIC:<track>") go to `owner`'s music ([`KillMusic`]); the other cues
+/// play unless `voice_only` (a paired take, whose sounds come from the other side).
+#[allow(clippy::too_many_arguments)]
+pub fn play_anim_sounds(commands: &mut Commands, sounds: Option<&AnimSounds>, span: Option<(&str, f32, f32)>, at: Vec3, actor: Option<Entity>, owner: Option<Entity>, voice_only: bool) {
     let (Some(sounds), Some((take, from, to))) = (sounds, span) else { return };
     for cue in sounds.passed(take, from, to) {
+        if let Some(track) = cue.strip_prefix("MUSIC:") {
+            if let Some(owner) = owner {
+                commands.trigger(KillMusic { owner, track: track.to_string() });
+            }
+            continue;
+        }
         if cue.starts_with("VO:") {
             if let Some(actor) = actor {
                 commands.trigger(ActorSound { actor, prop: intern(cue) });
@@ -838,7 +852,8 @@ fn music_stinger(
     }
 }
 
-/// The counselor's music track (its player and FadeOutTime), when the idle music is due, and what has played.
+/// The counselor's music track (its player and FadeOutTime), when the idle music is due, what has played, and a kill's
+/// music while it plays.
 #[derive(Resource, Default)]
 pub struct MusicState {
     track: Option<(Entity, f32, f32)>,
@@ -846,6 +861,53 @@ pub struct MusicState {
     match_started: bool,
     two_minutes: bool,
     ended: bool,
+    cinematic: Option<Entity>,
+}
+
+/// SCAnimNotify_PlayCinematicMusic (its Notify 0x140314530): a kill montage's MusicTrackToPlay, for the character
+/// playing it (`owner`).
+#[derive(Event, Clone, Debug)]
+pub struct KillMusic {
+    pub owner: Entity,
+    pub track: String,
+}
+
+/// The notify plays the track on the owner's MusicComponent only where the owner is locally controlled or is the one
+/// the local player spectates (SCPlayerController SpectatingPlayer +0x838). PlayCinematicMusic (SCMusicComponent
+/// vt+0x3c0, 0x140319300): StopMusic (vt+0x3b8: the current and next tracks stopped at once; the counselor's also fades
+/// Jason's near music out), then the track in 2D (CreateSound2D, volume and pitch 1) as CurrentTrack, PlayingCinematicMusic
+/// set; when it ends (CinematicKillMusicFinished 0x1402fdc20) the counselor's idle music is due again (vt+0x3d8
+/// 0x14031d5b0: MinIdleMusicTime..MaxIdleMusicTime). PLACEHOLDERS: StopMusic keeps the two-minute warning (turned down,
+/// DAT_14209aa5c), Jason's music after it (JasonsMusic) isn't ported, and her DeathMusic waits for the kill's music
+/// to end (where they meet isn't read).
+#[allow(clippy::too_many_arguments)]
+fn kill_music(
+    ev: On<KillMusic>,
+    mut commands: Commands,
+    assets: Res<AssetServer>,
+    sounds: Option<ResMut<Sounds>>,
+    mut state: ResMut<MusicState>,
+    mut rng: ResMut<AudioRng>,
+    local: Query<(), With<crate::controls::LocalPlayer>>,
+    jasons: Query<(), With<crate::jason::Jason>>,
+    (play_jason, spectate): (Option<Res<crate::jason_player::PlayJason>>, Option<Res<crate::spectate::Spectate>>),
+) {
+    let Some(mut sounds) = sounds else { return };
+    let mine = local.contains(ev.owner) || (play_jason.is_some() && jasons.contains(ev.owner)) || spectate.as_ref().and_then(|s| s.viewed()) == Some(ev.owner);
+    if !mine {
+        return;
+    }
+    state.fade_out(&mut commands, 0.0);
+    if let Some(e) = state.cinematic.take() {
+        if let Ok(mut ec) = commands.get_entity(e) {
+            ec.despawn();
+        }
+    }
+    if let Some((e, _)) = spawn_2d(&mut commands, &assets, &mut sounds, &mut rng, &ev.track, false, 1.0) {
+        state.cinematic = Some(e);
+        state.idle_at = None;
+        info!("music: kill {}", ev.track);
+    }
 }
 
 impl MusicState {
@@ -878,14 +940,28 @@ fn counselor_music(
         return;
     }
     let now = time.elapsed_secs();
+    let idle = |rng: &mut AudioRng| {
+        let lo = music["MinIdleMusicTime"].as_f64().unwrap_or(5.0) as f32;
+        let hi = music["MaxIdleMusicTime"].as_f64().unwrap_or(10.0) as f32;
+        now + lo + (hi - lo) * rng.0.frand()
+    };
+    // A kill's music over (CinematicKillMusicFinished): the idle music a while later.
+    if let Some(e) = state.cinematic {
+        if playing.get(e).is_err() {
+            state.cinematic = None;
+            if state.track.is_none() {
+                state.idle_at = Some(idle(&mut rng));
+            }
+        } else {
+            return;
+        }
+    }
     // A finished track (checked before anything starts: a new player spawns at the end of the frame): the idle music
     // a while later.
     if let Some((e, _, _)) = state.track {
         if playing.get(e).is_err() {
             state.track = None;
-            let lo = music["MinIdleMusicTime"].as_f64().unwrap_or(5.0) as f32;
-            let hi = music["MaxIdleMusicTime"].as_f64().unwrap_or(10.0) as f32;
-            state.idle_at = Some(now + lo + (hi - lo) * rng.0.frand());
+            state.idle_at = Some(idle(&mut rng));
         }
     }
     // PlayMusic(event), for a MUSICTRACK entry.
@@ -977,7 +1053,8 @@ fn near_music(
     }
     let v = |k: &str, d: f32| killer.info.values.get(k).copied().unwrap_or(d);
     let distance = jxf.translation().distance(pxf.translation()) * 100.0;
-    let silenced = jason.stalking() || !p.counselor.alive() || matches!(jason.state, crate::jason::JasonState::Done);
+    // (And faded out while a kill's music plays: StopMusic.)
+    let silenced = jason.stalking() || !p.counselor.alive() || matches!(jason.state, crate::jason::JasonState::Done) || state.cinematic.is_some();
     let target = if silenced {
         0.0
     } else {

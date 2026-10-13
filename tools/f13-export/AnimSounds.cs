@@ -13,7 +13,9 @@ static class AnimSounds
     /// montage plays): [[time s, cue name]...] in that sequence's time. A sequence's own notifies, and those of the
     /// characters' montage segments playing it (by name without the `f_`/`m_` prefix, or its take number: the
     /// counselors' female takes mirror the shared montages, whose notifies hold the sounds), each in the segment it
-    /// falls in. Also returns the cues' paths, for the sound export.
+    /// falls in. Jason's montages (under Characters/Killers) also go in as "killer/<sequence>": the paired kills' montages
+    /// share their names with the counselor's, and each side plays its own. Also returns the cues' paths, for the sound
+    /// export.
     public static (JObject Json, List<string> Cues) Collect(IFileProvider provider, IEnumerable<string> animations)
     {
         // Every montage's segments with sounds, by their sequences' bare names (the first montage wins).
@@ -30,11 +32,14 @@ static class AnimSounds
         }
         var json = new JObject();
         var cues = new List<string>();
+        // A cue's kind prefix ("VO:", "MUSIC:" or none) and its path.
+        static (string Prefix, string Path) Split(string cue) =>
+            cue.StartsWith("VO:") ? ("VO:", cue[3..]) : cue.StartsWith("MUSIC:") ? ("MUSIC:", cue[6..]) : ("", cue);
         void Add(string name, List<(float Time, string Cue)> found)
         {
             if (found.Count == 0 || json.ContainsKey(name)) return;
-            cues.AddRange(found.Select(n => n.Cue.StartsWith("VO:") ? n.Cue[3..] : n.Cue).Where(c => c.Contains('/')));
-            json[name] = new JArray(found.Distinct().OrderBy(n => n.Time).Select(n => new JArray(n.Time, (n.Cue.StartsWith("VO:") ? "VO:" : "") + n.Cue.Split('.')[^1].Split('/')[^1].Replace("VO:", ""))));
+            cues.AddRange(found.Select(n => Split(n.Cue).Path).Where(c => c.Contains('/')));
+            json[name] = new JArray(found.Distinct().OrderBy(n => n.Time).Select(n => new JArray(n.Time, Split(n.Cue).Prefix + Split(n.Cue).Path.Split('.')[^1].Split('/')[^1])));
         }
         if (Environment.GetEnvironmentVariable("F13_ANIM_SOUNDS_DEBUG") is { } q)
             foreach (var k in segments.Keys.Where(k => k.Contains(q))) Console.WriteLine($"segment {k}: {string.Join(", ", segments[k])}");
@@ -49,6 +54,7 @@ static class AnimSounds
                 {
                     Add(seq, segment);
                     Add($"{m.Name}/{seq}", segment);
+                    if (path.Contains("/Characters/Killers/", StringComparison.OrdinalIgnoreCase)) Add($"killer/{seq}", segment);
                 }
                 continue;
             }
@@ -68,7 +74,7 @@ static class AnimSounds
 
     /// An object's PlaySound notifies: (its time, the cue's path); its SCAnimNotify_PlayCounselorVO notifies as
     /// "VO:<VoiceOverEvent>" (her voice object's line), and SCAnimNotify_PlayCounselorVOBySoundCue's cue as
-    /// "VO:<cue path>".
+    /// "VO:<cue path>", and SCAnimNotify_PlayCinematicMusic's MusicTrackToPlay as "MUSIC:<sound path>".
     static IEnumerable<(float Time, string Cue)> Sounds(UObject obj)
     {
         foreach (var n in obj.GetOrDefault<FStructFallback[]>("Notifies", []))
@@ -85,6 +91,9 @@ static class AnimSounds
                     break;
                 case "SCAnimNotify_PlayCounselorVOBySoundCue":
                     if (notify.GetOrDefault<FPackageIndex>("VoiceOverSoundCue")?.ResolvedObject?.GetPathName() is { } cue) yield return (time, "VO:" + cue);
+                    break;
+                case "SCAnimNotify_PlayCinematicMusic":
+                    if (notify.GetOrDefault<FPackageIndex>("MusicTrackToPlay")?.ResolvedObject?.GetPathName() is { } track) yield return (time, "MUSIC:" + track);
                     break;
             }
         }

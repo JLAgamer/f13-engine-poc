@@ -3471,10 +3471,16 @@ fn animate_jason(
             commands.entity(parent.parent()).remove::<crate::character::SeekAction>();
         }
         if let Ok(at) = owners.get(parent.parent()) {
+            // His take's sounds: its montage's when they differ by montage, else his own montage's (the paired kills
+            // share their names with hers: anim_sounds.json "killer/<take>"), else the take's.
             let span = rig.action_span(dt);
-            let keyed = montage.zip(span).map(|(m, (take, from, to))| (format!("{}/{take}", m.0), from, to));
+            let keyed = match (montage, span) {
+                (Some(m), Some((take, from, to))) => Some((format!("{}/{take}", m.0), from, to)),
+                (None, Some((take, from, to))) if anim_sounds.as_ref().is_some_and(|s| s.has(&format!("killer/{take}"))) => Some((format!("killer/{take}"), from, to)),
+                _ => None,
+            };
             let span = keyed.as_ref().map(|(k, from, to)| (k.as_str(), *from, *to)).or(span);
-            crate::audio::play_anim_sounds(&mut commands, anim_sounds.as_deref(), span, at.translation, None, false);
+            crate::audio::play_anim_sounds(&mut commands, anim_sounds.as_deref(), span, at.translation, None, Some(parent.parent()), false);
         }
         // BS_Jason_Normal_Move's SpeedState: 0 idle, 1 walk, 2 fast walk, 3 run.
         let speed = j.velocity.length();

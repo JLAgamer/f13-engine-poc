@@ -40,7 +40,8 @@ Base content (asset paths in the player's install; all gameplay values come from
 - [ ] The computer Jason and knife pickups: he takes them in passing (no pick-up move) and doesn't go looking for them
 - [ ] Sound: the thrown knife's ThrowingKnifeImpactConfirmation (SCThrowable JasonImpactNoise: where it plays isn't
       found yet)
-- [ ] Sound: the executions' missing sounds (compare each kill against its montage's sound notifies)
+- [ ] Music: Jason's own music (his MusicComponent's JasonsMusic, after a kill's music too), the two-minute warning
+      turned down under a kill's music
 - [ ] More content, one at a time: maps (with their boat and other escapes), Jasons, counselors, perks, skins,
       emotes, a main menu
 
