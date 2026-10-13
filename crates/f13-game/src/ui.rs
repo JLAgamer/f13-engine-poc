@@ -147,7 +147,8 @@ impl Plugin for UiPlugin {
             .init_resource::<Prompts>()
             .init_resource::<prompts::PromptUi>()
             .add_systems(Startup, load_hud)
-            .add_systems(Update, (build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, (map_screen, counselor_map_icons).chain(), jason_hud, ability_popup, morph_cursor, rage_hud, noise_meter, xp_lines, wiggle_state.pipe(wiggle_widget)), prompts::prompts, spectator_hud, widget_anims, fear_widgets, content_alpha, widget_colors, additive_brushes, hide_for_jason).chain().run_if(resource_exists::<Hud>));
+            .init_resource::<MatchEndPage>()
+            .add_systems(Update, (match_end_page, build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, (map_screen, counselor_map_icons).chain(), jason_hud, ability_popup, morph_cursor, rage_hud, noise_meter, xp_lines, wiggle_state.pipe(wiggle_widget)), prompts::prompts, spectator_hud, widget_anims, fear_widgets, content_alpha, widget_colors, additive_brushes, hide_for_jason).chain().run_if(resource_exists::<Hud>));
     }
 }
 
@@ -358,6 +359,9 @@ pub struct Hud {
     /// The match's end (MatchEnd: SCMatchEndLobbyWidget) and its XP lines (MatchEndLine).
     match_end: Option<Widget>,
     match_end_line: Option<Widget>,
+    /// The badge screens after it (MatchEnd_Badges), and the badges (ui/badges.json: name, icon, unlock count).
+    match_badges: Option<Widget>,
+    badges: Value,
     export: PathBuf,
     classes: ClassDb,
     /// Texture name -> PNG (ui/textures.json).
@@ -591,6 +595,15 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
             w
         }),
         match_end_line: Widget::load(dir, "MatchEndLine"),
+        match_badges: Widget::load(dir, "MatchEnd_Badges").map(|mut w| {
+            for name in ["PlayerCardRightWidget", "MenuActionBarWidget_930"] {
+                if let Some(x) = w.find_mut(name) {
+                    x.set_visibility(Vis::Collapsed);
+                }
+            }
+            w
+        }),
+        badges: std::fs::read_to_string(dir.join("ui/badges.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default(),
         spectator: Widget::load(dir, "SpectatorHUDWidget").map(|mut w| {
             action_keys(&mut w);
             w
@@ -605,7 +618,7 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         names: HashMap::new(),
         map,
         scale: 1.0,
-        anims: ["SCCounselorTimerWidget", "SCBreathWidget", "KillerHUDWidget", "ObjectivesWidget", "KillerAbilityWidget", "AbilityAvailable", "RageWidget", "YouDied", "YouSurvived", "SpectatorHUDWidget", "LobbyWidget", "MatchEnd"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
+        anims: ["SCCounselorTimerWidget", "SCBreathWidget", "KillerHUDWidget", "ObjectivesWidget", "KillerAbilityWidget", "AbilityAvailable", "RageWidget", "YouDied", "YouSurvived", "SpectatorHUDWidget", "LobbyWidget", "MatchEnd", "MatchEnd_Badges"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
         ability_icon_colors: {
             let d = std::fs::read_to_string(dir.join("ui/KillerAbilityWidget.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
             ["IconUsableColor", "IconUnusableColor", "IconLockedColor"].map(|k| color(&d["Defaults"][k], [1.0; 4]))
@@ -668,7 +681,7 @@ fn build_hud(
     game: Option<Res<crate::match_flow::GameMatch>>,
     spectating: Option<Res<crate::spectate::SpectatorStatus>>,
     (lobby, me, client, mut playing, time): (Query<&crate::lobby::NetLobby>, Option<Res<crate::lobby::Me>>, Option<Res<crate::net::NetClient>>, ResMut<PlayingAnims>, Res<Time>),
-    (match_tuning, mutes): (Option<Res<crate::match_flow::MatchTuning>>, Option<Res<crate::voice::VoiceMutes>>),
+    (match_tuning, mutes, page): (Option<Res<crate::match_flow::MatchTuning>>, Option<Res<crate::voice::VoiceMutes>>, Res<MatchEndPage>),
 ) {
     let size = window.size();
     // The lobby while it's open (LobbyWidget, as the game's lobby map shows it).
@@ -699,10 +712,18 @@ fn build_hud(
         let awards = if jason { g.killer_score.awards.clone() } else { g.mine().map_or(vec![], |t| t.score.awards.clone()) };
         match_end_lines(&awards, match_tuning.as_deref())
     });
+    // Past it (Continue): a badge earned a screen (OnDisplayUnlock -> MatchEnd_Badges' ShowBadgeUnlock, one at a time).
+    let badge = ended.and_then(|g| {
+        let earned = if jason { g.killer_badges.clone() } else { g.mine().map_or(vec![], |t| t.badges.clone()) };
+        earned.get(page.0.checked_sub(1)?).cloned()
+    }).filter(|_| hud.match_badges.is_some());
     if let (Some(g), Some(lines)) = (ended, &end_lines) {
         pocket_key = lines.iter().map(|(c, xp)| format!("matchend:{c}:{xp}")).collect();
         pocket_key.insert(0, "matchend:".into());
         pocket_key.push(format!("closing:{}", g.state.remaining_time));
+        if let Some(b) = &badge {
+            pocket_key.insert(0, format!("badge:{b}"));
+        }
     }
     if let Some(l) = open_lobby {
         pocket_key = l.members.iter().map(|m| format!("lobby:{}:{}:{}:{:?}:{}:{}:{}:{}", m.id, m.name, m.ready, m.preference, m.ping, m.talked, m.talking, mutes.as_ref().is_some_and(|x| x.0.contains(&m.name)))).collect();
@@ -721,7 +742,14 @@ fn build_hud(
     // The window in design units: scaled to fit 1920×1080, the rest added along the longer side.
     let scale = (size.x / DESIGN.x).min(size.y / DESIGN.y);
     let virt = size / scale;
-    let mut tree = if let (Some(g), Some(lines)) = (ended, &end_lines) {
+    let mut tree = if let (Some(g), Some(b)) = (ended, &badge) {
+        if !hud.built.as_ref().is_some_and(|built| built.1.first() == pocket_key.first()) {
+            playing.play("MatchEnd_Badges", "AnimIn", time.elapsed_secs(), false);
+        }
+        let mut t = hud.match_badges.clone().unwrap_or_else(|| hud.hud.clone());
+        fill_badge(&hud, &mut t, b, g.state.remaining_time);
+        t
+    } else if let (Some(g), Some(lines)) = (ended, &end_lines) {
         // AnimIn as it's shown, the total's TotalAnimIn after the lines (each line DelayIndex * 0.2 s. PLACEHOLDER:
         // the wait before the lines, 1 s: OnUpdateScoreEvents' Delay; DisplayPlayerScoreDelay not read).
         if !hud.built.as_ref().is_some_and(|b| b.1.first().is_some_and(|k| k.starts_with("matchend:"))) {
@@ -788,7 +816,7 @@ fn build_hud(
     let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names };
     let full = Rect { x: 0.0, y: 0.0, w: virt.x, h: virt.y };
     let laid = tree.layout(full);
-    b.spawn(&laid, root, full, if ended.is_some() { "MatchEnd" } else if open_lobby.is_some() { "LobbyWidget" } else if jason { "KillerHUDWidget" } else if spectator { "SpectatorHUDWidget" } else { "CounselorHUDWidget" });
+    b.spawn(&laid, root, full, if badge.is_some() { "MatchEnd_Badges" } else if ended.is_some() { "MatchEnd" } else if open_lobby.is_some() { "LobbyWidget" } else if jason { "KillerHUDWidget" } else if spectator { "SpectatorHUDWidget" } else { "CounselorHUDWidget" });
     // Her breath meter and interaction dial are hers (Jason's HUD has neither; nor has the lobby).
     if let Some(breath) = hud.breath.as_ref().filter(|_| !jason && open_lobby.is_none() && ended.is_none()) {
         let laid = breath.layout(full);
@@ -857,6 +885,40 @@ fn category_name(category: &str) -> Option<&'static str> {
         "Sacrifice" => "Sacrifice",
         _ => return None,
     })
+}
+
+/// The match end's page: 0 its XP, then a badge each (Continue: MenuSelect, Enter here), back to 0 for the next match.
+#[derive(Resource, Default)]
+pub struct MatchEndPage(pub usize);
+
+fn match_end_page(mut page: ResMut<MatchEndPage>, keys: Res<ButtonInput<KeyCode>>, game: Option<Res<crate::match_flow::GameMatch>>) {
+    let ended = game.as_ref().is_some_and(|g| matches!(g.state.state, f13_core::game_mode::MatchState::WaitingPostMatch | f13_core::game_mode::MatchState::LeavingMap));
+    if !ended {
+        if page.0 != 0 {
+            page.0 = 0;
+        }
+    } else if keys.just_pressed(KeyCode::Enter) {
+        page.0 += 1;
+    }
+}
+
+/// MatchEnd_Badges filled with a badge (GetBadgeInfo at star level 0: its DisplayName, one-star icon and unlock
+/// count; BadgeProgress "{c}/{t}", both its unlock count as the blueprint passes them), and the time until the lobby.
+fn fill_badge(hud: &Hud, tree: &mut Widget, badge: &str, closing: i32) {
+    let b = &hud.badges[badge];
+    if let Some(t) = tree.find_mut("BadgeName") {
+        t.props["Text"] = json!({ "LocalizedString": b["Name"].as_str().unwrap_or(badge) });
+    }
+    if let (Some(t), Some(n)) = (tree.find_mut("BadgeProgress"), b["Unlock"].as_i64()) {
+        t.props["Text"] = json!({ "LocalizedString": format!("{n}/{n}") });
+    }
+    if let (Some(i), Some(file)) = (tree.find_mut("BadgeImage"), b["Icon"].as_str()) {
+        i.props["Brush"]["ResourceObject"] = json!({ "File": file });
+    }
+    if let Some(t) = tree.find_mut("TextBlock_358") {
+        let c = closing.max(0);
+        t.props["Text"] = json!({ "LocalizedString": format!("{:02}:{:02}", c / 60, c % 60) });
+    }
 }
 
 /// MatchEnd filled: a MatchEndLine per category in ExperienceBox (OnAddMatchEndLine: CatagoryText, "{Num} xp"), the
@@ -1259,10 +1321,11 @@ fn widget_anims(time: Res<Time>, hud: Res<Hud>, playing: Res<PlayingAnims>, mut 
                 a.set_if_neq(ContentAlpha(curve.eval(x)));
             }
         }
-        // (A Border's WidgetColor is its BrushColor: see Builder::spawn.)
+        // (A Border's WidgetColor is its BrushColor: see Builder::spawn. A channel without keys or a default leaves its
+        // part as it is: MatchEnd_Badges' AnimIn has BadgeImage's colour without its alpha.)
         for (widget, curves) in anim.colors.iter().chain(&anim.brush_colors) {
             if let Some(mut c) = hud.names.get(&format!("{owner}.{widget}")).and_then(|&e| colors.get_mut(e).ok()) {
-                c.set_if_neq(WidgetColor(curves.each_ref().map(|k| k.eval(x))));
+                c.set_if_neq(WidgetColor(curves.each_ref().map(|k| if k.keys.is_empty() { 1.0 } else { k.eval(x) })));
             }
         }
         // A canvas slot's offsets (point anchors at the canvas's top left: position and size).
@@ -1909,7 +1972,7 @@ fn map_screen(
             }
             for (widget, curves) in &anim.colors {
                 if let Some(mut c) = ui.names.get(&format!("ObjectivesWidget.{widget}")).and_then(|&e| colors.get_mut(e).ok()) {
-                    c.set_if_neq(WidgetColor(curves.each_ref().map(|k| k.eval(x))));
+                    c.set_if_neq(WidgetColor(curves.each_ref().map(|k| if k.keys.is_empty() { 1.0 } else { k.eval(x) })));
                 }
             }
         }

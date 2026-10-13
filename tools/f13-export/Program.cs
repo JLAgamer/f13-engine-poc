@@ -808,6 +808,28 @@ switch (rest[0])
                 ["Image"] = image == null ? null : ToFile(image) + ".png",
             }.ToString());
         }
+        // The badges (SCStatBadge classes, /Game/Blueprints/Badges): each one's DisplayName, Description, one-star
+        // icon and unlock count (GetBadgeInfo at star level 0: the match end's badge screen), by class (ui/badges.json).
+        {
+            var badges = new Newtonsoft.Json.Linq.JObject();
+            foreach (var file in provider.Files.Keys.Where(k => k.StartsWith("SummerCamp/Content/Blueprints/Badges/", StringComparison.OrdinalIgnoreCase) && k.EndsWith(".uasset")).ToList())
+            {
+                var def = provider.LoadPackage(file).GetExports().FirstOrDefault(e => e.Name.StartsWith("Default__"));
+                if (def == null) continue;
+                var p = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(def))["Properties"];
+                var icon = p?["BadgeIcon"]?["AssetPathName"]?.ToString().Split('.')[0];
+                if (!string.IsNullOrEmpty(icon)) ExportAsset(icon);
+                badges[Path.GetFileNameWithoutExtension(file)] = new Newtonsoft.Json.Linq.JObject
+                {
+                    ["Name"] = p?["DisplayName"]?["LocalizedString"]?.ToString(),
+                    ["Description"] = p?["Description"]?["LocalizedString"]?.ToString(),
+                    ["Icon"] = string.IsNullOrEmpty(icon) ? null : ToFile(icon) + ".png",
+                    ["Unlock"] = p?["OneStarUnlock"],
+                };
+            }
+            File.WriteAllText(Path.Combine(outDir, "ui", "badges.json"), badges.ToString());
+            Console.WriteLine($"ui: {badges.Count} badges");
+        }
         Console.WriteLine($"ui: {n} widgets, {wx.ClassTextures()} class textures, {wx.Fonts(game!)} fonts");
         break;
     }
@@ -1404,6 +1426,10 @@ static class Mvp
         // The match's end: its XP by category.
         "/Game/UI/Menu/MatchEnd/MatchEnd",
         "/Game/UI/Menu/MatchEnd/MatchEndLine",
+        "/Game/UI/Menu/MatchEnd/MatchEnd_Badges",
+        // The lobby rows' ping and speaker.
+        "/Game/UI/Controls/Player/PlayerPingDisplayWidget",
+        "/Game/UI/Controls/Player/PlayerSpeakIconMuteButton",
         // Its key hints (an ActionMapWidget and a title).
         "/Game/UI/Controls/ActionDisplay",
         // The minimap's icons (the SCMinimapIconComponents' DefaultIcon, and Jason's KillerIcon).
