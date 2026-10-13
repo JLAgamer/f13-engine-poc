@@ -325,6 +325,8 @@ pub enum BotSetup {
     NoJason,
     /// Every fuse box destroyed (`--cut-power`).
     CutPower,
+    /// The car she drives stands here, turned to this yaw.
+    PlaceCar { at: [f32; 3], yaw: f32 },
 }
 
 static SETUP: std::sync::Mutex<Vec<BotSetup>> = std::sync::Mutex::new(Vec::new());
@@ -856,6 +858,7 @@ fn run_bot(
                 let want = Vec3::NEG_X;
                 let yaw = want.z.atan2(want.x) - seat_dir.z.atan2(seat_dir.x);
                 vxf.rotation = Quat::from_rotation_y(-yaw);
+                setup(BotSetup::PlaceCar { at: vxf.translation.to_array(), yaw: -yaw });
                 info!("bot: waiting in the car 8 m from Jason");
             }
             if let Some(mut k) = knowledge.iter_mut().next() {
@@ -896,6 +899,7 @@ fn run_bot(
                 let to_zone = -inward;
                 let yaw = (-to_zone.z).atan2(to_zone.x);
                 vxf.rotation = Quat::from_rotation_y(yaw);
+                setup(BotSetup::PlaceCar { at: vxf.translation.to_array(), yaw });
                 camera.yaw = (-to_zone.x).atan2(-to_zone.z);
                 info!("bot: driving into the escape zone at ({:.0}, {:.0}, {:.0})", zone.x, zone.y, zone.z);
             }

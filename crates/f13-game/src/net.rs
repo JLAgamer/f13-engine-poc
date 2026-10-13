@@ -203,6 +203,10 @@ pub struct NetCounselor {
     pub breath: (f32, bool),
     /// Her hold interaction (a repair's dial and its pips: her client's dial shows it, her presses go to the server).
     pub hold: Option<NetHold>,
+    /// In a car: its world id, her seat (none: the driver's) and the ignition's hold.
+    pub driving: Option<(u32, Option<u8>, Option<NetHold>)>,
+    /// Escaped, and how.
+    pub escaped: Option<String>,
 }
 
 /// A hold interaction (f13-core minigame HoldInteraction): its times, and its pips (width, position, state, key).
@@ -390,6 +394,7 @@ fn bot_hooks(
     mut players: Query<(&PlayedBy, &mut Player)>,
     jason_entities: Query<Entity, With<crate::jason::Jason>>,
     (mut fuse_boxes, mut grids): (Query<&mut crate::power::FuseBox>, Option<ResMut<crate::power::PowerGrids>>),
+    (drivers, mut cars): (Query<(&PlayedBy, &crate::vehicle::Driving)>, Query<&mut Transform, (With<crate::props::Vehicle>, Without<PlayedBy>, Without<Player>)>),
 ) {
     for (link, mut r) in &mut links {
         for BotSetupMsg(change) in r.receive() {
@@ -407,7 +412,11 @@ fn bot_hooks(
                 crate::bot::BotSetup::Place(at) => {
                     if let Some((e, _, mut xf)) = counselors.iter_mut().find(|(_, by, _)| by.0 == link) {
                         xf.translation = Vec3::from_array(at);
-                        commands.entity(e).insert(crate::player::Unsettled);
+                        // Out of any move she was in (it would carry her back toward its spot).
+                        commands
+                            .entity(e)
+                            .insert(crate::player::Unsettled)
+                            .remove::<(crate::interact::MoveToSpot, crate::interact::DoorMove, crate::interact::WindowMove, crate::interact::BarricadeMove)>();
                     }
                 }
                 crate::bot::BotSetup::Door { at, barred } => {
@@ -447,6 +456,12 @@ fn bot_hooks(
                             Some(g) => crate::power::set_destroyed(&mut f, true, g),
                             None => f.destroyed = true,
                         }
+                    }
+                }
+                crate::bot::BotSetup::PlaceCar { at, yaw } => {
+                    if let Some(mut xf) = drivers.iter().find(|(by, _)| by.0 == link).and_then(|(_, d)| cars.get_mut(d.vehicle).ok()) {
+                        xf.translation = Vec3::from_array(at);
+                        xf.rotation = Quat::from_rotation_y(yaw);
                     }
                 }
                 crate::bot::BotSetup::NoJason => {
@@ -744,7 +759,7 @@ fn set<T: PartialEq>(mut c: Mut<T>, v: T) {
 #[allow(clippy::type_complexity)]
 fn update_bodies(
     mut bodies: Query<(&mut NetBody, &Transform, &mut NetAction, Option<&PlayAction>, Has<crate::items::Blocking>)>,
-    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>, Has<crate::voice::Spectating>), (Option<&crate::hiding::Hiding>, Option<&crate::hiding::Breathing>, Option<&crate::interact::Interaction>))>,
+    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>, Has<crate::voice::Spectating>), (Option<&crate::hiding::Hiding>, Option<&crate::hiding::Breathing>, Option<&crate::interact::Interaction>), (Option<&crate::vehicle::Driving>, Option<&crate::vehicle::Escaped>))>,
     struggle: Option<Res<crate::jason::Struggle>>,
     mut jasons: Query<(&mut NetJason, &crate::jason::Jason, Option<&crate::senses::Knowledge>, Option<&crate::kill_camera::KillCam>)>,
     world_ids: Query<&crate::net_world::WorldId>,
@@ -765,7 +780,7 @@ fn update_bodies(
             a.blocking = blocking;
         }
     }
-    for (n, p, name, controls, (held, trapped, spectating), (hiding, breathing, interaction)) in &mut counselors {
+    for (n, p, name, controls, (held, trapped, spectating), (hiding, breathing, interaction), (driving, escaped)) in &mut counselors {
         let c = &p.counselor;
         set(n, NetCounselor {
             stance: c.stance as u8,
@@ -788,6 +803,8 @@ fn update_bodies(
             hiding: hiding.and_then(|h| Some((world_ids.get(h.spot).ok()?.0, h.side as u8, h.phase.index()))),
             breath: breathing.map_or((0.0, false), |b| (b.breath.current, b.breath.holding)),
             hold: interaction.and_then(|i| i.hold.as_ref()).map(NetHold::of),
+            driving: driving.and_then(|d| Some((world_ids.get(d.vehicle).ok()?.0, d.seat.map(|s| s as u8), d.starting.as_ref().map(NetHold::of)))),
+            escaped: escaped.map(|e| e.how.clone()),
         });
     }
     for (n, j, know, cam) in &mut jasons {
@@ -1026,14 +1043,14 @@ fn mirror(
     mut commands: Commands,
     (real, clock): (Res<Time<Real>>, Res<ServerClock>),
     mut bodies: Query<(&NetBody, &NetAction, Option<&NetCounselor>, Option<&NetJason>, &mut Twin, Option<&Snapshots>)>,
-    mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>, (Option<&Name>, Option<&mut Controls>, Has<LocalPlayer>, Option<&mut crate::senses::Knowledge>), (Has<crate::jason::Held>, Option<&mut crate::items::Trapped>, Has<crate::voice::Spectating>), (Option<&mut crate::hiding::Hiding>, Option<&mut crate::hiding::Breathing>, Option<&mut crate::interact::Interaction>))>,
+    mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>, (Option<&Name>, Option<&mut Controls>, Has<LocalPlayer>, Option<&mut crate::senses::Knowledge>), (Has<crate::jason::Held>, Option<&mut crate::items::Trapped>, Has<crate::voice::Spectating>), (Option<&mut crate::hiding::Hiding>, Option<&mut crate::hiding::Breathing>, Option<&mut crate::interact::Interaction>), (Option<&mut crate::vehicle::Driving>, Has<crate::vehicle::Escaped>))>,
     mut struggle: Option<ResMut<crate::jason::Struggle>>,
     actors: Res<crate::net_world::Actors>,
     cams: Query<&crate::kill_camera::KillCam>,
 ) {
     let shown_at = clock.now(&real) - INTERP_DELAY_S;
     for (b, a, nc, nj, mut twin, snaps) in &mut bodies {
-        let Ok((mut xf, player, jason, action, blocking, (name, controls, local, know), (held, trapped, spectating), (hiding, breathing, interaction))) = twins.get_mut(twin.local) else { continue };
+        let Ok((mut xf, player, jason, action, blocking, (name, controls, local, know), (held, trapped, spectating), (hiding, breathing, interaction), (driving, escaped))) = twins.get_mut(twin.local) else { continue };
         let (to, yaw) = snaps.and_then(|s| sample(s, shown_at)).unwrap_or((Vec3::from_array(b.pos), b.yaw));
         xf.translation = to;
         xf.rotation = Quat::from_rotation_y(yaw);
@@ -1089,6 +1106,24 @@ fn mirror(
             }
             if let Some(mut i) = interaction {
                 i.hold = n.hold.as_ref().map(NetHold::hold);
+            }
+            // In a car (its seat, the ignition's dial) and out of the match.
+            match (n.driving.as_ref().and_then(|(id, seat, start)| Some((actors.get(*id)?, *seat, start))), driving) {
+                (Some((vehicle, seat, start)), Some(mut d)) => {
+                    d.vehicle = vehicle;
+                    d.seat = seat.map(|s| s as usize);
+                    d.starting = start.as_ref().map(NetHold::hold);
+                }
+                (Some((vehicle, seat, start)), None) => {
+                    e.insert(crate::vehicle::Driving { vehicle, seat: seat.map(|s| s as usize), starting: start.as_ref().map(NetHold::hold), seat_move: None });
+                }
+                (None, Some(_)) => {
+                    e.remove::<crate::vehicle::Driving>();
+                }
+                (None, None) => {}
+            }
+            if let (Some(how), false) = (&n.escaped, escaped) {
+                e.insert(crate::vehicle::Escaped { how: how.clone() });
             }
             match (n.spectating, spectating) {
                 (true, false) => {
