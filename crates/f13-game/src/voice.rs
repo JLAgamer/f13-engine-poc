@@ -11,9 +11,13 @@
 //! [`route`]. Walkie-talkie carriers further apart than MinVoIPDistance hear each other in 2D (by radio); Jason is
 //! always heard and hears in 3D; the dead and escaped (spectating) are heard only by each other.
 //!
+//! The attenuation is VoIPAudioComponent's override (Base_Counselor's and Jason_Base's, bOverrideAttenuation): a
+//! Custom distance model on its external VoIPAttenuationCurve (x2 at the inner radius, cubic down to x0.01 at the
+//! falloff's end), FalloffDistance 4000 cm, the shape's default sphere (400 cm).
+//!
 //! PLACEHOLDERS:
-//! - the attenuation: no attenuation asset or override is set on VoIPAudioComponent by code or Blueprint that was found;
-//!   UE's FSoundAttenuationSettings defaults stand in (linear, full within 400 cm, silent 3600 cm further);
+//! - its occlusion (bEnableOcclusion on WorldDynamic, with the settings' default filter and volume: 20 kHz, x1) isn't
+//!   traced;
 //! - the gate (frames whose RMS is under [`GATE_RMS`] aren't sent), not the engine's;
 //! - the Psychic perk's VoIPDistanceModifier (no perks yet).
 
@@ -29,9 +33,19 @@ const RATE: u32 = 16000;
 const FRAME: usize = 320;
 /// VoIPAudioComponent's VolumeMultiplier (DAT_1420f594c).
 const VOLUME: f32 = 1.5;
-/// FSoundAttenuationSettings' defaults (cm): the inner radius and the falloff distance.
+/// VoIPAudioComponent's AttenuationOverrides (cm): the sphere's radius (FAttenuationSettings' default
+/// AttenuationShapeExtents) and its FalloffDistance.
 const INNER_CM: f32 = 400.0;
-const FALLOFF_CM: f32 = 3600.0;
+const FALLOFF_CM: f32 = 4000.0;
+
+/// VoIPAttenuationCurve (/Game/Characters): the volume over the distance past the inner radius, as a fraction of the
+/// falloff (EAttenuationDistanceModel::Custom).
+fn voip_attenuation(cm: f32) -> f32 {
+    use f13_core::curve::{Interp, Key, RichCurve};
+    let key = |time, value| Key { time, value, interp: Interp::Cubic, arrive_tangent: 0.0, leave_tangent: 0.0 };
+    let curve = RichCurve { keys: vec![key(0.0, 2.0), key(1.0, 0.01)] };
+    curve.eval(((cm - INNER_CM) / FALLOFF_CM).clamp(0.0, 1.0))
+}
 /// SCWalkieTalkie's MinVoIPDistance (WalkieTalkie_C's default, cm): carriers further apart hear each other in 2D.
 const WALKIE_MIN_CM: f32 = 400.0;
 /// The walkie-talkie's class (SCGameState WalkieTalkiePlayers: the counselors carrying one).
@@ -546,7 +560,7 @@ fn play_gains(
             Route::Spatial => {
                 let at = g.translation() + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M;
                 let cm = ear.translation().distance(at) * 100.0;
-                let a = (1.0 - (cm - INNER_CM).max(0.0) / FALLOFF_CM).clamp(0.0, 1.0);
+                let a = voip_attenuation(cm);
                 let local = to_listener.transform_point3(at);
                 let (right, front) = (local.x, -local.z);
                 let (l, r) = crate::audio::x3d_stereo(right.atan2(front), right.hypot(front) <= f32::EPSILON);
@@ -559,6 +573,14 @@ fn play_gains(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_voice_fades_on_its_curve() {
+        // x2 within the sphere, x0.01 at the falloff's end, the cubic's middle between.
+        assert_eq!(voip_attenuation(100.0), 2.0);
+        assert!((voip_attenuation(4400.0) - 0.01).abs() < 1e-5);
+        assert!((voip_attenuation(2400.0) - 1.005).abs() < 1e-3);
+    }
 
     #[test]
     fn voices_route_as_the_game_routes_them() {
