@@ -7,8 +7,8 @@ Base content (asset paths in the player's install; all gameplay values come from
 `Characters/Killers/Jason/J2`, the Chevettes (`Blueprints/Vehicles/DriveableVehicles/Cars/Chevette`), the police.
 
 ## Todo
-- [ ] The lobby's rest: the match-end lobby as the game's widget (SCMatchEndLobbyWidget with its badges' icons:
-      SCStatBadge; the text overlay stands in, the last match's results on it), the lobby's ready bar
+- [ ] The lobby's rest: the match end's badges and unlocks screens (MatchEnd_Badges, MatchEnd_Unlocks: SCStatBadge
+      icons), the last match's results back in the lobby as widgets (text stands in), the lobby's ready bar
       (LobbyReadyButtonMaterial) and its rows' character select, ping and mute buttons, the counselors' character
       picks (one counselor exported so far), a full 8-player run
 - [ ] The Tommy Jarvis timer, Tommy Jarvis, and Jason dying

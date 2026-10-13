@@ -501,6 +501,8 @@ fn update_hud(
             bg.0 = Color::srgba(0.0, 0.0, 0.0, 0.25);
             format!("MATCH OVER\n{}", game.outcome_for(killer))
         }
+        // (Shown as the game's MatchEnd when it's exported: ui.rs.)
+        MatchState::WaitingPostMatch | MatchState::LeavingMap if game_hud.as_ref().is_some_and(|h| h.has_match_end()) => String::new(),
         MatchState::WaitingPostMatch | MatchState::LeavingMap => {
             bg.0 = Color::srgba(0.0, 0.0, 0.0, 0.92);
             let mut s = format!("{}\nmatch time {}:{:02}\n\n", game.outcome_for(killer), m.elapsed_in_progress_time / 60, m.elapsed_in_progress_time % 60);

@@ -355,6 +355,9 @@ pub struct Hud {
     lobby_row: Option<(Widget, HashMap<String, String>, Value)>,
     /// The map played's definition (ui/map.json: SCMapDefinition's DisplayName and first LobbyThumbnailImages).
     lobby_map: Value,
+    /// The match's end (MatchEnd: SCMatchEndLobbyWidget) and its XP lines (MatchEndLine).
+    match_end: Option<Widget>,
+    match_end_line: Option<Widget>,
     export: PathBuf,
     classes: ClassDb,
     /// Texture name -> PNG (ui/textures.json).
@@ -571,6 +574,16 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
             (w, textures, v["Defaults"].clone())
         }),
         lobby_map: std::fs::read_to_string(dir.join("ui/map.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default(),
+        match_end: Widget::load(dir, "MatchEnd").map(|mut w| {
+            // Not ported: the player card, the Continue button (the screen closes as the match does), the level up.
+            for name in ["PlayerCardRightWidget", "MenuActionBarWidget_930", "LevelUp"] {
+                if let Some(x) = w.find_mut(name) {
+                    x.set_visibility(Vis::Collapsed);
+                }
+            }
+            w
+        }),
+        match_end_line: Widget::load(dir, "MatchEndLine"),
         spectator: Widget::load(dir, "SpectatorHUDWidget").map(|mut w| {
             action_keys(&mut w);
             w
@@ -585,7 +598,7 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         names: HashMap::new(),
         map,
         scale: 1.0,
-        anims: ["SCCounselorTimerWidget", "SCBreathWidget", "KillerHUDWidget", "ObjectivesWidget", "KillerAbilityWidget", "AbilityAvailable", "RageWidget", "YouDied", "YouSurvived", "SpectatorHUDWidget", "LobbyWidget"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
+        anims: ["SCCounselorTimerWidget", "SCBreathWidget", "KillerHUDWidget", "ObjectivesWidget", "KillerAbilityWidget", "AbilityAvailable", "RageWidget", "YouDied", "YouSurvived", "SpectatorHUDWidget", "LobbyWidget", "MatchEnd"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
         ability_icon_colors: {
             let d = std::fs::read_to_string(dir.join("ui/KillerAbilityWidget.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
             ["IconUsableColor", "IconUnusableColor", "IconLockedColor"].map(|k| color(&d["Defaults"][k], [1.0; 4]))
@@ -610,6 +623,11 @@ impl Hud {
     /// SpectatorHUDWidget was exported.
     pub fn has_spectator(&self) -> bool {
         self.spectator.is_some()
+    }
+
+    /// Whether the match's end shows as the game's widget (MatchEnd).
+    pub fn has_match_end(&self) -> bool {
+        self.match_end.is_some()
     }
 }
 
@@ -643,6 +661,7 @@ fn build_hud(
     game: Option<Res<crate::match_flow::GameMatch>>,
     spectating: Option<Res<crate::spectate::SpectatorStatus>>,
     (lobby, me, client, mut playing, time): (Query<&crate::lobby::NetLobby>, Option<Res<crate::lobby::Me>>, Option<Res<crate::net::NetClient>>, ResMut<PlayingAnims>, Res<Time>),
+    match_tuning: Option<Res<crate::match_flow::MatchTuning>>,
 ) {
     let size = window.size();
     // The lobby while it's open (LobbyWidget, as the game's lobby map shows it).
@@ -667,6 +686,17 @@ fn build_hud(
     if spectator {
         pocket_key = vec![format!("spectator:{next_mode}")];
     }
+    // The match over: its XP by category (MatchEnd), in place of the HUD.
+    let ended = game.as_ref().filter(|g| matches!(g.state.state, f13_core::game_mode::MatchState::WaitingPostMatch | f13_core::game_mode::MatchState::LeavingMap) && hud.match_end.is_some());
+    let end_lines = ended.map(|g| {
+        let awards = if jason { g.killer_score.awards.clone() } else { g.mine().map_or(vec![], |t| t.score.awards.clone()) };
+        match_end_lines(&awards, match_tuning.as_deref())
+    });
+    if let (Some(g), Some(lines)) = (ended, &end_lines) {
+        pocket_key = lines.iter().map(|(c, xp)| format!("matchend:{c}:{xp}")).collect();
+        pocket_key.insert(0, "matchend:".into());
+        pocket_key.push(format!("closing:{}", g.state.remaining_time));
+    }
     if let Some(l) = open_lobby {
         pocket_key = l.members.iter().map(|m| format!("lobby:{}:{}:{}:{:?}", m.id, m.name, m.ready, m.preference)).collect();
         pocket_key.push(format!("countdown:{:?}", l.countdown.map(|t| t.ceil() as i32)));
@@ -684,7 +714,18 @@ fn build_hud(
     // The window in design units: scaled to fit 1920×1080, the rest added along the longer side.
     let scale = (size.x / DESIGN.x).min(size.y / DESIGN.y);
     let virt = size / scale;
-    let mut tree = if let Some(l) = open_lobby {
+    let mut tree = if let (Some(g), Some(lines)) = (ended, &end_lines) {
+        // AnimIn as it's shown, the total's TotalAnimIn after the lines (each line DelayIndex * 0.2 s. PLACEHOLDER:
+        // the wait before the lines, 1 s: OnUpdateScoreEvents' Delay; DisplayPlayerScoreDelay not read).
+        if !hud.built.as_ref().is_some_and(|b| b.1.first().is_some_and(|k| k.starts_with("matchend:"))) {
+            let now = time.elapsed_secs();
+            playing.play("MatchEnd", "AnimIn", now, false);
+            playing.play("MatchEnd", "TotalAnimIn", now + 1.0 + 0.2 * lines.len() as f32, false);
+        }
+        let mut t = hud.match_end.clone().unwrap_or_else(|| hud.hud.clone());
+        fill_match_end(&hud, &mut t, lines, g.state.remaining_time);
+        t
+    } else if let Some(l) = open_lobby {
         // Its contents fade in (AnimIn: LobbyContentsBorder's and LobbyDetailsBorder's content alpha, 0 as built).
         // PLACEHOLDER: played as it opens (the blueprint's caller not read).
         if !hud.built.as_ref().is_some_and(|b| b.1.first().is_some_and(|k| k.starts_with("lobby:"))) {
@@ -705,10 +746,10 @@ fn build_hud(
             t.props["Text"] = json!({ "LocalizedString": next_mode });
         }
     }
-    if !jason && !spectator && open_lobby.is_none() {
+    if !jason && !spectator && open_lobby.is_none() && ended.is_none() {
         fill_inventory(&hud, &mut tree, &pockets, selected);
     }
-    if open_lobby.is_none() {
+    if open_lobby.is_none() && ended.is_none() {
         fill_xp_lines(&hud, &mut tree, &scores);
     }
     if police {
@@ -740,15 +781,15 @@ fn build_hud(
     let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names };
     let full = Rect { x: 0.0, y: 0.0, w: virt.x, h: virt.y };
     let laid = tree.layout(full);
-    b.spawn(&laid, root, full, if open_lobby.is_some() { "LobbyWidget" } else if jason { "KillerHUDWidget" } else if spectator { "SpectatorHUDWidget" } else { "CounselorHUDWidget" });
+    b.spawn(&laid, root, full, if ended.is_some() { "MatchEnd" } else if open_lobby.is_some() { "LobbyWidget" } else if jason { "KillerHUDWidget" } else if spectator { "SpectatorHUDWidget" } else { "CounselorHUDWidget" });
     // Her breath meter and interaction dial are hers (Jason's HUD has neither; nor has the lobby).
-    if let Some(breath) = hud.breath.as_ref().filter(|_| !jason && open_lobby.is_none()) {
+    if let Some(breath) = hud.breath.as_ref().filter(|_| !jason && open_lobby.is_none() && ended.is_none()) {
         let laid = breath.layout(full);
         let e = b.spawn(&laid, root, full, "SCBreathWidget");
         b.commands.entity(e).insert(Visibility::Hidden);
         b.names.insert("SCBreathWidget".into(), e);
     }
-    if let Some(dial) = hud.dial.as_ref().filter(|_| !jason && open_lobby.is_none()) {
+    if let Some(dial) = hud.dial.as_ref().filter(|_| !jason && open_lobby.is_none() && ended.is_none()) {
         let laid = dial.layout(full);
         let e = b.spawn(&laid, root, full, "SCInteractMinigame_Widget");
         b.commands.entity(e).insert(Visibility::Hidden);
@@ -763,6 +804,81 @@ fn build_hud(
     hud.root = Some(root);
     hud.scale = scale;
     hud.built = Some((size, pocket_key, jason, (police, game_timer, spectator), lines));
+}
+
+/// The match's XP by category, in the order first scored (SCMatchEndLobbyWidget DisplayPlayerScore 0x1404234e0: a line
+/// per categorized score event, its category's name (0x140448fc0) and its total. PLACEHOLDER: the order, the player
+/// state's categorized events' own not read). Events without a category (None) aren't shown.
+fn match_end_lines(awards: &[f13_core::game_mode::Award], tuning: Option<&crate::match_flow::MatchTuning>) -> Vec<(String, i32)> {
+    let mut lines: Vec<(String, i32)> = vec![];
+    for a in awards {
+        let category = tuning.and_then(|t| t.events.get(&a.event)).map_or("None", |e| e.category.as_str());
+        let Some(name) = category_name(category) else { continue };
+        match lines.iter_mut().find(|(n, _)| n == name) {
+            Some(l) => l.1 += a.xp,
+            None => lines.push((name.to_string(), a.xp)),
+        }
+    }
+    lines
+}
+
+/// EScoreEventCategory's display names (0x140448fc0).
+fn category_name(category: &str) -> Option<&'static str> {
+    Some(match category {
+        "Offense" => "Offense",
+        "Defense" => "Defense",
+        "Betrayal" => "Betrayal",
+        "Fixer" => "Fixer",
+        "Escaped" => "Escaped",
+        "TeamEscaped" => "Team Escaped",
+        "Reinforcements" => "Reinforcements",
+        "CompletedMatch" => "Completed Match",
+        "TimeBonus" => "Time Bonus",
+        "Demasking" => "Demasking",
+        "Kill" => "Kill",
+        "NoSurvivors" => "No Survivors",
+        "Resourceful" => "Resourceful",
+        "Versatile" => "Versatile",
+        "Seeker" => "Seeker",
+        "DemolitionMan" => "Demolition Man",
+        "BoatKill" => "Boat Kill",
+        "Butcher" => "Butcher",
+        "Trapper" => "Trapper",
+        "PartyCrasher" => "Party Crasher",
+        "DefeatedJason" => "Defeated Jason!",
+        "Escort" => "Escort",
+        "Sacrifice" => "Sacrifice",
+        _ => return None,
+    })
+}
+
+/// MatchEnd filled: a MatchEndLine per category in ExperienceBox (OnAddMatchEndLine: CatagoryText, "{Num} xp"), the
+/// total ("{0} xp": ShowTotal 0x140444550), and the time until the lobby (GetText_0: the travel countdown, mm:ss).
+fn fill_match_end(hud: &Hud, tree: &mut Widget, lines: &[(String, i32)], closing: i32) {
+    let total: i32 = lines.iter().map(|l| l.1).sum();
+    if let Some(t) = tree.find_mut("TotalXPText") {
+        t.props["Text"] = json!({ "LocalizedString": format!("{total} xp") });
+    }
+    if let Some(t) = tree.find_mut("TextBlock_358") {
+        let c = closing.max(0);
+        t.props["Text"] = json!({ "LocalizedString": format!("{:02}:{:02}", c / 60, c % 60) });
+    }
+    let Some(row) = &hud.match_end_line else { return };
+    let Some(list) = tree.find_mut("ExperienceBox") else { return };
+    list.children.clear();
+    for (i, (category, xp)) in lines.iter().enumerate() {
+        let mut w = row.clone();
+        w.name = format!("MatchEndLine{i}");
+        w.slot_kind = "VerticalBoxSlot".into();
+        w.slot = json!({});
+        if let Some(t) = w.find_mut("Catagory") {
+            t.props["Text"] = json!({ "LocalizedString": category });
+        }
+        if let Some(t) = w.find_mut("XPAmount") {
+            t.props["Text"] = json!({ "LocalizedString": format!("{xp} xp") });
+        }
+        list.children.push(w);
+    }
 }
 
 /// The lobby's player list: a LobbyPlayerListItem per member in LobbyPlayerListWidget's PlayerVerticalBox (its
