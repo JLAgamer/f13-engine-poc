@@ -577,7 +577,7 @@ pub struct Jason {
     /// At the end of a path that stops short of a goal in the water (the shore): straight on from here.
     at_shore: bool,
     replan: f32,
-    cooldown: f32,
+    pub(crate) cooldown: f32,
     wants_grab: bool,
     /// Where he was at the last progress check, and the time since.
     progress: (Vec3, f32),

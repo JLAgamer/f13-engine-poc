@@ -177,6 +177,8 @@ pub(crate) struct Bot {
     shot: bool,
     /// Where the current dodge started, and the stamina then.
     dodge_from: Option<(Vec3, f32)>,
+    /// When Jason was first seen stunned (a client's fight bot: his state comes as its name).
+    stun_seen: Option<f32>,
     dodges_ok: usize,
     /// The first tap of a double tap was pressed last frame.
     second_tap: bool,
@@ -209,7 +211,7 @@ pub(crate) struct Bot {
 
 impl Default for Bot {
     fn default() -> Self {
-        Self { jason_spawn: None, goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, dodges_ok: 0, second_tap: false, pressed_at: 0.0, retried: false, pressed_state: [false; 5], failed_spots: Vec::new(), hold_e: false, cabinet_hold: false, fixtures: [None; 3], door_ok: false, jason_shots: Vec::new(), door_hits: Vec::new(), fear_seen: Vec::new(), last_health: 100.0, min_breath: f32::MAX }
+        Self { jason_spawn: None, goal: Goal::Escape, step: Step::Start, vehicle: None, timer: 0.0, total: 0.0, placed_car: false, shot: false, dodge_from: None, stun_seen: None, dodges_ok: 0, second_tap: false, pressed_at: 0.0, retried: false, pressed_state: [false; 5], failed_spots: Vec::new(), hold_e: false, cabinet_hold: false, fixtures: [None; 3], door_ok: false, jason_shots: Vec::new(), door_hits: Vec::new(), fear_seen: Vec::new(), last_health: 100.0, min_breath: f32::MAX }
     }
 }
 
@@ -1115,7 +1117,8 @@ fn run_bot(
             let dist = jxf.translation.distance(pxf.translation);
             if bot.timer >= 5.0 {
                 bot.timer = 0.0;
-                info!("bot: Jason {:?}, {:.1} m away; health {:.0}; hand {:?}", j.state, dist, p.counselor.health, inv.and_then(|i| i.hand).map(|e| carried.get(e).map(|i| i.kind.clone())));
+                let state = if ON_CLIENT.load(std::sync::atomic::Ordering::Relaxed) { j.remote_state.clone() } else { format!("{:?}", j.state) };
+                info!("bot: Jason {state}, {:.1} m away; health {:.0}; hand {:?}", dist, p.counselor.health, inv.and_then(|i| i.hand).map(|e| carried.get(e).map(|i| i.kind.clone())));
             }
             keys.release(KeyCode::KeyA);
             keys.release(KeyCode::KeyD);
@@ -1160,7 +1163,10 @@ fn run_bot(
             // With a weapon, as a player fights him: he swings from his attack range (2 m), past the weapon's reach,
             // and lands first (his hit window opens 0.22 s in, hers SWING_LEAD_S), so she blocks in combat stance as
             // he comes, and once he's swung (his attack delay) steps in and swings back.
-            let opening = matches!(j.state, JasonState::Hunting) && j.recovering();
+            // (On a client his state comes as its name.)
+            let on_client = ON_CLIENT.load(std::sync::atomic::Ordering::Relaxed);
+            let state_is = |name: &str| if on_client { j.remote_state == name } else { j.state_name() == name };
+            let opening = state_is("Hunting") && j.recovering();
             if armed && !busy && !held && dist < 4.0 && !opening {
                 if p.counselor.stance != f13_core::counselor::Stance::Combat {
                     if keys.pressed(KeyCode::KeyC) {
@@ -1172,7 +1178,7 @@ fn run_bot(
                     mouse.press(MouseButton::Right);
                 }
             }
-            if matches!(j.state, JasonState::Hunting) && !busy {
+            if state_is("Hunting") && !busy {
                 let kind = |e: Entity| carried.get(e).ok().map(|i| i.kind.clone());
                 let hand = inv.and_then(|i| i.hand).and_then(kind);
                 match hand {
@@ -1211,16 +1217,26 @@ fn run_bot(
                     bot.jason_shots.push("backed");
                 }
             }
-            if let JasonState::Stunned { t, stun } = j.state {
+            // Stunned a second (on a client: by its name, the second from when it's seen).
+            let stunned = match j.state {
+                JasonState::Stunned { t, stun } if !on_client => Some((t, format!("{stun:?}"))),
+                _ if on_client && j.remote_state == "Stunned" => {
+                    let total = bot.total;
+                    let since = *bot.stun_seen.get_or_insert(total);
+                    Some((bot.total - since, String::new()))
+                }
+                _ => None,
+            };
+            if let Some((t, stun)) = stunned {
                 if !bot.jason_shots.contains(&"stun") && t > 1.0 {
                     bot.jason_shots.push("stun");
-                    info!("bot: Jason stunned ({stun:?})");
+                    info!("bot: Jason stunned ({stun})");
                     let path = std::env::temp_dir().join("f13-bot-fight-stun.png");
                     info!("bot: screenshot {}", path.display());
                     commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
                 }
             }
-            if bot.jason_shots.contains(&"stun") && matches!(j.state, JasonState::Hunting) {
+            if bot.jason_shots.contains(&"stun") && state_is("Hunting") {
                 info!("bot: Jason recovered after the stun ({:.1}s)", bot.total);
                 bot.step = Step::Done;
                 bot.timer = 0.0;

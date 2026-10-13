@@ -254,8 +254,9 @@ pub struct NetJason {
     pub door: Option<(u32, crate::jason::DoorMove)>,
     pub knives: u32,
     pub traps: u32,
-    /// His state's name (a Jason player's HUD).
+    /// His state's name (a Jason player's HUD), and his attack's recovery left (s; a client's bot steps in then).
     pub state: String,
+    pub cooldown: f32,
     /// His abilities (f13-core KillerAbilities): unlocked, recharge timers, the unlock timer, rage.
     pub unlocked: [bool; 4],
     pub recharge: [f32; 4],
@@ -806,6 +807,7 @@ fn update_bodies(
             knives: j.knives,
             traps: j.traps,
             state: j.state_name(),
+            cooldown: j.cooldown,
             unlocked: a.map_or([false; 4], |a| a.unlocked),
             recharge: a.map_or([0.0; 4], |a| a.recharge_timer),
             unlock_timer: a.map_or(0.0, |a| a.unlock_timer),
@@ -1135,6 +1137,7 @@ fn mirror(
                 door: n.door.and_then(|(id, m)| Some((actors.get(id)?, m))),
             });
             j.remote_state = n.state.clone();
+            j.cooldown = n.cooldown;
             let key = n.kill_cam.as_ref().map(|(k, ..)| k.clone());
             if key != twin.kill {
                 match &n.kill_cam {
