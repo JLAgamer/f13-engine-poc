@@ -362,6 +362,11 @@ pub struct Hud {
     /// The badge screens after it (MatchEnd_Badges), and the badges (ui/badges.json: name, icon, unlock count).
     match_badges: Option<Widget>,
     badges: Value,
+    /// The scoreboard after them (ScoreboardWidget), its rows (ScoreboardPlayerListItem), and the characters'
+    /// thumbnails (ui/characters.json).
+    scoreboard: Option<Widget>,
+    scoreboard_row: Option<Widget>,
+    characters: Value,
     export: PathBuf,
     classes: ClassDb,
     /// Texture name -> PNG (ui/textures.json).
@@ -604,6 +609,9 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
             w
         }),
         badges: std::fs::read_to_string(dir.join("ui/badges.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default(),
+        scoreboard: Widget::load(dir, "ScoreboardWidget"),
+        scoreboard_row: Widget::load(dir, "ScoreboardPlayerListItem"),
+        characters: std::fs::read_to_string(dir.join("ui/characters.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default(),
         spectator: Widget::load(dir, "SpectatorHUDWidget").map(|mut w| {
             action_keys(&mut w);
             w
@@ -681,7 +689,7 @@ fn build_hud(
     game: Option<Res<crate::match_flow::GameMatch>>,
     spectating: Option<Res<crate::spectate::SpectatorStatus>>,
     (lobby, me, client, mut playing, time): (Query<&crate::lobby::NetLobby>, Option<Res<crate::lobby::Me>>, Option<Res<crate::net::NetClient>>, ResMut<PlayingAnims>, Res<Time>),
-    (match_tuning, mutes, page): (Option<Res<crate::match_flow::MatchTuning>>, Option<Res<crate::voice::VoiceMutes>>, Res<MatchEndPage>),
+    (match_tuning, mutes, page, names): (Option<Res<crate::match_flow::MatchTuning>>, Option<Res<crate::voice::VoiceMutes>>, Res<MatchEndPage>, Query<&Name>),
 ) {
     let size = window.size();
     // The lobby while it's open (LobbyWidget, as the game's lobby map shows it).
@@ -713,16 +721,22 @@ fn build_hud(
         match_end_lines(&awards, match_tuning.as_deref())
     });
     // Past it (Continue): a badge earned a screen (OnDisplayUnlock -> MatchEnd_Badges' ShowBadgeUnlock, one at a time).
+    let earned = ended.map_or(0, |g| if jason { g.killer_badges.len() } else { g.mine().map_or(0, |t| t.badges.len()) });
     let badge = ended.and_then(|g| {
         let earned = if jason { g.killer_badges.clone() } else { g.mine().map_or(vec![], |t| t.badges.clone()) };
         earned.get(page.0.checked_sub(1)?).cloned()
     }).filter(|_| hud.match_badges.is_some());
+    // Then the scoreboard (OnShowScoreboard): everyone, how their match ended.
+    let board = ended.filter(|_| page.0 > earned && hud.scoreboard.is_some()).map(|g| scoreboard_rows(g, &names));
     if let (Some(g), Some(lines)) = (ended, &end_lines) {
         pocket_key = lines.iter().map(|(c, xp)| format!("matchend:{c}:{xp}")).collect();
         pocket_key.insert(0, "matchend:".into());
         pocket_key.push(format!("closing:{}", g.state.remaining_time));
         if let Some(b) = &badge {
             pocket_key.insert(0, format!("badge:{b}"));
+        }
+        if let Some(rows) = &board {
+            pocket_key.insert(0, format!("board:{rows:?}"));
         }
     }
     if let Some(l) = open_lobby {
@@ -742,7 +756,11 @@ fn build_hud(
     // The window in design units: scaled to fit 1920×1080, the rest added along the longer side.
     let scale = (size.x / DESIGN.x).min(size.y / DESIGN.y);
     let virt = size / scale;
-    let mut tree = if let (Some(g), Some(b)) = (ended, &badge) {
+    let mut tree = if let Some(rows) = &board {
+        let mut t = hud.scoreboard.clone().unwrap_or_else(|| hud.hud.clone());
+        fill_scoreboard(&hud, &mut t, rows);
+        t
+    } else if let (Some(g), Some(b)) = (ended, &badge) {
         if !hud.built.as_ref().is_some_and(|built| built.1.first() == pocket_key.first()) {
             playing.play("MatchEnd_Badges", "AnimIn", time.elapsed_secs(), false);
         }
@@ -816,7 +834,7 @@ fn build_hud(
     let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names };
     let full = Rect { x: 0.0, y: 0.0, w: virt.x, h: virt.y };
     let laid = tree.layout(full);
-    b.spawn(&laid, root, full, if badge.is_some() { "MatchEnd_Badges" } else if ended.is_some() { "MatchEnd" } else if open_lobby.is_some() { "LobbyWidget" } else if jason { "KillerHUDWidget" } else if spectator { "SpectatorHUDWidget" } else { "CounselorHUDWidget" });
+    b.spawn(&laid, root, full, if board.is_some() { "ScoreboardWidget" } else if badge.is_some() { "MatchEnd_Badges" } else if ended.is_some() { "MatchEnd" } else if open_lobby.is_some() { "LobbyWidget" } else if jason { "KillerHUDWidget" } else if spectator { "SpectatorHUDWidget" } else { "CounselorHUDWidget" });
     // Her breath meter and interaction dial are hers (Jason's HUD has neither; nor has the lobby).
     if let Some(breath) = hud.breath.as_ref().filter(|_| !jason && open_lobby.is_none() && ended.is_none()) {
         let laid = breath.layout(full);
@@ -899,6 +917,75 @@ fn match_end_page(mut page: ResMut<MatchEndPage>, keys: Res<ButtonInput<KeyCode>
         }
     } else if keys.just_pressed(KeyCode::Enter) {
         page.0 += 1;
+    }
+}
+
+/// A scoreboard row: their name, their status text, whether they're Jason and whether they're dead.
+type ScoreRow = (String, String, bool, bool);
+
+/// The scoreboard's players: each counselor (her name and SCPlayerListItemWidget GetStatusDisplayText 0x14042d630:
+/// "Escaped", her death's DeathScoreboardDisplayText, "Alive"), then Jason ("Killed {0}/{1}": his kills of the
+/// counselors). PLACEHOLDERS: the order (the list's own not read), a death's text ("Dead"), Jason's name.
+fn scoreboard_rows(g: &crate::match_flow::GameMatch, names: &Query<&Name>) -> Vec<ScoreRow> {
+    let mut rows: Vec<ScoreRow> = g
+        .counselors
+        .iter()
+        .map(|(e, t)| {
+            let name = names.get(*e).map_or("Counselor".to_string(), |n| n.to_string());
+            let status = if t.record.escaped { "Escaped" } else if t.record.dead { "Dead" } else { "Alive" };
+            (name, status.to_string(), false, t.record.dead && !t.record.escaped)
+        })
+        .collect();
+    let kills = g.counselors.values().filter(|t| t.record.dead && !t.record.escaped).count();
+    rows.push(("Jason".to_string(), format!("Killed {kills}/{}", g.counselors.len()), true, false));
+    rows
+}
+
+/// ScoreboardWidget filled: a ScoreboardPlayerListItem per player in its ScoreBoardHUDWidget's PlayerVerticalBox,
+/// each its AliveDeadPanel, its picked character (the character's ThumbnailImage; its border red for the dead and
+/// Jason, else (0.552, 0.527, 0.434, 0.5); the image red for the dead), its name and its status.
+fn fill_scoreboard(hud: &Hud, tree: &mut Widget, rows: &[ScoreRow]) {
+    // Its header (MenuSmallHeaderWidget: TitleText its Text, TitleBar gone with RemoveLine).
+    if let Some(h) = tree.find_mut("MenuSmallHeaderWidget") {
+        let (text, remove_line) = (h.props["Text"].clone(), h.props["RemoveLine"].as_bool().unwrap_or(false));
+        if let Some(t) = h.find_mut("TitleText") {
+            t.props["Text"] = text;
+        }
+        if let Some(bar) = h.find_mut("TitleBar").filter(|_| remove_line) {
+            bar.set_visibility(Vis::Collapsed);
+        }
+    }
+    let Some(row) = &hud.scoreboard_row else { return };
+    let Some(list) = tree.find_mut("PlayerVerticalBox") else { return };
+    list.children.clear();
+    let red = json!({ "R": 0.854993, "G": 0.030713, "B": 0.017642, "A": 1.0 });
+    for (i, (name, status, killer, dead)) in rows.iter().enumerate() {
+        let mut w = row.clone();
+        w.name = format!("ScoreboardRow{i}");
+        w.slot_kind = "VerticalBoxSlot".into();
+        w.slot = json!({});
+        for (n, shown) in [("AliveDeadPanel", true), ("PickedCharacterPanel", true), ("PlayerStatusPanel", true), ("SpectatingPanel", false)] {
+            if let Some(x) = w.find_mut(n) {
+                x.set_visibility(if shown { Vis::Visible } else { Vis::Collapsed });
+            }
+        }
+        if let (Some(i), Some(file)) = (w.find_mut("CharacterImage"), hud.characters[if *killer { "Killer" } else { "Counselor" }]["Thumbnail"].as_str()) {
+            i.props["Brush"] = json!({ "ImageSize": { "X": 32.0, "Y": 32.0 }, "ResourceObject": { "File": file } });
+            i.props["ColorAndOpacity"] = if *dead { red.clone() } else { json!({ "R": 1.0, "G": 1.0, "B": 1.0, "A": 1.0 }) };
+        }
+        if let Some(b) = w.find_mut("CharacterBorderImg") {
+            b.props["ColorAndOpacity"] = if *dead || *killer { red.clone() } else { json!({ "R": 0.552012, "G": 0.527115, "B": 0.434154, "A": 0.5 }) };
+        }
+        if let Some(t) = w.find_mut("PlayerNameText") {
+            t.props["Text"] = json!({ "LocalizedString": name });
+        }
+        if let Some(t) = w.find_mut("StatusText") {
+            t.props["Text"] = json!({ "LocalizedString": status });
+        }
+        if let Some(t) = w.find_mut("PingText") {
+            t.props["Text"] = json!({ "LocalizedString": "" });
+        }
+        list.children.push(w);
     }
 }
 

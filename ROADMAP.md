@@ -7,9 +7,7 @@ Base content (asset paths in the player's install; all gameplay values come from
 `Characters/Killers/Jason/J2`, the Chevettes (`Blueprints/Vehicles/DriveableVehicles/Cars/Chevette`), the police.
 
 ## Todo
-- [ ] The lobby's rest: the scoreboard after the match end's screens (SCPlayerController OnShowScoreboard; the last
-      match's results show as text in the lobby), the counselors' character picks (one counselor exported so far), a
-      full 8-player run
+- [ ] The lobby's rest: the counselors' character picks (one counselor exported so far), a full 8-player run
 - [ ] The Tommy Jarvis timer, Tommy Jarvis, and Jason dying
 - [ ] Voice chat: VoIPAudioComponent's real attenuation (UE's defaults stand in); the settings and mutes in the game's
       own menus (the lobby's keys stand in: P push-to-talk, Shift + n mute)

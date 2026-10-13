@@ -830,6 +830,20 @@ switch (rest[0])
             File.WriteAllText(Path.Combine(outDir, "ui", "badges.json"), badges.ToString());
             Console.WriteLine($"ui: {badges.Count} badges");
         }
+        // The characters played: each one's ThumbnailImage (SCCharacter GetCharacterThumbnailImage: the scoreboard's
+        // rows), by role (ui/characters.json).
+        {
+            var characters = new Newtonsoft.Json.Linq.JObject();
+            foreach (var (role, cls) in new[] { ("Counselor", Mvp.Counselor), ("Killer", Mvp.Killer) })
+            {
+                var def = provider.LoadPackage(ToFile(cls)).GetExports().FirstOrDefault(e => e.Name.StartsWith("Default__"));
+                var thumb = def == null ? null : Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(def))["Properties"]?["ThumbnailImage"]?["ObjectPath"]?.ToString().Split('.')[0];
+                if (thumb == null) continue;
+                ExportAsset(thumb);
+                characters[role] = new Newtonsoft.Json.Linq.JObject { ["Thumbnail"] = thumb + ".png" };
+            }
+            File.WriteAllText(Path.Combine(outDir, "ui", "characters.json"), characters.ToString());
+        }
         Console.WriteLine($"ui: {n} widgets, {wx.ClassTextures()} class textures, {wx.Fonts(game!)} fonts");
         break;
     }
@@ -1427,6 +1441,8 @@ static class Mvp
         "/Game/UI/Menu/MatchEnd/MatchEnd",
         "/Game/UI/Menu/MatchEnd/MatchEndLine",
         "/Game/UI/Menu/MatchEnd/MatchEnd_Badges",
+        "/Game/UI/HUD/Scoreboard/ScoreboardWidget",
+        "/Game/UI/HUD/Scoreboard/ScoreboardPlayerListItem",
         // The lobby rows' ping and speaker.
         "/Game/UI/Controls/Player/PlayerPingDisplayWidget",
         "/Game/UI/Controls/Player/PlayerSpeakIconMuteButton",
