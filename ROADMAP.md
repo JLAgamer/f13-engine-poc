@@ -29,10 +29,6 @@ Base content (asset paths in the player's install; all gameplay values come from
       2.5 ms of the main world a frame; their draw is already on the GPU: MODLOG "The rain's draw")
 - [ ] Post-processing and lighting: compare against the game's own screenshots (the user's cabin porch reference,
       2026-10-12: its wall lamp's spots light sharp bands up and down the logs)
-- [ ] Read the stock pak directly, so users don't need to extract it first (with the host CLI's first-run setup).
-      Its footer is known (an encrypted-index flag, magics 'Atae' and 'kcid', version 5, index offset and size,
-      hash); the index is AES-encrypted with the game's key, so reading it means decrypting with that key: on hold
-      for a decision on that
 - [ ] Optimize performance
 - [ ] Blood: the kills' screen blood (their "Blendable: PP_Player_BloodEffect_01..06" windows)
 - [ ] Blood: Jason's weapon bloodied by a kill (ShowWeaponBlood)
@@ -43,6 +39,8 @@ Base content (asset paths in the player's install; all gameplay values come from
 - [ ] Jason's knife pick-up: the knife in his hand during the take (its Prop: throwing_Dart window, 0.89-2.35 s), and
       the special move's 0.15 s interp and walk to its place (he only turns to it now)
 - [ ] The computer Jason and knife pickups: he takes them in passing (no pick-up move) and doesn't go looking for them
+- [ ] Sound: the impact sound when a thrown knife hits a character
+- [ ] Sound: the executions' missing sounds (compare each kill against its montage's sound notifies)
 - [ ] More content, one at a time: maps (with their boat and other escapes), Jasons, counselors, perks, skins,
       emotes, a main menu
 
