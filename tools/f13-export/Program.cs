@@ -1401,6 +1401,9 @@ static class Mvp
         // The lobby (its player list's rows: LobbyPlayerListWidget adds one per player).
         "/Game/UI/Lobby/LobbyWidget",
         "/Game/UI/Lobby/LobbyPlayerListItem",
+        // The match's end: its XP by category.
+        "/Game/UI/Menu/MatchEnd/MatchEnd",
+        "/Game/UI/Menu/MatchEnd/MatchEndLine",
         // Its key hints (an ActionMapWidget and a title).
         "/Game/UI/Controls/ActionDisplay",
         // The minimap's icons (the SCMinimapIconComponents' DefaultIcon, and Jason's KillerIcon).
