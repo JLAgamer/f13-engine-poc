@@ -85,7 +85,8 @@ impl Plugin for PlayJasonPlugin {
         if self.demo {
             app.init_resource::<DemoView>()
                 .add_systems(PreUpdate, demo.after(capture).before(bevy::input::InputSystems).run_if(on))
-                .add_systems(Update, demo_view.after(look).run_if(on));
+                .add_systems(Update, demo_view.after(look).run_if(on))
+                .add_systems(Update, demo_knife.run_if(on).run_if(|| std::env::var("F13_DEMO_KNIFE").is_ok()));
         }
         if self.active {
             app.insert_resource(PlayJason).init_resource::<JasonControls>();
@@ -352,6 +353,32 @@ fn demo_view(view: Res<DemoView>, mut controls: ResMut<JasonControls>) {
     controls.pitch = view.1;
 }
 
+/// Testing (F13_DEMO_KNIFE): 3 s in, the demo's Jason stands 0.6 m off the nearest knife pickup's AlignmentSpecialMove
+/// spot, looking at the knives (the demo then presses E there: its slide onto the spot, the take, the knife in his hand).
+fn demo_knife(
+    time: Res<Time>,
+    mut done: Local<bool>,
+    mut jason: Query<&mut Transform, With<crate::jason::Jason>>,
+    knives: Query<(&crate::props::KnifePickup, &GlobalTransform)>,
+    mut camera: Single<&mut PlayerCamera>,
+) {
+    if *done || time.elapsed_secs() < 3.0 {
+        return;
+    }
+    let Ok(mut xf) = jason.single_mut() else { return };
+    let Some((k, g)) = knives.iter().min_by(|a, b| a.1.translation().distance(xf.translation).total_cmp(&b.1.translation().distance(xf.translation))) else { return };
+    *done = true;
+    let spot = g.compute_transform() * k.spot;
+    let knives_at = g.transform_point(k.interact);
+    let off = (spot.translation - knives_at).with_y(0.0).normalize_or(Vec3::X) * 0.6;
+    xf.translation = Vec3::new(spot.translation.x + off.x, spot.translation.y, spot.translation.z + off.z);
+    let to = knives_at - (xf.translation + Vec3::Y * 0.88);
+    xf.rotation = Quat::from_rotation_y(to.x.atan2(to.z));
+    camera.yaw = (-to.x).atan2(-to.z);
+    camera.pitch = to.y.atan2(Vec2::new(to.x, to.z).length());
+    info!("jason demo: by the knives at {knives_at} (their spot {})", spot.translation);
+}
+
 /// The scripted player: what a player would press, by distance to her.
 fn demo(
     mut commands: Commands,
@@ -388,6 +415,14 @@ fn demo(
     // Yaw so that the view's forward (-sin, -cos) points at her (or her door).
     camera.yaw = (-d.x).atan2(-d.z);
     camera.pitch = -0.15;
+    // (F13_DEMO_KNIFE: at the knives within 3 m until it has tried them.)
+    if !*knife_tried && std::env::var("F13_DEMO_KNIFE").is_ok() {
+        let eyes = jxf.translation + Vec3::Y * 0.88;
+        if let Some(v) = knives.iter().filter(|k| !k.3).map(|(_, k, g, _)| g.transform_point(k.interact) - eyes).filter(|v| flat(*v).length() < 3.0).min_by(|a, b| a.length().total_cmp(&b.length())) {
+            camera.yaw = (-v.x).atan2(-v.z);
+            camera.pitch = v.y.atan2(flat(v).length());
+        }
+    }
     // Aiming a knife: the view at her chest from his camera, over the knife's drop (as a player would aim).
     if matches!(j.state, crate::jason::JasonState::Throwing { .. }) && controls.view.1 != Vec3::ZERO {
         let to = h.translation + Vec3::Y * 1.2 - controls.view.0;
@@ -424,7 +459,7 @@ fn demo(
     controls.sense |= know.iter().next().is_some_and(|k| !k.sensing(now) && k.abilities.is_available(f13_core::killer_abilities::Ability::Sense, &f13_core::killer_abilities::Blockers::default()));
     // Morph by his map once it's ready and she's far: open it (1), then a click at its centre 8 s later. Not with a
     // counselor bot (it brings her to him).
-    let morph_ready = bot.is_none() && know.iter().next().is_some_and(|k| k.abilities.is_available(f13_core::killer_abilities::Ability::Morph, &f13_core::killer_abilities::Blockers::default()));
+    let morph_ready = bot.is_none() && std::env::var("F13_DEMO_KNIFE").is_err() && know.iter().next().is_some_and(|k| k.abilities.is_available(f13_core::killer_abilities::Ability::Morph, &f13_core::killer_abilities::Blockers::default()));
     match *opened {
         None if morph_ready && dist > 40.0 && matches!(j.state, crate::jason::JasonState::Hunting) => {
             controls.latched.morph = true;
@@ -447,7 +482,8 @@ fn demo(
     // Throwing knives at hand: a screenshot (temp f13-demo-knives.png: their prompt), then E, once.
     if !*knife_tried && matches!(j.state, crate::jason::JasonState::Hunting) {
         let centre = jxf.translation + Vec3::Y * 0.88;
-        let look = Quat::from_euler(EulerRot::YXZ, camera.yaw, camera.pitch, 0.0) * Vec3::NEG_Z;
+        // (The look his E is taken with: this frame's controls, captured before this turns the camera.)
+        let look = Quat::from_euler(EulerRot::YXZ, controls.yaw, controls.pitch, 0.0) * Vec3::NEG_Z;
         if crate::jason::knife_pickup_at(&knives, &limits, centre, look).is_some() {
             *knife_tried = true;
             let path = std::env::temp_dir().join("f13-demo-knives.png");

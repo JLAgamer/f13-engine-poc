@@ -1354,6 +1354,14 @@ pub struct Held;
 #[derive(Component)]
 pub struct Staggered(pub f32);
 
+/// His way onto a special move's spot (SCSpecialMove_SoloMontage's interp: from where he stood, its params).
+#[derive(Component, Clone, Copy)]
+pub struct AlignTo {
+    from: Transform,
+    to: Transform,
+    params: crate::interact::MoveParams,
+}
+
 /// Jason's model parts (ray casts for the camera skip them).
 #[derive(Component)]
 pub struct JasonPart;
@@ -1747,12 +1755,14 @@ pub(crate) fn update_jason(
     (mut barricades, mut walls): (Query<&mut crate::windows::Barricade>, Query<(Entity, &mut crate::doors::Wall, &GlobalTransform)>),
     (mut spots, cabinets, mut placed_kills): (Query<(Entity, &mut crate::hiding::HidingSpot, &GlobalTransform)>, Query<&GlobalTransform, With<crate::props::Cabinet>>, Query<&mut crate::placed_kills::PlacedKill>),
     mut rigs: Query<(&mut Rig, &ChildOf, &Transform), (Without<Jason>, Without<Player>)>,
-    (globals, navmesh, leaves, parents, interact_limits): (
+    (globals, navmesh, leaves, parents, interact_limits, special_moves, aligns): (
         Query<&GlobalTransform>,
         Option<Res<crate::navigation::Navmesh>>,
         Query<(Entity, &ChildOf), With<crate::navigation::NotOnNavmesh>>,
         Query<&ChildOf>,
         Query<&crate::interact::InteractLimits>,
+        Option<Res<crate::interact::SpecialMoves>>,
+        Query<&AlignTo>,
     ),
 ) {
     let navmesh = navmesh.as_deref().map(|n| &*n.0);
@@ -1783,6 +1793,7 @@ pub(crate) fn update_jason(
         (at, v.speed)
     });
     for (je, mut j, mut xf, hit, mut know) in &mut jasons {
+        let align = aligns.get(je).ok().copied();
         // Under water (his tick 0x14040d900): in the water with his capsule's top under its surface; there he walks
         // the bottom at UnderwaterSpeed scaled by his feet's depth (GetUnderwaterDepthModifier: up to
         // UnderwaterFullSpeedDepth) from MaxSlowRunSpeed, and he's unseen outside his special moves
@@ -2119,13 +2130,15 @@ pub(crate) fn update_jason(
                         // (Jason_ThrowingKnifePickup) plays his take; PerformPickup at its KnifePickup driver window.
                         if let Some(ke) = knife_pickup_at(&knife_pickups, &interact_limits, centre, i.look) {
                             info!("Jason: picking up throwing knives");
+                            // Jason_ThrowingKnifePickup (SCSpecialMove_SoloMontage, bInterpToInteraction): onto its
+                            // spot over InterpolationTime first (the state's clock runs from minus that), then the take.
+                            let params = special_moves.as_deref().map_or_else(Default::default, |m| m.of("ThrowingKnifePickup_C", "AlignmentSpecialMove"));
                             if let Ok((_, k, kg, _)) = knife_pickups.get(ke) {
-                                let to = kg.transform_point(k.interact) - xf.translation;
-                                xf.rotation = Quat::from_rotation_y(to.x.atan2(to.z));
+                                let to = crate::interact::standing_on(&xf, kg.compute_transform() * k.spot);
+                                commands.entity(je).insert(AlignTo { from: *xf, to, params });
                             }
-                            j.state = JasonState::BreakingFuse { t: 0.0, fuse: ke, done: false };
+                            j.state = JasonState::BreakingFuse { t: -params.interp_time, fuse: ke, done: false };
                             j.velocity = Vec2::ZERO;
-                            commands.entity(je).insert(PlayAction(KNIFE_PICKUP.into()));
                             continue;
                         }
                         // A radio (SCRadio::OnInteract: his Destroy_SpecialMoveHandler; CanInteractWith: not broken).
@@ -2564,6 +2577,37 @@ pub(crate) fn update_jason(
             JasonState::BreakingFuse { t: at, fuse, done } => {
                 let at = at + dt;
                 j.velocity = Vec2::ZERO;
+                // On his way onto a special move's spot (negative time): swept there; arrived, its take. Blocked short
+                // of its MoveThreshold, the move is cancelled (CancelSpecialMove).
+                if let Some(a) = align {
+                    let take = KNIFE_PICKUP;
+                    let k = ((at + a.params.interp_time) / a.params.interp_time.max(1e-4)).clamp(0.0, 1.0);
+                    let (from, to) = (a.from.rotation, a.to.rotation);
+                    let to_rot = if from.dot(to) < 0.0 { -to } else { to };
+                    let mut next = Transform { translation: a.from.translation.lerp(a.to.translation, k), rotation: (from * (1.0 - k) + to_rot * k).normalize(), ..a.to };
+                    let sweep = |p: Vec3, q: Vec3| f13_core::collision::capsule_sweep(&world, p, q, t.capsule.radius, t.capsule.half_height);
+                    if a.params.sweep {
+                        if let Some(hit) = sweep(xf.translation, next.translation) {
+                            next.translation = xf.translation.lerp(next.translation, hit);
+                        }
+                    }
+                    *xf = next;
+                    if at >= 0.0 {
+                        commands.entity(je).remove::<AlignTo>();
+                        let near = Vec2::new(xf.translation.x - a.to.translation.x, xf.translation.z - a.to.translation.z).length() <= a.params.threshold_m;
+                        if a.params.sweep && sweep(xf.translation, a.to.translation).is_some() && !near {
+                            info!("Jason: special move cancelled: blocked on the way to its spot");
+                            j.state = JasonState::Hunting;
+                            continue;
+                        }
+                        *xf = a.to;
+                        commands.entity(je).insert(PlayAction(take.into()));
+                        j.state = JasonState::BreakingFuse { t: 0.0, fuse, done };
+                    } else {
+                        j.state = JasonState::BreakingFuse { t: at, fuse, done };
+                    }
+                    continue;
+                }
                 // A radio's break take (its DestroyRadio driver window: OnBreakRadio), the knife pickup's (its
                 // KnifePickup window: PerformPickup), else the fuse box's.
                 let radio = radios.contains(fuse);

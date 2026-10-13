@@ -178,6 +178,8 @@ pub struct KnifePickup {
     pub interact: Vec3,
     /// Interaction range, cm.
     pub reach: f32,
+    /// Its AlignmentSpecialMove's place (actor space): where he takes them from.
+    pub spot: Transform,
 }
 
 /// A knife pickup taken (PerformPickup: MULTICAST_DisablePickup, SetLifeSpan 5 s): hidden, gone when this runs out (s).
@@ -720,7 +722,8 @@ fn spawn_props(
             }
         } else if classes.is_child_of(&actor.class, "SCThrowingKnifePickup") {
             let count = classes.prop(&actor.class, "StackSize").as_f64().unwrap_or(1.0).max(1.0) as u32;
-            commands.entity(root).insert(KnifePickup { count, interact: interact.map_or(Vec3::ZERO, |c| local(c).translation), reach: interact.map_or(150.0, |c| reach(c, 150.0)) });
+            let spot = info.components.iter().find(|c| c.name == "AlignmentSpecialMove").map_or(Transform::IDENTITY, local);
+            commands.entity(root).insert(KnifePickup { count, interact: interact.map_or(Vec3::ZERO, |c| local(c).translation), reach: interact.map_or(150.0, |c| reach(c, 150.0)), spot });
             if let Some(c) = interact {
                 commands.entity(root).insert(crate::placed_kills::InteractPrompt(crate::placed_kills::KillPrompt::of(&classes, c)));
             }

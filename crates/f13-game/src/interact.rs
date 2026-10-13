@@ -335,7 +335,7 @@ fn repair_start(base: &str) -> (RepairAnim, crate::character::PlayAction) {
 }
 
 /// On a special move's spot (world), facing its forward (Unreal +X; she faces +Z), on her floor.
-fn standing_on(player: &Transform, at: Transform) -> Transform {
+pub(crate) fn standing_on(player: &Transform, at: Transform) -> Transform {
     let (yaw, _, _) = at.rotation.to_euler(EulerRot::YXZ);
     Transform { translation: Vec3::new(at.translation.x, player.translation.y, at.translation.z), rotation: Quat::from_rotation_y(yaw + std::f32::consts::FRAC_PI_2), ..*player }
 }
