@@ -81,6 +81,10 @@ List<string> WriteAnimSounds()
     var (json, cues) = AnimSounds.Collect(provider, Mvp.CounselorAnims.Concat(Mvp.KillerAnims));
     File.WriteAllText(Path.Combine(outDir, "anim_sounds.json"), json.ToString(Newtonsoft.Json.Formatting.Indented));
     Console.WriteLine($"anim sounds: {json.Count} animations, {cues.Distinct().Count()} cues");
+    // And their props (anim_props.json: SCPropSpawnerNotifyState), the meshes queued.
+    var props = AnimSounds.Props(provider, Mvp.CounselorAnims.Concat(Mvp.KillerAnims), Queue, m => new SkinnedAssetExporter(m).SavePath + ".glb");
+    File.WriteAllText(Path.Combine(outDir, "anim_props.json"), props.ToString(Newtonsoft.Json.Formatting.Indented));
+    Console.WriteLine($"anim props: {props.Count} animations");
     return cues;
 }
 // Simple collision of every exported static mesh, by glTF path (collision.json).
@@ -763,7 +767,8 @@ switch (rest[0])
         sx.WriteSoundClasses();
         sx.WriteSoundMixes(Mvp.SoundMixes);
         Console.WriteLine($"sounds: {n} cues");
-        return 0;
+        // (On to the meshes: the animations' props.)
+        break;
     }
     case "collision": // levels (for collision flags), classes and collision.json; no meshes or textures
         ExportLevel(Mvp.Map);

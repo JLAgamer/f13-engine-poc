@@ -35,8 +35,7 @@ Base content (asset paths in the player's install; all gameplay values come from
 - [ ] Blood: dismemberment (the death's dismember roll, the dismemberment meshes)
 - [ ] Blood: the counselor's gore skin layer (SkinGoreMaster)
 - [ ] Blood: check whether thrown knives and shotgun hits on a character spawn blood in the game
-- [ ] Jason's knife pick-up: the knife in his hand during the take (its Prop: throwing_Dart window, 0.89-2.35 s), and
-      the special move's 0.15 s interp and walk to its place (he only turns to it now)
+- [ ] Jason's knife pick-up: the special move's 0.15 s interp and walk to its place (he only turns to it now)
 - [ ] The computer Jason and knife pickups: he takes them in passing (no pick-up move) and doesn't go looking for them
 - [ ] Sound: the thrown knife's ThrowingKnifeImpactConfirmation (SCThrowable JasonImpactNoise: where it plays isn't
       found yet)

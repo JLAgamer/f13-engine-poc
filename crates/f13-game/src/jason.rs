@@ -3457,8 +3457,13 @@ fn animate_jason(
     owners: Query<&Transform, With<Jason>>,
     mut rigs: Query<(&ChildOf, &mut Rig, &mut AnimationPlayer)>,
     anim_sounds: Option<Res<crate::audio::AnimSounds>>,
+    forced: Option<Res<crate::character::ForcedPose>>,
 ) {
     let (Some(killer), Some(t)) = (killer, tuning) else { return };
+    // (`--pose` holds every rig in its pose: character.rs.)
+    if forced.is_some() {
+        return;
+    }
     let dt = time.delta_secs();
     for (parent, mut rig, mut anim) in &mut rigs {
         if rig.model != Model::Killer {

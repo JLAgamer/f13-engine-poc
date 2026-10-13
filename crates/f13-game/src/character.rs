@@ -108,6 +108,8 @@ impl Plugin for CharacterPlugin {
             }
         })
         .add_systems(Update, (assemble, animate).chain())
+        .add_systems(Startup, load_anim_props)
+        .add_systems(PostUpdate, anim_props.before(bevy::transform::TransformSystems::Propagate))
         .init_resource::<LayerRestore>()
         .add_systems(PostUpdate, (restore_unanimated, run_lean, layered_blend, item_hand_layer, aim_offset, head_look, jason_twists, item_arm_layer).chain().after(bevy::app::AnimationSystems).before(bevy::transform::TransformSystems::Propagate));
     }
@@ -588,7 +590,9 @@ pub(crate) fn animate(
     let Some(character) = character else { return };
     let dt = time.delta_secs();
     if let Some(f) = forced {
-        for (_, rig, mut anim) in &mut rigs {
+        for (_, mut rig, mut anim) in &mut rigs {
+            // (As the action, so its props show.)
+            rig.action = Some((f.0.clone(), f.1));
             let model = match rig.model {
                 Model::Counselor => &character.0,
                 Model::Killer => match killer.as_deref() {
@@ -857,6 +861,83 @@ pub(crate) fn animate(
                     }
                 }
             }
+        }
+    }
+}
+
+/// The animations' props (anim_props.json: SCPropSpawnerNotifyState): "killer/<take>" (Jason's) or "counselor/<take>"
+/// -> each window's start and end (s in the take), its mesh (glTF), the socket or bone it's on and bHideEquippedItem.
+#[derive(Resource, Default)]
+pub struct AnimProps(HashMap<String, Vec<(f32, f32, String, String, bool)>>);
+
+pub(crate) fn load_anim_props(mut commands: Commands, export: Res<crate::ExportRoot>) {
+    let props = std::fs::read_to_string(export.0.join("anim_props.json")).ok().and_then(|t| serde_json::from_str(&t).ok());
+    if props.is_none() {
+        warn!("no anim_props.json (re-export: f13-export sounds): the animations' props aren't shown");
+    }
+    commands.insert_resource(AnimProps(props.unwrap_or_default()));
+}
+
+/// The props a character's action shows now (their windows' indexes and entities).
+#[derive(Component, Default)]
+pub struct ShownProps(String, Vec<(usize, Entity)>);
+
+/// SCPropSpawnerNotifyState: while its window lasts, its SkeletalPropMesh on the character's mesh at SocketName (a
+/// socket, else a bone of that name), snapped to it (no offset of its own); gone at its end (or when the action is).
+/// PLACEHOLDER: bHideEquippedItem (every window here has it off).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn anim_props(
+    mut commands: Commands,
+    props: Option<Res<AnimProps>>,
+    assets: Res<AssetServer>,
+    (counselor, killer): (Option<Res<CounselorCharacter>>, Option<Res<crate::character::KillerCharacter>>),
+    rigs: Query<(&ChildOf, &Rig)>,
+    mut shown: Query<&mut ShownProps>,
+) {
+    let Some(props) = props else { return };
+    for (parent, rig) in &rigs {
+        let owner = parent.parent();
+        let info = match rig.model {
+            Model::Killer => killer.as_ref().map(|k| &k.info),
+            _ => counselor.as_ref().map(|c| &c.info),
+        };
+        let key = rig.action.as_ref().map(|(take, _)| if matches!(rig.model, Model::Killer) { format!("killer/{take}") } else { format!("counselor/{take}") });
+        let at = rig.action.as_ref().map_or(0.0, |(_, t)| *t);
+        let windows = key.as_ref().and_then(|k| props.0.get(k));
+        let want: Vec<usize> = windows.map_or_else(Vec::new, |w| w.iter().enumerate().filter(|(_, w)| w.0 <= at && at < w.1).map(|(i, _)| i).collect());
+        let Ok(mut have) = shown.get_mut(owner) else {
+            if !want.is_empty() {
+                commands.entity(owner).insert(ShownProps::default());
+            }
+            continue;
+        };
+        let key = key.unwrap_or_default();
+        // Gone: past their window, or another action's.
+        let stale = have.0 != key;
+        have.1.retain(|(i, e)| {
+            let keep = !stale && want.contains(i);
+            if !keep {
+                commands.entity(*e).despawn();
+            }
+            keep
+        });
+        have.0 = key;
+        let (Some(windows), Some(info)) = (windows, info) else { continue };
+        for i in want {
+            if have.1.iter().any(|(j, _)| *j == i) {
+                continue;
+            }
+            let (_, _, mesh, socket, _) = &windows[i];
+            let (bone, offset) = match info.sockets.get(socket) {
+                Some(s) => (rig.bones.get(&s.attach), s.transform.as_ref().map(crate::to_transform).unwrap_or_default()),
+                None => (rig.bones.get(socket), Transform::IDENTITY),
+            };
+            let Some(&bone) = bone else {
+                warn_once!("prop {mesh}: no socket or bone {socket}");
+                continue;
+            };
+            let e = commands.spawn((WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(mesh.clone()))), offset, Visibility::default(), ChildOf(bone))).id();
+            have.1.push((i, e));
         }
     }
 }

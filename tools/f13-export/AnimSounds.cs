@@ -6,6 +6,7 @@ using CUE4Parse.UE4.Assets.Exports;
 using CUE4Parse.UE4.Assets.Exports.Animation;
 using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Assets.Objects;
+using CUE4Parse.UE4.Assets.Exports.SkeletalMesh;
 
 static class AnimSounds
 {
@@ -66,6 +67,51 @@ static class AnimSounds
             Add(obj.Name, list);
         }
         return (json, cues);
+    }
+
+    /// Each montage's SCPropSpawnerNotifyState windows (a prop mesh on a socket while it lasts), by the names f13-game
+    /// plays its sequences under (as [`Collect`]: "<seq>", "<montage>/<seq>", Jason's "killer/<seq>", a counselor's
+    /// "counselor/<seq>"): [[start s, end s,
+    /// mesh glTF, socket, bHideEquippedItem]...] in that sequence's time. `queue` gets each prop mesh for export;
+    /// `meshPath` names its file.
+    public static JObject Props(IFileProvider provider, IEnumerable<string> animations, Action<UObject> queue, Func<USkeletalMesh, string> meshPath)
+    {
+        var json = new JObject();
+        foreach (var path in animations)
+        {
+            if (Load(provider, path) is not UAnimMontage m) continue;
+            var windows = new List<(float Start, float End, string Mesh, string Socket, bool Hide)>();
+            foreach (var n in m.GetOrDefault<FStructFallback[]>("Notifies", []))
+            {
+                if (n.GetOrDefault<FPackageIndex>("NotifyStateClass")?.Load() is not { ExportType: "SCPropSpawnerNotifyState" } state) continue;
+                if (state.GetOrDefault<FPackageIndex>("SkeletalPropMesh")?.Load() is not USkeletalMesh mesh) continue;
+                queue(mesh);
+                var start = n.GetOrDefault<float>("LinkValue");
+                windows.Add((start, start + n.GetOrDefault<float>("Duration"), meshPath(mesh), state.GetOrDefault<FName>("SocketName").Text, state.GetOrDefault<bool>("bHideEquippedItem")));
+            }
+            if (windows.Count == 0) continue;
+            foreach (var slot in m.SlotAnimTracks ?? [])
+            {
+                var segs = (slot.AnimTrack.AnimSegments ?? []).ToList();
+                foreach (var seg in segs)
+                {
+                    if (seg.AnimReference.ResolvedObject?.Name.Text is not { } seq) continue;
+                    var rate = seg.AnimPlayRate == 0 ? 1f : Math.Abs(seg.AnimPlayRate);
+                    var length = (seg.AnimEndTime - seg.AnimStartTime) / rate * Math.Max(seg.LoopingCount, 1);
+                    var end = seg.StartPos + length;
+                    var mine = windows.Where(w => w.Start < end && w.End > seg.StartPos)
+                        .Select(w => new JArray(seg.AnimStartTime + (Math.Max(w.Start, seg.StartPos) - seg.StartPos) * rate,
+                            seg.AnimStartTime + (Math.Min(w.End, end) - seg.StartPos) * rate, w.Mesh, w.Socket, w.Hide)).ToList();
+                    if (mine.Count == 0) continue;
+                    var names = new List<string> { seq, $"{m.Name}/{seq}" };
+                    if (path.Contains("/Characters/Killers/", StringComparison.OrdinalIgnoreCase)) names.Add($"killer/{seq}");
+                    if (path.Contains("/Characters/Counselors/", StringComparison.OrdinalIgnoreCase)) names.Add($"counselor/{seq}");
+                    foreach (var name in names)
+                        if (!json.ContainsKey(name)) json[name] = new JArray(mine);
+                }
+            }
+        }
+        return json;
     }
 
     static string Bare(string name) => Regex.Replace(name, "^(AM_)?[fFmM]_", "");
