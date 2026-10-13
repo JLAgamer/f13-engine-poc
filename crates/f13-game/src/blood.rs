@@ -28,7 +28,7 @@
 //! on a skeleton of its own, posed as hers, the physics asset's bodies from its bone down simulated (ragdoll.rs); one
 //! on a skeleton of another (the face's) goes where it hung on her, with what hangs off it (her hair), and drops.
 //! PLACEHOLDERS: the blow's bone (a thrown knife's: the bone nearest where it struck; a swing's: the bone nearest
-//! Jason's weapon_attach_r); the roll's rand() (the match's random numbers); no blood on the dropped limb; the face
+//! Jason's weapon_attach_r); the roll's rand() (the match's random numbers); the face
 //! falls straight down, untumbled, onto what's below (its physics asset isn't exported). Her damage textures are their masks
 //! (the latest per parameter) combined by channel, as the shaders sum them, her clothes' without Head Damage; her
 //! clothes and skin get their own materials with them. PLACEHOLDERS: the hit bone (the bone nearest the hit, no
@@ -117,7 +117,7 @@ impl Plugin for BloodPlugin {
             .add_systems(Startup, load_anim_gore)
             .add_observer(apply_blood)
             .add_observer(combat_dismember)
-            .add_systems(Update, (kill_gore.run_if(crate::net::simulating), show_gore, gore_caps, drop_limbs, pose_limbs, limb_ragdolls, drop_falling).chain());
+            .add_systems(Update, (kill_gore.run_if(crate::net::simulating), show_gore, gore_caps, drop_limbs, pose_limbs, limb_ragdolls, drop_falling, limb_blood).chain());
     }
 }
 
@@ -371,6 +371,40 @@ fn limb_ragdolls(
     }
 }
 
+/// Her damage textures (her clothes', her skin's) as last combined: a dropped limb takes them (its materials are the
+/// body's, which the game's gore records set on every element).
+#[derive(Component, Clone)]
+struct GoreTextures(Handle<Image>, Handle<Image>);
+
+/// A dropped limb's clothes and skin with her damage textures (once its materials are in).
+#[allow(clippy::type_complexity)]
+fn limb_blood(
+    limbs: Query<(Entity, &FallingLimb)>,
+    parents: Query<&ChildOf>,
+    textures: Query<&GoreTextures>,
+    children: Query<&Children>,
+    (mut clothes, mut skin): (Query<&mut MeshMaterial3d<crate::materials::ClothesMaterial>>, Query<&mut MeshMaterial3d<crate::materials::SkinMaterial>>),
+    (mut clothes_materials, mut skin_materials): (ResMut<Assets<crate::materials::ClothesMaterial>>, ResMut<Assets<crate::materials::SkinMaterial>>),
+) {
+    for (e, limb) in &limbs {
+        let Some(t) = parents.get(limb.from).ok().and_then(|p| textures.get(p.parent()).ok()) else { continue };
+        for c in children.iter_descendants(e) {
+            if let Ok(mut m) = clothes.get_mut(c) {
+                if let Some(mut own) = clothes_materials.get(&m.0).filter(|o| o.extension.damage != t.0).cloned() {
+                    own.extension.damage = t.0.clone();
+                    m.0 = clothes_materials.add(own);
+                }
+            }
+            if let Ok(mut m) = skin.get_mut(c) {
+                if let Some(mut own) = skin_materials.get(&m.0).filter(|o| o.extension.damage != t.1).cloned() {
+                    own.extension.damage = t.1.clone();
+                    m.0 = skin_materials.add(own);
+                }
+            }
+        }
+    }
+}
+
 /// A dropped limb has its ragdoll (if any) and gore cap.
 #[derive(Component)]
 struct LimbCapped;
@@ -501,6 +535,7 @@ fn gore_caps(
 /// and skin on their own materials with them.
 #[allow(clippy::too_many_arguments)]
 fn show_gore(
+    mut commands: Commands,
     changed: Query<(Entity, &Gore), Changed<Gore>>,
     children: Query<&Children>,
     (mut clothes, mut skin): (Query<&mut MeshMaterial3d<crate::materials::ClothesMaterial>>, Query<&mut MeshMaterial3d<crate::materials::SkinMaterial>>),
@@ -529,6 +564,7 @@ fn show_gore(
             images.add(image)
         };
         let (on_clothes, on_skin) = (combine(false), combine(true));
+        commands.entity(e).insert(GoreTextures(on_clothes.clone(), on_skin.clone()));
         info!("blood: {} on {e:?}", g.0.iter().map(|(p, m)| format!("{p} {}", m.rsplit('/').next().unwrap_or(""))).collect::<Vec<_>>().join(", "));
         for c in children.iter_descendants(e) {
             if let Ok(mut m) = clothes.get_mut(c) {

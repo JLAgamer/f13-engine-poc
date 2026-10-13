@@ -26,8 +26,8 @@ Base content (asset paths in the player's install; all gameplay values come from
 - [ ] Optimize performance (2026-10-13, a counselor at her start, --perf --features profile: 11.4 ms a frame, the render
       world's CPU the critical path: encoding 4.4 ms, submit 1.6, preprocess bind groups 1.3, the shadow phases'
       instance buffers 1.3; main world 3.9, PostUpdate 2.5; particles 0.9)
-- [ ] Blood: a dropped limb's own blood and gore cap blood effects, the face's fall as a body (its physics asset),
-      the kill takes' limb mesh swaps (SCLimbMeshSwapAnimNotify)
+- [ ] Blood: the dropped face's fall as a body (its physics asset), the kill takes' limb mesh swaps
+      (SCLimbMeshSwapAnimNotify)
 - [ ] Music: Jason's own music (JasonsMusic, for one spectating him: MODLOG "Jason's music, read further"; Jason is
       spectated only in private matches, so it waits for those)
 - [ ] More content, one at a time: maps (with their boat and other escapes), Jasons, counselors, perks, skins,
