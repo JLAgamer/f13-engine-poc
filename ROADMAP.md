@@ -9,8 +9,7 @@ Base content (asset paths in the player's install; all gameplay values come from
 ## Todo
 - [ ] The lobby's rest: its counselor pick widget (the pick is C for now; the fourteen counselors play), a full
       8-player run
-- [ ] Jason dying, its rest (MODLOG "Jason's death"): the shotgun's kill, the kill's camera splines and prompt, the
-      mask pickup, the sweater outfit, a network run; --bot-kill-jason injects her hits (her machete's swing missed
+- [ ] Jason dying, its rest (MODLOG "Jason's death"): the kill's camera splines and prompt, the mask pickup, the sweater outfit, a network run; --bot-kill-jason injects her hits (her machete's swing missed
       a waiting Jason at 1.5 m: find out why)
 - [ ] Tommy Jarvis: his intro at his start (FUN_14040fe60), HunterIntroComplete's pawn setup, a network bot run
 - [ ] Voice chat: push-to-talk in the game's settings menu (no menus yet: P in the lobby stands in)

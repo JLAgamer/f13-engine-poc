@@ -6,8 +6,9 @@
 //! _Machete_C: AM_m_cinematic_death_sequence_axe / _machete; VictimWeaponKillClasses Jason_Death_*:
 //! AM_cinematic_death_sequence_*), both played from where he kneels (InteractorPositionRequirement
 //! LocationAndRotation). Its KillInfo (KillJason_KillInfo_C) scores her KillJason; he's dead and the match ends.
-//! PLACEHOLDERS: the shotgun's kill (Gun classes, not in WeaponRequirements), its camera splines (Axe_SCSplineCamera,
-//! Machete_SCSplineCamera), the prompt.
+//! The shotgun can't kill him: its Gun takes are in the weapon-specific lists, but WeaponRequirements gates the
+//! interaction (FUN_14033a130: her current weapon must be one of its classes) and a gun's hit doesn't start his kill
+//! stance. PLACEHOLDERS: its camera splines (Axe_SCSplineCamera, Machete_SCSplineCamera), the prompt.
 
 use bevy::prelude::*;
 
