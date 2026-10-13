@@ -197,6 +197,10 @@ pub struct NetCounselor {
     pub trapped: Option<Option<f32>>,
     /// Dead or escaped (voice.rs: heard only by the others spectating).
     pub spectating: bool,
+    /// In a hiding spot: its world id, the side and the phase (hiding.rs HidePhase).
+    pub hiding: Option<(u32, u8, u8)>,
+    /// Her breath (hiding.rs Breathing): how much is left and whether she holds it.
+    pub breath: (f32, bool),
 }
 
 /// What Jason's animation reads of his state.
@@ -373,6 +377,13 @@ fn bot_hooks(
                             a.recharge_timer = a.tuning.recharge_time;
                         }
                         j.skip_morph_grace();
+                    }
+                }
+                crate::bot::BotSetup::Rage => {
+                    for (_, k) in &mut jasons {
+                        if let Some(mut k) = k {
+                            k.abilities.rage_active = true;
+                        }
                     }
                 }
                 crate::bot::BotSetup::Heard(at) => {
@@ -635,7 +646,7 @@ fn set<T: PartialEq>(mut c: Mut<T>, v: T) {
 #[allow(clippy::type_complexity)]
 fn update_bodies(
     mut bodies: Query<(&mut NetBody, &Transform, &mut NetAction, Option<&PlayAction>, Has<crate::items::Blocking>)>,
-    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>, Has<crate::voice::Spectating>))>,
+    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>, Has<crate::voice::Spectating>), (Option<&crate::hiding::Hiding>, Option<&crate::hiding::Breathing>))>,
     struggle: Option<Res<crate::jason::Struggle>>,
     mut jasons: Query<(&mut NetJason, &crate::jason::Jason, Option<&crate::senses::Knowledge>, Option<&crate::kill_camera::KillCam>)>,
     world_ids: Query<&crate::net_world::WorldId>,
@@ -656,7 +667,7 @@ fn update_bodies(
             a.blocking = blocking;
         }
     }
-    for (n, p, name, controls, (held, trapped, spectating)) in &mut counselors {
+    for (n, p, name, controls, (held, trapped, spectating), (hiding, breathing)) in &mut counselors {
         let c = &p.counselor;
         set(n, NetCounselor {
             stance: c.stance as u8,
@@ -676,6 +687,8 @@ fn update_bodies(
             held: held.then(|| struggle.as_ref().map_or(0.0, |s| s.wiggle.completion)),
             trapped: trapped.map(|t| t.struggle()),
             spectating,
+            hiding: hiding.and_then(|h| Some((world_ids.get(h.spot).ok()?.0, h.side as u8, h.phase.index()))),
+            breath: breathing.map_or((0.0, false), |b| (b.breath.current, b.breath.holding)),
         });
     }
     for (n, j, know, cam) in &mut jasons {
@@ -913,14 +926,14 @@ fn mirror(
     mut commands: Commands,
     (real, clock): (Res<Time<Real>>, Res<ServerClock>),
     mut bodies: Query<(&NetBody, &NetAction, Option<&NetCounselor>, Option<&NetJason>, &mut Twin, Option<&Snapshots>)>,
-    mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>, (Option<&Name>, Option<&mut Controls>, Has<LocalPlayer>, Option<&mut crate::senses::Knowledge>), (Has<crate::jason::Held>, Option<&mut crate::items::Trapped>, Has<crate::voice::Spectating>))>,
+    mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>, (Option<&Name>, Option<&mut Controls>, Has<LocalPlayer>, Option<&mut crate::senses::Knowledge>), (Has<crate::jason::Held>, Option<&mut crate::items::Trapped>, Has<crate::voice::Spectating>), (Option<&mut crate::hiding::Hiding>, Option<&mut crate::hiding::Breathing>))>,
     mut struggle: Option<ResMut<crate::jason::Struggle>>,
     actors: Res<crate::net_world::Actors>,
     cams: Query<&crate::kill_camera::KillCam>,
 ) {
     let shown_at = clock.now(&real) - INTERP_DELAY_S;
     for (b, a, nc, nj, mut twin, snaps) in &mut bodies {
-        let Ok((mut xf, player, jason, action, blocking, (name, controls, local, know), (held, trapped, spectating))) = twins.get_mut(twin.local) else { continue };
+        let Ok((mut xf, player, jason, action, blocking, (name, controls, local, know), (held, trapped, spectating), (hiding, breathing))) = twins.get_mut(twin.local) else { continue };
         let (to, yaw) = snaps.and_then(|s| sample(s, shown_at)).unwrap_or((Vec3::from_array(b.pos), b.yaw));
         xf.translation = to;
         xf.rotation = Quat::from_rotation_y(yaw);
@@ -955,6 +968,24 @@ fn mirror(
                     e.remove::<crate::jason::Held>();
                 }
                 (None, false) => {}
+            }
+            // In a hiding spot: her hiding camera, the breath meter, the way out.
+            match (n.hiding.and_then(|(id, side, phase)| Some((actors.get(id)?, side, phase))), hiding) {
+                (Some((spot, side, phase)), Some(mut h)) => {
+                    h.spot = spot;
+                    h.side = side as usize;
+                    h.phase = crate::hiding::HidePhase::from_index(phase);
+                }
+                (Some((spot, side, phase)), None) => {
+                    e.insert(crate::hiding::Hiding::remote(spot, side as usize, crate::hiding::HidePhase::from_index(phase)));
+                }
+                (None, Some(_)) => {
+                    e.remove::<crate::hiding::Hiding>();
+                }
+                (None, None) => {}
+            }
+            if let Some(mut b) = breathing {
+                (b.breath.current, b.breath.holding) = n.breath;
             }
             match (n.spectating, spectating) {
                 (true, false) => {

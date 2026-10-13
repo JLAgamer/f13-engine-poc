@@ -331,6 +331,33 @@ pub struct Hiding {
     wants_exit: bool,
 }
 
+impl Hiding {
+    /// On a client: a counselor the server has in a hiding spot (it runs her hiding; net.rs).
+    pub fn remote(spot: Entity, side: usize, phase: HidePhase) -> Hiding {
+        Hiding { spot, side, phase, t: 0.0, end: Transform::IDENTITY, wants_exit: false }
+    }
+}
+
+impl HidePhase {
+    pub fn index(self) -> u8 {
+        match self {
+            HidePhase::Entering => 0,
+            HidePhase::Hidden => 1,
+            HidePhase::Exiting => 2,
+            HidePhase::Killed => 3,
+        }
+    }
+
+    pub fn from_index(i: u8) -> HidePhase {
+        match i {
+            1 => HidePhase::Hidden,
+            2 => HidePhase::Exiting,
+            3 => HidePhase::Killed,
+            _ => HidePhase::Entering,
+        }
+    }
+}
+
 pub struct HidingPlugin;
 
 impl Plugin for HidingPlugin {

@@ -313,6 +313,8 @@ pub enum BotSetup {
     Abilities,
     /// Jason heard her here.
     Heard([f32; 3]),
+    /// Jason raged.
+    Rage,
 }
 
 static SETUP: std::sync::Mutex<Vec<BotSetup>> = std::sync::Mutex::new(Vec::new());
@@ -1625,8 +1627,9 @@ fn run_bot(
             let Ok((_, d, g)) = doors.get(de) else { return };
             // He hears her in there (and is raged, for --bot-raged-in).
             if let Some(mut k) = knowledge.iter_mut().next() {
-                if matches!(bot.goal, Goal::LockedIn { raged: true, .. }) {
+                if matches!(bot.goal, Goal::LockedIn { raged: true, .. }) && !k.abilities.rage_active {
                     k.abilities.rage_active = true;
+                    setup(BotSetup::Rage);
                 }
                 if !k.sees {
                     k.last_known = Some((pxf.translation, time.elapsed_secs(), crate::senses::Clue::Heard));
@@ -1778,7 +1781,12 @@ fn run_bot(
                         }
                         if bot.goal == Goal::Hide && bot.timer > 60.0 {
                             info!("bot: leaving the hiding spot");
-                            crate::hiding::request_exit(h);
+                            // (On a client the server has her hiding: E, as a player leaves.)
+                            if ON_CLIENT.load(std::sync::atomic::Ordering::Relaxed) {
+                                keys.press(KeyCode::KeyE);
+                            } else {
+                                crate::hiding::request_exit(h);
+                            }
                             bot.step = Step::Hide(3);
                             bot.timer = 0.0;
                         }
