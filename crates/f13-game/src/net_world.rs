@@ -165,6 +165,7 @@ pub enum Heard {
     Distortion { at: [f32; 3], dest: Option<[f32; 3]> },
     SoundBlip { at: [f32; 3] },
     JasonSound { cue: String },
+    PickupTaken { pickup: NetRef },
 }
 
 /// The channel [`Heard`] goes on (in order, every one).
@@ -184,6 +185,8 @@ pub enum Shout {
     SoundBlip(crate::senses::SoundBlip),
     /// A 2D sound for whoever plays Jason only (his locally controlled character's PlaySound2D).
     JasonSound(JasonSound),
+    /// A knife pickup taken (MULTICAST_DisablePickup).
+    PickupTaken(crate::jason::PickupTaken),
 }
 
 /// A 2D cue only Jason's player hears (played where PlayJason is).
@@ -212,6 +215,7 @@ pub fn shout(commands: &mut Commands, what: Shout) {
         Shout::Distortion(e) => commands.trigger(e),
         Shout::SoundBlip(e) => commands.trigger(e),
         Shout::JasonSound(e) => commands.trigger(e),
+        Shout::PickupTaken(e) => commands.trigger(e),
     }
     commands.trigger(what);
 }
@@ -452,6 +456,7 @@ fn send_heard(
         Shout::Distortion(d) => Some(Heard::Distortion { at: d.at.to_array(), dest: d.dest.map(|d| d.to_array()) }),
         Shout::SoundBlip(b) => Some(Heard::SoundBlip { at: b.at.to_array() }),
         Shout::JasonSound(s) => Some(Heard::JasonSound { cue: s.0.clone() }),
+        Shout::PickupTaken(p) => r(p.0).map(|pickup| Heard::PickupTaken { pickup }),
     };
     let Some(heard) = heard else {
         debug!("net: can't name {:?} to the clients", *what);
@@ -688,6 +693,11 @@ fn hear(mut commands: Commands, actors: Res<Actors>, twins: Res<crate::net::Twin
                 Heard::Distortion { at, dest } => commands.trigger(crate::jason::Distortion { at: v(at), dest: dest.map(v) }),
                 Heard::SoundBlip { at } => commands.trigger(crate::senses::SoundBlip { at: v(at) }),
                 Heard::JasonSound { cue } => commands.trigger(JasonSound(cue)),
+                Heard::PickupTaken { pickup } => {
+                    if let Some(p) = find(&pickup) {
+                        commands.trigger(crate::jason::PickupTaken(p));
+                    }
+                }
             }
         }
     }

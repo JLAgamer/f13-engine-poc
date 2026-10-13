@@ -415,7 +415,7 @@ fn bot_hooks(
     mut barricades: Query<&mut crate::windows::Barricade>,
     mut jasons: Query<(&mut crate::jason::Jason, Option<&mut crate::senses::Knowledge>)>,
     time: Res<Time>,
-    (own, mut starts, mut dropped): (Query<(Entity, &Transform), (With<LocalPlayer>, With<Player>, Without<PlayedBy>)>, ResMut<FreeStarts>, Local<bool>),
+    (own, mut starts, mut dropped, remote_jason): (Query<(Entity, &Transform), (With<LocalPlayer>, With<Player>, Without<PlayedBy>)>, ResMut<FreeStarts>, Local<bool>, Option<Res<crate::lobby::JasonPlayer>>),
     mut players: Query<(&PlayedBy, &mut Player)>,
     jason_entities: Query<Entity, With<crate::jason::Jason>>,
     (mut fuse_boxes, mut grids): (Query<&mut crate::power::FuseBox>, Option<ResMut<crate::power::PowerGrids>>),
@@ -427,9 +427,9 @@ fn bot_hooks(
     for (link, mut r) in &mut links {
         for BotSetupMsg(change) in r.receive() {
             // A test's server plays no one (its own counselor would be Jason's nearest): gone, as a dedicated
-            // lobby's, at the first scene change. (Not for a played Jason's abilities: with no counselor at all he'd
-            // have no target, and update_jason skips him.)
-            if !*dropped && change != crate::bot::BotSetup::Abilities {
+            // lobby's, at the first scene change. (Not when a player's Jason is the test: with no counselor at all
+            // he'd have no target, and update_jason skips him.)
+            if !*dropped && remote_jason.is_none() {
                 *dropped = true;
                 for (e, xf) in &own {
                     starts.0.insert(0, xf.translation);
@@ -1360,6 +1360,8 @@ struct NetBot {
     /// As Jason, also use his abilities (`--bot-net-abilities`), and their recharge timers before each.
     abilities: bool,
     recharge: [f32; 4],
+    /// The knife pickup it takes as Jason, and his knives before.
+    pickup: Option<(Entity, u32)>,
 }
 
 /// How long the bot waits for the server (real seconds) before giving up.
@@ -1713,6 +1715,7 @@ fn net_bot_jason(
     own: Query<(&NetBody, &NetJason), With<Controlled>>,
     know: Query<&crate::senses::Knowledge, With<crate::jason::Jason>>,
     (mut map, window): (ResMut<crate::jason_player::MorphMap>, Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>),
+    pickups: Query<(Entity, &crate::props::KnifePickup, &GlobalTransform, Has<crate::props::PickedUp>)>,
     mut exit: MessageWriter<AppExit>,
 ) {
     bot.t += time.delta_secs();
@@ -1759,6 +1762,50 @@ fn net_bot_jason(
             // (Keys' bits: NET_KEYS' order, 1 at bit 8.)
             const STEPS: [(&str, u32); 4] = [("Shift", 1 << 10), ("Stalk", 1 << 11), ("Sense", 1 << 9), ("Morph", 1 << 8)];
             let i = (bot.step - 10) as usize;
+            // Then a knife pickup (E at it): taken on the server, hidden here.
+            if i == STEPS.len() {
+                if bot.t < 2.0 {
+                    if nj.state != "Hunting" {
+                        bot.t = 0.0;
+                    }
+                    return;
+                }
+                let Some((pe, before)) = bot.pickup.or_else(|| {
+                    let (pe, k, g, _) = pickups.iter().filter(|p| !p.3).min_by(|a, b| a.2.translation().distance(at).total_cmp(&b.2.translation().distance(at)))?;
+                    // Beside its AlignmentSpecialMove spot, facing the knives (as the knife demo stands him).
+                    let spot = g.compute_transform() * k.spot;
+                    let knives_at = g.transform_point(k.interact);
+                    let off = (spot.translation - knives_at).with_y(0.0).normalize_or(Vec3::X) * 0.6;
+                    let stand = Vec3::new(spot.translation.x + off.x, spot.translation.y, spot.translation.z + off.z);
+                    crate::bot::setup(crate::bot::BotSetup::PlaceJason(stand.to_array()));
+                    info!("bot: net: Jason to the knives at {knives_at}");
+                    Some((pe, nj.knives))
+                }) else {
+                    bot.failed.push("knives");
+                    bot.step += 1;
+                    return;
+                };
+                bot.pickup = Some((pe, before));
+                let Ok((_, k, g, taken)) = pickups.get(pe) else { return };
+                let to = g.transform_point(k.interact) - (at + Vec3::Y * 0.88);
+                let (ky, kp) = ((-to.x).atan2(-to.z), to.y.atan2(Vec2::new(to.x, to.z).length()));
+                controls.yaw = ky;
+                controls.pitch = kp;
+                if taken && nj.knives > before {
+                    info!("bot: net: the knife pickup taken (hidden here), {} knives", nj.knives);
+                    bot.step += 1;
+                    bot.t = 0.0;
+                    controls.apply_remote(0, 0, ky, kp, view);
+                } else if bot.t > 20.0 {
+                    warn!("bot: net: the knife pickup: taken here {taken}, knives {} (were {before})", nj.knives);
+                    bot.failed.push("knives");
+                    bot.step += 1;
+                    bot.t = 0.0;
+                } else if bot.t > 3.0 {
+                    controls.apply_remote(if (bot.t * 2.0) as u32 % 2 == 0 { 1 << 7 } else { 0 }, 0, ky, kp, view);
+                }
+                return;
+            }
             let Some(&(name, key)) = STEPS.get(i) else {
                 if bot.failed.is_empty() {
                     info!("bot: net: passed");

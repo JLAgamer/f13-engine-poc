@@ -338,6 +338,7 @@ impl Plugin for JasonPlugin {
             .add_systems(FixedUpdate, choose_target.before(crate::senses::perceive).before(grab_kills_available).before(update_jason).run_if(crate::net::simulating))
             .add_systems(FixedUpdate, (grab_kills_available.before(update_jason), update_jason, recover_counselor, fly_knives, pick_up_knives).run_if(crate::net::simulating).run_if(crate::match_flow::in_progress))
             .add_observer(spawn_knife)
+            .add_observer(pickup_taken)
             .add_observer(distortion)
             .add_observer(car_slam)
             .add_systems(Update, (tag_jason_parts, animate_jason, grab_layer, jason_mixes, teleport_mix, jason_door_camera, held_knife.after(animate_jason)));
@@ -936,6 +937,16 @@ impl Stun {
 pub const KNIFE_PICKUP: &str = "normal_stand_throwingknife_grab";
 /// PerformPickup's SetLifeSpan (DAT_14207a218, s).
 const PICKUP_LIFESPAN_S: f32 = 5.0;
+
+/// A knife pickup taken (MULTICAST_DisablePickup: on every machine): hidden, out of reach, gone after its lifespan.
+#[derive(Event, Clone, Debug)]
+pub struct PickupTaken(pub Entity);
+
+fn pickup_taken(ev: On<PickupTaken>, mut commands: Commands) {
+    if let Ok(mut e) = commands.get_entity(ev.0) {
+        e.insert((crate::props::PickedUp(PICKUP_LIFESPAN_S), Visibility::Hidden));
+    }
+}
 
 /// The throwing knife pickup the played Jason's E takes: within its Interactable's DistanceLimit (+1 m, as the other
 /// interactables here) and its yaw limit (MaxYawOffset 70); SCThrowingKnifePickup's CanInteractWith (0x140375000)
@@ -2814,7 +2825,7 @@ pub(crate) fn update_jason(
                     if let Ok((_, k, _, _)) = knife_pickups.get(fuse) {
                         j.knives += k.count;
                         info!("Jason picked up {} throwing knife(s) ({} now)", k.count, j.knives);
-                        commands.entity(fuse).insert((crate::props::PickedUp(PICKUP_LIFESPAN_S), Visibility::Hidden));
+                        crate::net_world::shout(&mut commands, crate::net_world::Shout::PickupTaken(PickupTaken(fuse)));
                     }
                 }
                 if at >= killer.length(take).unwrap_or(2.0) {
