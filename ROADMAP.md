@@ -28,7 +28,9 @@ Base content (asset paths in the player's install; all gameplay values come from
       2.5 ms of the main world a frame; their draw is already on the GPU: MODLOG "The rain's draw")
 - [ ] Post-processing and lighting: compare against the game's own screenshots (the user's cabin porch reference,
       2026-10-12: its wall lamp's spots light sharp bands up and down the logs)
-- [ ] Optimize performance
+- [ ] Optimize performance (2026-10-13, a counselor at her start, --perf --features profile: 11.4 ms a frame, the render
+      world's CPU the critical path: encoding 4.4 ms, submit 1.6, preprocess bind groups 1.3, the shadow phases'
+      instance buffers 1.3; main world 3.9, PostUpdate 2.5; particles 0.9)
 - [ ] Blood: a hit's blood on the hit bone's clothing ("Trying to apply blood")
 - [ ] Blood: dismemberment (the death's dismember roll, the dismemberment meshes)
 - [ ] Blood: the counselor's gore skin layer (SkinGoreMaster)
