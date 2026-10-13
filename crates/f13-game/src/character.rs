@@ -459,6 +459,8 @@ pub struct Rig {
     idle_time: f32,
     /// The montage or action playing: its animation and time since it started.
     pub action: Option<(String, f32)>,
+    /// Actions blending out: their time, still advancing (a montage instance plays on through its BlendOut).
+    fading: HashMap<String, f32>,
     /// Jump straight to the next pose instead of blending (after the owner moved to where a root motion ended).
     snap: bool,
     /// Whether her last footstep was the left.
@@ -580,6 +582,7 @@ pub fn spawn_model_as(commands: &mut Commands, assets: &AssetServer, character: 
         aim_weights: [0.0; 4],
         aim_on: false,
         timed: None,
+        fading: HashMap::new(),
         shotgun_hold: false,
         crossfade: None,
         sync_t: HashMap::new(),
@@ -1089,8 +1092,18 @@ impl Rig {
     pub fn set_action(&mut self, action: Option<&str>, dt: f32) {
         match (&mut self.action, action) {
             (Some((name, at)), Some(a)) if name == a => *at += dt,
-            (_, Some(a)) => self.action = Some((a.to_string(), 0.0)),
-            (_, None) => self.action = None,
+            (old, Some(a)) => {
+                if let Some((n, t)) = old.take() {
+                    self.fading.insert(n, t);
+                }
+                self.fading.remove(a);
+                self.action = Some((a.to_string(), 0.0));
+            }
+            (old, None) => {
+                if let Some((n, t)) = old.take() {
+                    self.fading.insert(n, t);
+                }
+            }
         }
     }
 
@@ -1173,6 +1186,11 @@ impl Rig {
             None => self.sync_t.clear(),
         }
         self.idle_time += dt;
+        for t in self.fading.values_mut() {
+            *t += dt;
+        }
+        let weights = &self.weights;
+        self.fading.retain(|n, _| weights.get(n).is_some_and(|w| *w > 1e-4));
 
         for (name, &(node, len)) in &model.clips {
             let w = self.weights.get(name).copied().unwrap_or(0.0);
@@ -1185,6 +1203,9 @@ impl Rig {
             let at = if self.action.as_ref().is_some_and(|(a, _)| a == name) {
                 // Loop sections (a stun's middle, a drawer's Idle) repeat; the rest hold their last frame.
                 let t = self.action.as_ref().unwrap().1;
+                if name.contains("_loop") || name.contains("_cycle") || name.ends_with("_idle") { t % len.max(1e-3) } else { t.min(len) }
+            } else if let Some(&t) = self.fading.get(name) {
+                // (Blending out: on from where it was, held at its end; a loop section repeats.)
                 if name.contains("_loop") || name.contains("_cycle") || name.ends_with("_idle") { t % len.max(1e-3) } else { t.min(len) }
             } else if let Some((_, t, looping)) = self.timed.filter(|(n, _, _)| n == name) {
                 if looping { t % len.max(1e-3) } else { t.min(len) }

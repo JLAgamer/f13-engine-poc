@@ -7,7 +7,6 @@ Base content (asset paths in the player's install; all gameplay values come from
 `Characters/Killers/Jason/J2`, the Chevettes (`Blueprints/Vehicles/DriveableVehicles/Cars/Chevette`), the police.
 
 ## Todo
-- [ ] Jason's knife throw: its animation quickly repeats when he throws
 - [ ] The lobby's rest: its counselor pick widget (the pick is C for now; the fourteen counselors play), a full
       8-player run
 - [ ] Jason dying, its rest (MODLOG "Jason's death"): the kill's camera splines and prompt, the mask pickup, the sweater outfit, a network run; --bot-kill-jason injects her hits (her machete's swing missed
