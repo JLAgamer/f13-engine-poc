@@ -1157,16 +1157,15 @@ fn fly_knives(
                 // SCThrowable::OnStop (0x1403fe870) in a character: its JasonImpactNoise
                 // (ThrowingKnifeImpactConfirmation) in 2D for its thrower's player.
                 crate::net_world::shout(&mut commands, crate::net_world::Shout::JasonSound(crate::net_world::JasonSound("ThrowingKnifeImpactConfirmation".into())));
-                // Its CounselorFX (P_Hit_Blood_Counselor_Default_01) where it struck, and its CounselorDecal's splashes
-                // (blood on what's around her, along the knife's way and down). PLACEHOLDER: the gash decal itself
-                // (on her) isn't drawn: decals here don't follow a character.
+                // Its CounselorFX (P_Hit_Blood_Counselor_Default_01) where it struck, and its CounselorDecal: its gash on
+                // her (following her), its splashes on what's around her (along the knife's way and down).
+                // PLACEHOLDER: her surface there, 0.15 m from her capsule's axis toward the knife (no mesh trace).
                 if let Some(k) = impact.as_deref() {
                     let dir = k_vel.normalize_or(Vec3::Z);
                     if let Some(fx) = &k.1 {
                         commands.write_message(crate::particles::SpawnParticles::impact(fx, from, -dir));
                     }
                     if let Some(d) = &k.2 {
-                        let splashes = crate::decals::ImpactDecal { material: String::new(), ..d.clone() };
                         let mut seed = (k_age.to_bits() as u64 ^ 0x9e37_79b9) | 1;
                         let mut r = || {
                             seed ^= seed << 13;
@@ -1174,7 +1173,9 @@ fn fly_knives(
                             seed ^= seed << 17;
                             (seed % 32768) as f32 / 32767.0
                         };
-                        crate::decals::spawn_impact(&mut commands, &splashes, from, -dir, dir.with_y(0.0).normalize_or(Vec3::Z), &mut r, |a, b| {
+                        let axis = from.clamp(a.with_y(a.y.min(b.y)), b.with_y(a.y.max(b.y))).with_x(a.x).with_z(a.z);
+                        let out = (from - axis).normalize_or(-dir);
+                        crate::decals::spawn_impact(&mut commands, d, axis + out * 0.15, out, dir.with_y(0.0).normalize_or(Vec3::Z), Some(pe), &mut r, |a, b| {
                             f13_core::collision::segment_hit_tri(&world, a, b, 2.0).map(|(t, n, _)| (a + (b - a) * t, n))
                         });
                     }

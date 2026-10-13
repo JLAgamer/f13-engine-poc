@@ -29,8 +29,6 @@ Base content (asset paths in the player's install; all gameplay values come from
 - [ ] Blood: a hit's blood on the hit bone's clothing ("Trying to apply blood")
 - [ ] Blood: dismemberment (the death's dismember roll, the dismemberment meshes)
 - [ ] Blood: the counselor's gore skin layer (SkinGoreMaster)
-- [ ] Blood: impact decals on characters (a thrown knife's gash on her, the shotgun's on Jason: decals that follow a
-      character)
 - [ ] Music: Jason's own music (JasonsMusic, for one spectating him: MODLOG "Jason's music, read further"; Jason is
       spectated only in private matches, so it waits for those)
 - [ ] More content, one at a time: maps (with their boat and other escapes), Jasons, counselors, perks, skins,

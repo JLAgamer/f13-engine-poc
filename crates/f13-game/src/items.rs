@@ -924,6 +924,10 @@ fn tick_action(
                                 if let Some(fx) = impacts.get(2).cloned().flatten() {
                                     commands.write_message(crate::particles::SpawnParticles::impact(&fx, chest + dir * dj, -dir));
                                 }
+                                // And its JasonDecal on him (following him).
+                                if let (Some(decal), Some((je, _))) = (impact_decals.get(2).cloned().flatten(), jason) {
+                                    crate::decals::spawn_impact(&mut commands, &decal, chest + dir * dj, -dir, facing, Some(je), &mut r, |_, _| None);
+                                }
                             }
                             (_, Some((d, n, surface))) => {
                                 let at = chest + dir * d;
@@ -944,7 +948,7 @@ fn tick_action(
                                 let decal = (1..=22).contains(&surface).then(|| impact_decals.get(2 + surface as usize).cloned().flatten()).flatten().or_else(|| impact_decals.first().cloned().flatten());
                                 if let Some(decal) = decal {
                                     let n = if n.dot(dir) > 0.0 { -n } else { n };
-                                    crate::decals::spawn_impact(&mut commands, &decal, at, n, facing, &mut r, |a, b| {
+                                    crate::decals::spawn_impact(&mut commands, &decal, at, n, facing, None, &mut r, |a, b| {
                                         f13_core::collision::segment_hit_tri(&world, a, b, 2.0).map(|(t, n, _)| (a + (b - a) * t, n))
                                     });
                                 }

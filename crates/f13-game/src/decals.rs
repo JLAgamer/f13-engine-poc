@@ -170,6 +170,9 @@ pub struct SpawnDecal {
     pub size: Vec3,
     pub lifespan: f32,
     pub fade_screen_size: f32,
+    /// A character it's on: it follows the bone nearest where it lands (SpawnDecalAttached to the hit component's
+    /// bone, KeepWorldPosition).
+    pub on: Option<Entity>,
 }
 
 #[derive(Component)]
@@ -270,6 +273,7 @@ fn spawn_decals(
     mut built: Local<Built>,
     mut entries: Local<Option<HashMap<String, Entry>>>,
     mut cube: Local<Option<Handle<Mesh>>>,
+    (children, skins, transforms): (Query<&Children>, Query<&bevy::mesh::skinning::SkinnedMesh>, Query<&GlobalTransform>),
 ) {
     for r in requests.read() {
         let entries = entries.get_or_insert_with(|| std::fs::read_to_string(export.0.join("materials.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default());
@@ -288,14 +292,28 @@ fn spawn_decals(
         let cube = cube.get_or_insert_with(|| meshes.add(Cuboid::new(2.0, 2.0, 2.0))).clone();
         debug!("decal {} at {} rotator {} size {}", r.material, r.at, r.rotator, r.size);
         let q = f13_core::camera_spline::quaternion(r.rotator);
-        commands.spawn((
+        let world = Transform { translation: r.at, rotation: Quat::from_xyzw(-q.x, -q.z, -q.y, q.w), scale: Vec3::new(r.size.x, r.size.z, r.size.y) / 100.0 };
+        // On a character: under its skeleton's joint nearest the point, where it lands (kept in the world).
+        let bone = r.on.and_then(|c| {
+            children
+                .iter_descendants(c)
+                .filter_map(|e| skins.get(e).ok())
+                .flat_map(|s| s.joints.iter().copied())
+                .filter_map(|j| Some((j, transforms.get(j).ok()?)))
+                .min_by(|a, b| a.1.translation().distance(r.at).total_cmp(&b.1.translation().distance(r.at)))
+        });
+        let transform = bone.map_or(world, |(_, g)| Transform::from_matrix(g.to_matrix().inverse() * world.to_matrix()));
+        let mut e = commands.spawn((
             Mesh3d(cube),
             MeshMaterial3d(materials.add(mat)),
-            Transform { translation: r.at, rotation: Quat::from_xyzw(-q.x, -q.z, -q.y, q.w), scale: Vec3::new(r.size.x, r.size.z, r.size.y) / 100.0 },
+            transform,
             Decal { left: (r.lifespan > 0.0).then_some(r.lifespan), fade_screen_size: r.fade_screen_size, radius: r.size.max_element() },
             bevy::light::NotShadowCaster,
             Name::new(format!("decal {}", r.material)),
         ));
+        if let Some((j, _)) = bone {
+            e.insert(ChildOf(j));
+        }
     }
 }
 
@@ -360,14 +378,16 @@ fn ue(v: Vec3) -> Vec3 {
 /// out, and where it lands spawns decal [min(rand / 32767 x count, count - 1)] the same way, stopping after the first
 /// with bSingleSplashDecal. Bevy space in (`normal` out of the hit surface); `rand` the game's rand() / 32767; `trace`
 /// the world's first hit on a segment (point, normal).
-pub fn spawn_impact(commands: &mut Commands, d: &ImpactDecal, at: Vec3, normal: Vec3, instigator_forward: Vec3, rand: &mut impl FnMut() -> f32, trace: impl Fn(Vec3, Vec3) -> Option<(Vec3, Vec3)>) {
+/// `on`: the character hit (its decal follows it; the splashes land on the world).
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_impact(commands: &mut Commands, d: &ImpactDecal, at: Vec3, normal: Vec3, instigator_forward: Vec3, on: Option<Entity>, rand: &mut impl FnMut() -> f32, trace: impl Fn(Vec3, Vec3) -> Option<(Vec3, Vec3)>) {
     let mut rotator = rotator_of(ue(-normal));
     if d.random_rotation {
         rotator.z = rand() * 360.0 - 180.0;
     }
     // (No material: its splashes only.)
     if !d.material.is_empty() {
-        commands.write_message(SpawnDecal { material: d.material.clone(), at, rotator, size: d.size, lifespan: d.lifespan, fade_screen_size: d.fade_screen_size });
+        commands.write_message(SpawnDecal { material: d.material.clone(), at, rotator, size: d.size, lifespan: d.lifespan, fade_screen_size: d.fade_screen_size, on });
     }
     for s in d.splashes.iter().filter(|s| !s.decals.is_empty()) {
         let basis = if s.instigator_forward { rotator_of(ue(instigator_forward)) } else { rotator_of(ue(normal)) };
@@ -381,7 +401,7 @@ pub fn spawn_impact(commands: &mut Commands, d: &ImpactDecal, at: Vec3, normal: 
         }
         let count = s.decals.len();
         let i = ((rand() * count as f32) as usize).min(count - 1);
-        commands.write_message(SpawnDecal { material: s.decals[i].clone(), at: p, rotator, size: s.size, lifespan: s.lifespan, fade_screen_size: s.fade_screen_size });
+        commands.write_message(SpawnDecal { material: s.decals[i].clone(), at: p, rotator, size: s.size, lifespan: s.lifespan, fade_screen_size: s.fade_screen_size, on: None });
         if d.single_splash {
             return;
         }
