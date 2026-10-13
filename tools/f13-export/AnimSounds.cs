@@ -252,9 +252,18 @@ static class AnimSounds
 
     /// Each take's gore notifies, keyed as [`Props`]: SCApplyBloodMaskAnimNotify ({Time, Kind "Blood", Limb (ELimb's
     /// name), Mask (texture path), Parameter, Elements}) and SCDetachLimbAnimNotify ({Time, Kind "Detach", Limb, Impulse
-    /// [x, y, z], Mask (BloodMaskOverride, or none), ShowLimb}), in that sequence's time; the masks go to `queue`.
+    /// [x, y, z], Mask (BloodMaskOverride, or none), ShowLimb}) and SCLimbMeshSwapAnimNotify ({Time, Kind "Swap", Limb,
+    /// Name (LimbSwapName), Mesh (MeshToSwap's .glb, or none)}), in that sequence's time; the masks and meshes go to
+    /// `queue`.
     public static JObject Gore(IFileProvider provider, IEnumerable<string> animations, Action<UObject> queue, Func<UObject, string> texturePath)
     {
+        string? SwapMesh(UObject notify)
+        {
+            if (notify.GetOrDefault<FSoftObjectPath?>("MeshToSwap") is not { } sp || sp.AssetPathName.Text is not { Length: > 0 } a || a == "None") return null;
+            if (!sp.TryLoad(out USkeletalMesh mesh)) return null;
+            queue(mesh);
+            return new CUE4Parse_Conversion.Exporters.SkinnedAssetExporter(mesh).SavePath + ".glb";
+        }
         var json = new JObject();
         foreach (var path in animations)
         {
@@ -292,6 +301,13 @@ static class AnimSounds
                         ["Impulse"] = notify.GetOrDefault<CUE4Parse.UE4.Objects.Core.Math.FVector?>("Impulse") is { } i ? new JArray(i.X, i.Y, i.Z) : new JArray(0, 0, 0),
                         ["Mask"] = maskPath,
                         ["ShowLimb"] = notify.GetOrDefault("bShowLimbAfterDetach", false),
+                    },
+                    "SCLimbMeshSwapAnimNotify" => new JObject
+                    {
+                        ["Kind"] = "Swap",
+                        ["Limb"] = notify.GetOrDefault<FName>("LimbToSwap").Text,
+                        ["Name"] = notify.GetOrDefault<FName>("LimbSwapName").Text,
+                        ["Mesh"] = SwapMesh(notify),
                     },
                     _ => null,
                 };

@@ -758,6 +758,23 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             if (provider.TryLoadPackageObject<UTexture2D>(pkg + "." + pkg.Split('/')[^1], out var tex)) queue(tex);
             return (pkg.StartsWith("/Game/") ? "SummerCamp/Content/" + pkg["/Game/".Length..] : pkg) + ".png";
         }
+        Newtonsoft.Json.Linq.JObject Swaps(Newtonsoft.Json.Linq.JToken? list)
+        {
+            var o = new Newtonsoft.Json.Linq.JObject();
+            foreach (var s in list as Newtonsoft.Json.Linq.JArray ?? new Newtonsoft.Json.Linq.JArray())
+            {
+                var path = s["SwapMesh"]?["AssetPathName"]?.ToString();
+                if (string.IsNullOrEmpty(path) || path == "None" || !provider.TryLoadPackageObject<USkeletalMesh>(path, out var mesh)) continue;
+                o[s["SwapName"]?.ToString() ?? ""] = Queued(mesh);
+            }
+            return o;
+        }
+        static Newtonsoft.Json.Linq.JToken? LimbBodies(USkeletalMesh mesh)
+        {
+            var info = new Info();
+            AddRagdoll(info, mesh);
+            return info.Ragdoll == null ? null : Newtonsoft.Json.Linq.JToken.FromObject(info.Ragdoll);
+        }
         string Queued(USkeletalMesh mesh)
         {
             queue(mesh);
@@ -829,6 +846,10 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
                 // LimbGoreCap (a static mesh) at LimbGoreCapSocket (the limb mesh's or its skeleton's).
                 ["Limb"] = limbs.TryGetValue(name, out var lm) ? Queued(lm) : null,
                 ["LimbCap"] = LimbCap(p["LimbGoreCap"]),
+                // ShowLimb's (0x14035cd30, the mesh swap notify's): its MeshSwaps by SwapName.
+                ["MeshSwaps"] = Swaps(p["MeshSwaps"]),
+                // The limb mesh's own physics asset's bodies (the face's: Counselor_Face_Base_Physics, one sphyl).
+                ["LimbBodies"] = lm != null ? LimbBodies(lm) : null,
                 ["LimbCapAt"] = lm != null && p["LimbGoreCapSocket"]?.ToString() is { } sock && sock != "None" ? SocketOf(lm, sock) : null,
             };
         }

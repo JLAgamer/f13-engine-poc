@@ -184,6 +184,12 @@ pub struct BodyPartInfo {
     pub limb_cap: Option<String>,
     #[serde(default)]
     pub limb_cap_at: Option<Part>,
+    /// The limb mesh's own physics asset's bodies.
+    #[serde(default, deserialize_with = "crate::level::null_as_empty")]
+    pub limb_bodies: Vec<RagdollBody>,
+    /// ShowLimb's mesh swaps (SCLimbMeshSwapAnimNotify's LimbSwapName -> mesh).
+    #[serde(default, deserialize_with = "crate::level::null_as_empty")]
+    pub mesh_swaps: HashMap<String, String>,
 }
 
 /// properties.

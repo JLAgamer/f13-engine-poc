@@ -29,7 +29,7 @@
 //! on a skeleton of another (the face's) goes where it hung on her, with what hangs off it (her hair), and drops.
 //! PLACEHOLDERS: the blow's bone (a thrown knife's: the bone nearest where it struck; a swing's: the bone nearest
 //! Jason's weapon_attach_r); the roll's rand() (the match's random numbers); the face
-//! falls straight down, untumbled, onto what's below (its physics asset isn't exported). Her damage textures are their masks
+//! falls straight down, untumbled, onto what's below (its physics asset is one sphyl: its radius rests on the ground). Her damage textures are their masks
 //! (the latest per parameter) combined by channel, as the shaders sum them, her clothes' without Head Damage; her
 //! clothes and skin get their own materials with them. PLACEHOLDERS: the hit bone (the bone nearest the hit, no
 //! per-bone hit test); the elements (every clothes and skin material takes them).
@@ -332,7 +332,9 @@ fn pose_limbs(
                 let cx = c.transform.as_ref().map(crate::to_transform).unwrap_or_default();
                 commands.spawn((cx, Visibility::default(), bevy::world_serialization::WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(c.file.clone()))), ChildOf(e)));
             }
-            let radius = counselor.info.ragdoll.iter().find(|b| b.bone == p.attach).map_or(0.1, |b| b.radius / 100.0);
+            // Its own physics asset's body (the face's: one sphyl on its Face bone), else her body's at that bone.
+            let info = counselor.info.body_parts.get(PARTS[limb.part]);
+            let radius = info.and_then(|i| i.limb_bodies.first()).or_else(|| counselor.info.ragdoll.iter().find(|b| b.bone == p.attach)).map_or(0.1, |b| b.radius / 100.0);
             commands.entity(e).insert(Dropping(0.0, radius));
         }
         commands.entity(e).insert(LimbPosed);
