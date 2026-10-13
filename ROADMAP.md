@@ -13,8 +13,8 @@ Base content (asset paths in the player's install; all gameplay values come from
       SCStatBadge; award sites and classes are read, MODLOG), the counselors' character picks, a full 8-player run
       (`--lobby` gathers, picks Jason, starts the match and, the match over, starts again for a rematch)
 - [ ] The Tommy Jarvis timer, Tommy Jarvis, and Jason dying
-- [ ] Voice chat: VoIPAudioComponent's real attenuation (UE's defaults stand in), muting players (the scoreboard's,
-      ILLGameVoiceBlueprintLibrary), the push-to-talk setting in a menu (`--open-mic` for now)
+- [ ] Voice chat: VoIPAudioComponent's real attenuation (UE's defaults stand in); the settings and mutes in the game's
+      own menus (the lobby's keys stand in: P push-to-talk, Shift + n mute)
 - [ ] Materials: foliage subsurface (its transmission is the deferred light pass's, whose code isn't in the shipped
       global shader cache: MODLOG "Foliage subsurface: blocked")
 - [ ] Counselor model: the eye look against a capture of the game (it rolls the eyes 90 degrees from their bind:

@@ -159,7 +159,41 @@ pub(crate) fn client(app: &mut App) {
 }
 
 pub(crate) fn ui(app: &mut App) {
-    app.add_systems(Startup, spawn_overlay).add_systems(Update, show_overlay);
+    app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay));
+}
+
+/// The lobby's voice options (PLACEHOLDER keys: the game's are in its audio settings and scoreboard menus): P turns
+/// push-to-talk off and on (SCAudioSettingsSaveGame bUsePushToTalk), Shift + a member's number mutes or unmutes them.
+fn voice_keys(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    lobby: Query<&NetLobby>,
+    open_mic: Option<Res<crate::voice::OpenMic>>,
+    mut mutes: ResMut<crate::voice::VoiceMutes>,
+    me: Option<Res<Me>>,
+) {
+    let Some(l) = lobby.iter().next().filter(|l| l.open) else { return };
+    if keys.just_pressed(KeyCode::KeyP) {
+        if open_mic.is_some() {
+            commands.remove_resource::<crate::voice::OpenMic>();
+        } else {
+            commands.insert_resource(crate::voice::OpenMic);
+        }
+    }
+    if !keys.pressed(KeyCode::ShiftLeft) && !keys.pressed(KeyCode::ShiftRight) {
+        return;
+    }
+    const DIGITS: [KeyCode; 8] = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::Digit5, KeyCode::Digit6, KeyCode::Digit7, KeyCode::Digit8];
+    for (i, k) in DIGITS.iter().enumerate() {
+        let Some(m) = l.members.get(i).filter(|_| keys.just_pressed(*k)) else { continue };
+        if me.as_ref().is_some_and(|me| me.id == m.id) {
+            continue;
+        }
+        if !mutes.0.remove(&m.name) {
+            mutes.0.insert(m.name.clone());
+        }
+        info!("voice: {} {}", m.name, if mutes.0.contains(&m.name) { "muted" } else { "unmuted" });
+    }
 }
 
 fn peer_id(id: &RemoteId) -> u64 {
@@ -208,6 +242,10 @@ fn receive(mut receivers: Query<(Entity, &mut MessageReceiver<LobbyMsg>)>, links
 
 /// The lobby's keys: 1 counselor, 2 no preference, 3 Jason, Enter ready or not.
 fn lobby_key(keys: &ButtonInput<KeyCode>) -> Option<LobbyMsg> {
+    // (Shift + a number mutes a player: voice_keys.)
+    if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) {
+        return None;
+    }
     if keys.just_pressed(KeyCode::Digit1) {
         Some(LobbyMsg::Preference(Preference::Counselor))
     } else if keys.just_pressed(KeyCode::Digit2) {
@@ -422,7 +460,14 @@ fn spawn_overlay(mut commands: Commands) {
 }
 
 /// The lobby's list while it's open.
-fn show_overlay(lobby: Query<&NetLobby>, me: Option<Res<Me>>, client: Option<Res<NetClient>>, mut overlay: Single<(&mut Text, &mut Visibility), With<Overlay>>) {
+#[allow(clippy::type_complexity)]
+fn show_overlay(
+    lobby: Query<&NetLobby>,
+    me: Option<Res<Me>>,
+    client: Option<Res<NetClient>>,
+    mut overlay: Single<(&mut Text, &mut Visibility), With<Overlay>>,
+    (open_mic, mutes): (Option<Res<crate::voice::OpenMic>>, Option<Res<crate::voice::VoiceMutes>>),
+) {
     let (ref mut text, ref mut vis) = *overlay;
     let Some(l) = lobby.iter().next().filter(|l| l.open) else {
         vis.set_if_neq(Visibility::Hidden);
@@ -430,11 +475,17 @@ fn show_overlay(lobby: Query<&NetLobby>, me: Option<Res<Me>>, client: Option<Res
     };
     let mine = if client.is_some() { me.map(|m| m.id) } else { Some(0) };
     let mut s = String::from("LOBBY\n\n");
-    for m in &l.members {
+    for (i, m) in l.members.iter().enumerate() {
         let you = if Some(m.id) == mine { "  (you)" } else { "" };
-        s.push_str(&format!("{}  -  {}  -  {}{}\n", m.name, m.preference.label(), if m.ready { "READY" } else { "not ready" }, you));
+        s.push_str(&format!("{}. {}  -  {}  -  {}{}\n", i + 1, m.name, m.preference.label(), if m.ready { "READY" } else { "not ready" }, you));
     }
     s.push_str("\n1 counselor   2 no preference   3 Jason   Enter ready\n");
+    let open = open_mic.is_some();
+    s.push_str(&format!("P push-to-talk (T): {}   Shift+n mute player n\n", if open { "off" } else { "on" }));
+    let muted: Vec<&str> = mutes.as_ref().map_or_else(Vec::new, |m| m.0.iter().map(String::as_str).collect());
+    if !muted.is_empty() {
+        s.push_str(&format!("muted: {}\n", muted.join(", ")));
+    }
     if let Some(t) = l.countdown {
         s.push_str(&format!("\nthe match in {:.0} s", t.ceil().max(0.0)));
     }

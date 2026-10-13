@@ -61,9 +61,13 @@ pub(crate) fn protocol(app: &mut App) {
     app.register_message::<VoiceDown>().add_direction(NetworkDirection::ServerToClient);
 }
 
-/// The player turned push-to-talk off (`--open-mic`; the test tone always sends).
+/// The player turned push-to-talk off (`--open-mic`, or P in the lobby; the test tone always sends).
 #[derive(Resource)]
 pub(crate) struct OpenMic;
+
+/// The players this one muted (ILLGameVoiceBlueprintLibrary MutePlayerState: on this machine only), by name.
+#[derive(Resource, Default)]
+pub(crate) struct VoiceMutes(pub std::collections::HashSet<String>);
 
 /// GLB_Speak (DefaultInput.ini): held to talk.
 const SPEAK: KeyCode = KeyCode::KeyT;
@@ -483,7 +487,8 @@ fn play_gains(
     listener: Query<&GlobalTransform, With<SpatialListener>>,
     twins: Option<Res<crate::net::Twins>>,
     globals: Query<&GlobalTransform>,
-    characters: Query<(Has<crate::jason::Jason>, Has<Spectating>, Option<&crate::interact::Inventory>)>,
+    characters: Query<(Has<crate::jason::Jason>, Has<Spectating>, Option<&crate::interact::Inventory>, Option<&Name>)>,
+    mutes: Option<Res<VoiceMutes>>,
     items: Query<&crate::props::Item>,
     (local, jasons, play_jason, game, lobby): (
         Query<Entity, (With<crate::controls::LocalPlayer>, With<crate::player::Player>)>,
@@ -496,7 +501,7 @@ fn play_gains(
     let Some(ear) = listener.iter().next() else { return };
     let to_listener = ear.affine().inverse();
     let party = |e: Entity| {
-        let (jason, spectating, inv) = characters.get(e).unwrap_or((false, false, None));
+        let (jason, spectating, inv, _) = characters.get(e).unwrap_or((false, false, None, None));
         let walkie = inv.is_some_and(|i| i.special.iter().any(|&s| items.get(s).is_ok_and(|it| it.class == WALKIE)));
         let at = globals.get(e).map_or(Vec3::ZERO, |g| g.translation() + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M) * 100.0;
         Party { jason, spectating, walkie, at }
@@ -519,6 +524,11 @@ fn play_gains(
             v.gains = (0.0, 0.0);
             continue;
         };
+        // Muted here.
+        if characters.get(e).ok().and_then(|c| c.3).is_some_and(|n| mutes.as_ref().is_some_and(|m| m.0.contains(n.as_str()))) {
+            v.gains = (0.0, 0.0);
+            continue;
+        }
         v.gains = match route(in_progress, party(e), hearer) {
             Route::Silent => (0.0, 0.0),
             Route::Flat => (VOLUME, VOLUME),

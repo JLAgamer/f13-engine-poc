@@ -273,6 +273,7 @@ counselor|none|jason` sets your preference from the start, and `--dedicated` hos
 Voice chat is on, push-to-talk as in the game: hold T to talk into your default microphone (`--open-mic` sends
 whenever you speak). Players hear each other from their characters within about 36 m; two counselors carrying
 walkie-talkies hear each other at any range, Jason only nearby, and the dead and escaped only each other.
+In the lobby, P turns push-to-talk off and on and Shift + a player's number mutes them (for you only).
 `--no-voice` turns it off (handy for several games on one machine).
 
 ## Host commands
