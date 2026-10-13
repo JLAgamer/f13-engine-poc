@@ -120,7 +120,13 @@ impl Plugin for BotPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Bot { goal: self.0, ..default() })
             .add_systems(PreUpdate, run_bot.after(InputSystems))
-            .add_systems(FixedPostUpdate, watch_fear);
+            .add_systems(FixedPostUpdate, watch_fear)
+            // (A game of its own has no server to tell.)
+            .add_systems(Last, |client: Option<Res<crate::net::NetClient>>| {
+                if client.is_none() {
+                    take_setup();
+                }
+            });
     }
 }
 
@@ -292,6 +298,37 @@ fn stand_spot(world: &(impl f13_core::collision::TriSource + ?Sized), point: Vec
 
 fn place(player: &mut Transform, at: Vec3) {
     player.translation = at;
+    setup(BotSetup::Place(at.to_array()));
+}
+
+/// A scene change the bot makes, for a server to make too when the bot plays on a client (net.rs `bot_hooks`: the
+/// server's `--bot-hooks`); a game of its own ignores them.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+pub enum BotSetup {
+    /// Her counselor stands here.
+    Place([f32; 3]),
+    /// The door whose interact point is here locked, or barricaded.
+    Door { at: [f32; 3], barred: bool },
+    /// Jason's abilities all ready, past the AI's wait before its first Morph.
+    Abilities,
+    /// Jason heard her here.
+    Heard([f32; 3]),
+}
+
+static SETUP: std::sync::Mutex<Vec<BotSetup>> = std::sync::Mutex::new(Vec::new());
+
+/// The bot plays on a client: the fear events and the score are the server's (its own runs check those).
+pub(crate) static ON_CLIENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn setup(s: BotSetup) {
+    if let Ok(mut q) = SETUP.lock() {
+        q.push(s);
+    }
+}
+
+/// The scene changes since the last call.
+pub(crate) fn take_setup() -> Vec<BotSetup> {
+    SETUP.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default()
 }
 
 /// Points the camera from the counselor's chest at `target` (interaction prefers what the camera looks at).
@@ -470,6 +507,7 @@ fn run_bot(
                     } else {
                         d.locked = true;
                     }
+                    setup(BotSetup::Door { at: door_at.to_array(), barred });
                     info!("bot: shut in behind a {} door (health {:.0}), Jason {:.0} m away", if barred { "barricaded" } else { "locked" }, d.health, door_at.distance(jat));
                     bot.door_hits.push((0.0, d.health));
                 }
@@ -490,6 +528,7 @@ fn run_bot(
                 return;
             }
             if bot.goal == Goal::Abilities {
+                setup(BotSetup::Abilities);
                 if let Some(mut k) = knowledge.iter_mut().next() {
                     let a = &mut k.abilities;
                     a.unlocked = [true; 4];
@@ -795,6 +834,7 @@ fn run_bot(
             if let Some(mut k) = knowledge.iter_mut().next() {
                 if !k.sees {
                     k.last_known = Some((pxf.translation, time.elapsed_secs(), crate::senses::Clue::Heard));
+                    setup(BotSetup::Heard(pxf.translation.to_array()));
                 }
             }
             if bot.timer > 120.0 {
@@ -1483,6 +1523,7 @@ fn run_bot(
                 if let Some(mut k) = knowledge.iter_mut().next() {
                     if !k.sees {
                         k.last_known = Some((pxf.translation, time.elapsed_secs(), crate::senses::Clue::Heard));
+                        setup(BotSetup::Heard(pxf.translation.to_array()));
                     }
                 }
                 if matches!(j.state, crate::jason::JasonState::Killing { .. }) && j.kill_move.2 == "Underwater Grab" && !bot.jason_shots.contains(&"drown") {
@@ -1502,6 +1543,7 @@ fn run_bot(
                 if let Some(mut k) = knowledge.iter_mut().next() {
                     if !k.sees {
                         k.last_known = Some((pxf.translation, time.elapsed_secs(), crate::senses::Clue::Heard));
+                        setup(BotSetup::Heard(pxf.translation.to_array()));
                     }
                 }
                 let placed = bot.fixtures[0].and_then(|e| placed_kills.get(e).ok()).map(|(_, k)| k.takes().2);
@@ -1516,6 +1558,7 @@ fn run_bot(
                 if let Some(mut k) = knowledge.iter_mut().next() {
                     if !k.sees {
                         k.last_known = Some((pxf.translation, time.elapsed_secs(), crate::senses::Clue::Heard));
+                        setup(BotSetup::Heard(pxf.translation.to_array()));
                     }
                     let a = &k.abilities;
                     let spent = |ability| a.is_unlocked(ability) && a.recharge_fraction(ability) < 1.0;
@@ -1587,6 +1630,7 @@ fn run_bot(
                 }
                 if !k.sees {
                     k.last_known = Some((pxf.translation, time.elapsed_secs(), crate::senses::Clue::Heard));
+                    setup(BotSetup::Heard(pxf.translation.to_array()));
                 }
             }
             if bot.timer >= 5.0 {
@@ -1856,7 +1900,8 @@ fn run_bot(
                     Goal::LockedIn { .. } => &["IndoorFearEvent", "JasonNearFearEvent"],
                     _ => &[],
                 };
-                let missing: Vec<&&str> = fear.iter().filter(|e| !bot.fear_seen.iter().any(|s| s == **e)).collect();
+                let on_client = ON_CLIENT.load(std::sync::atomic::Ordering::Relaxed);
+                let missing: Vec<&&str> = fear.iter().filter(|e| !on_client && !bot.fear_seen.iter().any(|s| s == **e)).collect();
                 info!("bot: fear events pushed: {}", bot.fear_seen.join(", "));
                 if !missing.is_empty() {
                     error!("bot: fear events never pushed: {missing:?}");
@@ -1883,7 +1928,7 @@ fn run_bot(
                     _ => &[],
                 };
                 let mut unscored = Vec::new();
-                if let Some(g) = &game {
+                if let Some(g) = game.as_ref().filter(|_| !on_client) {
                     let score = g.mine().map(|t| t.score.clone()).unwrap_or_default();
                     let awards: Vec<String> = score.awards.iter().map(|a| format!("{} {}", a.event, a.xp)).collect();
                     info!("bot: scored {} XP: {}", score.total(), awards.join(", "));

@@ -310,6 +310,79 @@ pub struct NetPlugin {
     /// a rematch's relaunch keeps them).
     pub net_id: Option<u64>,
     pub last_jason: Option<u64>,
+    /// A server: its players' scenario bots may set their scenes up (`--bot-hooks`: teleports, locks; testing).
+    pub bot_hooks: bool,
+}
+
+/// A client's scenario bot's scene change (bot.rs [`crate::bot::BotSetup`]), for the server to make.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct BotSetupMsg(pub crate::bot::BotSetup);
+
+/// On a client: its scenario bot's scene changes to the server.
+fn send_bot_setup(mut senders: Query<&mut MessageSender<BotSetupMsg>, With<Connected>>) {
+    let changes = crate::bot::take_setup();
+    for mut s in &mut senders {
+        for c in &changes {
+            s.send::<InputChannelReliable>(BotSetupMsg(c.clone()));
+        }
+    }
+}
+
+/// The reliable channel for the bots' scene changes.
+pub struct InputChannelReliable;
+
+/// On a `--bot-hooks` server: each player's bot's scene changes, made to her counselor and the world.
+#[allow(clippy::type_complexity)]
+fn bot_hooks(
+    mut commands: Commands,
+    mut links: Query<(Entity, &mut MessageReceiver<BotSetupMsg>)>,
+    mut counselors: Query<(Entity, &PlayedBy, &mut Transform), Without<crate::jason::Jason>>,
+    mut doors: Query<(Entity, &mut crate::doors::Door, &GlobalTransform)>,
+    mut barricades: Query<&mut crate::windows::Barricade>,
+    mut jasons: Query<(&mut crate::jason::Jason, Option<&mut crate::senses::Knowledge>)>,
+    time: Res<Time>,
+) {
+    for (link, mut r) in &mut links {
+        for BotSetupMsg(change) in r.receive() {
+            info!("net: bot hook from {link}: {change:?}");
+            match change {
+                crate::bot::BotSetup::Place(at) => {
+                    if let Some((e, _, mut xf)) = counselors.iter_mut().find(|(_, by, _)| by.0 == link) {
+                        xf.translation = Vec3::from_array(at);
+                        commands.entity(e).insert(crate::player::Unsettled);
+                    }
+                }
+                crate::bot::BotSetup::Door { at, barred } => {
+                    let at = Vec3::from_array(at);
+                    let Some((de, mut d, _)) = doors.iter_mut().min_by(|a, b| a.2.transform_point(a.1.interact).distance(at).total_cmp(&b.2.transform_point(b.1.interact).distance(at))) else { continue };
+                    if barred {
+                        for mut b in barricades.iter_mut().filter(|b| b.door == Some(de)) {
+                            b.enabled = true;
+                        }
+                    } else {
+                        d.locked = true;
+                    }
+                }
+                crate::bot::BotSetup::Abilities => {
+                    for (mut j, k) in &mut jasons {
+                        if let Some(mut k) = k {
+                            let a = &mut k.abilities;
+                            a.unlocked = [true; 4];
+                            a.recharge_timer = a.tuning.recharge_time;
+                        }
+                        j.skip_morph_grace();
+                    }
+                }
+                crate::bot::BotSetup::Heard(at) => {
+                    for (_, k) in &mut jasons {
+                        if let Some(mut k) = k.filter(|k| !k.sees) {
+                            k.last_known = Some((Vec3::from_array(at), time.elapsed_secs(), crate::senses::Clue::Heard));
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// On a lobby's server: its matches end back in the lobby ([`relaunch`]).
@@ -351,6 +424,9 @@ impl Plugin for NetPlugin {
             Role::Server(port) => {
                 app.add_plugins(server::ServerPlugins { tick_duration: TICK });
                 protocol(app);
+                if self.bot_hooks {
+                    app.add_systems(Update, bot_hooks);
+                }
                 if self.lobby {
                     app.insert_resource(Rematch).insert_resource(crate::lobby::LastJason(self.last_jason));
                 }
@@ -392,6 +468,9 @@ impl Plugin for NetPlugin {
                 app.insert_resource(NetClient)
                     .insert_resource(ServerAddr(addr))
                     .insert_resource(NetId(self.net_id))
+                    // (Its scenario bot, if any, plays here: bot.rs.)
+                    .add_systems(Startup, || crate::bot::ON_CLIENT.store(true, std::sync::atomic::Ordering::Relaxed))
+                    .add_systems(Update, send_bot_setup)
                     .add_systems(Update, connect)
                     .add_observer(body_gone)
                     .init_resource::<Twins>()
@@ -416,6 +495,8 @@ impl Plugin for NetPlugin {
 fn protocol(app: &mut App) {
     app.add_channel::<InputChannel>(ChannelSettings { mode: ChannelMode::SequencedUnreliable, ..default() }).add_direction(NetworkDirection::ClientToServer);
     app.register_message::<InputMsg>().add_direction(NetworkDirection::ClientToServer);
+    app.add_channel::<InputChannelReliable>(ChannelSettings { mode: ChannelMode::OrderedReliable(ReliableSettings::default()), ..default() }).add_direction(NetworkDirection::ClientToServer);
+    app.register_message::<BotSetupMsg>().add_direction(NetworkDirection::ClientToServer);
     app.component::<NetBody>().replicate();
     app.component::<NetCounselor>().replicate();
     app.component::<NetJason>().replicate();

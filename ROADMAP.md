@@ -7,8 +7,8 @@ Base content (asset paths in the player's install; all gameplay values come from
 `Characters/Killers/Jason/J2`, the Chevettes (`Blueprints/Vehicles/DriveableVehicles/Cars/Chevette`), the police.
 
 ## Todo
-- [ ] Bot clients for the scenarios: the bots that set up their scene (teleports, locks) need a server-side hook
-      (the net bot plays through its input only)
+- [ ] Scenario bots on clients: the rest of the scenarios over the network (`--bot-hooks` carries the locked-in
+      one's scene changes: placing her, a door, Jason's hearing and abilities; the others change more: cars, items)
 - [ ] The lobby's rest: the match-end lobby as its own screen (SCMatchEndLobbyWidget, its badges' icons and names:
       SCStatBadge; award sites and classes are read, MODLOG), the counselors' character picks, a full 8-player run
       (`--lobby` gathers, picks Jason, starts the match and, the match over, starts again for a rematch)
