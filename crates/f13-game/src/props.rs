@@ -395,6 +395,17 @@ fn spawn_props(
             kind: Some(SpawnKind::LargeItem),
         });
     }
+    // Jason's mask (his KillerMaskPickupClass), set aside until it's knocked off (jason_death.rs).
+    let killer_mask = world.actors.len();
+    if classes.get(crate::jason_death::KILLER_MASK_PICKUP).is_some() {
+        world.actors.push(f13_data::world::MatchActor {
+            class: crate::jason_death::KILLER_MASK_PICKUP.into(),
+            transform: Xform { t: [0.0, 0.0, -100000.0], r: [0.0, 0.0, 0.0, 1.0], s: [1.0; 3] },
+            from_level: false,
+            spawned_by: None,
+            kind: Some(SpawnKind::SmallItem),
+        });
+    }
 
     let mut scenes: HashMap<String, Handle<WorldAsset>> = HashMap::new();
     let mut scene = |file: &str| {
@@ -411,6 +422,9 @@ fn spawn_props(
         entities.insert(id, root);
         if id == hunter_weapon {
             commands.entity(root).insert((crate::tommy::HunterWeapon, crate::interact::Carried, Visibility::Hidden));
+        }
+        if id == killer_mask {
+            commands.entity(root).insert((crate::jason_death::KillerMask, crate::interact::Carried, Visibility::Hidden));
         }
         // The CB radio (SCCBRadio): its Interactable's hold calls Tommy (tommy.rs).
         if classes.is_child_of(&actor.class, "SCCBRadio") {

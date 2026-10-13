@@ -1400,7 +1400,9 @@ static class Mvp
         "Pickaxe_ThroatHack_GrabKill_C", "Pickaxe_Canopener_GrabKill_C", "PickAxe_CurbStomp_GrabKill_C",
         "PickAxe_SweepTheLeg_GrabKill_C", "PickAxe_TopPopper_GrabKill_C", "Choke_GrabKill_C",
         // Jason's death (his JasonKillClass: a context kill) and Pamela's sweater's ability (its SweaterAbilityClass).
-        "JasonDeath_C"];
+        "JasonDeath_C",
+        // His mask, knocked off (Jason_SackHead_C's KillerMaskPickupClass: an SCKillerMask).
+        "J2_MaskPickup_C"];
     // Montages whose length or root motion the rules use (anims.json).
     const string Shared = "/Game/Characters/Counselors/Base/Shared";
     public static readonly string[] Montages =

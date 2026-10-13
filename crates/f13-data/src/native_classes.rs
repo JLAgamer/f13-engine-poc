@@ -222,5 +222,8 @@ pub(crate) const NATIVE_PARENTS: &[(&str, &str)] = &[
     ("SCPamelaSweater", "SCSpecialItem"),
     ("SCWalkieTalkie", "SCSpecialItem"),
     ("SCPocketKnife", "SCItem"),
+    // Its InternalConstructor calls SCItem's constructor (0x14036d590) and sets its own vtable, which overrides only
+    // the destructor.
+    ("SCKillerMask", "SCItem"),
     ("SCVehicleStarterComponent", "SCRepairComponent"),
 ];
