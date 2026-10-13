@@ -96,12 +96,48 @@ pub fn query_world(server: SocketAddr) -> Option<WorldInfo> {
 #[derive(Resource)]
 pub struct NetClient;
 
-/// A player's input for one tick: the buttons held ([`Controls::held`]) and the control rotation.
+/// A player's input for one frame: the buttons held ([`Controls::held`]), the control rotation, and how many times
+/// each button was pressed and released so far (wrapping counts, by [`Controls::held`]'s bit): the server keeps only
+/// the newest input, so a tap between two of its frames (or in a lost message) shows as a count gone up.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct InputMsg {
     pub held: u32,
     pub yaw: f32,
     pub pitch: f32,
+    pub presses: [u8; 32],
+    pub releases: [u8; 32],
+}
+
+/// The buttons whose counts changed from `old` to `new` (bits as [`Controls::held`]).
+fn counted(old: &[u8; 32], new: &[u8; 32]) -> u32 {
+    (0..32).filter(|&i| old[i] != new[i]).fold(0, |bits, i| bits | 1 << i)
+}
+
+/// On a client: its buttons' press and release counts so far (sent in every [`InputMsg`]).
+#[derive(Default)]
+struct Counts {
+    presses: [u8; 32],
+    releases: [u8; 32],
+}
+
+impl Counts {
+    fn add(&mut self, pressed: u32, released: u32) {
+        for i in 0..32 {
+            if pressed & 1 << i != 0 {
+                self.presses[i] = self.presses[i].wrapping_add(1);
+            }
+            if released & 1 << i != 0 {
+                self.releases[i] = self.releases[i].wrapping_add(1);
+            }
+        }
+    }
+}
+
+/// On the server, a player link's counts as last received (none before the first input).
+#[derive(Component)]
+struct LinkCounts {
+    presses: [u8; 32],
+    releases: [u8; 32],
 }
 
 /// The input channel: only the newest input counts.
@@ -277,7 +313,8 @@ impl Plugin for NetPlugin {
                             a.seek = (a.seek.0 + 1, s.0);
                         }
                     })
-                    .add_systems(Update, apply_inputs);
+                    // Before the frame's gameplay (each press shows for exactly one frame).
+                    .add_systems(PreUpdate, apply_inputs.after(MessageSystems::Receive));
                 crate::net_world::server(app);
                 crate::voice::server(app, self.dedicated);
                 if self.lobby {
@@ -405,13 +442,29 @@ fn player_left(left: On<Remove, Connected>, counselors: Query<(Entity, &PlayedBy
     }
 }
 
-/// Each player's newest input into her counselor's controls.
-fn apply_inputs(mut links: Query<(Entity, &mut MessageReceiver<InputMsg>)>, mut counselors: Query<(&PlayedBy, &mut Controls)>) {
-    for (link, mut receiver) in &mut links {
-        let Some(input) = receiver.receive().last() else { continue };
+/// Each player's newest input into her counselor's controls, with the buttons pressed or released since the last
+/// (their counts changed: [`InputMsg`]). A frame with no input keeps the buttons held, none pressed again.
+fn apply_inputs(mut commands: Commands, mut links: Query<(Entity, &mut MessageReceiver<InputMsg>, Option<&mut LinkCounts>)>, mut counselors: Query<(&PlayedBy, &mut Controls)>) {
+    for (link, mut receiver, counts) in &mut links {
+        let input = receiver.receive().last();
+        let edges = match (&input, counts) {
+            (Some(i), Some(mut c)) => {
+                let edges = (counted(&c.presses, &i.presses), counted(&c.releases, &i.releases));
+                (c.presses, c.releases) = (i.presses, i.releases);
+                edges
+            }
+            (Some(i), None) => {
+                commands.entity(link).insert(LinkCounts { presses: i.presses, releases: i.releases });
+                (0, 0)
+            }
+            (None, _) => (0, 0),
+        };
         for (by, mut c) in &mut counselors {
             if by.0 == link {
-                *c = c.next(input.held, input.yaw, input.pitch);
+                *c = match &input {
+                    Some(i) => c.next_with(i.held, edges.0, edges.1, i.yaw, i.pitch),
+                    None => c.held_still(),
+                };
             }
         }
     }
@@ -547,10 +600,12 @@ fn connect(mut commands: Commands, server: Res<ServerAddr>, level: Res<crate::Le
 }
 
 /// This player's input, every frame (the server keeps the newest).
-fn send_input(local: Query<&Controls, With<LocalPlayer>>, mut senders: Query<&mut MessageSender<InputMsg>, With<Connected>>) {
+fn send_input(local: Query<&Controls, With<LocalPlayer>>, mut senders: Query<&mut MessageSender<InputMsg>, With<Connected>>, mut counts: Local<Counts>) {
     let Ok(c) = local.single() else { return };
+    let (pressed, released) = c.edges();
+    counts.add(pressed, released);
     for mut s in &mut senders {
-        s.send::<InputChannel>(InputMsg { held: c.held(), yaw: c.yaw, pitch: c.pitch });
+        s.send::<InputChannel>(InputMsg { held: c.held(), yaw: c.yaw, pitch: c.pitch, presses: counts.presses, releases: counts.releases });
     }
 }
 
@@ -1178,6 +1233,21 @@ mod tests {
         let w = Snapshots([(0.0, Vec3::ZERO, 3.0), (1.0, Vec3::ZERO, -3.0)].into());
         let (_, y) = sample(&w, 0.5).unwrap();
         assert!((y - (3.0 + (std::f32::consts::TAU - 6.0) / 2.0)).abs() < 1e-3, "{y}");
+    }
+
+    #[test]
+    fn a_tap_between_two_inputs_still_counts() {
+        let e = 1 << crate::controls::Button::Interact as u32;
+        let mut client = Counts::default();
+        let before = client.presses;
+        // Pressed and released between two of the server's frames: the newest input holds nothing.
+        client.add(e, 0);
+        client.add(0, e);
+        let c = Controls::default().next_with(0, counted(&before, &client.presses), counted(&before, &client.releases), 0.0, 0.0);
+        assert!(c.just_pressed(crate::controls::Button::Interact) && c.just_released(crate::controls::Button::Interact));
+        assert!(!c.pressed(crate::controls::Button::Interact));
+        // A frame with no input doesn't press it again.
+        assert!(!c.held_still().just_pressed(crate::controls::Button::Interact));
     }
 
     #[test]

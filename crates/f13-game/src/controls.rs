@@ -128,9 +128,26 @@ impl Controls {
         Controls { pressed: held, just_pressed: held & !self.pressed, just_released: self.pressed & !held, yaw, pitch }
     }
 
+    /// [`Controls::next`] with the buttons also pressed or released in between (`presses`, `releases`: a tap shorter
+    /// than the gap between two updates still counts).
+    pub fn next_with(&self, held: u32, presses: u32, releases: u32, yaw: f32, pitch: f32) -> Controls {
+        let n = self.next(held, yaw, pitch);
+        Controls { just_pressed: n.just_pressed | presses, just_released: n.just_released | releases, ..n }
+    }
+
+    /// The same buttons held, none pressed or released this frame.
+    pub fn held_still(&self) -> Controls {
+        Controls { just_pressed: 0, just_released: 0, ..*self }
+    }
+
     /// The buttons held, as [`Controls::next`] takes them.
     pub fn held(&self) -> u32 {
         self.pressed
+    }
+
+    /// The buttons pressed and released this frame (bits as [`Controls::held`]).
+    pub fn edges(&self) -> (u32, u32) {
+        (self.just_pressed, self.just_released)
     }
 }
 
