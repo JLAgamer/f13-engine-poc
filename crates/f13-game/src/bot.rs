@@ -1528,7 +1528,13 @@ fn run_bot(
                         setup(BotSetup::Heard(pxf.translation.to_array()));
                     }
                 }
-                if matches!(j.state, crate::jason::JasonState::Killing { .. }) && j.kill_move.2 == "Underwater Grab" && !bot.jason_shots.contains(&"drown") {
+                // (On a client his state comes as its name and the kill's isn't sent: Killing her in the water.)
+                let drowning = if ON_CLIENT.load(std::sync::atomic::Ordering::Relaxed) {
+                    j.remote_state == "Killing"
+                } else {
+                    matches!(j.state, crate::jason::JasonState::Killing { .. }) && j.kill_move.2 == "Underwater Grab"
+                };
+                if drowning && !bot.jason_shots.contains(&"drown") {
                     bot.jason_shots.push("drown");
                     info!("bot: Jason is drowning her");
                 }

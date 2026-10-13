@@ -326,6 +326,10 @@ pub struct BotSetupMsg(pub crate::bot::BotSetup);
 
 /// On a client: its scenario bot's scene changes to the server.
 fn send_bot_setup(mut senders: Query<&mut MessageSender<BotSetupMsg>, With<Connected>>) {
+    // (Kept until connected: a bot can set its scene up first.)
+    if senders.is_empty() {
+        return;
+    }
     let changes = crate::bot::take_setup();
     for mut s in &mut senders {
         for c in &changes {
@@ -347,9 +351,19 @@ fn bot_hooks(
     mut barricades: Query<&mut crate::windows::Barricade>,
     mut jasons: Query<(&mut crate::jason::Jason, Option<&mut crate::senses::Knowledge>)>,
     time: Res<Time>,
+    (own, mut starts, mut dropped): (Query<(Entity, &Transform), (With<LocalPlayer>, With<Player>, Without<PlayedBy>)>, ResMut<FreeStarts>, Local<bool>),
 ) {
     for (link, mut r) in &mut links {
         for BotSetupMsg(change) in r.receive() {
+            // A test's server plays no one (its own counselor would be Jason's nearest): gone, as a dedicated
+            // lobby's, at the first scene change.
+            if !*dropped {
+                *dropped = true;
+                for (e, xf) in &own {
+                    starts.0.insert(0, xf.translation);
+                    commands.entity(e).despawn();
+                }
+            }
             info!("net: bot hook from {link}: {change:?}");
             match change {
                 crate::bot::BotSetup::Place(at) => {
