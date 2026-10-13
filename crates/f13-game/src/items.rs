@@ -892,7 +892,13 @@ fn tick_action(
                         let world_hit = f13_core::collision::segment_hit_tri(&world, chest, chest + dir * reach, 2.0).map(|(t, n, s)| (t * reach, n, s));
                         let jason_hit = jason.and_then(|(_, jxf)| ray_hits_capsule(chest, dir, jxf.translation)).map(|p| p.distance(chest)).filter(|d| *d <= reach);
                         match (jason_hit, world_hit) {
-                            (Some(dj), w) if w.is_none_or(|w| dj < w.0) => on_jason += 1,
+                            (Some(dj), w) if w.is_none_or(|w| dj < w.0) => {
+                                on_jason += 1;
+                                // GetImpactFX on a killer: its JasonFX (P_Hit_Blood_Jason_Default_01) where it hit him.
+                                if let Some(fx) = impacts.get(2).cloned().flatten() {
+                                    commands.write_message(crate::particles::SpawnParticles::impact(&fx, chest + dir * dj, -dir));
+                                }
+                            }
                             (_, Some((d, n, surface))) => {
                                 let at = chest + dir * d;
                                 let surface = if surface == f13_core::collision::Tri::TERRAIN { sounds.as_ref().map_or(0, |s| s.terrain_surface(at.x, at.z)) } else { surface };

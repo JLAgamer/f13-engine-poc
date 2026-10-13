@@ -961,9 +961,10 @@ fn knife_velocity(from: Vec3, to: Vec3, speed: f32) -> Vec3 {
 #[derive(Resource)]
 pub(crate) struct KnifeLook(Handle<WorldAsset>, Transform, Transform);
 
-/// The thrown knife's ImpactTemplate's sounds (Killer_ImpactEffect_ThrowingKnife_C: [`crate::props::impact_sounds`]).
+/// The thrown knife's ImpactTemplate's sounds (Killer_ImpactEffect_ThrowingKnife_C: [`crate::props::impact_sounds`]),
+/// its CounselorFX and its CounselorDecal.
 #[derive(Resource, Default)]
-struct KnifeImpact(Vec<Option<String>>);
+struct KnifeImpact(Vec<Option<String>>, Option<String>, Option<crate::decals::ImpactDecal>);
 
 impl KnifeImpact {
     /// GetImpactSound for a hit on `surface`: its own (none if unset: "No Sound Cue to Play!"), else DefaultSound (a
@@ -995,7 +996,9 @@ fn load_knife_look(mut commands: Commands, export: Res<crate::ExportRoot>, asset
     let local = f13_data::level::Xform { r: quaternion(Vec3::new(270.0, 0.0, 0.0)).to_array(), ..local };
     commands.insert_resource(KnifeLook(assets.load(GltfAssetLabel::Scene(0).from_asset(file)), crate::to_transform(&local), held));
     if let Some(t) = classes.prop("ThrowingKnife_C", "ImpactTemplate").as_str() {
-        commands.insert_resource(KnifeImpact(crate::props::impact_sounds(&classes, t)));
+        let fx = classes.prop(t, "CounselorFX")["AssetPathName"].as_str().and_then(|a| a.rsplit('.').next()).map(String::from);
+        let decal = crate::decals::ImpactDecal::from_json(classes.prop(t, "CounselorDecal"));
+        commands.insert_resource(KnifeImpact(crate::props::impact_sounds(&classes, t), fx, decal));
     }
     if let Some(c) = classes.get("Underwater_GrabKill_C").and_then(|c| c.components.iter().find(|c| c.kind == "SCCameraSplineComponent")) {
         commands.insert_resource(DrownKillCamera(crate::to_transform(&c.local.unwrap_or(f13_data::level::Xform::IDENTITY))));
@@ -1139,6 +1142,7 @@ fn fly_knives(
             continue;
         }
         k.vel.y -= KNIFE_GRAVITY * dt;
+        let (k_vel, k_age) = (k.vel, k.age);
         let from = xf.translation;
         let to = from + k.vel * dt;
         // Her: the segment passing within her capsule (a 0.3 m radius around her from her feet to 1.8 m).
@@ -1149,6 +1153,28 @@ fn fly_knives(
                 let r = p.counselor.take_damage(Hit { amount: k.damage, blocked_with_weapon: false }, &ptuning.counselor);
                 info!("Jason's knife hit Vanessa for {:.0} (health {:.0})", r.dealt, p.counselor.health);
                 impact_at(&mut commands, from, 0);
+                // Its CounselorFX (P_Hit_Blood_Counselor_Default_01) where it struck, and its CounselorDecal's splashes
+                // (blood on what's around her, along the knife's way and down). PLACEHOLDER: the gash decal itself
+                // (on her) isn't drawn: decals here don't follow a character.
+                if let Some(k) = impact.as_deref() {
+                    let dir = k_vel.normalize_or(Vec3::Z);
+                    if let Some(fx) = &k.1 {
+                        commands.write_message(crate::particles::SpawnParticles::impact(fx, from, -dir));
+                    }
+                    if let Some(d) = &k.2 {
+                        let splashes = crate::decals::ImpactDecal { material: String::new(), ..d.clone() };
+                        let mut seed = (k_age.to_bits() as u64 ^ 0x9e37_79b9) | 1;
+                        let mut r = || {
+                            seed ^= seed << 13;
+                            seed ^= seed >> 7;
+                            seed ^= seed << 17;
+                            (seed % 32768) as f32 / 32767.0
+                        };
+                        crate::decals::spawn_impact(&mut commands, &splashes, from, -dir, dir.with_y(0.0).normalize_or(Vec3::Z), &mut r, |a, b| {
+                            f13_core::collision::segment_hit_tri(&world, a, b, 2.0).map(|(t, n, _)| (a + (b - a) * t, n))
+                        });
+                    }
+                }
                 if r.died {
                     commands.trigger(crate::match_flow::KillerScore("Butcher"));
                     commands.trigger(crate::match_flow::KillerScore("KillCounselor"));

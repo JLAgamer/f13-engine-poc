@@ -365,7 +365,10 @@ pub fn spawn_impact(commands: &mut Commands, d: &ImpactDecal, at: Vec3, normal: 
     if d.random_rotation {
         rotator.z = rand() * 360.0 - 180.0;
     }
-    commands.write_message(SpawnDecal { material: d.material.clone(), at, rotator, size: d.size, lifespan: d.lifespan, fade_screen_size: d.fade_screen_size });
+    // (No material: its splashes only.)
+    if !d.material.is_empty() {
+        commands.write_message(SpawnDecal { material: d.material.clone(), at, rotator, size: d.size, lifespan: d.lifespan, fade_screen_size: d.fade_screen_size });
+    }
     for s in d.splashes.iter().filter(|s| !s.decals.is_empty()) {
         let basis = if s.instigator_forward { rotator_of(ue(instigator_forward)) } else { rotator_of(ue(normal)) };
         let dir = f13_core::camera_spline::quaternion(basis) * s.ray_direction;
