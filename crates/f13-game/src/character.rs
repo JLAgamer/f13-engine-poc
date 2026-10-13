@@ -241,6 +241,10 @@ pub struct CounselorCharacter(#[deref] pub CharacterModel, pub HashMap<String, s
 /// The default counselor class (Vanessa).
 pub const DEFAULT_CLASS: &str = "Athlete";
 
+/// A male counselor (her looks' Gender: bIsFemale off).
+#[derive(Component)]
+pub struct Male;
+
 /// A master-pose part's name (its scene's root: the outfit, Jason's mask).
 #[derive(Component, Clone, Debug)]
 pub struct PartOf(pub String);

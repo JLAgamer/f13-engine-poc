@@ -212,7 +212,10 @@ fn spawn_player(
     match character.as_deref().filter(|_| !config.capsule) {
         Some(character) => {
             let looks = character.looks(&config.class);
-            let (model, _) = character.model_for(&looks);
+            let (model, male) = character.model_for(&looks);
+            if male {
+                commands.entity(player).insert(crate::character::Male);
+            }
             crate::character::spawn_model_as(&mut commands, &assets, model, Some(looks.clone()), crate::character::Model::Counselor, player, PlayerPart);
         }
         None => {
@@ -268,7 +271,10 @@ pub(crate) fn spawn_counselor(commands: &mut Commands, assets: &AssetServer, cha
         .id();
     if let Some(character) = character {
         let looks = character.looks(class);
-        let (model, _) = character.model_for(&looks);
+        let (model, male) = character.model_for(&looks);
+        if male {
+            commands.entity(other).insert(crate::character::Male);
+        }
         crate::character::spawn_model_as(commands, assets, model, Some(looks.clone()), crate::character::Model::Counselor, other, ());
     }
     info!("counselor {other} ({class}) at {at}");
@@ -295,7 +301,12 @@ fn restyle(
         info!("counselor {e}: now {}", class.0);
         p.counselor.stats = tuning.stats_of(&class.0);
         commands.entity(rig).despawn();
-        let (model, _) = character.model_for(&looks);
+        let (model, male) = character.model_for(&looks);
+        if male {
+            commands.entity(e).insert(crate::character::Male);
+        } else {
+            commands.entity(e).remove::<crate::character::Male>();
+        }
         if local {
             crate::character::spawn_model_as(&mut commands, &assets, model, Some(looks.clone()), crate::character::Model::Counselor, e, PlayerPart);
         } else {

@@ -49,6 +49,8 @@ pub enum Button {
     Primary,
     /// Right mouse: block, aim.
     Secondary,
+    /// Q: her ability (CSLR_UseAbility: Pamela's sweater; on release).
+    Ability,
 }
 
 impl Button {
@@ -58,7 +60,7 @@ impl Button {
 }
 
 /// The keyboard key or mouse button this machine reads for each [`Button`].
-const BINDINGS: [(Button, Bind); 20] = [
+const BINDINGS: [(Button, Bind); 21] = [
     (Button::Forward, Bind::Key(KeyCode::KeyW)),
     (Button::Back, Bind::Key(KeyCode::KeyS)),
     (Button::Right, Bind::Key(KeyCode::KeyD)),
@@ -79,6 +81,7 @@ const BINDINGS: [(Button, Bind); 20] = [
     (Button::Space, Bind::Key(KeyCode::Space)),
     (Button::Primary, Bind::Mouse(MouseButton::Left)),
     (Button::Secondary, Bind::Mouse(MouseButton::Right)),
+    (Button::Ability, Bind::Key(KeyCode::KeyQ)),
 ];
 
 #[derive(Clone, Copy)]

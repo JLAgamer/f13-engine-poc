@@ -1398,7 +1398,9 @@ static class Mvp
         "Underwater_GrabKill_C", "KillerWaterImage_C",
         // The pickaxe's grab kills (SCKillerCharacter's GrabKills: KillerGrabWidget's icons, DoesKillVolumeFit's KillBounds).
         "Pickaxe_ThroatHack_GrabKill_C", "Pickaxe_Canopener_GrabKill_C", "PickAxe_CurbStomp_GrabKill_C",
-        "PickAxe_SweepTheLeg_GrabKill_C", "PickAxe_TopPopper_GrabKill_C", "Choke_GrabKill_C"];
+        "PickAxe_SweepTheLeg_GrabKill_C", "PickAxe_TopPopper_GrabKill_C", "Choke_GrabKill_C",
+        // Jason's death (his JasonKillClass: a context kill) and Pamela's sweater's ability (its SweaterAbilityClass).
+        "JasonDeath_C"];
     // Montages whose length or root motion the rules use (anims.json).
     const string Shared = "/Game/Characters/Counselors/Base/Shared";
     public static readonly string[] Montages =
@@ -1918,6 +1920,9 @@ static class Mvp
         // hit reactions.
         $"{JasonStun}/Stun/AM_combat_Falling_stun",
         $"{JasonStun}/Stun/AM_combat_stand_stun_left_01",
+        // PamelasSweaterStun_C's JasonStunAnimMontage(2H): he kneels to the sweater.
+        $"{JasonAnim}/Interaction/AM_combat_stand_2h_axe_sweater_Stun_Montage",
+        $"{JasonAnim}/Interaction/AM_combat_stand_1h_sweater_Stun_Montage",
         $"{JasonStun}/Stun/AM_combat_stand_stun_right_01",
         $"{JasonStun}/Stun/AM_combat_stand_stun_back_01",
         $"{JasonStun}/Stun/AM_combat_stand_stunned_firecracker",

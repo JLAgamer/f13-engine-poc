@@ -602,6 +602,8 @@ pub struct Jason {
     /// His health and whether his mask is on (bMaskOn).
     pub health: f32,
     pub mask_on: bool,
+    /// Pamela's sweater stunned him (the bool at 0x1291, set with PamelasSweaterStun; cleared as he recovers).
+    pub sweater_stunned: bool,
     /// The hiding spot he's going to search, the ones he searched, the last clue he followed up (its time), and the
     /// place he's wandering to (with when he picked it).
     target_spot: Option<Entity>,
@@ -706,6 +708,11 @@ impl Jason {
     }
 
     /// In a context kill (bInContextKill): a grab, placed or hiding spot kill.
+    /// Morphing (bIsMorphActive).
+    pub fn morphing(&self) -> bool {
+        matches!(self.state, JasonState::Morphing { .. })
+    }
+
     pub fn in_context_kill(&self) -> bool {
         matches!(self.state, JasonState::Killing { .. } | JasonState::HideKill { .. })
     }
@@ -828,6 +835,9 @@ pub enum Stun {
     Police,
     /// MaskKnockedOffStun_C: his mask knocked off (3 s, its directional montages, no minigame).
     MaskOff { left: bool },
+    /// PamelasSweaterStun_C: Pamela's sweater (10 s, its "Resist" minigame, DepletionRate 0.2; JasonStunAnimMontage2H
+    /// with his two-handed pickaxe; sweater.rs).
+    Sweater,
 }
 
 impl Stun {
@@ -839,6 +849,7 @@ impl Stun {
             Stun::PocketKnife | Stun::GrabBreak | Stun::Police => 6.0,
             Stun::BearTrap => 10.0,
             Stun::MaskOff { .. } => 3.0,
+            Stun::Sweater => 10.0,
         }
     }
 
@@ -856,7 +867,7 @@ impl Stun {
             Stun::Firecracker => "FirecrackerJasonStun",
             Stun::BearTrap => "Trapper",
             Stun::PocketKnife | Stun::GrabBreak => "EscapeJasonGrab",
-            Stun::Police | Stun::MaskOff { .. } => return None,
+            Stun::Police | Stun::MaskOff { .. } | Stun::Sweater => return None,
         })
     }
 
@@ -867,7 +878,7 @@ impl Stun {
             Stun::Weapon { .. } | Stun::Shotgun => "Rise",
             Stun::Flare => "Brush Off",
             Stun::BearTrap => "Open Trap",
-            Stun::Police => "Resist",
+            Stun::Police | Stun::Sweater => "Resist",
             Stun::Firecracker | Stun::PocketKnife | Stun::GrabBreak | Stun::MaskOff { .. } => return None,
         })
     }
@@ -878,7 +889,7 @@ impl Stun {
     pub fn minigame(self) -> Option<f13_core::stun::WiggleTuning> {
         let depletion_rate = match self {
             Stun::Weapon { .. } => 0.3,
-            Stun::Flare | Stun::Shotgun | Stun::Police => 0.2,
+            Stun::Flare | Stun::Shotgun | Stun::Police | Stun::Sweater => 0.2,
             Stun::BearTrap => 0.02,
             Stun::Firecracker | Stun::PocketKnife | Stun::GrabBreak | Stun::MaskOff { .. } => return None,
         };
@@ -896,6 +907,7 @@ impl Stun {
             Stun::Police => ("combat_stand_stunned_police_02", Some("combat_stand_stunned_police_loop_01"), Some("combat_stand_stunned_police_exit_01")),
             Stun::PocketKnife => ("normal_stand_knife_pullout", None, None),
             Stun::GrabBreak => ("normal_grab_break", None, None),
+            Stun::Sweater => ("combat_stand_2h_axe_sweater", None, None),
             Stun::BearTrap => ("normal_stand_trap01_enter_lf", Some("normal_stand_trap01_cycle_lf"), Some("normal_stand_trap01_exit_lf")),
         }
     }
@@ -1484,6 +1496,7 @@ fn spawn_jason(
                 stun_immune: 0.0,
                 health: config.health.unwrap_or(tuning.max_health),
                 mask_on: true,
+                sweater_stunned: false,
                 target_spot: None,
                 target_side: None,
                 searched: Vec::new(),
@@ -1945,7 +1958,11 @@ pub(crate) fn update_jason(
                     stun_now = Some(Stun::MaskOff { left });
                 }
             }
-            let can_stun = can_stun || matches!(stun_now, Some(Stun::MaskOff { .. }));
+            // (The mask's and the sweater's stuns: ApplyStun with the class, whatever he's doing.)
+            let can_stun = can_stun || matches!(stun_now, Some(Stun::MaskOff { .. } | Stun::Sweater));
+            if stun_now == Some(Stun::Sweater) {
+                j.sweater_stunned = true;
+            }
             match stun_now {
                 _ if blocked => {
                     let anim = BLOCK_REACTIONS[rng.0.index(BLOCK_REACTIONS.len())];
@@ -3314,6 +3331,7 @@ pub(crate) fn update_jason(
                 commands.entity(je).insert(PlayAction(anim.into()));
                 if at >= end {
                     info!("Jason: recovered");
+                    j.sweater_stunned = false;
                     j.state = JasonState::Hunting;
                     j.cooldown = t.attack_delay;
                     j.stun_immune = STUN_IMMUNE_SECONDS;

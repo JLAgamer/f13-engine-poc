@@ -793,7 +793,7 @@ fn choose_target(
     doors: Query<(Entity, &Door, &GlobalTransform)>,
     windows: Query<(Entity, &Window, &GlobalTransform)>,
     barricades: Query<&Barricade>,
-    (spots, fuse_boxes): (Query<(Entity, &crate::hiding::HidingSpot, &GlobalTransform)>, Query<(Entity, &crate::power::FuseBox)>),
+    (spots, fuse_boxes, males): (Query<(Entity, &crate::hiding::HidingSpot, &GlobalTransform)>, Query<(Entity, &crate::power::FuseBox)>, Query<(), With<crate::character::Male>>),
     (phone_boxes, phones, radios, cb_radios): (Query<(Entity, &crate::police::PhoneBox)>, Query<(Entity, &crate::police::Phone)>, Query<(Entity, &crate::radio::Radio)>, Query<(Entity, &crate::tommy::CbRadio)>),
     (limits, globals, collision, dynamic, parents, no_world_dynamic, (names, actor_tris, no_visibility, (not_visibility, not_world_dynamic))): (
         Query<&InteractLimits>,
@@ -870,6 +870,10 @@ fn choose_target(
     for (e, item, gxf, in_cab) in &items {
         // In a drawer: the drawer hands it over.
         if in_cab.is_some() {
+            continue;
+        }
+        // Pamela's sweater: a female counselor's only (SCPamelaSweater's CanInteractWith; sweater.rs).
+        if crate::sweater::SWEATER_CLASSES.contains(&item.class.as_str()) && males.contains(pe) {
             continue;
         }
         let at = limits.get(e).ok().and_then(|l| l.0.get("Interactable")).map_or(gxf.translation(), |l| gxf.transform_point(l.at.translation));
