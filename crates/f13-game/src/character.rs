@@ -111,7 +111,7 @@ impl Plugin for CharacterPlugin {
         .add_systems(Startup, load_anim_props)
         .add_systems(PostUpdate, anim_props.before(bevy::transform::TransformSystems::Propagate))
         .init_resource::<LayerRestore>()
-        .add_systems(PostUpdate, (restore_unanimated, run_lean, layered_blend, item_hand_layer, aim_offset, head_look, jason_twists, item_arm_layer).chain().after(bevy::app::AnimationSystems).before(bevy::transform::TransformSystems::Propagate));
+        .add_systems(PostUpdate, (restore_unanimated, run_lean, layered_blend, item_hand_layer, aim_offset, head_look, jason_twists, item_arm_layer, crate::blood::hide_detached).chain().after(bevy::app::AnimationSystems).before(bevy::transform::TransformSystems::Propagate));
     }
 }
 
@@ -414,6 +414,17 @@ pub struct Rig {
     look: Vec2,
     look_alpha: f32,
     look_grab: f32,
+}
+
+impl Rig {
+    /// Spawns a skeletal mesh following the body's pose (its skin bound to the body's bones once in, as the outfit's).
+    pub(crate) fn follow(&mut self, commands: &mut Commands, assets: &AssetServer, rig: Entity, file: String) {
+        let ready = |ev: On<WorldInstanceReady>, mut commands: Commands| {
+            commands.entity(ev.entity).insert(SceneReady);
+        };
+        let e = commands.spawn((WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(file))), ChildOf(rig))).observe(ready).id();
+        self.outfit.push(e);
+    }
 }
 
 /// A full-body animation a character plays now (hit reactions, grabs, kills, death), whatever its movement state.

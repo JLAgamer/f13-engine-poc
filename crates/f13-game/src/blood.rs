@@ -9,9 +9,27 @@
 //! - a kill take's SCApplyBloodMaskAnimNotify (0x140314890): its Limb's part, its BloodMask (else the part's
 //!   LimbUVTexture), its TextureParameter (else the part's), its MaterialElementIndices (else the part's);
 //! - SCDetachLimbAnimNotify (0x140314b60, SCCounselorCharacter::DetachLimb 0x1403abf00): its BloodMaskOverride (else
-//!   the part's LimbUVTexture) on the part's parameter, then the limb comes off (not ported).
+//!   the part's LimbUVTexture) on the part's parameter, then the part's DetachLimb (0x14033d600): her body hides
+//!   BoneToHide (else the part's attach socket: SCCounselorCharacter's constructor attaches Face to head, Torso to
+//!   root, the arms to upperarm_l / upperarm_r, the legs to calf_l / calf_r; HideBoneByName, PBO_None) and gets the
+//!   part's ParentLimbGoreCap (FUN_14033c980: a skeletal mesh following her pose, at ParentLimbGoreCapSocket, which
+//!   none sets, snapped) and ParentLimbBloodEffect (FUN_14033bb80; none is set, the native constructor sets none).
+//!   With bShowLimbAfterDetach the limb's own mesh shows where it was (SetMasterPoseComponent(null) after taking the
+//!   body's pose at its socket), simulates (SetAllBodiesSimulatePhysics, the Ragdoll profile) and takes the Impulse,
+//!   with its LimbGoreCap (FUN_14033c760: a static mesh at LimbGoreCapSocket); every take's notify has it off.
+//! - the death's dismember roll (SCCharacter's TakeDamage, FUN_1403d7410): not in a context kill, the killer holding a
+//!   weapon, a point damage: rand() / RAND_MAX x 100 (at most 100) under his CombatDismemberChance (Jason_Base: 100)
+//!   detaches the hit bone's part (FUN_1403aea60) if it's still on her and isn't her torso: SERVER_DetachLimb
+//!   (FUN_14047a890, no impulse), MULTICAST_DetachLimb's DetachLimb (FUN_1403be460) with the limb shown.
 //!
-//! Here: [`Gore`] holds her records (the server's, replicated in NetCounselor); her damage textures are their masks
+//! Here: [`Gore`] holds her records and detached parts (the server's, replicated in NetCounselor); a hidden bone is
+//! shrunk to almost nothing after her pose (its children with it, and every mesh on her skeleton, as the body's slaves
+//! follow its bone visibility); a gore cap's skin is bound to her bones as the outfit's is. A shown limb is its mesh
+//! on a skeleton of its own, posed as hers, the physics asset's bodies from its bone down simulated (ragdoll.rs); one
+//! on a skeleton of another (the face's) goes where it hung on her, with what hangs off it (her hair), and drops.
+//! PLACEHOLDERS: the blow's bone (a thrown knife's: the bone nearest where it struck; a swing's: the bone nearest
+//! Jason's weapon_attach_r); the roll's rand() (the match's random numbers); no blood on the dropped limb; the face
+//! falls straight down, untumbled, onto what's below (its physics asset isn't exported). Her damage textures are their masks
 //! (the latest per parameter) combined by channel, as the shaders sum them, her clothes' without Head Damage; her
 //! clothes and skin get their own materials with them. PLACEHOLDERS: the hit bone (the bone nearest the hit, no
 //! per-bone hit test); the elements (every clothes and skin material takes them).
@@ -27,9 +45,46 @@ pub const PARTS: [&str; 6] = ["Face", "Torso", "LeftArm", "RightArm", "LeftLeg",
 /// The combined damage textures' size.
 const SIZE: u32 = 1024;
 
-/// Her gore records: (texture parameter, mask's .png path), in the order kept.
-#[derive(Component, Clone, Debug, Default, PartialEq, Eq)]
-pub struct Gore(pub Vec<(String, String)>);
+/// Her gore records: (texture parameter, mask's .png path), in the order kept; her detached parts, and those of them
+/// shown (dropped), as bits by [`PARTS`] index.
+#[derive(Component, Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Gore(pub Vec<(String, String)>, pub u8, pub u8);
+
+/// A combat kill by Jason (not a context kill): the death's dismember roll (the server's).
+#[derive(Event, Clone, Copy, Debug)]
+pub struct Dismember {
+    pub counselor: Entity,
+    /// Where the blow landed (a thrown knife's point); None: his swing (his weapon_attach_r bone).
+    pub at: Option<Vec3>,
+}
+
+/// The bone Jason's weapon hangs off (his Weapon_Attach socket's).
+const WEAPON_BONE: &str = "weapon_attach_r";
+
+/// A dropped limb: its part, the rig it came off, and its skeleton (filled once its scene is in).
+#[derive(Component)]
+struct FallingLimb {
+    part: usize,
+    from: Entity,
+    file: String,
+    bones: HashMap<String, Entity>,
+}
+
+/// A dropped limb on a skeleton not hers, falling: its speed (m/s, down) and radius.
+#[derive(Component)]
+struct Dropping(f32, f32);
+
+/// A dropped limb's scene is in.
+#[derive(Component)]
+struct LimbReady;
+
+/// A dropped limb posed as her (its ragdoll is built the next frame, from the propagated pose).
+#[derive(Component)]
+struct LimbPosed;
+
+/// The bone a part's DetachLimb hides when its BoneToHide is unset: its attach socket (SCCounselorCharacter's
+/// constructor), by [`PARTS`] index.
+const ATTACH: [&str; 6] = ["head", "root", "upperarm_l", "upperarm_r", "calf_l", "calf_r"];
 
 /// A hit that bloodies her where it struck (the server's).
 #[derive(Event, Clone, Copy, Debug)]
@@ -61,7 +116,8 @@ impl Plugin for BloodPlugin {
         app.init_resource::<AnimGore>()
             .add_systems(Startup, load_anim_gore)
             .add_observer(apply_blood)
-            .add_systems(Update, (kill_gore.run_if(crate::net::simulating), show_gore).chain());
+            .add_observer(combat_dismember)
+            .add_systems(Update, (kill_gore.run_if(crate::net::simulating), show_gore, gore_caps, drop_limbs, pose_limbs, limb_ragdolls, drop_falling).chain());
     }
 }
 
@@ -124,24 +180,225 @@ fn apply_blood(
     counselor: Option<Res<crate::character::CounselorCharacter>>,
 ) {
     let Some(counselor) = counselor else { return };
-    // The bone nearest the hit, among her skeleton's.
-    let Some((joint, _)) = children
-        .iter_descendants(ev.counselor)
-        .filter_map(|e| skins.get(e).ok())
-        .flat_map(|s| s.joints.iter().copied())
-        .filter_map(|j| Some((j, transforms.get(j).ok()?.translation().distance(ev.at))))
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-    else {
-        return;
-    };
-    let chain: Vec<&str> = std::iter::once(joint).chain(parents.iter_ancestors(joint)).filter_map(|e| names.get(e).ok().map(|n| n.as_str())).collect();
-    let Some(part) = part_of_bone(&chain) else { return };
+    let Some((part, bone)) = part_at(ev.counselor, ev.at, &children, &parents, &skins, &transforms, &names) else { return };
+    let chain = [bone.as_str()];
     let Some(r) = record(&counselor, part, None, None) else { return };
     info!("blood: hit at {} (bone {}): {} {}", ev.at, chain.first().unwrap_or(&"?"), PARTS[part], r.0);
-    let mut records = gore.get(ev.counselor).map_or_else(|_| Vec::new(), |g| g.0.clone());
-    records.retain(|(p, _)| *p != r.0);
-    records.push(r);
-    commands.entity(ev.counselor).insert(Gore(records));
+    let mut g = gore.get(ev.counselor).cloned().unwrap_or_default();
+    g.0.retain(|(p, _)| *p != r.0);
+    g.0.push(r);
+    commands.entity(ev.counselor).insert(g);
+}
+
+/// The part of hers nearest a point: the nearest of her skeleton's bones, its part (and its name).
+fn part_at(
+    counselor: Entity,
+    at: Vec3,
+    children: &Query<&Children>,
+    parents: &Query<&ChildOf>,
+    skins: &Query<&bevy::mesh::skinning::SkinnedMesh>,
+    transforms: &Query<&GlobalTransform>,
+    names: &Query<&Name>,
+) -> Option<(usize, String)> {
+    let (joint, _) = children
+        .iter_descendants(counselor)
+        .filter_map(|e| skins.get(e).ok())
+        .flat_map(|s| s.joints.iter().copied())
+        .filter_map(|j| Some((j, transforms.get(j).ok()?.translation().distance(at))))
+        .min_by(|a, b| a.1.total_cmp(&b.1))?;
+    let chain: Vec<&str> = std::iter::once(joint).chain(parents.iter_ancestors(joint)).filter_map(|e| names.get(e).ok().map(|n| n.as_str())).collect();
+    Some((part_of_bone(&chain)?, chain.first()?.to_string()))
+}
+
+/// The death's dismember roll, and the hit part detached and shown.
+#[allow(clippy::too_many_arguments)]
+fn combat_dismember(
+    ev: On<Dismember>,
+    mut commands: Commands,
+    (children, parents, skins, transforms, names): (Query<&Children>, Query<&ChildOf>, Query<&bevy::mesh::skinning::SkinnedMesh>, Query<&GlobalTransform>, Query<&Name>),
+    rigs: Query<&crate::character::Rig>,
+    gore: Query<&Gore>,
+    counselor: Option<Res<crate::character::CounselorCharacter>>,
+    killer: Option<Res<crate::character::KillerCharacter>>,
+    mut rng: ResMut<crate::GameRng>,
+) {
+    let (Some(counselor), Some(killer)) = (counselor, killer) else { return };
+    let chance = killer.info.values.get("CombatDismemberChance").copied().unwrap_or(0.0) as i32;
+    let roll = ((rng.0.frand() * 100.0) as i32).min(100);
+    if roll >= chance {
+        return;
+    }
+    let weapon = || {
+        let rig = rigs.iter().find(|r| matches!(r.model, crate::character::Model::Killer))?;
+        Some(transforms.get(*rig.bones.get(WEAPON_BONE)?).ok()?.translation())
+    };
+    let Some(at) = ev.at.or_else(weapon) else { return };
+    let Some((part, bone)) = part_at(ev.counselor, at, &children, &parents, &skins, &transforms, &names) else { return };
+    let mut g = gore.get(ev.counselor).cloned().unwrap_or_default();
+    if part == 1 || g.1 & (1 << part) != 0 {
+        return;
+    }
+    info!("blood: combat dismember (roll {roll} < {chance}): {} (bone {bone})", PARTS[part]);
+    if let Some(r) = record(&counselor, part, None, None) {
+        g.0.retain(|(p, _)| *p != r.0);
+        g.0.push(r);
+    }
+    g.1 |= 1 << part;
+    g.2 |= 1 << part;
+    commands.entity(ev.counselor).insert(g);
+}
+
+/// A shown part's limb, where it was on her.
+fn drop_limbs(
+    mut commands: Commands,
+    assets: Res<AssetServer>,
+    rigs: Query<(Entity, &ChildOf, &crate::character::Rig)>,
+    gore: Query<&Gore>,
+    globals: Query<&GlobalTransform>,
+    counselor: Option<Res<crate::character::CounselorCharacter>>,
+    mut dropped: Local<HashMap<Entity, u8>>,
+) {
+    let Some(counselor) = counselor else { return };
+    for (rig_entity, parent, rig) in &rigs {
+        let Ok(g) = gore.get(parent.parent()) else { continue };
+        if !matches!(rig.model, crate::character::Model::Counselor) || rig.bones.is_empty() {
+            continue;
+        }
+        let done = dropped.entry(rig_entity).or_default();
+        let new = g.2 & !*done;
+        *done |= new;
+        let Ok(at) = globals.get(rig_entity) else { continue };
+        for part in (0..PARTS.len()).filter(|i| new & (1 << i) != 0) {
+            let Some(file) = counselor.info.body_parts.get(PARTS[part]).and_then(|i| i.limb.clone()) else { continue };
+            info!("blood: {} dropped ({})", PARTS[part], file.rsplit('/').next().unwrap_or(""));
+            let ready = |ev: On<bevy::world_serialization::WorldInstanceReady>, mut commands: Commands| {
+                commands.entity(ev.entity).insert(LimbReady);
+            };
+            commands
+                .spawn((
+                    at.compute_transform(),
+                    Visibility::default(),
+                    bevy::world_serialization::WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(file.clone()))),
+                    FallingLimb { part, from: rig_entity, file, bones: HashMap::new() },
+                ))
+                .observe(ready);
+        }
+    }
+}
+
+/// A dropped limb's skeleton takes her pose (its own bone at full size); one not on her skeleton goes where it hung
+/// on her, with the parts hanging off it.
+#[allow(clippy::too_many_arguments)]
+fn pose_limbs(
+    mut commands: Commands,
+    assets: Res<AssetServer>,
+    mut limbs: Query<(Entity, &mut FallingLimb), (With<LimbReady>, Without<LimbPosed>)>,
+    rigs: Query<&crate::character::Rig>,
+    children: Query<&Children>,
+    names: Query<&Name>,
+    mut transforms: Query<&mut Transform>,
+    globals: Query<&GlobalTransform>,
+    counselor: Option<Res<crate::character::CounselorCharacter>>,
+) {
+    let Some(counselor) = counselor else { return };
+    for (e, mut limb) in &mut limbs {
+        let Ok(rig) = rigs.get(limb.from) else {
+            commands.entity(e).despawn();
+            continue;
+        };
+        limb.bones = children
+            .iter_descendants(e)
+            .filter_map(|c| names.get(c).ok().filter(|n| counselor.info.bones.iter().any(|b| b.name == n.as_str())).map(|n| (n.to_string(), c)))
+            .collect();
+        for (name, &b) in &limb.bones {
+            let Some(t) = rig.bones.get(name).and_then(|&src| transforms.get(src).ok()).copied() else { continue };
+            if let Ok(mut d) = transforms.get_mut(b) {
+                *d = t;
+            }
+        }
+        let bone = hidden_bone(&counselor, limb.part);
+        if let Some(mut d) = limb.bones.get(bone).and_then(|&b| transforms.get_mut(b).ok()) {
+            d.scale = Vec3::ONE;
+        } else if let Some(p) = counselor.info.parts.iter().find(|p| p.file == limb.file) {
+            // Where it hung (its attach bone's place on her, at her own scale: that bone is hidden now).
+            let (Some(at), Ok(rig_at)) = (rig.bones.get(&p.attach).and_then(|&b| globals.get(b).ok()), globals.get(limb.from)) else { continue };
+            let mut at = at.compute_transform();
+            at.scale = rig_at.compute_transform().scale;
+            let xf = at * p.transform.as_ref().map(crate::to_transform).unwrap_or_default();
+            if let Ok(mut d) = transforms.get_mut(e) {
+                *d = xf;
+            }
+            for c in counselor.info.parts.iter().filter(|c| c.attach == p.name && !c.file.is_empty()) {
+                let cx = c.transform.as_ref().map(crate::to_transform).unwrap_or_default();
+                commands.spawn((cx, Visibility::default(), bevy::world_serialization::WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(c.file.clone()))), ChildOf(e)));
+            }
+            let radius = counselor.info.ragdoll.iter().find(|b| b.bone == p.attach).map_or(0.1, |b| b.radius / 100.0);
+            commands.entity(e).insert(Dropping(0.0, radius));
+        }
+        commands.entity(e).insert(LimbPosed);
+    }
+}
+
+/// A posed limb's ragdoll (its bodies from its bone down) and its gore cap.
+fn limb_ragdolls(
+    mut commands: Commands,
+    assets: Res<AssetServer>,
+    limbs: Query<(Entity, &FallingLimb), (With<LimbPosed>, Without<LimbCapped>)>,
+    transforms: Query<&Transform>,
+    globals: Query<&GlobalTransform>,
+    counselor: Option<Res<crate::character::CounselorCharacter>>,
+) {
+    let Some(counselor) = counselor else { return };
+    for (e, limb) in &limbs {
+        let bone = hidden_bone(&counselor, limb.part);
+        commands.entity(e).insert(LimbCapped);
+        if limb.bones.contains_key(bone) {
+            match crate::ragdoll::limb_ragdoll(&counselor.info, &limb.bones, bone, &transforms, &globals) {
+                Some(r) => {
+                    info!("blood: the dropped {}'s ragdoll: {} bodies", PARTS[limb.part], r.bodies());
+                    commands.entity(e).insert(r);
+                }
+                None => warn!("blood: no ragdoll for the dropped {}", PARTS[limb.part]),
+            }
+        }
+        let info = counselor.info.body_parts.get(PARTS[limb.part]);
+        if let Some(cap) = info.and_then(|i| i.limb_cap.clone()) {
+            let at = info.and_then(|i| i.limb_cap_at.as_ref());
+            let parent = at.and_then(|s| limb.bones.get(&s.attach)).or_else(|| limb.bones.get(bone)).copied().unwrap_or(e);
+            let xf = at.and_then(|s| s.transform.as_ref()).map(crate::to_transform).unwrap_or_default();
+            commands.spawn((xf, Visibility::default(), bevy::world_serialization::WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(cap))), ChildOf(parent)));
+        }
+    }
+}
+
+/// A dropped limb has its ragdoll (if any) and gore cap.
+#[derive(Component)]
+struct LimbCapped;
+
+/// A dropped limb not on her skeleton falls (UE's gravity, 980 cm/s^2) until it rests on what's below.
+fn drop_falling(
+    mut commands: Commands,
+    time: Res<Time>,
+    collision: Res<crate::collision::WorldCollision>,
+    dynamic: Res<crate::collision::DynamicColliders>,
+    mut limbs: Query<(Entity, &mut Transform, &mut Dropping)>,
+) {
+    let world = collision.with(&dynamic);
+    let dt = time.delta_secs();
+    for (e, mut xf, mut d) in &mut limbs {
+        d.0 += 9.8 * dt;
+        let p = xf.translation;
+        let next = p.y - d.0 * dt;
+        let ground = f13_core::collision::surface_below(&world, p.x, p.z, p.y + 0.5, next - 1.0).map(|g| g.0);
+        match ground.filter(|&g| next - d.1 <= g) {
+            Some(g) => {
+                xf.translation.y = g + d.1;
+                info!("blood: a dropped limb at rest at {:?}", xf.translation);
+                commands.entity(e).remove::<Dropping>();
+            }
+            None => xf.translation.y = next,
+        }
+    }
 }
 
 /// Her takes' gore notifies as they pass (the server's).
@@ -169,18 +426,72 @@ fn kill_gore(
         };
         last.insert(owner, (take.clone(), *t));
         let Some(list) = notifies.0.get(&format!("counselor/{take}")) else { continue };
-        let mut records = gore.get(owner).map_or_else(|_| Vec::new(), |g| g.0.clone());
-        let before = records.clone();
+        let mut g = gore.get(owner).cloned().unwrap_or_default();
+        let before = g.clone();
         for n in list.iter().filter(|n| n.time > from && n.time <= *t) {
             let part = part_of_limb(&n.limb);
+            if n.kind == "Detach" {
+                info!("blood: {take} at {:.2}s: {} detached", n.time, PARTS[part]);
+                g.1 |= 1 << part;
+            }
             let parameter = if n.kind == "Blood" { n.parameter.as_deref() } else { None };
             let Some(r) = record(&counselor, part, n.mask.as_deref(), parameter) else { continue };
             info!("blood: {take} at {:.2}s: {} {} ({})", n.time, n.kind, r.0, r.1.rsplit('/').next().unwrap_or(""));
-            records.retain(|(p, _)| *p != r.0);
-            records.push(r);
+            g.0.retain(|(p, _)| *p != r.0);
+            g.0.push(r);
         }
-        if records != before {
-            commands.entity(owner).insert(Gore(records));
+        if g != before {
+            commands.entity(owner).insert(g);
+        }
+    }
+}
+
+/// A hidden bone's scale. UE hides it in the skinning only (BoneVisibilityStates), its pose (and the ragdoll's) left
+/// alone; here the bone itself shrinks, by this much rather than to nothing, so its children's global transforms
+/// still decompose (the ragdoll reads them). PLACEHOLDER: a skin-only hide.
+const HIDDEN: f32 = 1e-3;
+
+/// The bone a detached part hides.
+fn hidden_bone(counselor: &crate::character::CounselorCharacter, part: usize) -> &str {
+    counselor.info.body_parts.get(PARTS[part]).and_then(|i| i.bone_to_hide.as_deref()).filter(|b| *b != "None").unwrap_or(ATTACH[part])
+}
+
+/// Her detached parts' bones scaled to nothing, after her pose (character.rs's post-animation chain).
+pub(crate) fn hide_detached(rigs: Query<(&ChildOf, &crate::character::Rig)>, gore: Query<&Gore>, counselor: Option<Res<crate::character::CounselorCharacter>>, mut transforms: Query<&mut Transform>) {
+    let Some(counselor) = counselor else { return };
+    for (parent, rig) in &rigs {
+        let Ok(g) = gore.get(parent.parent()) else { continue };
+        if g.1 == 0 || !matches!(rig.model, crate::character::Model::Counselor) {
+            continue;
+        }
+        for part in (0..PARTS.len()).filter(|i| g.1 & (1 << i) != 0) {
+            if let Some(mut xf) = rig.bones.get(hidden_bone(&counselor, part)).and_then(|&b| transforms.get_mut(b).ok()) {
+                xf.scale = Vec3::splat(HIDDEN);
+            }
+        }
+    }
+}
+
+/// A detached part's gore cap on her (its ParentLimbGoreCap, following her pose).
+fn gore_caps(
+    mut commands: Commands,
+    assets: Res<AssetServer>,
+    mut rigs: Query<(Entity, &ChildOf, &mut crate::character::Rig)>,
+    gore: Query<&Gore>,
+    counselor: Option<Res<crate::character::CounselorCharacter>>,
+    mut capped: Local<HashMap<Entity, u8>>,
+) {
+    let Some(counselor) = counselor else { return };
+    for (rig_entity, parent, mut rig) in &mut rigs {
+        let Ok(g) = gore.get(parent.parent()) else { continue };
+        let done = capped.entry(rig_entity).or_default();
+        let new = g.1 & !*done;
+        for part in (0..PARTS.len()).filter(|i| new & (1 << i) != 0) {
+            *done |= 1 << part;
+            if let Some(file) = counselor.info.body_parts.get(PARTS[part]).and_then(|i| i.gore_cap.clone()) {
+                info!("blood: {} gore cap {}", PARTS[part], file.rsplit('/').next().unwrap_or(""));
+                rig.follow(&mut commands, &assets, rig_entity, file);
+            }
         }
     }
 }
@@ -265,6 +576,13 @@ mod tests {
         assert_eq!(part_of_bone(&["thigh_l", "pelvis"]), Some(1));
         assert_eq!(part_of_bone(&["foot_l", "calf_l", "thigh_l", "pelvis"]), Some(4));
         assert_eq!(part_of_bone(&["root"]), None);
+    }
+
+    #[test]
+    fn a_detached_part_hides_its_socket() {
+        assert_eq!(ATTACH[part_of_limb("None")], "head");
+        assert_eq!(ATTACH[part_of_limb("ELimb::RIGHT_ARM")], "upperarm_r");
+        assert_eq!(ATTACH[part_of_limb("ELimb::LEFT_ARM")], "upperarm_l");
     }
 
     #[test]

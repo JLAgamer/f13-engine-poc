@@ -209,8 +209,8 @@ pub struct NetCounselor {
     pub escaped: Option<String>,
     /// In a move at a door or window, or on her way onto a special move's spot ([`RemoteMove`] on her twin).
     pub moving: bool,
-    /// Her gore records (blood.rs Gore): parameter, mask.
-    pub gore: Vec<(String, String)>,
+    /// Her gore records and detached parts (blood.rs Gore).
+    pub gore: crate::blood::Gore,
 }
 
 /// A client's twin of a counselor in a move the server plays (at a door or window, or onto a special move's spot).
@@ -842,7 +842,7 @@ fn update_bodies(
             driving: driving.and_then(|d| Some((world_ids.get(d.vehicle).ok()?.0, d.seat.map(|s| s as u8), d.starting.as_ref().map(NetHold::of)))),
             escaped: escaped.map(|e| e.how.clone()),
             moving: to_spot || door_move || window_move,
-            gore: blood.map_or_else(Vec::new, |b| b.0.clone()),
+            gore: blood.cloned().unwrap_or_default(),
         });
     }
     for (n, j, know, cam) in &mut jasons {
@@ -1160,8 +1160,8 @@ fn mirror(
                 }
                 (None, None) => {}
             }
-            if blood.is_none_or(|b| b.0 != n.gore) && (!n.gore.is_empty() || blood.is_some()) {
-                e.insert(crate::blood::Gore(n.gore.clone()));
+            if blood.is_none_or(|b| *b != n.gore) && (n.gore != crate::blood::Gore::default() || blood.is_some()) {
+                e.insert(n.gore.clone());
             }
             match (n.moving, remote_move) {
                 (true, false) => {

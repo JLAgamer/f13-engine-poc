@@ -31,11 +31,18 @@ pub struct Ragdolled {
     bones: Vec<(usize, String, Option<usize>, Vec3)>,
     /// Every bone's local transform when she died (the bones the ragdoll doesn't move keep it).
     rest: HashMap<usize, Transform>,
+    /// The skeleton posed: its bones by name (her rig's, or a dropped limb's; blood.rs).
+    bone_entities: HashMap<String, Entity>,
     /// Seconds simulated.
     pub age: f32,
 }
 
 impl Ragdolled {
+    /// How many bodies it simulates.
+    pub fn bodies(&self) -> usize {
+        self.sim.bodies.len()
+    }
+
     /// Where the body is (its first body, the pelvis).
     pub fn center(&self) -> Option<Vec3> {
         self.sim.bodies.first().map(|b| self.sim.particles[b.particle].pos)
@@ -70,11 +77,11 @@ fn start_ragdolls(
         if rig.model != Model::Counselor || rig.bones.is_empty() || players.get(parent.parent()).map_or(true, |p| p.counselor.alive()) {
             continue;
         }
-        let Some(r) = build(&character.info, rig, &transforms, &globals) else {
+        let Some(r) = build(&character.info, &rig.bones, None, &transforms, &globals) else {
             warn!("no ragdoll: the counselor export has no physics asset (re-export with tools/f13-export counselor)");
             let mut sim = Ragdoll::default();
             sim.asleep = true;
-            commands.entity(e).insert(Ragdolled { sim, bones: Vec::new(), rest: HashMap::new(), age: 0.0 });
+            commands.entity(e).insert(Ragdolled { sim, bones: Vec::new(), rest: HashMap::new(), bone_entities: HashMap::new(), age: 0.0 });
             continue;
         };
         info!("ragdoll: {} bodies, {} links", r.sim.bodies.len(), r.sim.links.len());
@@ -88,18 +95,43 @@ fn side_name(name: &str) -> Option<(&str, bool)> {
     name.strip_suffix("_l").map(|s| (s, false)).or_else(|| name.strip_suffix("_r").map(|s| (s, true)))
 }
 
-fn build(info: &CharacterInfo, rig: &Rig, transforms: &Query<&Transform>, globals: &Query<&GlobalTransform>) -> Option<Ragdolled> {
+/// A dropped limb's ragdoll (blood.rs): the physics asset's bodies from `root` down, on the limb's own skeleton
+/// (`bones`), the root body free.
+pub(crate) fn limb_ragdoll(info: &CharacterInfo, bones: &HashMap<String, Entity>, root: &str, transforms: &Query<&Transform>, globals: &Query<&GlobalTransform>) -> Option<Ragdolled> {
+    let root = info.bones.iter().position(|b| b.name == root)?;
+    build(info, bones, Some(root), transforms, globals)
+}
+
+/// Whether bone `i` is `root` or under it.
+fn under(info: &CharacterInfo, mut i: usize, root: usize) -> bool {
+    loop {
+        if i == root {
+            return true;
+        }
+        match info.bones.get(i).map(|b| b.parent) {
+            Some(p) if p >= 0 => i = p as usize,
+            _ => return false,
+        }
+    }
+}
+
+fn build(info: &CharacterInfo, rig_bones: &HashMap<String, Entity>, subtree: Option<usize>, transforms: &Query<&Transform>, globals: &Query<&GlobalTransform>) -> Option<Ragdolled> {
     if info.ragdoll.is_empty() {
         return None;
     }
     let index: HashMap<&str, usize> = info.bones.iter().enumerate().map(|(i, b)| (b.name.as_str(), i)).collect();
-    let world = |bone: &str| rig.bones.get(bone).and_then(|&e| globals.get(e).ok()).map(|g| g.compute_transform());
+    let world = |bone: &str| rig_bones.get(bone).and_then(|&e| globals.get(e).ok()).map(|g| g.compute_transform());
     let dt = 1.0 / 64.0;
     let mut sim = Ragdoll::default();
-    // One particle per body, at its bone.
+    // One particle per body, at its bone (a limb's: only those under its root).
     let mut particle: HashMap<&str, usize> = HashMap::new();
     let mut radius: HashMap<&str, f32> = HashMap::new();
     for b in &info.ragdoll {
+        if let Some(root) = subtree {
+            if !index.get(b.bone.as_str()).is_some_and(|&i| under(info, i, root)) {
+                continue;
+            }
+        }
         let Some(xf) = world(&b.bone) else { continue };
         let r = (b.radius / 100.0).max(0.03);
         particle.insert(b.bone.as_str(), sim.add(xf.translation, r, Vec3::ZERO, dt));
@@ -193,9 +225,9 @@ fn build(info: &CharacterInfo, rig: &Rig, transforms: &Query<&Transform>, global
         .bones
         .iter()
         .enumerate()
-        .filter_map(|(i, b)| rig.bones.get(&b.name).and_then(|&e| transforms.get(e).ok()).map(|t| (i, *t)))
+        .filter_map(|(i, b)| rig_bones.get(&b.name).and_then(|&e| transforms.get(e).ok()).map(|t| (i, *t)))
         .collect();
-    Some(Ragdolled { sim, bones, rest, age: 0.0 })
+    Some(Ragdolled { sim, bones, rest, bone_entities: rig_bones.clone(), age: 0.0 })
 }
 
 fn simulate(
@@ -229,14 +261,14 @@ fn simulate(
 
 fn pose_ragdolls(
     character: Option<Res<CounselorCharacter>>,
-    rigs: Query<(&Rig, &Ragdolled)>,
+    rigs: Query<&Ragdolled>,
     parents: Query<&ChildOf>,
     globals: Query<&GlobalTransform>,
     mut transforms: Query<&mut Transform>,
 ) {
     let Some(character) = character else { return };
     let info = &character.info;
-    for (rig, r) in &rigs {
+    for r in &rigs {
         let mut desired: HashMap<usize, Affine3A> = HashMap::new();
         for (b, &(bone, _, _, scale)) in r.sim.bodies.iter().zip(&r.bones) {
             desired.insert(bone, Affine3A::from_scale_rotation_translation(scale, r.sim.rotation(b), r.sim.particles[b.particle].pos));
@@ -248,7 +280,7 @@ fn pose_ragdolls(
         // follow their parent with the pose they died in.
         let mut world: HashMap<usize, Affine3A> = HashMap::new();
         for (i, bone) in info.bones.iter().enumerate() {
-            let Some(&e) = rig.bones.get(&bone.name) else { continue };
+            let Some(&e) = r.bone_entities.get(&bone.name) else { continue };
             let parent_world = if bone.parent >= 0 {
                 world.get(&(bone.parent as usize)).copied()
             } else {

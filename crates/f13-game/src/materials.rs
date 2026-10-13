@@ -60,6 +60,7 @@ impl Plugin for MaterialsPlugin {
         embedded_asset!(app, "shaders/water.wgsl");
         embedded_asset!(app, "shaders/prop.wgsl");
         embedded_asset!(app, "shaders/clothes.wgsl");
+        embedded_asset!(app, "shaders/gorecap.wgsl");
         embedded_asset!(app, "shaders/skin.wgsl");
         embedded_asset!(app, "shaders/skin_prepass.wgsl");
         embedded_asset!(app, "shaders/masters.wgsl");
@@ -98,6 +99,7 @@ impl Plugin for MaterialsPlugin {
                 MaterialPlugin::<SkinMaterial>::default(),
                 MaterialPlugin::<MasterMaterial>::default(),
                 MaterialPlugin::<ClothesMaterial>::default(),
+                MaterialPlugin::<GoreCapMaterial>::default(),
             ))
             .add_systems(Update, ((apply_materials, strip_vertex_colors).chain(), sky_lightning, clothes_rain, skin_rain));
     }
@@ -173,6 +175,7 @@ enum Built {
     Master(Handle<MasterMaterial>),
     Clothes(Handle<ClothesMaterial>),
     Skin(Handle<SkinMaterial>),
+    GoreCap(Handle<GoreCapMaterial>),
     /// Not drawn: translucent planes with no textures (rain fixes, bed and exit blockers, light planes), which the
     /// game draws invisible (M_rainFix_invisible's compiled shader outputs zero) or as faint effects.
     Hidden,
@@ -840,6 +843,42 @@ fn clothes_material(root: &Path, info: &MaterialInfo, loader: &Loader, fallback:
     }
 }
 
+pub(crate) type GoreCapMaterial = ExtendedMaterial<StandardMaterial, GoreCapExt>;
+
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
+pub(crate) struct GoreCapExt {
+    #[texture(100)]
+    #[sampler(101)]
+    diffuse: Handle<Image>,
+    #[texture(102)]
+    ao: Handle<Image>,
+    #[uniform(103)]
+    selection: Vec4,
+}
+
+impl MaterialExtension for GoreCapExt {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://f13_game/shaders/gorecap.wgsl".into()
+    }
+}
+
+/// A GoreCap instance (shaders/gorecap.wgsl): its normal and two-sidedness on the StandardMaterial part, the meat's
+/// colour and AO (GoreCap_Meat_Layer's own samples); its mesh keeps its vertex colours (the blood).
+fn gore_cap_material(root: &Path, info: &MaterialInfo, loader: &Loader, fallback: &Fallback) -> GoreCapMaterial {
+    let fixed = |path: &str, kind: Tex, d: &Handle<Image>| loader.load(path, kind).unwrap_or_else(|| d.clone());
+    let mut base = standard_material(root, info, loader);
+    base.base_color_texture = None;
+    base.alpha_mode = AlphaMode::Opaque;
+    ExtendedMaterial {
+        base,
+        extension: GoreCapExt {
+            diffuse: fixed("SummerCamp/Content/Characters/Counselors/Gore/GoreCAps/gorecap_meat_D", Tex::Color, &fallback.white),
+            ao: fixed("SummerCamp/Content/Characters/Counselors/Gore/GoreCAps/gorecap_meat_AO", Tex::Data, &fallback.white),
+            selection: info.vectors.get("SelectionColor").map_or(Vec4::ZERO, |v| Vec4::from_array(*v)).with_w(0.0),
+        },
+    }
+}
+
 /// Rain_MPC's Rain on the clothes (Clothes_Layer's Rain: darker, glossier).
 fn clothes_rain(mpc: Option<Res<crate::weather::RainMpc>>, mut materials: ResMut<Assets<ClothesMaterial>>) {
     let Some(mpc) = mpc.filter(|m| m.is_changed()) else { return };
@@ -945,7 +984,7 @@ fn apply_materials(
         ResMut<Assets<WaterMaterial>>,
         ResMut<Assets<Image>>,
     ),
-    (mut props, mut masters, mut clothes): (ResMut<Assets<PropMaterial>>, ResMut<Assets<MasterMaterial>>, ResMut<Assets<ClothesMaterial>>),
+    (mut props, mut masters, mut clothes, mut gore_caps): (ResMut<Assets<PropMaterial>>, ResMut<Assets<MasterMaterial>>, ResMut<Assets<ClothesMaterial>>, ResMut<Assets<GoreCapMaterial>>),
     assets: Res<AssetServer>,
 ) {
     let index = &mut *index;
@@ -986,6 +1025,8 @@ fn apply_materials(
                     Built::Blend(blends.add(blend_material(info, kind, &loader, &fallback)))
                 } else if info.master == "SkinGoreMaster" {
                     Built::Skin(skins.add(skin_gore_material(&index.root, info, &loader, &fallback)))
+                } else if info.master == "GoreCap" {
+                    Built::GoreCap(gore_caps.add(gore_cap_material(&index.root, info, &loader, &fallback)))
                 } else if info.master == "ClothesMultiGore" {
                     Built::Clothes(clothes.add(clothes_material(&index.root, info, &loader, &fallback)))
                 } else if let Some(m) = master_material(&index.root, info, &loader) {
@@ -1047,6 +1088,9 @@ fn apply_materials(
             }
             Built::Skin(h) => {
                 e.remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(h));
+            }
+            Built::GoreCap(h) => {
+                e.remove::<MeshMaterial3d<StandardMaterial>>().insert((MeshMaterial3d(h), KeepVertexColors));
             }
             Built::Hidden => {
                 e.insert(Visibility::Hidden);

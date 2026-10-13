@@ -523,6 +523,8 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
                      ("MaxAttackInteractCounselorDistance", 200f), ("MaxAttackInteractAngle", 45f), ("DamageCharacterModifier", 1f),
                      ("DamageWorldModifier", 1f) })
             values[name] = ClassValue<float?>(cls, name) ?? fallback;
+        // A combat kill's dismember roll (SCCharacter's TakeDamage, FUN_1403d7410; the constructor sets none).
+        values["CombatDismemberChance"] = ClassValue<int?>(cls, "CombatDismemberChance") ?? 0;
         var move = Component(cdo, "CharacterMovement");
         foreach (var (name, fallback) in new[] { ("MaxWalkSpeed", 104f), ("MaxRunSpeed", 280f), ("MaxSprintSpeed", 450f), ("MaxCombatSpeed", 104f), ("MaxAcceleration", 2048f), ("MaxSlowRunSpeed", 200f) })
             values[name] = Inherited<float?>(move, name) ?? fallback;
@@ -756,13 +758,43 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             if (provider.TryLoadPackageObject<UTexture2D>(pkg + "." + pkg.Split('/')[^1], out var tex)) queue(tex);
             return (pkg.StartsWith("/Game/") ? "SummerCamp/Content/" + pkg["/Game/".Length..] : pkg) + ".png";
         }
+        string Queued(USkeletalMesh mesh)
+        {
+            queue(mesh);
+            return MeshFile(mesh);
+        }
+        string? LimbCap(Newtonsoft.Json.Linq.JToken? soft)
+        {
+            var path = soft?["AssetPathName"]?.ToString();
+            if (string.IsNullOrEmpty(path) || path == "None") return null;
+            if (!provider.TryLoadPackageObject<UStaticMesh>(path, out var mesh)) return null;
+            queue(mesh);
+            return new CUE4Parse_Conversion.Exporters.StaticMeshExporter(mesh).SavePath + ".glb";
+        }
+        static Newtonsoft.Json.Linq.JToken? SocketOf(USkeletalMesh mesh, string name)
+        {
+            var info = new Info();
+            AddSockets(info, mesh, mesh.Skeleton.Load<USkeleton>()!);
+            return info.Sockets.TryGetValue(name, out var part) ? Newtonsoft.Json.Linq.JToken.FromObject(part) : null;
+        }
+        string? GoreCap(Newtonsoft.Json.Linq.JToken? soft)
+        {
+            var path = soft?["AssetPathName"]?.ToString();
+            if (string.IsNullOrEmpty(path) || path == "None") return null;
+            if (!provider.TryLoadPackageObject<USkeletalMesh>(path, out var mesh)) return null;
+            queue(mesh);
+            return MeshFile(mesh);
+        }
         // ClothesMultiGore's own textures (its layer functions': Gore_Layer's and Gore_Bright_Layer's UV2_Gore_normal,
         // Gore_Layer's UV2_Gore_Colormask; Gore_Burn_Layer's Gore_RGB default).
-        foreach (var t in new[] { "/Game/Characters/Counselors/Gore/DismembermentMasks/UV2_Gore_normal", "/Game/Characters/Counselors/Gore/DismembermentMasks/UV2_Gore_Colormask", "/Game/Characters/Counselors/Gore/Textures/gore_burn_RGB_mask_01" })
+        // And GoreCap's (GoreCap_Meat_Layer's samples: the gore caps' meat).
+        foreach (var t in new[] { "/Game/Characters/Counselors/Gore/DismembermentMasks/UV2_Gore_normal", "/Game/Characters/Counselors/Gore/DismembermentMasks/UV2_Gore_Colormask", "/Game/Characters/Counselors/Gore/Textures/gore_burn_RGB_mask_01",
+                     "/Game/Characters/Counselors/Gore/GoreCAps/gorecap_meat_D", "/Game/Characters/Counselors/Gore/GoreCAps/gorecap_meat_AO", "/Game/Characters/Counselors/Gore/GoreCAps/gorecap_meat_normal" })
             Texture(new Newtonsoft.Json.Linq.JObject { ["AssetPathName"] = t });
         // They're the character's native default subobjects (SCCounselorCharacter's constructor): each class package's
         // own exports of them, a subclass's properties over its parents'.
         var parts = new Dictionary<string, Newtonsoft.Json.Linq.JObject>(StringComparer.OrdinalIgnoreCase);
+        var limbs = new Dictionary<string, USkeletalMesh>(StringComparer.OrdinalIgnoreCase);
         var chain = new List<UStruct>();
         for (var c = cls; c != null; c = c.SuperStruct?.Load<UStruct>()) chain.Insert(0, c);
         foreach (var c in chain.OfType<UBlueprintGeneratedClass>())
@@ -772,6 +804,7 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
                     var p = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(e))["Properties"] as Newtonsoft.Json.Linq.JObject ?? new Newtonsoft.Json.Linq.JObject();
                     if (parts.TryGetValue(e.Name, out var m)) m.Merge(p, new Newtonsoft.Json.Linq.JsonMergeSettings { MergeArrayHandling = Newtonsoft.Json.Linq.MergeArrayHandling.Replace });
                     else parts[e.Name] = p;
+                    if (e.GetOrDefault<FPackageIndex?>("SkeletalMesh")?.Load<USkeletalMesh>() is { } limb) limbs[e.Name] = limb;
                 }
         var result = new Newtonsoft.Json.Linq.JObject();
         foreach (var (name, p) in parts)
@@ -785,6 +818,18 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
                 ["Mask"] = Texture(p["LimbUVTexture"]),
                 ["WeaponMasks"] = gore,
                 ["Elements"] = p["ParentMaterialElementIndices"] ?? new Newtonsoft.Json.Linq.JArray(),
+                // DetachLimb's (0x14033d600): the bone hidden (else the part's attach socket), the parent's gore cap
+                // (FUN_14033c980: a skeletal mesh on the body's pose, at its socket) and blood effect (FUN_14033bb80).
+                ["BoneToHide"] = p["BoneToHide"],
+                ["GoreCap"] = GoreCap(p["ParentLimbGoreCap"]),
+                ["GoreCapSocket"] = p["ParentLimbGoreCapSocket"],
+                ["BloodEffect"] = p["ParentLimbBloodEffect"]?["AssetPathName"]?.ToString().Split('.')[^1] is { } fx && fx != "None" && fx != "" ? fx : null,
+                ["EmitterSocket"] = p["ParentLimbEmitterSocket"],
+                // Shown after the detach (bShowLimbAfterDetach, the combat dismember): the limb's own mesh and its
+                // LimbGoreCap (a static mesh) at LimbGoreCapSocket (the limb mesh's or its skeleton's).
+                ["Limb"] = limbs.TryGetValue(name, out var lm) ? Queued(lm) : null,
+                ["LimbCap"] = LimbCap(p["LimbGoreCap"]),
+                ["LimbCapAt"] = lm != null && p["LimbGoreCapSocket"]?.ToString() is { } sock && sock != "None" ? SocketOf(lm, sock) : null,
             };
         }
         return result.Count > 0 ? result : null;

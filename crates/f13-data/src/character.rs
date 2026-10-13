@@ -164,6 +164,26 @@ pub struct BodyPartInfo {
     pub weapon_masks: HashMap<String, String>,
     #[serde(default)]
     pub elements: Vec<u32>,
+    /// DetachLimb's: the bone her body hides ("None": the part's attach socket), the gore cap on her body (a
+    /// skeletal mesh following her pose) at its socket, and the blood effect (a particle system) at its socket.
+    #[serde(default)]
+    pub bone_to_hide: Option<String>,
+    #[serde(default)]
+    pub gore_cap: Option<String>,
+    #[serde(default)]
+    pub gore_cap_socket: Option<String>,
+    #[serde(default)]
+    pub blood_effect: Option<String>,
+    #[serde(default)]
+    pub emitter_socket: Option<String>,
+    /// Shown after the detach (the combat dismember): the limb's own mesh (on the body's skeleton), and its gore cap
+    /// (a static mesh) at its socket.
+    #[serde(default)]
+    pub limb: Option<String>,
+    #[serde(default)]
+    pub limb_cap: Option<String>,
+    #[serde(default)]
+    pub limb_cap_at: Option<Part>,
 }
 
 /// properties.

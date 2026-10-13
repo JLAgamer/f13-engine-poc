@@ -1183,6 +1183,7 @@ fn fly_knives(
                     }
                 }
                 if r.died {
+                    commands.trigger(crate::blood::Dismember { counselor: pe, at: Some(from) });
                     commands.trigger(crate::match_flow::KillerScore("Butcher"));
                     commands.trigger(crate::match_flow::KillerScore("KillCounselor"));
                     commands.entity(pe).insert(PlayAction(DEATH.into())).remove::<(Staggered, crate::items::ItemAction)>();
@@ -2785,6 +2786,7 @@ pub(crate) fn update_jason(
                     }
                     if r.died {
                         info!("Vanessa: killed by Jason's swing");
+                        commands.trigger(crate::blood::Dismember { counselor: pe, at: None });
                         // Not a context kill: JasonWeaponKillScoreEvent (Butcher), then KillCounselor.
                         commands.trigger(crate::match_flow::KillerScore("Butcher"));
                         commands.trigger(crate::match_flow::KillerScore("KillCounselor"));
