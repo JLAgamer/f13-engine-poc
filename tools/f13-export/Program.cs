@@ -1558,6 +1558,8 @@ static class Mvp
         "/Game/Sounds/GamePlay/VHS_SFXCue.VHS_SFXCue",
         // The world settings' PoliceCalledSFX (the call goes through).
         "/Game/Sounds/GamePlay/PoliceCalled.PoliceCalled",
+        // MusicJason_C's JasonsMusic (MUSICTRACK): Jason's layered music, for a player spectating him.
+        "/Game/Music/JasonsMusic.JasonsMusic",
         // AM_Break_Phone_Box_Machete's (its take is the fuse box break's, whose sound wins by take).
         "/Game/Sounds/GamePlay/PhoneBoxImpact.PhoneBoxImpact",
     ];

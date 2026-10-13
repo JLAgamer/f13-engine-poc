@@ -862,7 +862,13 @@ pub struct MusicState {
     two_minutes: bool,
     ended: bool,
     cinematic: Option<Entity>,
+    /// The two-minute warning while it plays (TwoMinuteWarningTrack, IsPlaying2MinuteWarning): its player and volume.
+    warning: Option<(Entity, f32)>,
 }
+
+/// StopMusic keeping the two-minute warning (its argument: IsPlaying2MinuteWarning, as PlayCinematicMusic passes it)
+/// turns it down to this (SetVolumeMultiplier DAT_14209aa5c, FUN_1402fdcc0).
+const WARNING_UNDER_MUSIC: f32 = 0.01;
 
 /// SCAnimNotify_PlayCinematicMusic (its Notify 0x140314530): a kill montage's MusicTrackToPlay, for the character
 /// playing it (`owner`).
@@ -877,9 +883,10 @@ pub struct KillMusic {
 /// vt+0x3c0, 0x140319300): StopMusic (vt+0x3b8: the current and next tracks stopped at once; the counselor's also fades
 /// Jason's near music out), then the track in 2D (CreateSound2D, volume and pitch 1) as CurrentTrack, PlayingCinematicMusic
 /// set; when it ends (CinematicKillMusicFinished 0x1402fdc20) the counselor's idle music is due again (vt+0x3d8
-/// 0x14031d5b0: MinIdleMusicTime..MaxIdleMusicTime). PLACEHOLDERS: StopMusic keeps the two-minute warning (turned down,
-/// DAT_14209aa5c), Jason's music after it (JasonsMusic) isn't ported, and her DeathMusic waits for the kill's music
-/// to end (where they meet isn't read).
+/// 0x14031d5b0: MinIdleMusicTime..MaxIdleMusicTime). StopMusic(IsPlaying2MinuteWarning) keeps a playing two-minute
+/// warning, turned down to [`WARNING_UNDER_MUSIC`] for good. PLACEHOLDERS: Jason's music after it (JasonsMusic: only for
+/// one spectating him, and Jason is spectated only in private matches) isn't ported, and her DeathMusic waits for the
+/// kill's music to end (where they meet isn't read).
 #[allow(clippy::too_many_arguments)]
 fn kill_music(
     ev: On<KillMusic>,
@@ -891,6 +898,7 @@ fn kill_music(
     local: Query<(), With<crate::controls::LocalPlayer>>,
     jasons: Query<(), With<crate::jason::Jason>>,
     (play_jason, spectate): (Option<Res<crate::jason_player::PlayJason>>, Option<Res<crate::spectate::Spectate>>),
+    mut sinks: Query<&mut bevy::audio::AudioSink>,
 ) {
     let Some(mut sounds) = sounds else { return };
     let mine = local.contains(ev.owner) || (play_jason.is_some() && jasons.contains(ev.owner)) || spectate.as_ref().and_then(|s| s.viewed()) == Some(ev.owner);
@@ -898,6 +906,11 @@ fn kill_music(
         return;
     }
     state.fade_out(&mut commands, 0.0);
+    if let Some((e, base)) = state.warning {
+        if let Ok(mut s) = sinks.get_mut(e) {
+            s.set_volume(Volume::Linear(base * WARNING_UNDER_MUSIC));
+        }
+    }
     if let Some(e) = state.cinematic.take() {
         if let Ok(mut ec) = commands.get_entity(e) {
             ec.despawn();
@@ -995,7 +1008,7 @@ fn counselor_music(
     if in_progress && !state.two_minutes && game.as_ref().is_some_and(|g| g.state.remaining_time <= 120) {
         state.two_minutes = true;
         if let Some(cue) = cue_name(&music["TwoMinuteWarningMusic"]) {
-            spawn_2d(&mut commands, &assets, &mut sounds, &mut rng, &cue, false, 1.0);
+            state.warning = spawn_2d(&mut commands, &assets, &mut sounds, &mut rng, &cue, false, 1.0);
             info!("music: two-minute warning");
         }
     }
