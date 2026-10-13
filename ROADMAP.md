@@ -7,7 +7,12 @@ Base content (asset paths in the player's install; all gameplay values come from
 `Characters/Killers/Jason/J2`, the Chevettes (`Blueprints/Vehicles/DriveableVehicles/Cars/Chevette`), the police.
 
 ## Todo
-- [ ] The lobby's rest: the counselors' character picks (one counselor exported so far), a full 8-player run
+- [ ] The lobby's rest: its counselor pick widget (the pick is C for now; the seven female counselors play), a full
+      8-player run
+- [ ] The male counselors (Jock, Tough, Prep, Nerd, Head, Stoner, Shelly; Tommy's Hunter): their skeleton and the male
+      animation set (the female counselors share Vanessa's)
+- [ ] Materials: the counselors' hair masters (HairMaster_02_m, HairMaster_03_m, M_Athlete_Girl_Hair_Inst: drawn grey),
+      each counselor's face base pose (Vanessa's on all), their names in the match's end (VANESSA on all)
 - [ ] The Tommy Jarvis timer, Tommy Jarvis, and Jason dying
 - [ ] Voice chat: push-to-talk in the game's settings menu (no menus yet: P in the lobby stands in)
 - [ ] Materials: foliage subsurface (its transmission is the deferred light pass's, whose code isn't in the shipped

@@ -101,7 +101,24 @@ impl Plugin for CharacterPlugin {
                         Err(e) => warn!("--outfit {spec}: {e}"),
                     }
                 }
-                commands.insert_resource(CounselorCharacter(c));
+                // Every exported counselor's looks (counselors/<Class>_Counselor.json), on the same skeleton and
+                // animations (the female counselors share them).
+                let mut classes = HashMap::new();
+                for e in std::fs::read_dir(export.join("counselors")).into_iter().flatten().flatten() {
+                    let path = e.path();
+                    let Some(class) = path.file_stem().and_then(|s| s.to_str()).and_then(|s| s.strip_suffix("_Counselor")).map(String::from) else { continue };
+                    if format!("{class}_Counselor") == COUNSELOR {
+                        classes.insert(class, std::sync::Arc::new(c.info.clone()));
+                    } else if let Ok(i) = CharacterInfo::load(&path) {
+                        if i.bones.iter().map(|b| &b.name).eq(c.info.bones.iter().map(|b| &b.name)) {
+                            classes.insert(class, std::sync::Arc::new(i));
+                        } else {
+                            info!("counselor {class}: another skeleton, not playable yet");
+                        }
+                    }
+                }
+                info!("counselors: {:?}", { let mut k: Vec<_> = classes.keys().collect(); k.sort(); k });
+                commands.insert_resource(CounselorCharacter(c, classes));
             }
             if let Some(c) = CharacterModel::load(&export.join("killers").join(format!("{KILLER}.json")), &export, &mut clips, &mut graphs) {
                 commands.insert_resource(KillerCharacter(c));
@@ -210,8 +227,28 @@ fn aim_targets(pitch: f32) -> [f32; 4] {
 const BLOCK_LAYER_FILTERS: &[(&str, i32)] = &[("spine_01", 2)];
 const BLOCK_LAYER_BLEND_S: f32 = 0.1;
 
+/// The counselor model (its skeleton and animations: Vanessa's), and every playable counselor's looks by class
+/// ("Athlete", "Hero", ...).
 #[derive(Resource, Deref)]
-pub struct CounselorCharacter(pub CharacterModel);
+pub struct CounselorCharacter(#[deref] pub CharacterModel, pub HashMap<String, std::sync::Arc<CharacterInfo>>);
+
+/// The default counselor class (Vanessa).
+pub const DEFAULT_CLASS: &str = "Athlete";
+
+/// The local player's counselor pick (--counselor).
+#[derive(Resource, Clone, Debug)]
+pub struct LocalClass(pub String);
+
+/// A counselor's class ("Athlete", "Hero", ...): her looks and stats.
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+pub struct CounselorClass(pub String);
+
+impl CounselorCharacter {
+    /// A class's looks (unknown: the default's).
+    pub fn looks(&self, class: &str) -> std::sync::Arc<CharacterInfo> {
+        self.1.get(class).cloned().unwrap_or_else(|| std::sync::Arc::new(self.0.info.clone()))
+    }
+}
 
 #[derive(Resource, Deref)]
 pub struct KillerCharacter(pub CharacterModel);
@@ -363,6 +400,8 @@ impl Rig {
 #[derive(Component)]
 pub struct Rig {
     pub model: Model,
+    /// Its looks when not the model's own (a counselor class's).
+    pub visual: Option<std::sync::Arc<CharacterInfo>>,
     body: Entity,
     outfit: Vec<Entity>,
     /// Parts hanging off a bone or another part, spawned once the body is in: (part index, entity holding its scene).
@@ -446,7 +485,13 @@ struct SceneReady;
 
 /// Spawns the model under `owner` (feet at its origin, facing +Z), with `marker` on the rig. Returns the rig entity.
 pub fn spawn_model(commands: &mut Commands, assets: &AssetServer, character: &CharacterModel, model: Model, owner: Entity, marker: impl Bundle) -> Entity {
-    let info = &character.info;
+    spawn_model_as(commands, assets, character, None, model, owner, marker)
+}
+
+/// [`spawn_model`] with another character's looks (a counselor class's body, parts and skin masks) on the model's
+/// skeleton and animations.
+pub fn spawn_model_as(commands: &mut Commands, assets: &AssetServer, character: &CharacterModel, visual: Option<std::sync::Arc<CharacterInfo>>, model: Model, owner: Entity, marker: impl Bundle) -> Entity {
+    let info = visual.as_deref().unwrap_or(&character.info);
     // CharacterMesh0 sits at MeshTransform from the capsule's centre; the player's origin is the capsule's bottom.
     // Unreal actors face +X, the player here faces +Z: a quarter turn about Y on top of the mesh's own yaw.
     let mut mesh = crate::to_transform(&info.mesh_transform);
@@ -474,6 +519,7 @@ pub fn spawn_model(commands: &mut Commands, assets: &AssetServer, character: &Ch
     }
     commands.entity(rig).insert(Rig {
         model,
+        visual,
         body,
         outfit,
         attached: Vec::new(),
@@ -529,7 +575,9 @@ fn assemble(
             Model::Counselor => counselor.as_deref().map(|c| &c.0),
             Model::Killer => killer.as_deref().map(|c| &c.0),
         };
-        let Some(info) = character.map(|c| &c.info) else { continue };
+        let Some(model_info) = character.map(|c| &c.info) else { continue };
+        let visual = rig.visual.clone();
+        let info = visual.as_deref().unwrap_or(model_info);
         let bones: HashMap<&str, Entity> = children
             .iter_descendants(rig.body)
             .filter_map(|e| names.get(e).ok().map(|n| (n.as_str(), e)))

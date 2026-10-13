@@ -211,6 +211,8 @@ pub struct NetCounselor {
     pub moving: bool,
     /// Her gore records and detached parts (blood.rs Gore).
     pub gore: crate::blood::Gore,
+    /// Her class ("Athlete", "Hero", ...; character.rs CounselorClass).
+    pub class: String,
 }
 
 /// A client's twin of a counselor in a move the server plays (at a door or window, or onto a special move's spot).
@@ -357,6 +359,8 @@ pub struct NetPlugin {
     pub dedicated: bool,
     /// This player's name in the lobby.
     pub name: String,
+    /// This player's counselor pick (--counselor).
+    pub class: String,
     /// A client's netcode id (else one from the clock), and a lobby's last match's Jason (`--net-id`, `--last-jason`:
     /// a rematch's relaunch keeps them).
     pub net_id: Option<u64>,
@@ -599,7 +603,7 @@ impl Plugin for NetPlugin {
                 crate::net_world::server(app);
                 crate::voice::server(app, self.dedicated);
                 if self.lobby {
-                    crate::lobby::server(app, self.dedicated, self.name.clone(), self.last_match.clone());
+                    crate::lobby::server(app, self.dedicated, self.name.clone(), self.last_match.clone(), self.class.clone());
                     if self.bot && !self.dedicated {
                         app.insert_resource(NetBot { prefer: self.prefer, ..default() })
                             .add_systems(Update, (net_bot_lobby.before(crate::lobby::Keys), host_bot_jason.run_if(resource_exists::<crate::jason_player::PlayJason>)));
@@ -727,7 +731,7 @@ fn player_joined(
         warn!("net: player {:?} joined with no counselor start left", id.0);
         return;
     };
-    let counselor = crate::player::spawn_counselor(&mut commands, &assets, character.as_deref(), &tuning, at);
+    let counselor = crate::player::spawn_counselor(&mut commands, &assets, character.as_deref(), &tuning, at, crate::character::DEFAULT_CLASS);
     commands.entity(counselor).insert((PlayedBy(joined.entity), ControlledBy { owner: joined.entity, lifetime: default() }));
     info!("net: player {:?} joined: counselor {counselor} at {at}", id.0);
 }
@@ -795,7 +799,7 @@ fn set<T: PartialEq>(mut c: Mut<T>, v: T) {
 #[allow(clippy::type_complexity)]
 fn update_bodies(
     mut bodies: Query<(&mut NetBody, &Transform, &mut NetAction, Option<&PlayAction>, Has<crate::items::Blocking>)>,
-    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>, Has<crate::voice::Spectating>), (Option<&crate::hiding::Hiding>, Option<&crate::hiding::Breathing>, Option<&crate::interact::Interaction>), (Option<&crate::vehicle::Driving>, Option<&crate::vehicle::Escaped>, Has<crate::interact::MoveToSpot>, Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>, Option<&crate::blood::Gore>))>,
+    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>, Has<crate::voice::Spectating>, Option<&crate::character::CounselorClass>), (Option<&crate::hiding::Hiding>, Option<&crate::hiding::Breathing>, Option<&crate::interact::Interaction>), (Option<&crate::vehicle::Driving>, Option<&crate::vehicle::Escaped>, Has<crate::interact::MoveToSpot>, Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>, Option<&crate::blood::Gore>))>,
     struggle: Option<Res<crate::jason::Struggle>>,
     mut jasons: Query<(&mut NetJason, &crate::jason::Jason, Option<&crate::senses::Knowledge>, Option<&crate::kill_camera::KillCam>)>,
     world_ids: Query<&crate::net_world::WorldId>,
@@ -816,7 +820,7 @@ fn update_bodies(
             a.blocking = blocking;
         }
     }
-    for (n, p, name, controls, (held, trapped, spectating), (hiding, breathing, interaction), (driving, escaped, to_spot, door_move, window_move, blood)) in &mut counselors {
+    for (n, p, name, controls, (held, trapped, spectating, class), (hiding, breathing, interaction), (driving, escaped, to_spot, door_move, window_move, blood)) in &mut counselors {
         let c = &p.counselor;
         set(n, NetCounselor {
             stance: c.stance as u8,
@@ -843,6 +847,7 @@ fn update_bodies(
             escaped: escaped.map(|e| e.how.clone()),
             moving: to_spot || door_move || window_move,
             gore: blood.cloned().unwrap_or_default(),
+            class: class.map_or(String::new(), |c| c.0.clone()),
         });
     }
     for (n, j, know, cam) in &mut jasons {
@@ -931,16 +936,24 @@ fn make_twins(
     assets: Res<AssetServer>,
     counselor: Option<Res<crate::character::CounselorCharacter>>,
     tuning: Res<crate::player::PlayerTuning>,
-    bodies: Query<(Entity, &NetBody, Has<Controlled>), Without<Twin>>,
+    bodies: Query<(Entity, &NetBody, Has<Controlled>, Option<&NetCounselor>), Without<Twin>>,
     local: Query<Entity, (With<LocalPlayer>, With<Player>)>,
     jason: Query<Entity, With<crate::jason::Jason>>,
     mut index: ResMut<Twins>,
 ) {
-    for (e, b, own) in &bodies {
+    for (e, b, own, nc) in &bodies {
         let at = Vec3::from_array(b.pos);
+        let class = nc.map(|n| n.class.as_str()).filter(|c| !c.is_empty()).unwrap_or(crate::character::DEFAULT_CLASS);
         let twin = match (b.kind, own) {
-            (BodyKind::Counselor, true) => local.single().ok(),
-            (BodyKind::Counselor, false) => Some(crate::player::spawn_counselor(&mut commands, &assets, counselor.as_deref(), &tuning, at)),
+            (BodyKind::Counselor, true) => {
+                // Hers as the server has her (her lobby pick).
+                let l = local.single().ok();
+                if let Some(l) = l {
+                    commands.entity(l).insert(crate::character::CounselorClass(class.to_string()));
+                }
+                l
+            }
+            (BodyKind::Counselor, false) => Some(crate::player::spawn_counselor(&mut commands, &assets, counselor.as_deref(), &tuning, at, class)),
             (BodyKind::Jason, _) => jason.single().ok(),
         };
         let Some(twin) = twin else { continue };

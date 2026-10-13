@@ -68,6 +68,8 @@ struct FallingLimb {
     from: Entity,
     file: String,
     bones: HashMap<String, Entity>,
+    /// Her looks (her class's).
+    looks: std::sync::Arc<f13_data::character::CharacterInfo>,
 }
 
 /// A dropped limb on a skeleton not hers, falling: its speed (m/s, down) and radius.
@@ -160,8 +162,8 @@ fn part_of_limb(limb: &str) -> usize {
 }
 
 /// A part's record: its parameter and mask, or the given ones over them.
-fn record(counselor: &crate::character::CounselorCharacter, part: usize, mask: Option<&str>, parameter: Option<&str>) -> Option<(String, String)> {
-    let info = counselor.info.body_parts.get(PARTS[part]);
+fn record(looks: &f13_data::character::CharacterInfo, part: usize, mask: Option<&str>, parameter: Option<&str>) -> Option<(String, String)> {
+    let info = looks.body_parts.get(PARTS[part]);
     let parameter = parameter.filter(|p| *p != "None").map(String::from).or_else(|| info.and_then(|i| i.parameter.clone()))?;
     let mask = mask.map(String::from).or_else(|| info.and_then(|i| i.mask.clone()))?;
     Some((parameter, mask))
@@ -176,13 +178,14 @@ fn apply_blood(
     skins: Query<&bevy::mesh::skinning::SkinnedMesh>,
     transforms: Query<&GlobalTransform>,
     names: Query<&Name>,
-    gore: Query<&Gore>,
+    (gore, classes): (Query<&Gore>, Query<&crate::character::CounselorClass>),
     counselor: Option<Res<crate::character::CounselorCharacter>>,
 ) {
     let Some(counselor) = counselor else { return };
     let Some((part, bone)) = part_at(ev.counselor, ev.at, &children, &parents, &skins, &transforms, &names) else { return };
     let chain = [bone.as_str()];
-    let Some(r) = record(&counselor, part, None, None) else { return };
+    let looks = classes.get(ev.counselor).map_or_else(|_| counselor.looks(crate::character::DEFAULT_CLASS), |c| counselor.looks(&c.0));
+    let Some(r) = record(&looks, part, None, None) else { return };
     info!("blood: hit at {} (bone {}): {} {}", ev.at, chain.first().unwrap_or(&"?"), PARTS[part], r.0);
     let mut g = gore.get(ev.counselor).cloned().unwrap_or_default();
     g.0.retain(|(p, _)| *p != r.0);
@@ -218,6 +221,7 @@ fn combat_dismember(
     (children, parents, skins, transforms, names): (Query<&Children>, Query<&ChildOf>, Query<&bevy::mesh::skinning::SkinnedMesh>, Query<&GlobalTransform>, Query<&Name>),
     rigs: Query<&crate::character::Rig>,
     gore: Query<&Gore>,
+    classes: Query<&crate::character::CounselorClass>,
     counselor: Option<Res<crate::character::CounselorCharacter>>,
     killer: Option<Res<crate::character::KillerCharacter>>,
     mut rng: ResMut<crate::GameRng>,
@@ -239,7 +243,8 @@ fn combat_dismember(
         return;
     }
     info!("blood: combat dismember (roll {roll} < {chance}): {} (bone {bone})", PARTS[part]);
-    if let Some(r) = record(&counselor, part, None, None) {
+    let looks = classes.get(ev.counselor).map_or_else(|_| counselor.looks(crate::character::DEFAULT_CLASS), |c| counselor.looks(&c.0));
+    if let Some(r) = record(&looks, part, None, None) {
         g.0.retain(|(p, _)| *p != r.0);
         g.0.push(r);
     }
@@ -269,7 +274,8 @@ fn drop_limbs(
         *done |= new;
         let Ok(at) = globals.get(rig_entity) else { continue };
         for part in (0..PARTS.len()).filter(|i| new & (1 << i) != 0) {
-            let Some(file) = counselor.info.body_parts.get(PARTS[part]).and_then(|i| i.limb.clone()) else { continue };
+            let looks = rig.visual.clone().unwrap_or_else(|| counselor.looks(crate::character::DEFAULT_CLASS));
+            let Some(file) = looks.body_parts.get(PARTS[part]).and_then(|i| i.limb.clone()) else { continue };
             info!("blood: {} dropped ({})", PARTS[part], file.rsplit('/').next().unwrap_or(""));
             let ready = |ev: On<bevy::world_serialization::WorldInstanceReady>, mut commands: Commands| {
                 commands.entity(ev.entity).insert(LimbReady);
@@ -279,7 +285,7 @@ fn drop_limbs(
                     at.compute_transform(),
                     Visibility::default(),
                     bevy::world_serialization::WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(file.clone()))),
-                    FallingLimb { part, from: rig_entity, file, bones: HashMap::new() },
+                    FallingLimb { part, from: rig_entity, file, bones: HashMap::new(), looks },
                 ))
                 .observe(ready);
         }
@@ -316,10 +322,11 @@ fn pose_limbs(
                 *d = t;
             }
         }
-        let bone = hidden_bone(&counselor, limb.part);
+        let looks = limb.looks.clone();
+        let bone = hidden_bone(&looks, limb.part);
         if let Some(mut d) = limb.bones.get(bone).and_then(|&b| transforms.get_mut(b).ok()) {
             d.scale = Vec3::ONE;
-        } else if let Some(p) = counselor.info.parts.iter().find(|p| p.file == limb.file) {
+        } else if let Some(p) = looks.parts.iter().find(|p| p.file == limb.file) {
             // Where it hung (its attach bone's place on her, at her own scale: that bone is hidden now).
             let (Some(at), Ok(rig_at)) = (rig.bones.get(&p.attach).and_then(|&b| globals.get(b).ok()), globals.get(limb.from)) else { continue };
             let mut at = at.compute_transform();
@@ -328,12 +335,12 @@ fn pose_limbs(
             if let Ok(mut d) = transforms.get_mut(e) {
                 *d = xf;
             }
-            for c in counselor.info.parts.iter().filter(|c| c.attach == p.name && !c.file.is_empty()) {
+            for c in looks.parts.iter().filter(|c| c.attach == p.name && !c.file.is_empty()) {
                 let cx = c.transform.as_ref().map(crate::to_transform).unwrap_or_default();
                 commands.spawn((cx, Visibility::default(), bevy::world_serialization::WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(c.file.clone()))), ChildOf(e)));
             }
             // Its own physics asset's body (the face's: one sphyl on its Face bone), else her body's at that bone.
-            let info = counselor.info.body_parts.get(PARTS[limb.part]);
+            let info = looks.body_parts.get(PARTS[limb.part]);
             let radius = info.and_then(|i| i.limb_bodies.first()).or_else(|| counselor.info.ragdoll.iter().find(|b| b.bone == p.attach)).map_or(0.1, |b| b.radius / 100.0);
             commands.entity(e).insert(Dropping(0.0, radius));
         }
@@ -352,7 +359,7 @@ fn limb_ragdolls(
 ) {
     let Some(counselor) = counselor else { return };
     for (e, limb) in &limbs {
-        let bone = hidden_bone(&counselor, limb.part);
+        let bone = hidden_bone(&limb.looks, limb.part);
         commands.entity(e).insert(LimbCapped);
         if limb.bones.contains_key(bone) {
             match crate::ragdoll::limb_ragdoll(&counselor.info, &limb.bones, bone, &transforms, &globals) {
@@ -363,7 +370,7 @@ fn limb_ragdolls(
                 None => warn!("blood: no ragdoll for the dropped {}", PARTS[limb.part]),
             }
         }
-        let info = counselor.info.body_parts.get(PARTS[limb.part]);
+        let info = limb.looks.body_parts.get(PARTS[limb.part]);
         if let Some(cap) = info.and_then(|i| i.limb_cap.clone()) {
             let at = info.and_then(|i| i.limb_cap_at.as_ref());
             let parent = at.and_then(|s| limb.bones.get(&s.attach)).or_else(|| limb.bones.get(bone)).copied().unwrap_or(e);
@@ -471,7 +478,7 @@ fn kill_gore(
                 g.1 |= 1 << part;
             }
             let parameter = if n.kind == "Blood" { n.parameter.as_deref() } else { None };
-            let Some(r) = record(&counselor, part, n.mask.as_deref(), parameter) else { continue };
+            let Some(r) = record(rig.visual.as_deref().unwrap_or(&counselor.info), part, n.mask.as_deref(), parameter) else { continue };
             info!("blood: {take} at {:.2}s: {} {} ({})", n.time, n.kind, r.0, r.1.rsplit('/').next().unwrap_or(""));
             g.0.retain(|(p, _)| *p != r.0);
             g.0.push(r);
@@ -488,8 +495,8 @@ fn kill_gore(
 const HIDDEN: f32 = 1e-3;
 
 /// The bone a detached part hides.
-fn hidden_bone(counselor: &crate::character::CounselorCharacter, part: usize) -> &str {
-    counselor.info.body_parts.get(PARTS[part]).and_then(|i| i.bone_to_hide.as_deref()).filter(|b| *b != "None").unwrap_or(ATTACH[part])
+fn hidden_bone(looks: &f13_data::character::CharacterInfo, part: usize) -> &str {
+    looks.body_parts.get(PARTS[part]).and_then(|i| i.bone_to_hide.as_deref()).filter(|b| *b != "None").unwrap_or(ATTACH[part])
 }
 
 /// Her detached parts' bones scaled to nothing, after her pose (character.rs's post-animation chain).
@@ -501,7 +508,7 @@ pub(crate) fn hide_detached(rigs: Query<(&ChildOf, &crate::character::Rig)>, gor
             continue;
         }
         for part in (0..PARTS.len()).filter(|i| g.1 & (1 << i) != 0) {
-            if let Some(mut xf) = rig.bones.get(hidden_bone(&counselor, part)).and_then(|&b| transforms.get_mut(b).ok()) {
+            if let Some(mut xf) = rig.bones.get(hidden_bone(rig.visual.as_deref().unwrap_or(&counselor.info), part)).and_then(|&b| transforms.get_mut(b).ok()) {
                 xf.scale = Vec3::splat(HIDDEN);
             }
         }
@@ -524,7 +531,7 @@ fn gore_caps(
         let new = g.1 & !*done;
         for part in (0..PARTS.len()).filter(|i| new & (1 << i) != 0) {
             *done |= 1 << part;
-            if let Some(file) = counselor.info.body_parts.get(PARTS[part]).and_then(|i| i.gore_cap.clone()) {
+            if let Some(file) = rig.visual.as_deref().unwrap_or(&counselor.info).body_parts.get(PARTS[part]).and_then(|i| i.gore_cap.clone()) {
                 info!("blood: {} gore cap {}", PARTS[part], file.rsplit('/').next().unwrap_or(""));
                 rig.follow(&mut commands, &assets, rig_entity, file);
             }

@@ -788,8 +788,9 @@ switch (rest[0])
         WriteCollision();
         foreach (var (k, n) in Collision.VisibilityDiffers) Console.WriteLine($"visibility differs from WorldDynamic: {n} x {k}");
         return 0;
-    case "counselor": // the MVP counselor's parts and animations (and the meshes they need)
-        new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims, Mvp.KeepRoot);
+    case "counselor": // counselor [Name...]: counselors' parts and animations (and the meshes they need); default the MVP's
+        foreach (var name in rest.Count > 1 ? rest.Skip(1) : [Mvp.Counselor.Split('/')[^1].Replace("_Counselor", "")])
+            new CounselorExporter(provider, outDir, Queue).Export($"/Game/Characters/Counselors/{name}/{name}_Counselor", Mvp.CounselorAnims, Mvp.KeepRoot);
         break;
     case "ui": // ui [widget...]: widget trees and their textures (default: Mvp.Widgets)
     {

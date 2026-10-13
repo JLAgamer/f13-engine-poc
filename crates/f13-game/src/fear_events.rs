@@ -168,7 +168,7 @@ fn setup(
         }
         commands.entity(e).insert((
             CounselorFear(fear),
-            CounselorStats { stats: pt.stats, fear_modifier: t.fear_modifier.clone(), perk_fear_rate: 0.0 },
+            CounselorStats { stats: p.counselor.stats, fear_modifier: t.fear_modifier.clone(), perk_fear_rate: 0.0 },
             Pushed::default(),
         ));
     }

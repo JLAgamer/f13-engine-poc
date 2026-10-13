@@ -63,6 +63,8 @@ pub enum LobbyMsg {
     Name(String),
     Preference(Preference),
     Ready(bool),
+    /// Their counselor pick (a class: "Athlete", "Hero", ...).
+    Class(String),
 }
 
 pub struct LobbyChannel;
@@ -80,6 +82,9 @@ pub struct Member {
     pub ping: u32,
     pub talked: bool,
     pub talking: bool,
+    /// Their counselor pick (empty: the default).
+    #[serde(default)]
+    pub class: String,
 }
 
 /// The lobby as the players see it: open, its members, the countdown to the match (s), and who plays Jason once it's
@@ -171,12 +176,12 @@ pub(crate) fn protocol(app: &mut App) {
 }
 
 /// The server's lobby: `dedicated`, the server's own player isn't in it.
-pub(crate) fn server(app: &mut App, dedicated: bool, name: String, last_match: Option<std::path::PathBuf>) {
+pub(crate) fn server(app: &mut App, dedicated: bool, name: String, last_match: Option<std::path::PathBuf>, class: String) {
     let last_match = last_match.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     let mut lobby = NetLobby { open: true, last_match, ..default() };
     let mut links = Links::default();
     if !dedicated {
-        lobby.members.push(Member { id: 0, name, ..default() });
+        lobby.members.push(Member { id: 0, name, class, ..default() });
         links.0.push((0, None));
     }
     app.insert_resource(LobbyOpen)
@@ -301,8 +306,9 @@ fn receive(mut receivers: Query<(Entity, &mut MessageReceiver<LobbyMsg>)>, links
                 LobbyMsg::Name(n) => m.name = n.chars().take(24).collect(),
                 LobbyMsg::Preference(p) => m.preference = p,
                 LobbyMsg::Ready(r) => m.ready = r,
+                LobbyMsg::Class(c) => m.class = c.chars().take(32).collect(),
             }
-            info!("lobby: {} ({}) {} {}", m.name, m.id, m.preference.label(), if m.ready { "ready" } else { "not ready" });
+            info!("lobby: {} ({}) {} {} {}", m.name, m.id, m.preference.label(), m.class, if m.ready { "ready" } else { "not ready" });
         }
     }
 }
@@ -321,21 +327,34 @@ fn lobby_key(keys: &ButtonInput<KeyCode>) -> Option<LobbyMsg> {
         Some(LobbyMsg::Preference(Preference::Killer))
     } else if keys.just_pressed(KeyCode::Enter) {
         Some(LobbyMsg::Ready(true))
+    } else if keys.just_pressed(KeyCode::KeyC) {
+        // The next counselor (its class filled in by the caller).
+        Some(LobbyMsg::Class(String::new()))
     } else {
         None
     }
 }
 
+/// The counselor after `current` among the playable ones (by class name; the first after the last).
+fn next_class(character: Option<&crate::character::CounselorCharacter>, current: &str) -> String {
+    let mut classes: Vec<&String> = character.map(|c| c.1.keys().collect()).unwrap_or_default();
+    classes.sort();
+    let current = if current.is_empty() { crate::character::DEFAULT_CLASS } else { current };
+    let i = classes.iter().position(|c| c.as_str() == current).map_or(0, |i| (i + 1) % classes.len().max(1));
+    classes.get(i).map_or_else(|| crate::character::DEFAULT_CLASS.to_string(), |c| c.to_string())
+}
+
 /// The server's own player's keys.
-fn local_keys(keys: Res<ButtonInput<KeyCode>>, mut lobby: Query<&mut NetLobby>) {
+fn local_keys(keys: Res<ButtonInput<KeyCode>>, mut lobby: Query<&mut NetLobby>, character: Option<Res<crate::character::CounselorCharacter>>) {
     let (Some(msg), Ok(mut lobby)) = (lobby_key(&keys), lobby.single_mut()) else { return };
     let Some(m) = lobby.members.iter_mut().find(|m| m.id == 0) else { return };
     match msg {
         LobbyMsg::Preference(p) => m.preference = p,
         LobbyMsg::Ready(_) => m.ready = !m.ready,
         LobbyMsg::Name(_) => {}
+        LobbyMsg::Class(_) => m.class = next_class(character.as_deref(), &m.class),
     }
-    info!("lobby: {} {} {}", m.name, m.preference.label(), if m.ready { "ready" } else { "not ready" });
+    info!("lobby: {} {} {} {}", m.name, m.preference.label(), m.class, if m.ready { "ready" } else { "not ready" });
 }
 
 /// Everyone ready: the countdown, then the match.
@@ -371,6 +390,7 @@ fn count_down(
     let name = |id: u64| lobby.members.iter().find(|m| m.id == id).map_or(String::new(), |m| m.name.clone());
     info!("lobby: the match starts: Jason is {}", killer.map_or("nobody".into(), name));
     let link = |id: u64| links.0.iter().find(|(i, _)| *i == id).and_then(|(_, l)| *l);
+    let class = |id: u64| lobby.members.iter().find(|m| m.id == id).map(|m| m.class.clone()).filter(|c| !c.is_empty());
     // The server's own counselor: hers if she's a counselor, else gone (her start free again).
     let local_plays = links.0.iter().find(|(_, l)| l.is_none()).map(|(i, _)| *i);
     if local_plays.is_none() || local_plays == killer {
@@ -380,6 +400,9 @@ fn count_down(
         }
     } else if let (Ok((e, _)), Some(id)) = (local.single(), local_plays) {
         commands.entity(e).insert(Name::new(name(id)));
+        if let Some(c) = class(id) {
+            commands.entity(e).insert(crate::character::CounselorClass(c));
+        }
     }
     for &(id, _) in &members {
         let Some(l) = link(id) else { continue };
@@ -391,7 +414,7 @@ fn count_down(
             warn!("lobby: no counselor start left for {id}");
             continue;
         };
-        let c = crate::player::spawn_counselor(&mut commands, &assets, character.as_deref(), &tuning, at);
+        let c = crate::player::spawn_counselor(&mut commands, &assets, character.as_deref(), &tuning, at, &class(id).unwrap_or_else(|| crate::character::DEFAULT_CLASS.to_string()));
         commands.entity(c).insert((PlayedBy(l), ControlledBy { owner: l, lifetime: default() }, Name::new(name(id))));
         info!("lobby: {} plays counselor {c} at {at}", name(id));
     }
@@ -463,16 +486,19 @@ fn apply_jason_input(player: Res<JasonPlayer>, mut receivers: Query<&mut Message
     }
 }
 
-/// The client's name, once connected.
-fn send_name(me: Option<Res<Me>>, mut senders: Query<&mut MessageSender<LobbyMsg>, Added<Connected>>) {
+/// The client's name and counselor pick (--counselor), once connected.
+fn send_name(me: Option<Res<Me>>, local: Option<Res<crate::character::LocalClass>>, mut senders: Query<&mut MessageSender<LobbyMsg>, Added<Connected>>) {
     let Some(me) = me else { return };
     for mut s in &mut senders {
         s.send::<LobbyChannel>(LobbyMsg::Name(me.name.clone()));
+        if let Some(c) = &local {
+            s.send::<LobbyChannel>(LobbyMsg::Class(c.0.clone()));
+        }
     }
 }
 
 /// The lobby's keys on a client.
-fn client_keys(keys: Res<ButtonInput<KeyCode>>, lobby: Query<&NetLobby>, me: Option<Res<Me>>, mut senders: Query<&mut MessageSender<LobbyMsg>, With<Connected>>) {
+fn client_keys(keys: Res<ButtonInput<KeyCode>>, lobby: Query<&NetLobby>, me: Option<Res<Me>>, character: Option<Res<crate::character::CounselorCharacter>>, mut senders: Query<&mut MessageSender<LobbyMsg>, With<Connected>>) {
     let (Ok(lobby), Some(me)) = (lobby.single(), me) else { return };
     if !lobby.open {
         return;
@@ -481,6 +507,10 @@ fn client_keys(keys: Res<ButtonInput<KeyCode>>, lobby: Query<&NetLobby>, me: Opt
     if let LobbyMsg::Ready(_) = msg {
         let ready = lobby.members.iter().find(|m| m.id == me.id).is_some_and(|m| m.ready);
         msg = LobbyMsg::Ready(!ready);
+    }
+    if let LobbyMsg::Class(_) = msg {
+        let current = lobby.members.iter().find(|m| m.id == me.id).map_or("", |m| m.class.as_str());
+        msg = LobbyMsg::Class(next_class(character.as_deref(), current));
     }
     for mut s in &mut senders {
         s.send::<LobbyChannel>(msg.clone());

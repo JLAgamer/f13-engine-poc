@@ -37,10 +37,19 @@ pub struct PlayerTuning {
     pub counselor: CounselorTuning,
     pub movement: MovementSettings,
     pub stats: f13_core::stats::Stats,
+    /// Every counselor class's stats (tuning.json's characters), by class.
+    pub characters: std::collections::BTreeMap<String, f13_core::stats::Stats>,
     pub first_aid: f13_data::FirstAid,
     pub minigame: f13_core::minigame::MinigameTuning,
     pub repair_hold_time: f32,
     pub vehicle_start: f13_data::VehicleStart,
+}
+
+impl PlayerTuning {
+    /// A counselor class's stats (unknown: the default's).
+    pub fn stats_of(&self, class: &str) -> f13_core::stats::Stats {
+        self.characters.get(class).copied().unwrap_or(self.stats)
+    }
 }
 
 #[derive(Component)]
@@ -133,6 +142,8 @@ pub struct PlayerPlugin {
     pub demo: bool,
     /// Fear at the start (--fear holds it there: fear_events.rs).
     pub fear: f32,
+    /// The local counselor's class (--counselor).
+    pub class: String,
     /// Starting health (testing: nothing deals damage in the client yet).
     pub health: Option<f32>,
 }
@@ -146,12 +157,14 @@ pub(crate) struct PlayerConfig {
     demo: bool,
     fear: f32,
     pub(crate) health: Option<f32>,
+    pub(crate) class: String,
 }
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(PlayerConfig { others: self.others.clone(), spawn: self.spawn, capsule: self.capsule, camera: self.camera, demo: self.demo, fear: self.fear, health: self.health })
+        app.insert_resource(PlayerConfig { others: self.others.clone(), spawn: self.spawn, capsule: self.capsule, camera: self.camera, demo: self.demo, fear: self.fear, health: self.health, class: self.class.clone() })
             .add_systems(Startup, spawn_player)
+            .add_systems(Update, restyle)
             // Input is read once per frame; one-shot actions stay latched until a fixed step uses them, so a frame
             // that runs several fixed steps (low frame rate, --speed) doesn't repeat a key press.
             .add_systems(RunFixedMainLoop, read_intent.in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop).run_if(crate::match_flow::in_progress))
@@ -181,7 +194,7 @@ fn spawn_player(
     mut materials: ResMut<Assets<StandardMaterial>>,
     character: Option<Res<crate::character::CounselorCharacter>>,
 ) {
-    let mut counselor = Counselor::new(tuning.stats);
+    let mut counselor = Counselor::new(tuning.stats_of(&config.class));
     counselor.health = config.health.unwrap_or(tuning.counselor.health.max_health).clamp(1.0, tuning.counselor.health.max_health);
     counselor.update_wounded(counselor.health, true, &tuning.counselor);
     let player = commands.spawn((
@@ -192,11 +205,13 @@ fn spawn_player(
         crate::controls::LocalPlayer,
         crate::controls::Controls::default(),
         Intent::default(),
+        crate::character::CounselorClass(config.class.clone()),
     ));
     let player = player.id();
+    info!("counselor class: {}", config.class);
     match character.as_deref().filter(|_| !config.capsule) {
         Some(character) => {
-            crate::character::spawn_model(&mut commands, &assets, character, crate::character::Model::Counselor, player, PlayerPart);
+            crate::character::spawn_model_as(&mut commands, &assets, character, Some(character.looks(&config.class)), crate::character::Model::Counselor, player, PlayerPart);
         }
         None => {
             let capsule = meshes.add(Capsule3d::new(CAPSULE_RADIUS_M, 2.0 * (CAPSULE_HALF_HEIGHT_M - CAPSULE_RADIUS_M)));
@@ -212,7 +227,7 @@ fn spawn_player(
     }
     // The other counselors (--counselors): at their starts, their controls idle (a network or bot player's later).
     for &at in &config.others {
-        spawn_counselor(&mut commands, &assets, character.as_deref().filter(|_| !config.capsule), &tuning, at);
+        spawn_counselor(&mut commands, &assets, character.as_deref().filter(|_| !config.capsule), &tuning, at, crate::character::DEFAULT_CLASS);
     }
     commands.spawn((
         Camera3d::default(),
@@ -234,8 +249,8 @@ fn spawn_player(
 
 /// A counselor other than the local one, at `at`: full health, her controls idle until her player's (a network or
 /// bot player's) come in.
-pub(crate) fn spawn_counselor(commands: &mut Commands, assets: &AssetServer, character: Option<&crate::character::CounselorCharacter>, tuning: &PlayerTuning, at: Vec3) -> Entity {
-    let mut counselor = Counselor::new(tuning.stats);
+pub(crate) fn spawn_counselor(commands: &mut Commands, assets: &AssetServer, character: Option<&crate::character::CounselorCharacter>, tuning: &PlayerTuning, at: Vec3, class: &str) -> Entity {
+    let mut counselor = Counselor::new(tuning.stats_of(class));
     counselor.health = tuning.counselor.health.max_health;
     let other = commands
         .spawn((
@@ -246,13 +261,42 @@ pub(crate) fn spawn_counselor(commands: &mut Commands, assets: &AssetServer, cha
             crate::controls::Controls::default(),
             Intent::default(),
             Name::new("counselor"),
+            crate::character::CounselorClass(class.to_string()),
         ))
         .id();
     if let Some(character) = character {
-        crate::character::spawn_model(commands, assets, character, crate::character::Model::Counselor, other, ());
+        crate::character::spawn_model_as(commands, assets, character, Some(character.looks(class)), crate::character::Model::Counselor, other, ());
     }
-    info!("counselor {other} at {at}");
+    info!("counselor {other} ({class}) at {at}");
     other
+}
+
+/// A counselor whose class changed (her lobby pick, her own as the server has it): her looks and stats as that
+/// class's (her model respawned).
+fn restyle(
+    mut commands: Commands,
+    assets: Res<AssetServer>,
+    character: Option<Res<crate::character::CounselorCharacter>>,
+    tuning: Res<PlayerTuning>,
+    mut changed: Query<(Entity, &crate::character::CounselorClass, &mut Player, Has<crate::controls::LocalPlayer>), Changed<crate::character::CounselorClass>>,
+    rigs: Query<(Entity, &ChildOf, &crate::character::Rig)>,
+) {
+    let Some(character) = character else { return };
+    for (e, class, mut p, local) in &mut changed {
+        let looks = character.looks(&class.0);
+        let Some((rig, _, r)) = rigs.iter().find(|(_, c, r)| c.parent() == e && r.model == crate::character::Model::Counselor) else { continue };
+        if r.visual.as_ref().is_some_and(|v| v.name == looks.name) {
+            continue;
+        }
+        info!("counselor {e}: now {}", class.0);
+        p.counselor.stats = tuning.stats_of(&class.0);
+        commands.entity(rig).despawn();
+        if local {
+            crate::character::spawn_model_as(&mut commands, &assets, &character, Some(looks), crate::character::Model::Counselor, e, PlayerPart);
+        } else {
+            crate::character::spawn_model_as(&mut commands, &assets, &character, Some(looks), crate::character::Model::Counselor, e, ());
+        }
+    }
 }
 
 /// Tags everything spawned under the player's model so ray casts can skip it.

@@ -336,9 +336,11 @@ static class Tuning
                 ["back"] = Montage("DodgeBackMontage", animBp),
             },
         };
-        // Playable counselors in the MVP: stats from each character Blueprint.
+        // Playable counselors: stats from each character Blueprint, by class (and Vanessa's by her name too).
         characters = new JObject();
-        foreach (var (key, rel) in new[] { ("Vanessa", "Characters/Counselors/Athlete/Athlete_Counselor") })
+        foreach (var (key, rel) in new[] { ("Vanessa", "Characters/Counselors/Athlete/Athlete_Counselor") }
+                     .Concat(new[] { "Athlete", "Biker", "Bookworm", "Catty", "Flirt", "Hero", "Rocker", "Head", "Hunter", "Jock", "Nerd", "Prep", "Shelly", "Stoner", "Tough" }
+                         .Select(n => (n, $"Characters/Counselors/{n}/{n}_Counselor"))))
         {
             var p = rd.Cdo(rel);
             characters[key] = new JObject { ["stats"] = new JArray(Enumerable.Range(0, 7).Select(i => (long)Num(P(p, "Stats", i)!))) };

@@ -2,6 +2,7 @@
 //!
 //!   cargo run -p f13-game --release -- --export <dir made by tools/f13-export> [--layout 1-4 (default: the game's random pick)] [--seed n] [--near-car] [--bot-escape] [--bot-heal] [--bot-dodge] [--bot-door] [--grass]
 //!       [--fly] [--capsule] [--demo] [--fear 0-100] [--health 1-100] [--speed x] [--tuning file] [--aerial] [--no-foliage] [--screenshot out.png [--screenshot-after s]]
+//!       [--counselor <class>]  (the counselor played: Athlete (Vanessa), Hero, Bookworm, ...)
 //!       [--pose <animation>@<seconds>]  (hold the counselor (and Jason) in one exported animation, for screenshots)
 //!       [--no-jason] [--jason-delay s] [--bot-jason]  (Jason hunts the counselor unless left out; counselor bots leave him out)
 //!       [--bot-abilities]  (Jason, every ability ready and told where she is, Morphs, Stalks and Shifts to her)
@@ -199,6 +200,8 @@ struct Args {
     pose: Option<(String, f32)>,
     /// The counselor's outfit (`--outfit <class or name>[:option,...]`).
     outfit: Option<String>,
+    /// The local counselor's class (`--counselor Athlete|Hero|...`; the lobby's pick, C cycles it there).
+    counselor_class: String,
     /// --fly start: eye position and a point to look at (Bevy space, metres).
     camera: Option<(Vec3, Vec3)>,
     /// --round-time: the match's length (s) instead of the game's.
@@ -279,6 +282,7 @@ fn parse_args() -> Args {
     let mut screenshot_after = 0.0;
     let mut pose = None;
     let mut outfit = None;
+    let mut counselor_class = character::DEFAULT_CLASS.to_string();
     let mut camera = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -384,6 +388,7 @@ fn parse_args() -> Args {
             "--unlit" => unlit = true,
             "--screenshot" => screenshot = it.next().map(PathBuf::from),
             "--outfit" => outfit = it.next(),
+            "--counselor" => counselor_class = it.next().unwrap_or_else(|| character::DEFAULT_CLASS.to_string()),
             "--pose" => {
                 let v = it.next().unwrap_or_default();
                 let (name, at) = v.split_once('@').unwrap_or((v.as_str(), "0"));
@@ -408,7 +413,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass] (or run the installer, lakeside-setup-installer)");
         std::process::exit(2);
     };
-    Args { net, bot_net, bot_spectate, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_passenger, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, override_spawning, no_voice, net_id, last_jason, bot_hooks, last_match, open_mic, bot_radio, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, camera, round_time, flashlight, rain }
+    Args { net, bot_net, bot_spectate, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_passenger, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, override_spawning, no_voice, net_id, last_jason, bot_hooks, last_match, open_mic, bot_radio, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, counselor_class, camera, round_time, flashlight, rain }
 }
 
 #[derive(Resource)]
@@ -561,6 +566,7 @@ fn main() {
             counselor: tuning.counselor,
             movement: tuning.counselor_movement,
             stats,
+            characters: tuning.characters.clone(),
             first_aid: tuning.first_aid,
             minigame: tuning.minigame.clone(),
             repair_hold_time: tuning.repair_hold_time,
@@ -569,7 +575,8 @@ fn main() {
             .insert_resource(senses::KillerAbilityTuning(tuning.jason.clone()))
             .add_plugins(controls::ControlsPlugin)
             .insert_resource(net::FreeStarts(counselor_starts(&layouts).into_iter().skip(args.counselors).collect()))
-            .add_plugins(player::PlayerPlugin { others: counselor_starts(&layouts).into_iter().skip(1).take(args.counselors - 1).collect(), spawn, capsule: args.capsule, camera: args.camera, demo: args.demo, fear: args.fear.unwrap_or(0.0), health: args.health })
+            .add_plugins(player::PlayerPlugin { others: counselor_starts(&layouts).into_iter().skip(1).take(args.counselors - 1).collect(), spawn, capsule: args.capsule, camera: args.camera, demo: args.demo, fear: args.fear.unwrap_or(0.0), health: args.health, class: args.counselor_class.clone() })
+            .insert_resource(character::LocalClass(args.counselor_class.clone()))
             .add_plugins(fear_events::FearEventsPlugin { locked: args.fear })
             // Playing Jason, the bot playing her doesn't decide when the run ends.
             .add_plugins(match_flow::MatchPlugin { leave: !bot || args.play_jason })
@@ -709,6 +716,7 @@ fn main() {
             lobby: args.lobby,
             dedicated: args.dedicated,
             name: args.name.clone().unwrap_or_else(|| if matches!(role, net::Role::Server(_)) { "host".into() } else { String::new() }),
+            class: args.counselor_class.clone(),
             net_id: args.net_id,
             last_jason: args.last_jason,
             bot_hooks: args.bot_hooks,
