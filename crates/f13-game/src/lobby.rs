@@ -152,6 +152,12 @@ pub struct JasonInputMsg {
     pub yaw: f32,
     pub pitch: f32,
     pub view: [f32; 6],
+    /// The last place picked on his Morph map (KLR_Morph_Activate) and how many picks so far (a new count is a new
+    /// pick: the message is sent every frame, and some are lost).
+    #[serde(default)]
+    pub morph_to: [f32; 3],
+    #[serde(default)]
+    pub morph_picks: u32,
 }
 
 /// Last match's Jason (his id: the server's own player 0), out of the draw when anyone else is in.
@@ -479,9 +485,20 @@ pub fn pick_killer(players: &[(u64, Preference)], last: Option<u64>, frand: &mut
 }
 
 /// A remote Jason's input into his controls (every message: a tap between two frames still counts).
-fn apply_jason_input(player: Res<JasonPlayer>, mut receivers: Query<&mut MessageReceiver<JasonInputMsg>>, controls: Option<ResMut<crate::jason_player::JasonControls>>) {
+fn apply_jason_input(
+    player: Res<JasonPlayer>,
+    mut receivers: Query<&mut MessageReceiver<JasonInputMsg>>,
+    controls: Option<ResMut<crate::jason_player::JasonControls>>,
+    mut map: ResMut<crate::jason_player::MorphMap>,
+    mut picks: Local<u32>,
+) {
     let (Ok(mut r), Some(mut c)) = (receivers.get_mut(player.0), controls) else { return };
     for m in r.receive() {
+        // A new pick on his Morph map: the place (jason.rs AttemptMorph reads it).
+        if m.morph_picks != *picks {
+            *picks = m.morph_picks;
+            map.target = Some(Vec3::from_array(m.morph_to));
+        }
         let v = m.view;
         c.apply_remote(m.keys, m.buttons, m.yaw, m.pitch, (Vec3::new(v[0], v[1], v[2]), Vec3::new(v[3], v[4], v[5])));
     }
@@ -532,12 +549,21 @@ fn become_jason(mut commands: Commands, jason: Query<(), (With<crate::net::NetJa
 }
 
 /// This client's Jason input, every frame.
-fn send_jason_input(controls: Option<Res<crate::jason_player::JasonControls>>, mut senders: Query<&mut MessageSender<JasonInputMsg>, With<Connected>>) {
+fn send_jason_input(
+    controls: Option<Res<crate::jason_player::JasonControls>>,
+    mut senders: Query<&mut MessageSender<JasonInputMsg>, With<Connected>>,
+    mut map: ResMut<crate::jason_player::MorphMap>,
+    mut pick: Local<(u32, [f32; 3])>,
+) {
     let Some(c) = controls else { return };
+    // The place his Morph map's click picked here (ui.rs): the server's to morph to.
+    if let Some(at) = map.target.take() {
+        *pick = (pick.0 + 1, at.to_array());
+    }
     let (keys, buttons) = c.held();
     let (p, f) = c.view;
     for mut s in &mut senders {
-        s.send::<crate::net::InputChannel>(JasonInputMsg { keys, buttons, yaw: c.yaw, pitch: c.pitch, view: [p.x, p.y, p.z, f.x, f.y, f.z] });
+        s.send::<crate::net::InputChannel>(JasonInputMsg { keys, buttons, yaw: c.yaw, pitch: c.pitch, view: [p.x, p.y, p.z, f.x, f.y, f.z], morph_to: pick.1, morph_picks: pick.0 });
     }
 }
 

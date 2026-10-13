@@ -283,6 +283,9 @@ pub struct NetJason {
     pub mask_on: bool,
     #[serde(default)]
     pub health: f32,
+    /// His map out for a Morph (the player's MorphMap: bIsMorphActive), for the client that plays him.
+    #[serde(default)]
+    pub morph_map: bool,
 }
 
 /// A character's full-body action ([`PlayAction`]), how often it restarted ([`RestartAction`]), its last seek
@@ -358,6 +361,8 @@ pub struct NetPlugin {
     /// A client: the network test bot ([`net_bot`]), and what it asks the lobby for. A lobby's server that plays: only
     /// the lobby's part (it asks and readies up), so a lobby test takes two games, not three.
     pub bot: bool,
+    /// The client bot as Jason also uses his abilities (`--bot-net-abilities`; the server needs `--bot-hooks`).
+    pub bot_abilities: bool,
     pub prefer: crate::lobby::Preference,
     /// A server: the lobby first (lobby.rs), and whether the server plays no one.
     pub lobby: bool,
@@ -419,8 +424,9 @@ fn bot_hooks(
     for (link, mut r) in &mut links {
         for BotSetupMsg(change) in r.receive() {
             // A test's server plays no one (its own counselor would be Jason's nearest): gone, as a dedicated
-            // lobby's, at the first scene change.
-            if !*dropped {
+            // lobby's, at the first scene change. (Not for a played Jason's abilities: with no counselor at all he'd
+            // have no target, and update_jason skips him.)
+            if !*dropped && change != crate::bot::BotSetup::Abilities {
                 *dropped = true;
                 for (e, xf) in &own {
                     starts.0.insert(0, xf.translation);
@@ -646,7 +652,7 @@ impl Plugin for NetPlugin {
                     .add_observer(body_gone)
                     .init_resource::<Twins>()
                     .init_resource::<ServerClock>()
-                    .add_systems(Update, (send_input, (make_twins, record_bodies, mirror, hide_jason, sync_classes).chain().in_set(Mirrored).before(crate::character::animate)));
+                    .add_systems(Update, (send_input, (make_twins, record_bodies, mirror, hide_jason, sync_classes, sync_morph_map).chain().in_set(Mirrored).before(crate::character::animate)));
                 app.add_systems(Update, receive_match.after(Mirrored));
                 crate::net_world::client(app);
                 crate::lobby::client(app);
@@ -654,7 +660,7 @@ impl Plugin for NetPlugin {
                 crate::lobby::ui(app);
                 app.insert_resource(ClientName(self.name.clone()));
                 if self.bot {
-                    app.insert_resource(NetBot { prefer: self.prefer, ..default() })
+                    app.insert_resource(NetBot { prefer: self.prefer, abilities: self.bot_abilities, ..default() })
                         .add_systems(Update, (net_bot_lobby, net_bot.run_if(not(resource_exists::<crate::jason_player::PlayJason>)), net_bot_jason.run_if(resource_exists::<crate::jason_player::PlayJason>)).chain().before(send_input).before(crate::lobby::Keys));
                 }
             }
@@ -809,6 +815,7 @@ fn update_bodies(
     mut jasons: Query<(&mut NetJason, &crate::jason::Jason, Option<&crate::senses::Knowledge>, Option<&crate::kill_camera::KillCam>)>,
     world_ids: Query<&crate::net_world::WorldId>,
     fixed: Res<Time<Fixed>>,
+    morph_map: Option<Res<crate::jason_player::MorphMap>>,
 ) {
     for (mut b, xf, mut a, action, blocking) in &mut bodies {
         let pos = xf.translation.to_array();
@@ -873,6 +880,7 @@ fn update_bodies(
             traps: j.traps,
             mask_on: j.mask_on,
             health: j.health,
+            morph_map: morph_map.as_ref().is_some_and(|m| m.morph),
             state: j.state_name(),
             cooldown: j.cooldown,
             unlocked: a.map_or([false; 4], |a| a.unlocked),
@@ -932,6 +940,19 @@ fn send_input(local: Query<&Controls, With<LocalPlayer>>, mut senders: Query<&mu
     counts.add(pressed, released);
     for mut s in &mut senders {
         s.send::<InputChannel>(InputMsg { held: c.held(), yaw: c.yaw, pitch: c.pitch, presses: counts.presses, releases: counts.releases });
+    }
+}
+
+/// The client that plays Jason: his map out for a Morph as the server has it (pressing 1 opens it there), so the
+/// map shows here and its click picks the place (sent back: lobby.rs send_jason_input).
+fn sync_morph_map(own: Query<&NetJason, (With<Controlled>, Changed<NetJason>)>, map: Option<ResMut<crate::jason_player::MorphMap>>) {
+    let (Ok(n), Some(mut map)) = (own.single(), map) else { return };
+    if map.morph != n.morph_map {
+        map.morph = n.morph_map;
+        map.open = n.morph_map;
+        if !n.morph_map {
+            map.click = None;
+        }
     }
 }
 
@@ -1323,6 +1344,9 @@ struct NetBot {
     /// What it asks the lobby for, and how far it got there (0 waiting, 1 asked, 2 ready).
     prefer: crate::lobby::Preference,
     lobby: u8,
+    /// As Jason, also use his abilities (`--bot-net-abilities`), and their recharge timers before each.
+    abilities: bool,
+    recharge: [f32; 4],
 }
 
 /// How long the bot waits for the server (real seconds) before giving up.
@@ -1665,17 +1689,21 @@ fn host_bot_jason(
 }
 
 /// The net bot as Jason: he walks (W, 3 s) through his remote controls and must move on the server; his abilities
-/// (the server's) must show unlocked here.
+/// (the server's) must show unlocked here. With `--bot-net-abilities`: every ability made ready (a bot hook), he
+/// Shifts (3), Stalks (4), Senses (2) and Morphs (1, then a click on his map's centre), each seen in the server's
+/// replicated Jason.
+#[allow(clippy::type_complexity)]
 fn net_bot_jason(
     mut bot: ResMut<NetBot>,
     time: Res<Time>,
     mut controls: ResMut<crate::jason_player::JasonControls>,
-    own: Query<&NetBody, (With<NetJason>, With<Controlled>)>,
+    own: Query<(&NetBody, &NetJason), With<Controlled>>,
     know: Query<&crate::senses::Knowledge, With<crate::jason::Jason>>,
+    (mut map, window): (ResMut<crate::jason_player::MorphMap>, Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>),
     mut exit: MessageWriter<AppExit>,
 ) {
     bot.t += time.delta_secs();
-    let Ok(body) = own.single() else { return };
+    let Ok((body, nj)) = own.single() else { return };
     let at = Vec3::from_array(body.pos);
     let (yaw, pitch, view) = (controls.yaw, controls.pitch, controls.view);
     match bot.step {
@@ -1702,11 +1730,72 @@ fn net_bot_jason(
             } else if moved < 1.5 {
                 error!("bot: net: failed [\"Jason walk\"]");
                 exit.write(AppExit::error());
+            } else if bot.abilities {
+                crate::bot::setup(crate::bot::BotSetup::Abilities);
+                bot.step = 10;
+                bot.t = 0.0;
+                return;
             } else {
                 info!("bot: net: passed");
                 exit.write(AppExit::Success);
             }
             bot.step = 3;
+        }
+        // His abilities: each pressed (held a moment, then let go), then seen on the server.
+        10.. => {
+            // (Keys' bits: NET_KEYS' order, 1 at bit 8.)
+            const STEPS: [(&str, u32); 4] = [("Shift", 1 << 10), ("Stalk", 1 << 11), ("Sense", 1 << 9), ("Morph", 1 << 8)];
+            let i = (bot.step - 10) as usize;
+            let Some(&(name, key)) = STEPS.get(i) else {
+                if bot.failed.is_empty() {
+                    info!("bot: net: passed");
+                    exit.write(AppExit::Success);
+                } else {
+                    error!("bot: net: failed {:?}", bot.failed);
+                    exit.write(AppExit::error());
+                }
+                bot.step = 3;
+                return;
+            };
+            // (Each once he's back to hunting: a press mid-Shift does nothing.)
+            if bot.t < 2.0 {
+                bot.recharge = nj.recharge;
+                if nj.state != "Hunting" {
+                    bot.t = 0.0;
+                }
+                return;
+            }
+            let held = bot.t < 2.3;
+            controls.apply_remote(if held { key } else { 0 }, 0, yaw, pitch, view);
+            // The Morph: once his map's out here (the server opened it), a click on its centre picks the place.
+            if name == "Morph" && !held && map.morph && bot.tries == 0 {
+                if let Ok(w) = window.single() {
+                    info!("bot: net: his Morph map is out here: a click on it");
+                    map.click = Some(Vec2::new(w.width(), w.height()) / 2.0);
+                    bot.tries = 1;
+                }
+            }
+            // (A recharge timer drops as the ability's used.)
+            let spent = |a: f13_core::killer_abilities::Ability| nj.recharge[a as usize] < bot.recharge[a as usize];
+            use f13_core::killer_abilities::Ability;
+            let seen = match name {
+                "Shift" => nj.shifting || spent(Ability::Shift),
+                "Stalk" => nj.stalking || spent(Ability::Stalk),
+                "Sense" => spent(Ability::Sense),
+                _ => nj.state == "Morphing" || spent(Ability::Morph),
+            };
+            if seen {
+                info!("bot: net: {name} on the server (state {}, recharge {:?})", nj.state, nj.recharge);
+                bot.step += 1;
+                bot.t = 0.0;
+                controls.apply_remote(0, 0, yaw, pitch, view);
+            } else if bot.t > 12.0 {
+                warn!("bot: net: no {name} on the server (state {}, recharge {:?})", nj.state, nj.recharge);
+                bot.failed.push(name);
+                bot.step += 1;
+                bot.t = 0.0;
+                controls.apply_remote(0, 0, yaw, pitch, view);
+            }
         }
         _ => {}
     }

@@ -103,6 +103,7 @@ struct Args {
     net: Option<net::Role>,
     /// --bot-net: as a client, the network test bot (net.rs); as a lobby's playing server, its lobby part only.
     bot_net: bool,
+    bot_net_abilities: bool,
     /// --bot-spectate: the spectating test (spectate.rs; with --counselors 2).
     bot_spectate: bool,
     /// --lobby (a server): the players gather and ready up first (lobby.rs); --dedicated: the server plays no one.
@@ -237,6 +238,7 @@ fn parse_args() -> Args {
     let mut bot_heal = false;
     let mut bot_drop = false;
     let mut bot_net = false;
+    let mut bot_net_abilities = false;
     let mut bot_spectate = false;
     let (mut lobby, mut dedicated, mut name, mut prefer) = (false, false, None, lobby::Preference::NoPreference);
     let mut bot_dodge = false;
@@ -316,6 +318,10 @@ fn parse_args() -> Args {
             "--bot-heal" => bot_heal = true,
             "--bot-drop" => bot_drop = true,
             "--bot-net" => bot_net = true,
+            "--bot-net-abilities" => {
+                bot_net = true;
+                bot_net_abilities = true;
+            }
             "--bot-spectate" => bot_spectate = true,
             "--lobby" => lobby = true,
             "--dedicated" => dedicated = true,
@@ -437,7 +443,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass] (or run the installer, lakeside-setup-installer)");
         std::process::exit(2);
     };
-    Args { net, bot_net, bot_spectate, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_passenger, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, jason_health, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, override_spawning, no_voice, net_id, last_jason, bot_hooks, last_match, open_mic, bot_radio, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, counselor_class, bot_tommy, bot_sweater, bot_kill_jason, bot_mask, camera, round_time, flashlight, rain }
+    Args { net, bot_net, bot_net_abilities, bot_spectate, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_passenger, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, jason_health, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, override_spawning, no_voice, net_id, last_jason, bot_hooks, last_match, open_mic, bot_radio, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, counselor_class, bot_tommy, bot_sweater, bot_kill_jason, bot_mask, camera, round_time, flashlight, rain }
 }
 
 #[derive(Resource)]
@@ -748,6 +754,7 @@ fn main() {
         app.add_plugins(net::NetPlugin {
             role,
             bot: args.bot_net,
+            bot_abilities: args.bot_net_abilities,
             prefer: args.prefer,
             lobby: args.lobby,
             dedicated: args.dedicated,
