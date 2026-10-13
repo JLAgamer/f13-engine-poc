@@ -727,6 +727,12 @@ fn apply_traps(mut commands: Commands, actors: Res<Actors>, proxies: Query<(&Pro
                 ec.insert(crate::prop_anim::PropAnim::new(name));
             }
         }
+        // Armed (set, not sprung): an armed trap here too.
+        if prop_anim(trap) == Some(crate::prop_anim::TRAP_ARMED) {
+            ec.insert(crate::items::ArmedTrap::remote());
+        } else {
+            ec.remove::<crate::items::ArmedTrap>();
+        }
     }
 }
 

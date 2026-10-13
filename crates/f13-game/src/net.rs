@@ -393,6 +393,11 @@ fn bot_hooks(
                         j.skip_morph_grace();
                     }
                 }
+                crate::bot::BotSetup::Give(classes) => {
+                    if let Some((e, _, _)) = counselors.iter().find(|(_, by, _)| by.0 == link) {
+                        commands.entity(e).insert(crate::items::GiveItems(classes));
+                    }
+                }
                 crate::bot::BotSetup::Rage => {
                     for (_, k) in &mut jasons {
                         if let Some(mut k) = k {
@@ -498,6 +503,13 @@ impl Plugin for NetPlugin {
                     // (Its scenario bot, if any, plays here: bot.rs.)
                     .add_systems(Startup, || crate::bot::ON_CLIENT.store(true, std::sync::atomic::Ordering::Relaxed))
                     .add_systems(Update, send_bot_setup)
+                    // A client's --give is the server's to make (bot hooks).
+                    .add_systems(Update, |mut commands: Commands, give: Option<Res<crate::items::Give>>| {
+                        if let Some(g) = give {
+                            crate::bot::setup(crate::bot::BotSetup::Give(g.0.clone()));
+                            commands.remove_resource::<crate::items::Give>();
+                        }
+                    })
                     .add_systems(Update, connect)
                     .add_observer(body_gone)
                     .init_resource::<Twins>()

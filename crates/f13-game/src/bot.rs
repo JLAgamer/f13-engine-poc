@@ -315,6 +315,8 @@ pub enum BotSetup {
     Heard([f32; 3]),
     /// Jason raged.
     Rage,
+    /// Her `--give` items.
+    Give(Vec<String>),
 }
 
 static SETUP: std::sync::Mutex<Vec<BotSetup>> = std::sync::Mutex::new(Vec::new());
@@ -322,7 +324,7 @@ static SETUP: std::sync::Mutex<Vec<BotSetup>> = std::sync::Mutex::new(Vec::new()
 /// The bot plays on a client: the fear events and the score are the server's (its own runs check those).
 pub(crate) static ON_CLIENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-fn setup(s: BotSetup) {
+pub(crate) fn setup(s: BotSetup) {
     if let Ok(mut q) = SETUP.lock() {
         q.push(s);
     }
@@ -418,7 +420,9 @@ fn run_bot(
             bot.dodge_from = Some((Vec3::ZERO, bot.total));
         }
         let unseen_for = bot.total - bot.dodge_from.map_or(0.0, |d| d.1);
-        if let Some((j, jxf)) = jasons.iter().next().filter(|(j, _)| matches!(j.state, crate::jason::JasonState::Hunting)) {
+        // (On a client his state comes as its name.)
+        let hunting = |j: &crate::jason::Jason| if ON_CLIENT.load(std::sync::atomic::Ordering::Relaxed) { j.remote_state == "Hunting" } else { matches!(j.state, crate::jason::JasonState::Hunting) };
+        if let Some((j, jxf)) = jasons.iter().next().filter(|(j, _)| hunting(j)) {
             let _ = j;
             if !sees && unseen_for > 8.0 {
                 let yaw = jxf.rotation.to_euler(EulerRot::YXZ).0;

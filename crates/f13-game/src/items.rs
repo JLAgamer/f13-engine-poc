@@ -166,19 +166,39 @@ fn hold_aim(hold: Option<Res<AimHold>>, time: Res<Time>, mut mouse: ResMut<Butto
 #[derive(Resource)]
 pub struct Give(pub Vec<String>);
 
+/// The same for one counselor (a client's scenario bot's `--give`, made by the server: net.rs bot hooks).
+#[derive(Component)]
+pub struct GiveItems(pub Vec<String>);
+
+#[allow(clippy::type_complexity)]
 fn give_items(
     mut commands: Commands,
     give: Option<Res<Give>>,
-    mut player: Query<&mut Inventory, (With<Player>, With<crate::controls::LocalPlayer>)>,
+    mut players: Query<(Entity, &mut Inventory, Has<crate::controls::LocalPlayer>, Option<&GiveItems>), With<Player>>,
     items: Query<(Entity, &Item), Without<Carried>>,
     mut visibility: Query<&mut Visibility>,
 ) {
-    let Some(give) = give else { return };
-    let Ok(mut inv) = player.single_mut() else { return };
     if items.is_empty() {
         return; // the match hasn't spawned yet
     }
-    for class in &give.0 {
+    for (pe, mut inv, local, own) in &mut players {
+        let classes = match (own, &give) {
+            (Some(g), _) => {
+                commands.entity(pe).remove::<GiveItems>();
+                g.0.clone()
+            }
+            (None, Some(g)) if local => {
+                commands.remove_resource::<Give>();
+                g.0.clone()
+            }
+            _ => continue,
+        };
+        give_to(&mut commands, &mut inv, &classes, &items, &mut visibility);
+    }
+}
+
+fn give_to(commands: &mut Commands, inv: &mut Inventory, classes: &[String], items: &Query<(Entity, &Item), Without<Carried>>, visibility: &mut Query<&mut Visibility>) {
+    for class in classes {
         let Some((e, item)) = items.iter().find(|(e, i)| &i.class == class && inv.hand != Some(*e) && !inv.pockets.contains(e) && !inv.special.contains(e)) else {
             warn!("--give: no {class} in this match");
             continue;
@@ -197,7 +217,6 @@ fn give_items(
             *v = Visibility::Hidden;
         }
     }
-    commands.remove_resource::<Give>();
 }
 
 /// The held item hangs off the counselor's hand socket.
@@ -504,6 +523,13 @@ pub struct ArmedTrap {
     /// Who set it (none: Jason's).
     pub by: Option<Entity>,
     pub killer: bool,
+}
+
+impl ArmedTrap {
+    /// On a client: a counselor's trap the server has armed (it springs them).
+    pub fn remote() -> ArmedTrap {
+        ArmedTrap { clear: false, by: None, killer: false }
+    }
 }
 
 /// Jason's trap class (his TrapClass).
