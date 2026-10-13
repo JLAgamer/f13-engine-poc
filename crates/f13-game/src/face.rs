@@ -365,7 +365,7 @@ fn face(
     mut weights: Query<(&mut MorphWeights, &Children)>,
     mesh_of: Query<&Mesh3d>,
     meshes: Res<Assets<Mesh>>,
-    mut state: Local<(u64, Option<FaceTuning>)>,
+    mut state: Local<(u64, std::collections::HashMap<String, FaceTuning>)>,
     (names, mut bones, parents): (Query<&Name>, Query<(&mut Transform, &GlobalTransform)>, Query<&ChildOf>),
 ) {
     let Some(character) = character else { return };
@@ -375,10 +375,12 @@ fn face(
     if *rng == 0 {
         *rng = 0x9e37_79b9_7f4a_7c15;
     }
-    let t = tuning.get_or_insert_with(|| FaceTuning::new(info, &root.0));
     let dt = time.delta_secs();
     for (parent, rig) in &rigs {
         let Ok((p, fear)) = players.get(parent.parent()) else { continue };
+        // Her own face's (her class's base pose and poses).
+        let looks = rig.visual.as_deref().unwrap_or(info);
+        let t = &*tuning.entry(looks.name.clone()).or_insert_with(|| FaceTuning::new(looks, &root.0));
         let Some(face_entity) = rig.part(face_index) else { continue };
         let Ok(mut f) = faces.get_mut(face_entity) else {
             let timer = frand(rng) * (t.blink_max - t.blink_min) + t.blink_min;

@@ -61,6 +61,8 @@ impl Plugin for MaterialsPlugin {
         embedded_asset!(app, "shaders/prop.wgsl");
         embedded_asset!(app, "shaders/clothes.wgsl");
         embedded_asset!(app, "shaders/gorecap.wgsl");
+        embedded_asset!(app, "shaders/hair.wgsl");
+        embedded_asset!(app, "shaders/hair_prepass.wgsl");
         embedded_asset!(app, "shaders/skin.wgsl");
         embedded_asset!(app, "shaders/skin_prepass.wgsl");
         embedded_asset!(app, "shaders/masters.wgsl");
@@ -100,6 +102,7 @@ impl Plugin for MaterialsPlugin {
                 MaterialPlugin::<MasterMaterial>::default(),
                 MaterialPlugin::<ClothesMaterial>::default(),
                 MaterialPlugin::<GoreCapMaterial>::default(),
+                MaterialPlugin::<HairMaterial>::default(),
             ))
             .add_systems(Update, ((apply_materials, strip_vertex_colors).chain(), sky_lightning, clothes_rain, skin_rain));
     }
@@ -176,6 +179,7 @@ enum Built {
     Clothes(Handle<ClothesMaterial>),
     Skin(Handle<SkinMaterial>),
     GoreCap(Handle<GoreCapMaterial>),
+    Hair(Handle<HairMaterial>),
     /// Not drawn: translucent planes with no textures (rain fixes, bed and exit blockers, light planes), which the
     /// game draws invisible (M_rainFix_invisible's compiled shader outputs zero) or as faint effects.
     Hidden,
@@ -843,6 +847,78 @@ fn clothes_material(root: &Path, info: &MaterialInfo, loader: &Loader, fallback:
     }
 }
 
+pub(crate) type HairMaterial = ExtendedMaterial<StandardMaterial, HairExt>;
+
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
+pub(crate) struct HairExt {
+    #[uniform(100)]
+    params: HairParams,
+    #[sampler(101)]
+    #[texture(102)]
+    tex_a: Handle<Image>,
+    #[texture(103)]
+    tex_b: Handle<Image>,
+    #[texture(104)]
+    tex_c: Handle<Image>,
+    #[texture(105)]
+    tex_d: Handle<Image>,
+}
+
+#[derive(ShaderType, Reflect, Debug, Clone)]
+struct HairParams {
+    color1: Vec4,
+    color2: Vec4,
+    color3: Vec4,
+    /// Diffuse Brightness, Haircolor 1 Specular, Haircolor 2 Specular, Roughness.
+    a: Vec4,
+    /// HairAlphaContrast, mode (0 HairMaster_03_m, 1 M_Athlete_Girl_Hair_Inst).
+    b: Vec4,
+}
+
+impl MaterialExtension for HairExt {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://f13_game/shaders/hair.wgsl".into()
+    }
+
+    fn prepass_fragment_shader() -> ShaderRef {
+        "embedded://f13_game/shaders/hair_prepass.wgsl".into()
+    }
+}
+
+/// A counselor hair material (shaders/hair.wgsl): HairMaster_03_m's parameters (the master's defaults: uniexpr.py on
+/// it), or M_Athlete_Girl_Hair_Inst's own textures; two-sided, its mesh keeping its vertex colours.
+fn hair_material(root: &Path, info: &MaterialInfo, loader: &Loader, fallback: &Fallback) -> HairMaterial {
+    let v = |name: &str, d: [f32; 4]| info.vectors.get(name).map_or(Vec4::from_array(d), |v| Vec4::from_array(*v));
+    let tex = |name: &str, kind: Tex, d: &Handle<Image>| info.textures.get(name).and_then(|p| loader.load(p, kind)).unwrap_or_else(|| d.clone());
+    let fixed = |path: &str, kind: Tex, d: &Handle<Image>| loader.load(path, kind).unwrap_or_else(|| d.clone());
+    let mut base = standard_material(root, info, loader);
+    base.base_color_texture = None;
+    base.alpha_mode = AlphaMode::Opaque;
+    base.double_sided = true;
+    base.cull_mode = None;
+    let athlete = info.master == "M_Athlete_Girl_Hair_Inst";
+    const OWN: &str = "SummerCamp/Content/Characters/Counselors/Athlete/Textures/T_Athlete_Girl_Hair";
+    if athlete {
+        base.normal_map_texture = loader.load(&format!("{OWN}_N"), Tex::Data);
+    }
+    ExtendedMaterial {
+        base,
+        extension: HairExt {
+            params: HairParams {
+                color1: v("Diffuse Hair Color 1", [0.185, 0.095784, 0.047175, 1.0]),
+                color2: v("Diffuse Hair Color 2", [0.95, 0.399, 0.656799, 1.0]),
+                color3: v("HairColor3", [1.0, 0.605633, 0.12, 1.0]),
+                a: Vec4::new(info.scalar("Diffuse Brightness", 3.0), info.scalar("Haircolor 1 Specular", 0.12), info.scalar("Haircolor 2 Specular", 0.1), info.scalar("Roughness", 0.35)),
+                b: Vec4::new(info.scalar("HairAlphaContrast", 2.0), if athlete { 1.0 } else { 0.0 }, 0.0, 0.0),
+            },
+            tex_a: if athlete { fixed(&format!("{OWN}_D"), Tex::Color, &fallback.white) } else { tex("Diffuse 2 Hair Mask", Tex::Data, &fallback.white) },
+            tex_b: tex("Mask", Tex::Data, &fallback.white),
+            tex_c: if athlete { fixed(&format!("{OWN}_RMA"), Tex::Data, &fallback.rmas) } else { tex("Hair Diffuse Texture", Tex::Color, &fallback.white) },
+            tex_d: tex("RootMask", Tex::Data, &fallback.white),
+        },
+    }
+}
+
 pub(crate) type GoreCapMaterial = ExtendedMaterial<StandardMaterial, GoreCapExt>;
 
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
@@ -984,7 +1060,7 @@ fn apply_materials(
         ResMut<Assets<WaterMaterial>>,
         ResMut<Assets<Image>>,
     ),
-    (mut props, mut masters, mut clothes, mut gore_caps): (ResMut<Assets<PropMaterial>>, ResMut<Assets<MasterMaterial>>, ResMut<Assets<ClothesMaterial>>, ResMut<Assets<GoreCapMaterial>>),
+    (mut props, mut masters, mut clothes, mut gore_caps, mut hairs): (ResMut<Assets<PropMaterial>>, ResMut<Assets<MasterMaterial>>, ResMut<Assets<ClothesMaterial>>, ResMut<Assets<GoreCapMaterial>>, ResMut<Assets<HairMaterial>>),
     assets: Res<AssetServer>,
 ) {
     let index = &mut *index;
@@ -1025,6 +1101,8 @@ fn apply_materials(
                     Built::Blend(blends.add(blend_material(info, kind, &loader, &fallback)))
                 } else if info.master == "SkinGoreMaster" {
                     Built::Skin(skins.add(skin_gore_material(&index.root, info, &loader, &fallback)))
+                } else if info.master == "HairMaster_03_m" || info.master == "M_Athlete_Girl_Hair_Inst" {
+                    Built::Hair(hairs.add(hair_material(&index.root, info, &loader, &fallback)))
                 } else if info.master == "GoreCap" {
                     Built::GoreCap(gore_caps.add(gore_cap_material(&index.root, info, &loader, &fallback)))
                 } else if info.master == "ClothesMultiGore" {
@@ -1090,6 +1168,9 @@ fn apply_materials(
                 e.remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(h));
             }
             Built::GoreCap(h) => {
+                e.remove::<MeshMaterial3d<StandardMaterial>>().insert((MeshMaterial3d(h), KeepVertexColors));
+            }
+            Built::Hair(h) => {
                 e.remove::<MeshMaterial3d<StandardMaterial>>().insert((MeshMaterial3d(h), KeepVertexColors));
             }
             Built::Hidden => {

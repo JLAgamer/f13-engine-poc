@@ -191,6 +191,9 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         var cls = provider.LoadPackageObject<UBlueprintGeneratedClass>(blueprint + "." + blueprint.Split('/')[^1] + "_C");
         var cdo = cls.ClassDefaultObject.Load()!;
         var info = new Info { Name = blueprint.Split('/')[^1] };
+        // Her name and trope (CharacterName, CharacterTropeName: "Vanessa Jones", "The Athletic Girl").
+        foreach (var key in new[] { "CharacterName", "CharacterTropeName" })
+            if (cdo.GetOrDefault<CUE4Parse.UE4.Objects.Core.i18N.FText?>(key)?.Text is { Length: > 0 } text) (info.Names ??= new())[key] = text;
 
         var meshComp = Component(cdo, "Mesh");
         var body = meshComp.GetOrDefault<FPackageIndex>("SkeletalMesh").Load<USkeletalMesh>()!;

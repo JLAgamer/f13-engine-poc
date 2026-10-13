@@ -90,6 +90,8 @@ pub struct Tally {
     pub popups: Vec<(String, String, f32)>,
     /// The badges she earned (her score events' CounselorBadge, once each: FUN_1403aca40).
     pub badges: Vec<String>,
+    /// Her first name (her class's CharacterName: "Vanessa").
+    pub character: String,
 }
 
 impl Tally {
@@ -167,10 +169,11 @@ impl GameMatch {
         if killer {
             let n = self.counselors.len();
             let (dead, escaped) = (self.counselors.values().filter(|t| t.record.dead).count(), self.counselors.values().filter(|t| t.record.escaped).count());
+            let her = self.counselors.values().next().map_or(String::new(), |t| t.character.to_uppercase());
             return match n {
-                1 if escaped == 1 => "VANESSA ESCAPED".into(),
-                1 if dead == 1 => "VANESSA IS DEAD".into(),
-                1 => "VANESSA SURVIVED".into(),
+                1 if escaped == 1 => format!("{her} ESCAPED"),
+                1 if dead == 1 => format!("{her} IS DEAD"),
+                1 => format!("{her} SURVIVED"),
                 _ => format!("{dead} OF {n} DEAD, {escaped} ESCAPED"),
             };
         }
@@ -289,9 +292,9 @@ fn run_match(
     time: Res<Time>,
     tuning: Option<Res<MatchTuning>>,
     mut game: ResMut<GameMatch>,
-    players: Query<(Entity, &Player, Has<Escaped>, Has<crate::controls::LocalPlayer>), Without<Unsettled>>,
+    players: Query<(Entity, &Player, Has<Escaped>, Has<crate::controls::LocalPlayer>, Option<&crate::character::CounselorClass>), Without<Unsettled>>,
     jason: Query<(), With<Jason>>,
-    leave: Res<Leave>,
+    (leave, character): (Res<Leave>, Option<Res<crate::character::CounselorCharacter>>),
     host: Option<ResMut<crate::host::HostRequests>>,
     mut exit: MessageWriter<AppExit>,
     (rematch, lobby, names): (Option<Res<crate::net::Rematch>>, Query<&crate::lobby::NetLobby>, Query<&Name>),
@@ -304,11 +307,15 @@ fn run_match(
     let g = &mut *game;
     let elapsed = g.state.elapsed_in_progress_time;
     let mut left = 0;
-    for (e, p, escaped, local) in &players {
+    for (e, p, escaped, local, class) in &players {
         if local {
             g.local = Some(e);
         }
         let tally = g.counselors.entry(e).or_default();
+        if tally.character.is_empty() {
+            let class = class.map_or(crate::character::DEFAULT_CLASS, |c| c.0.as_str());
+            tally.character = character.as_ref().and_then(|c| c.looks(class).names.get("CharacterName").and_then(|n| n.split_whitespace().next()).map(String::from)).unwrap_or_else(|| "Vanessa".into());
+        }
         let health = p.counselor.health;
         if tally.last_health.is_some_and(|h| health < h) {
             tally.record.taken_damage = true;
