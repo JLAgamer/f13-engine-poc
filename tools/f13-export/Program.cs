@@ -480,9 +480,9 @@ void WriteClasses()
         .Select(c => c["Props"]?["KillInfo"]?.ToString()).Where(n => n != null && n.EndsWith("_C") && !classes.Classes.ContainsKey(n)).Distinct().ToList();
     foreach (var k in killInfos) AddClassByName(k!);
     classes.Run();
-    // The weapons' impact effects (ImpactEffectClass, a gun's PelletImpactTemplate: SCImpactEffect Blueprints, their FX,
+    // The weapons' impact effects (ImpactEffectClass, a gun's PelletImpactTemplate, a thrown knife's ImpactTemplate: SCImpactEffect Blueprints, their FX,
     // sounds and decals by surface type).
-    var impacts = classes.Classes.Values.SelectMany(c => new[] { c["Props"]?["ImpactEffectClass"], c["Props"]?["PelletImpactTemplate"] })
+    var impacts = classes.Classes.Values.SelectMany(c => new[] { c["Props"]?["ImpactEffectClass"], c["Props"]?["PelletImpactTemplate"], c["Props"]?["ImpactTemplate"] })
         .Select(t => t?.ToString()).Where(n => n != null && n.EndsWith("_C") && !classes.Classes.ContainsKey(n)).Distinct().ToList();
     foreach (var k in impacts) AddClassByName(k!);
     classes.Run();

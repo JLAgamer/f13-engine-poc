@@ -985,6 +985,22 @@ fn knife_velocity(from: Vec3, to: Vec3, speed: f32) -> Vec3 {
 #[derive(Resource)]
 pub(crate) struct KnifeLook(Handle<WorldAsset>, Transform, Transform);
 
+/// The thrown knife's ImpactTemplate's sounds (Killer_ImpactEffect_ThrowingKnife_C: [`crate::props::impact_sounds`]).
+#[derive(Resource, Default)]
+struct KnifeImpact(Vec<Option<String>>);
+
+impl KnifeImpact {
+    /// GetImpactSound for a hit on `surface`: its own (none if unset: "No Sound Cue to Play!"), else DefaultSound (a
+    /// character's hit too: ThrowingKnifeBodyImpact; the knife isn't heavy).
+    fn sound(&self, surface: u8) -> Option<String> {
+        if (1..=22).contains(&surface) {
+            self.0.get(surface as usize).cloned().flatten()
+        } else {
+            self.0.first().cloned().flatten()
+        }
+    }
+}
+
 /// The knife in his hand while he aims (SERVER_SpawnKnife 0x1404051d0: a ThrowingKnifeClass actor, CurrentThrowable,
 /// attached to his Mesh at KnifeAttachSocket, SnapToTargetNotIncludingScale; the constructor's KnifeAttachSocket is
 /// handGrabSocket), until it leaves his hand at the throw or he puts it away.
@@ -1002,6 +1018,9 @@ fn load_knife_look(mut commands: Commands, export: Res<crate::ExportRoot>, asset
     let held = crate::to_transform(&local);
     let local = f13_data::level::Xform { r: quaternion(Vec3::new(270.0, 0.0, 0.0)).to_array(), ..local };
     commands.insert_resource(KnifeLook(assets.load(GltfAssetLabel::Scene(0).from_asset(file)), crate::to_transform(&local), held));
+    if let Some(t) = classes.prop("ThrowingKnife_C", "ImpactTemplate").as_str() {
+        commands.insert_resource(KnifeImpact(crate::props::impact_sounds(&classes, t)));
+    }
     if let Some(c) = classes.get("Underwater_GrabKill_C").and_then(|c| c.components.iter().find(|c| c.kind == "SCCameraSplineComponent")) {
         commands.insert_resource(DrownKillCamera(crate::to_transform(&c.local.unwrap_or(f13_data::level::Xform::IDENTITY))));
     }
@@ -1124,7 +1143,14 @@ fn fly_knives(
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
     mut knives: Query<(Entity, &mut Knife, &mut Transform), Without<Player>>,
     mut players: Query<(Entity, &mut Player, &Transform)>,
+    (impact, sounds): (Option<Res<KnifeImpact>>, Option<Res<crate::audio::Sounds>>),
 ) {
+    // The ImpactTemplate's sound where it hit (heard by everyone: net_world shout).
+    let mut impact_at = |commands: &mut Commands, at: Vec3, surface: u8| {
+        if let Some(cue) = impact.as_ref().and_then(|i| i.sound(surface)) {
+            crate::net_world::shout(commands, crate::net_world::Shout::Sound(crate::audio::PlaySound { cue, at: Some(at) }));
+        }
+    };
     let dt = time.delta_secs();
     let world = collision.with(&dynamic);
     for (ke, mut k, mut xf) in &mut knives {
@@ -1146,6 +1172,7 @@ fn fly_knives(
             if p.counselor.alive() && segment_distance(from, to, a, b) < 0.35 {
                 let r = p.counselor.take_damage(Hit { amount: k.damage, blocked_with_weapon: false }, &ptuning.counselor);
                 info!("Jason's knife hit Vanessa for {:.0} (health {:.0})", r.dealt, p.counselor.health);
+                impact_at(&mut commands, from, 0);
                 if r.died {
                     commands.trigger(crate::match_flow::KillerScore("Butcher"));
                     commands.trigger(crate::match_flow::KillerScore("KillCounselor"));
@@ -1163,8 +1190,11 @@ fn fly_knives(
         if struck {
             continue;
         }
-        if let Some(f) = f13_core::collision::segment_hit(&world, from, to, 1.0) {
+        if let Some((f, _, surface)) = f13_core::collision::segment_hit_tri(&world, from, to, 1.0) {
             xf.translation = from + (to - from) * f;
+            let at = xf.translation;
+            let surface = if surface == f13_core::collision::Tri::TERRAIN { sounds.as_ref().map_or(0, |s| s.terrain_surface(at.x, at.z)) } else { surface };
+            impact_at(&mut commands, at, surface);
             k.stuck = true;
             let n = f13_core::collision::segment_hit_normal(&world, from, to, 1.0).map_or(Vec3::ZERO, |h| h.1);
             let fixed = f13_core::collision::segment_hit(world.0, from, to, 1.0).is_some();

@@ -38,7 +38,8 @@ Base content (asset paths in the player's install; all gameplay values come from
 - [ ] Jason's knife pick-up: the knife in his hand during the take (its Prop: throwing_Dart window, 0.89-2.35 s), and
       the special move's 0.15 s interp and walk to its place (he only turns to it now)
 - [ ] The computer Jason and knife pickups: he takes them in passing (no pick-up move) and doesn't go looking for them
-- [ ] Sound: the impact sound when a thrown knife hits a character
+- [ ] Sound: the thrown knife's ThrowingKnifeImpactConfirmation (SCThrowable JasonImpactNoise: where it plays isn't
+      found yet)
 - [ ] Sound: the executions' missing sounds (compare each kill against its montage's sound notifies)
 - [ ] More content, one at a time: maps (with their boat and other escapes), Jasons, counselors, perks, skins,
       emotes, a main menu

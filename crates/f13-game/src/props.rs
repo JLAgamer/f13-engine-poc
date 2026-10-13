@@ -33,6 +33,14 @@ pub struct Item {
     pub loaded_idle: Option<String>,
 }
 
+/// An SCImpactEffect class's sounds (GetImpactSound FUN_140347cb0): DefaultSound, then surface types 1..22 (0x4d0 ..).
+pub fn impact_sounds(classes: &f13_data::classes::ClassDb, template: &str) -> Vec<Option<String>> {
+    std::iter::once("DefaultSound".to_string())
+        .chain(IMPACT_FX[3..].iter().map(|f| f.replace("FX", "Sound")))
+        .map(|f| classes.prop(template, &f)["AssetPathName"].as_str().and_then(|a| a.rsplit('.').next()).map(String::from))
+        .collect()
+}
+
 /// SCImpactEffect's FX fields in order (class_layouts.json: DefaultFX 0x48, CounselorFX 0x70, JasonFX 0x98, then
 /// WoodHeavyFX 0xc0 .. WoodDoorFX 0x408 every 0x28: surface types 1..22).
 pub const IMPACT_FX: [&str; 25] = [
@@ -134,13 +142,8 @@ impl ItemKind {
                 impacts: p("PelletImpactTemplate").as_str().map_or_else(Vec::new, |t| {
                     IMPACT_FX.iter().map(|f| classes.prop(t, f)["AssetPathName"].as_str().and_then(|a| a.rsplit('.').next()).map(String::from)).collect()
                 }),
-                // And its sounds (GetImpactSound FUN_140347cb0): DefaultSound, then surface types 1..22 (0x4d0 ..).
-                impact_sounds: p("PelletImpactTemplate").as_str().map_or_else(Vec::new, |t| {
-                    std::iter::once("DefaultSound".to_string())
-                        .chain(IMPACT_FX[3..].iter().map(|f| f.replace("FX", "Sound")))
-                        .map(|f| classes.prop(t, &f)["AssetPathName"].as_str().and_then(|a| a.rsplit('.').next()).map(String::from))
-                        .collect()
-                }),
+                // And its sounds (GetImpactSound FUN_140347cb0).
+                impact_sounds: p("PelletImpactTemplate").as_str().map_or_else(Vec::new, |t| impact_sounds(classes, t)),
                 // And its decals (GetImpactDecal FUN_1403413b0): DefaultDecal 0x868, CounselorDecal, JasonDecal, then
                 // surface types 1..22 (0x910 + 0x38 (n - 1)).
                 impact_decals: p("PelletImpactTemplate").as_str().map_or_else(Vec::new, |t| {
