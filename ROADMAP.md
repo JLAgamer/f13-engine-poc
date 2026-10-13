@@ -27,7 +27,6 @@ Base content (asset paths in the player's install; all gameplay values come from
       world's CPU the critical path: encoding 4.4 ms, submit 1.6, preprocess bind groups 1.3, the shadow phases'
       instance buffers 1.3; main world 3.9, PostUpdate 2.5; particles 0.9)
 - [ ] Blood: dismemberment (the death's dismember roll, the dismemberment meshes)
-- [ ] Blood: the counselor's gore skin layer (SkinGoreMaster)
 - [ ] Music: Jason's own music (JasonsMusic, for one spectating him: MODLOG "Jason's music, read further"; Jason is
       spectated only in private matches, so it waits for those)
 - [ ] More content, one at a time: maps (with their boat and other escapes), Jasons, counselors, perks, skins,

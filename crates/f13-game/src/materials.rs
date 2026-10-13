@@ -99,7 +99,7 @@ impl Plugin for MaterialsPlugin {
                 MaterialPlugin::<MasterMaterial>::default(),
                 MaterialPlugin::<ClothesMaterial>::default(),
             ))
-            .add_systems(Update, ((apply_materials, strip_vertex_colors).chain(), sky_lightning, clothes_rain));
+            .add_systems(Update, ((apply_materials, strip_vertex_colors).chain(), sky_lightning, clothes_rain, skin_rain));
     }
 }
 
@@ -172,6 +172,7 @@ enum Built {
     Prop(Handle<PropMaterial>),
     Master(Handle<MasterMaterial>),
     Clothes(Handle<ClothesMaterial>),
+    Skin(Handle<SkinMaterial>),
     /// Not drawn: translucent planes with no textures (rain fixes, bed and exit blockers, light planes), which the
     /// game draws invisible (M_rainFix_invisible's compiled shader outputs zero) or as faint effects.
     Hidden,
@@ -547,6 +548,67 @@ pub(crate) struct SkinMaskExt {
     mask_a: Handle<Image>,
     #[texture(102)]
     mask_b: Handle<Image>,
+    #[uniform(103)]
+    params: SkinParams,
+    /// The body parts' damage, combined (blood.rs; see shaders/skin.wgsl).
+    #[texture(104)]
+    pub(crate) damage: Handle<Image>,
+    #[texture(105)]
+    gore_normal: Handle<Image>,
+    #[texture(106)]
+    gore_rgb: Handle<Image>,
+    #[texture(107)]
+    colormask: Handle<Image>,
+    #[texture(108)]
+    rma: Handle<Image>,
+}
+
+#[derive(ShaderType, Reflect, Debug, Clone)]
+struct SkinParams {
+    dark_tint: Vec4,
+    /// RoughMin, RoughMax, RoughnessMultiplier, RainGloss.
+    rough: Vec4,
+    /// 0.35 + Sweat, PoreSpecWeight, Rain_MPC's Rain.
+    spec: Vec4,
+    selection: Vec4,
+}
+
+/// A SkinGoreMaster instance (the master's defaults: uniexpr.py on it), nothing clipped (black masks: the face; the
+/// body takes its own: [`MaterialIndex::skin_material`]) and no damage yet.
+fn skin_gore_material(root: &Path, info: &MaterialInfo, loader: &Loader, fallback: &Fallback) -> SkinMaterial {
+    let v = |name: &str, d: [f32; 4]| info.vectors.get(name).map_or(Vec4::from_array(d), |v| Vec4::from_array(*v));
+    let tex = |name: &str, kind: Tex, d: &Handle<Image>| info.textures.get(name).and_then(|p| loader.load(p, kind)).unwrap_or_else(|| d.clone());
+    let fixed = |path: &str, kind: Tex, d: &Handle<Image>| loader.load(path, kind).unwrap_or_else(|| d.clone());
+    let mut base = standard_material(root, info, loader);
+    if !matches!(base.alpha_mode, AlphaMode::Mask(_)) {
+        base.alpha_mode = AlphaMode::Mask(0.3333);
+    }
+    ExtendedMaterial {
+        base,
+        extension: SkinMaskExt {
+            mask_a: fallback.black.clone(),
+            mask_b: fallback.black.clone(),
+            params: SkinParams {
+                dark_tint: v("Skin_diffuse_DarkTint", [1.0; 4]),
+                rough: Vec4::new(info.scalar("RoughMin", 0.1), info.scalar("RoughMax", 0.9), v("RoughnessMultiplier", [1.0; 4]).x, info.scalar("RainGloss", 0.55)),
+                spec: Vec4::new(0.35 + info.scalar("Sweat", 0.2), info.scalar("PoreSpecWeight", 0.0), 0.0, 0.0),
+                selection: v("SelectionColor", [0.0; 4]).with_w(0.0),
+            },
+            damage: fallback.clear.clone(),
+            gore_normal: fixed(GORE_NORMAL, Tex::Data, &fallback.normal),
+            gore_rgb: tex("Gore_RGB", Tex::Data, &fixed(GORE_RGB, Tex::Data, &fallback.black)),
+            colormask: fixed(GORE_COLORMASK, Tex::Data, &fallback.black),
+            rma: tex("Skin RMA", Tex::Data, &fallback.rmas),
+        },
+    }
+}
+
+/// Rain_MPC's Rain on the skin (glossier).
+fn skin_rain(mpc: Option<Res<crate::weather::RainMpc>>, mut materials: ResMut<Assets<SkinMaterial>>) {
+    let Some(mpc) = mpc.filter(|m| m.is_changed()) else { return };
+    for (_, m) in materials.iter_mut() {
+        m.extension.params.spec.z = mpc.rain;
+    }
 }
 
 impl MaterialExtension for SkinMaskExt {
@@ -589,16 +651,14 @@ impl MaterialIndex {
 
     /// A skin material clipped by two exported masks (export-relative texture paths), on top of `base` (the skin's
     /// own material as built from the export). None if a mask is missing from the export.
-    pub(crate) fn skin_material(&self, base: StandardMaterial, masks: &[String], assets: &AssetServer) -> Option<SkinMaterial> {
+    /// A skin material clipped by the body's masks (its own, then the outfit's).
+    pub(crate) fn skin_material(&self, skin: SkinMaterial, masks: &[String], assets: &AssetServer) -> Option<SkinMaterial> {
         let loader = Loader { root: &self.root, assets };
         let [a, b] = masks else { return None };
-        let mask_a = loader.load(a, Tex::Data)?;
-        let mask_b = loader.load(b, Tex::Data)?;
-        let mut base = base;
-        if !matches!(base.alpha_mode, AlphaMode::Mask(_)) {
-            base.alpha_mode = AlphaMode::Mask(0.3333);
-        }
-        Some(ExtendedMaterial { base, extension: SkinMaskExt { mask_a, mask_b } })
+        let mut skin = skin;
+        skin.extension.mask_a = loader.load(a, Tex::Data)?;
+        skin.extension.mask_b = loader.load(b, Tex::Data)?;
+        Some(skin)
     }
 }
 
@@ -924,6 +984,8 @@ fn apply_materials(
                 } else if let Some(kind) = blend_kind(&info.master) {
                     // (The POM variant's parallax is not ported: drawn flat.)
                     Built::Blend(blends.add(blend_material(info, kind, &loader, &fallback)))
+                } else if info.master == "SkinGoreMaster" {
+                    Built::Skin(skins.add(skin_gore_material(&index.root, info, &loader, &fallback)))
                 } else if info.master == "ClothesMultiGore" {
                     Built::Clothes(clothes.add(clothes_material(&index.root, info, &loader, &fallback)))
                 } else if let Some(m) = master_material(&index.root, info, &loader) {
@@ -944,12 +1006,12 @@ fn apply_materials(
             }
         };
         let mut e = commands.entity(entity);
-        if let (Built::Standard(h), Some(masks)) = (&built, parents.iter_ancestors(entity).find_map(|a| skin_masks.get(a).ok())) {
+        if let (Built::Skin(h), Some(masks)) = (&built, parents.iter_ancestors(entity).find_map(|a| skin_masks.get(a).ok())) {
             let key = format!("{key}|skin");
             let skin = match index.skins.get(&key) {
                 Some(s) => Some(s.clone()),
                 None => {
-                    let s = standard.get(h).cloned().and_then(|base| index.skin_material(base, &masks.0, &assets)).map(|m| skins.add(m));
+                    let s = skins.get(h).cloned().and_then(|skin| index.skin_material(skin, &masks.0, &assets)).map(|m| skins.add(m));
                     if let Some(s) = &s {
                         index.skins.insert(key, s.clone());
                     }
@@ -981,6 +1043,9 @@ fn apply_materials(
                 e.remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(h));
             }
             Built::Clothes(h) => {
+                e.remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(h));
+            }
+            Built::Skin(h) => {
                 e.remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(h));
             }
             Built::Hidden => {

@@ -92,14 +92,15 @@ fn apply_blood(
     }
 }
 
-/// Her clothes' damage texture from her parts' masks (r: their blue, g: their alpha, b: their red, a: 0 — no
-/// Environment Damage), and her clothes on their own materials with it.
+/// Her damage textures from her parts' masks (r: their blue, g: their alpha, b: their red, a: 0 — no Environment or
+/// Burn Damage): her clothes' (their parameters: not Head Damage) and her skin's (all of them), and her clothes and
+/// skin on their own materials with them.
 #[allow(clippy::too_many_arguments)]
 fn show_blood(
     changed: Query<(Entity, &Bloodied), Changed<Bloodied>>,
     children: Query<&Children>,
-    mut clothes: Query<&mut MeshMaterial3d<crate::materials::ClothesMaterial>>,
-    mut materials: ResMut<Assets<crate::materials::ClothesMaterial>>,
+    (mut clothes, mut skin): (Query<&mut MeshMaterial3d<crate::materials::ClothesMaterial>>, Query<&mut MeshMaterial3d<crate::materials::SkinMaterial>>),
+    (mut clothes_materials, mut skin_materials): (ResMut<Assets<crate::materials::ClothesMaterial>>, ResMut<Assets<crate::materials::SkinMaterial>>),
     mut images: ResMut<Assets<Image>>,
     counselor: Option<Res<crate::character::CounselorCharacter>>,
     export: Res<crate::ExportRoot>,
@@ -107,34 +108,44 @@ fn show_blood(
 ) {
     let Some(counselor) = counselor else { return };
     for (e, b) in &changed {
-        let mut sum = vec![0u16; (SIZE * SIZE * 3) as usize];
-        for (i, name) in PARTS.iter().enumerate() {
-            if b.0 & (1 << i) == 0 {
-                continue;
+        let mut combine = |head: bool| {
+            let mut sum = vec![0u16; (SIZE * SIZE * 3) as usize];
+            for (i, name) in PARTS.iter().enumerate() {
+                if b.0 & (1 << i) == 0 {
+                    continue;
+                }
+                let Some(info) = counselor.info.body_parts.get(*name) else { continue };
+                if !info.parameter.as_deref().is_some_and(|p| head || p != "Head Damage") {
+                    continue;
+                }
+                let Some(path) = &info.mask else { continue };
+                let Some(px) = masks.entry(path.clone()).or_insert_with(|| load_mask(&export.0.join(path))) else { continue };
+                for (k, s) in px.chunks_exact(4).enumerate() {
+                    sum[k * 3] += s[2] as u16;
+                    sum[k * 3 + 1] += s[3] as u16;
+                    sum[k * 3 + 2] += s[0] as u16;
+                }
             }
-            let Some(info) = counselor.info.body_parts.get(*name) else { continue };
-            // (The clothes' parameters: the head's is the face's own.)
-            if !info.parameter.as_deref().is_some_and(|p| p != "Head Damage") {
-                continue;
-            }
-            let Some(path) = &info.mask else { continue };
-            let Some(px) = masks.entry(path.clone()).or_insert_with(|| load_mask(&export.0.join(path))) else { continue };
-            for (k, s) in px.chunks_exact(4).enumerate() {
-                sum[k * 3] += s[2] as u16;
-                sum[k * 3 + 1] += s[3] as u16;
-                sum[k * 3 + 2] += s[0] as u16;
-            }
-        }
-        let data: Vec<u8> = sum.chunks_exact(3).flat_map(|c| [c[0].min(255) as u8, c[1].min(255) as u8, c[2].min(255) as u8, 0]).collect();
-        let mut image = Image::new(Extent3d { width: SIZE, height: SIZE, depth_or_array_layers: 1 }, TextureDimension::D2, data, TextureFormat::Rgba8Unorm, RenderAssetUsages::RENDER_WORLD);
-        image.sampler = ImageSampler::linear();
-        let damage = images.add(image);
+            let data: Vec<u8> = sum.chunks_exact(3).flat_map(|c| [c[0].min(255) as u8, c[1].min(255) as u8, c[2].min(255) as u8, 0]).collect();
+            let mut image = Image::new(Extent3d { width: SIZE, height: SIZE, depth_or_array_layers: 1 }, TextureDimension::D2, data, TextureFormat::Rgba8Unorm, RenderAssetUsages::RENDER_WORLD);
+            image.sampler = ImageSampler::linear();
+            images.add(image)
+        };
+        let (on_clothes, on_skin) = (combine(false), combine(true));
         info!("blood: {} on {:?}", PARTS.iter().enumerate().filter(|(i, _)| b.0 & (1 << i) != 0).map(|(_, n)| *n).collect::<Vec<_>>().join(", "), e);
         for c in children.iter_descendants(e) {
-            let Ok(mut m) = clothes.get_mut(c) else { continue };
-            let Some(mut own) = materials.get(&m.0).cloned() else { continue };
-            own.extension.damage = damage.clone();
-            m.0 = materials.add(own);
+            if let Ok(mut m) = clothes.get_mut(c) {
+                if let Some(mut own) = clothes_materials.get(&m.0).cloned() {
+                    own.extension.damage = on_clothes.clone();
+                    m.0 = clothes_materials.add(own);
+                }
+            }
+            if let Ok(mut m) = skin.get_mut(c) {
+                if let Some(mut own) = skin_materials.get(&m.0).cloned() {
+                    own.extension.damage = on_skin.clone();
+                    m.0 = skin_materials.add(own);
+                }
+            }
         }
     }
 }
