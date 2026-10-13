@@ -115,6 +115,8 @@ pub struct NetBody {
     pub pos: [f32; 3],
     pub yaw: f32,
     pub kind: BodyKind,
+    /// When the server took it (its fixed-step clock, s): a client spaces the bodies by this, not by when they arrive.
+    pub t: f32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -298,6 +300,7 @@ impl Plugin for NetPlugin {
                     .add_systems(Update, connect)
                     .add_observer(body_gone)
                     .init_resource::<Twins>()
+                    .init_resource::<ServerClock>()
                     .add_systems(Update, (send_input, (make_twins, record_bodies, mirror, hide_jason).chain().in_set(Mirrored).before(crate::character::animate)));
                 app.add_systems(Update, receive_match.after(Mirrored));
                 crate::net_world::client(app);
@@ -421,10 +424,10 @@ fn replicate_bodies(
     jasons: Query<Entity, (With<crate::jason::Jason>, Without<NetBody>)>,
 ) {
     for e in &counselors {
-        commands.entity(e).insert((NetBody { id: e.to_bits(), pos: [0.0; 3], yaw: 0.0, kind: BodyKind::Counselor }, NetCounselor::default(), NetTally::default(), NetAction::default(), Replicate::to_clients(NetworkTarget::All)));
+        commands.entity(e).insert((NetBody { id: e.to_bits(), pos: [0.0; 3], yaw: 0.0, kind: BodyKind::Counselor, t: 0.0 }, NetCounselor::default(), NetTally::default(), NetAction::default(), Replicate::to_clients(NetworkTarget::All)));
     }
     for e in &jasons {
-        commands.entity(e).insert((NetBody { id: e.to_bits(), pos: [0.0; 3], yaw: 0.0, kind: BodyKind::Jason }, NetJason::default(), NetAction::default(), Replicate::to_clients(NetworkTarget::All)));
+        commands.entity(e).insert((NetBody { id: e.to_bits(), pos: [0.0; 3], yaw: 0.0, kind: BodyKind::Jason, t: 0.0 }, NetJason::default(), NetAction::default(), Replicate::to_clients(NetworkTarget::All)));
     }
 }
 
@@ -441,6 +444,7 @@ fn update_bodies(
     mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>)>,
     mut jasons: Query<(&mut NetJason, &crate::jason::Jason, Option<&crate::senses::Knowledge>, Option<&crate::kill_camera::KillCam>)>,
     world_ids: Query<&crate::net_world::WorldId>,
+    fixed: Res<Time<Fixed>>,
 ) {
     for (mut b, xf, mut a, action, blocking) in &mut bodies {
         let pos = xf.translation.to_array();
@@ -448,6 +452,8 @@ fn update_bodies(
         if b.pos != pos || b.yaw != yaw {
             b.pos = pos;
             b.yaw = yaw;
+            // The fixed step the body moved in (the characters move only there).
+            b.t = fixed.elapsed_secs();
         }
         let take = action.map(|p| p.0.clone());
         if a.take != take || a.blocking != blocking {
@@ -614,23 +620,64 @@ const INTERP_DELAY_S: f32 = 0.1;
 const SNAP_M: f32 = 3.0;
 /// How long the bodies received are kept (s).
 const SNAPSHOTS_KEPT_S: f32 = 1.0;
+/// A body that changes after standing still longer than this (s) held its last place until about this long before
+/// (the server sends a body only when it moves, every frame while it does).
+const STILL_GAP_S: f32 = 0.05;
+/// How fast the server clock estimate rises towards a later arrival, per body received (it drops to an earlier one
+/// at once): the fastest arrivals set it, so a slow packet doesn't move it.
+const CLOCK_RISE: f32 = 0.002;
 
-/// On a client: a character's bodies as they came in (real time received, place, yaw).
+/// On a client: this machine's real clock minus the server's, as the fastest bodies to arrive show it.
+#[derive(Resource, Default)]
+struct ServerClock(Option<f32>);
+
+impl ServerClock {
+    /// The server's clock now (s), by this machine's.
+    fn now(&self, real: &Time<Real>) -> f32 {
+        real.elapsed_secs() - self.0.unwrap_or(0.0)
+    }
+}
+
+/// On a client: a character's bodies as the server took them (server time, place, yaw).
 #[derive(Component, Default)]
 struct Snapshots(std::collections::VecDeque<(f32, Vec3, f32)>);
 
-/// Each body received is kept, with when it came.
-fn record_bodies(mut commands: Commands, real: Res<Time<Real>>, mut bodies: Query<(Entity, &NetBody, Option<&mut Snapshots>), Changed<NetBody>>) {
+impl Snapshots {
+    /// Adds a body taken at server time `t` (an older one than the newest, arrived late, is dropped). After standing
+    /// still, the body held its place until just before it moved.
+    fn push(&mut self, t: f32, at: Vec3, yaw: f32) {
+        if let Some(&(t0, p0, y0)) = self.0.back() {
+            if t <= t0 {
+                return;
+            }
+            if t - t0 > 2.0 * STILL_GAP_S {
+                self.0.push_back((t - STILL_GAP_S, p0, y0));
+            }
+        }
+        self.0.push_back((t, at, yaw));
+        while self.0.front().is_some_and(|f| t - f.0 > SNAPSHOTS_KEPT_S) && self.0.len() > 2 {
+            self.0.pop_front();
+        }
+    }
+}
+
+/// Each body received is kept, with when the server took it.
+fn record_bodies(
+    mut commands: Commands,
+    real: Res<Time<Real>>,
+    mut clock: ResMut<ServerClock>,
+    mut bodies: Query<(Entity, &NetBody, Option<&mut Snapshots>), Changed<NetBody>>,
+) {
     let now = real.elapsed_secs();
     for (e, b, snaps) in &mut bodies {
-        let s = (now, Vec3::from_array(b.pos), b.yaw);
+        let behind = now - b.t;
+        clock.0 = Some(match clock.0 {
+            Some(c) if behind >= c => c + (behind - c) * CLOCK_RISE,
+            _ => behind,
+        });
+        let s = (b.t, Vec3::from_array(b.pos), b.yaw);
         match snaps {
-            Some(mut q) => {
-                q.0.push_back(s);
-                while q.0.front().is_some_and(|f| now - f.0 > SNAPSHOTS_KEPT_S) && q.0.len() > 2 {
-                    q.0.pop_front();
-                }
-            }
+            Some(mut q) => q.push(s.0, s.1, s.2),
             None => {
                 commands.entity(e).insert(Snapshots([s].into()));
             }
@@ -663,13 +710,13 @@ fn sample(snaps: &Snapshots, t: f32) -> Option<(Vec3, f32)> {
 #[allow(clippy::type_complexity)]
 fn mirror(
     mut commands: Commands,
-    real: Res<Time<Real>>,
+    (real, clock): (Res<Time<Real>>, Res<ServerClock>),
     mut bodies: Query<(&NetBody, &NetAction, Option<&NetCounselor>, Option<&NetJason>, &mut Twin, Option<&Snapshots>)>,
     mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>, (Option<&Name>, Option<&mut Controls>, Has<LocalPlayer>, Option<&mut crate::senses::Knowledge>))>,
     actors: Res<crate::net_world::Actors>,
     cams: Query<&crate::kill_camera::KillCam>,
 ) {
-    let shown_at = real.elapsed_secs() - INTERP_DELAY_S;
+    let shown_at = clock.now(&real) - INTERP_DELAY_S;
     for (b, a, nc, nj, mut twin, snaps) in &mut bodies {
         let Ok((mut xf, player, jason, action, blocking, (name, controls, local, know))) = twins.get_mut(twin.local) else { continue };
         let (to, yaw) = snaps.and_then(|s| sample(s, shown_at)).unwrap_or((Vec3::from_array(b.pos), b.yaw));
@@ -1131,5 +1178,19 @@ mod tests {
         let w = Snapshots([(0.0, Vec3::ZERO, 3.0), (1.0, Vec3::ZERO, -3.0)].into());
         let (_, y) = sample(&w, 0.5).unwrap();
         assert!((y - (3.0 + (std::f32::consts::TAU - 6.0) / 2.0)).abs() < 1e-3, "{y}");
+    }
+
+    #[test]
+    fn bodies_keep_the_servers_spacing() {
+        let mut s = Snapshots::default();
+        s.push(1.0, Vec3::ZERO, 0.0);
+        // A late arrival older than the newest is dropped.
+        s.push(2.0, Vec3::X, 0.0);
+        s.push(1.5, Vec3::Y, 0.0);
+        assert_eq!(s.0.len(), 3);
+        // After a second still, it held its place until just before it moved.
+        assert_eq!(sample(&s, 1.5).unwrap().0, Vec3::ZERO);
+        assert_eq!(sample(&s, 2.0 - STILL_GAP_S).unwrap().0, Vec3::ZERO);
+        assert!((sample(&s, 2.0 - STILL_GAP_S / 2.0).unwrap().0.x - 0.5).abs() < 1e-3);
     }
 }
