@@ -326,6 +326,7 @@ pub(crate) struct JasonConfig {
 
 impl Plugin for JasonPlugin {
     fn build(&self, app: &mut App) {
+        crate::net_world::sounds(app);
         app.insert_resource(JasonConfig { delay: self.delay, kill: self.kill })
             .init_resource::<GrabKillsAvailable>()
             .init_resource::<JasonTarget>()
@@ -1153,6 +1154,9 @@ fn fly_knives(
                 let r = p.counselor.take_damage(Hit { amount: k.damage, blocked_with_weapon: false }, &ptuning.counselor);
                 info!("Jason's knife hit Vanessa for {:.0} (health {:.0})", r.dealt, p.counselor.health);
                 impact_at(&mut commands, from, 0);
+                // SCThrowable::OnStop (0x1403fe870) in a character: its JasonImpactNoise
+                // (ThrowingKnifeImpactConfirmation) in 2D for its thrower's player.
+                crate::net_world::shout(&mut commands, crate::net_world::Shout::JasonSound(crate::net_world::JasonSound("ThrowingKnifeImpactConfirmation".into())));
                 // Its CounselorFX (P_Hit_Blood_Counselor_Default_01) where it struck, and its CounselorDecal's splashes
                 // (blood on what's around her, along the knife's way and down). PLACEHOLDER: the gash decal itself
                 // (on her) isn't drawn: decals here don't follow a character.

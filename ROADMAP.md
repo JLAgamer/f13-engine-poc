@@ -36,8 +36,6 @@ Base content (asset paths in the player's install; all gameplay values come from
 - [ ] Blood: the counselor's gore skin layer (SkinGoreMaster)
 - [ ] Blood: impact decals on characters (a thrown knife's gash on her, the shotgun's on Jason: decals that follow a
       character)
-- [ ] Sound: the thrown knife's ThrowingKnifeImpactConfirmation (SCThrowable JasonImpactNoise: where it plays isn't
-      found yet)
 - [ ] Music: Jason's own music (his MusicComponent's JasonsMusic, after a kill's music too), the two-minute warning
       turned down under a kill's music
 - [ ] More content, one at a time: maps (with their boat and other escapes), Jasons, counselors, perks, skins,

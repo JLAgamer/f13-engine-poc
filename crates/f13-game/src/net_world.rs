@@ -163,6 +163,7 @@ pub enum Heard {
     BreakApart { piece: NetRef, origin: [f32; 3], radius: f32, force: f32, lifespan: f32 },
     Distortion { at: [f32; 3], dest: Option<[f32; 3]> },
     SoundBlip { at: [f32; 3] },
+    JasonSound { cue: String },
 }
 
 /// The channel [`Heard`] goes on (in order, every one).
@@ -180,6 +181,22 @@ pub enum Shout {
     Distortion(crate::jason::Distortion),
     /// Only to whoever plays Jason.
     SoundBlip(crate::senses::SoundBlip),
+    /// A 2D sound for whoever plays Jason only (his locally controlled character's PlaySound2D).
+    JasonSound(JasonSound),
+}
+
+/// A 2D cue only Jason's player hears (played where PlayJason is).
+#[derive(Event, Clone, Debug)]
+pub struct JasonSound(pub String);
+
+fn jason_sound(ev: On<JasonSound>, mut commands: Commands, play: Option<Res<crate::jason_player::PlayJason>>) {
+    if play.is_some() {
+        commands.trigger(crate::audio::PlaySound { cue: ev.0.clone(), at: None });
+    }
+}
+
+pub(crate) fn sounds(app: &mut App) {
+    app.add_observer(jason_sound);
 }
 
 /// Triggers what the simulation did, and has a server tell its clients.
@@ -193,6 +210,7 @@ pub fn shout(commands: &mut Commands, what: Shout) {
         Shout::BreakApart(e) => commands.trigger(e),
         Shout::Distortion(e) => commands.trigger(e),
         Shout::SoundBlip(e) => commands.trigger(e),
+        Shout::JasonSound(e) => commands.trigger(e),
     }
     commands.trigger(what);
 }
@@ -432,6 +450,7 @@ fn send_heard(
         Shout::BreakApart(b) => r(b.piece).map(|piece| Heard::BreakApart { piece, origin: b.origin.to_array(), radius: b.radius, force: b.force, lifespan: b.lifespan }),
         Shout::Distortion(d) => Some(Heard::Distortion { at: d.at.to_array(), dest: d.dest.map(|d| d.to_array()) }),
         Shout::SoundBlip(b) => Some(Heard::SoundBlip { at: b.at.to_array() }),
+        Shout::JasonSound(s) => Some(Heard::JasonSound { cue: s.0.clone() }),
     };
     let Some(heard) = heard else {
         debug!("net: can't name {:?} to the clients", *what);
@@ -440,7 +459,7 @@ fn send_heard(
     let Ok(server) = server.single() else { return };
     // Jason's sound blips are his alone (SoundBlip_C spawns on his machine only).
     let to = match heard {
-        Heard::SoundBlip { .. } => match jason_player.as_ref().and_then(|j| remotes.get(j.0).ok()) {
+        Heard::SoundBlip { .. } | Heard::JasonSound { .. } => match jason_player.as_ref().and_then(|j| remotes.get(j.0).ok()) {
             Some(id) => NetworkTarget::Single(id.0),
             None => return,
         },
@@ -663,6 +682,7 @@ fn hear(mut commands: Commands, actors: Res<Actors>, twins: Res<crate::net::Twin
                 }
                 Heard::Distortion { at, dest } => commands.trigger(crate::jason::Distortion { at: v(at), dest: dest.map(v) }),
                 Heard::SoundBlip { at } => commands.trigger(crate::senses::SoundBlip { at: v(at) }),
+                Heard::JasonSound { cue } => commands.trigger(JasonSound(cue)),
             }
         }
     }
