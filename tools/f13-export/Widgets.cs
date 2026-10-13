@@ -204,8 +204,16 @@ class WidgetExporter(IFileProvider provider, string outDir, Action<UObject> queu
                             var textures = new JArray();
                             var scalars = new JObject();
                             var vectors = new JObject();
+                            // A texture parameter's default, by its name (kept apart: "Textures" is the samples').
+                            var textureParams = new JObject();
                             foreach (var e in mexp)
                             {
+                                if (e.ExportType == "MaterialExpressionTextureSampleParameter2D" && e.GetOrDefault<FPackageIndex?>("Texture")?.Load<UTexture2D>() is { } ptexd)
+                                {
+                                    queue(ptexd);
+                                    textureParams[e.GetOrDefault<FName>("ParameterName").Text] = ptexd.GetPathName().Split('.')[0] + ".png";
+                                    continue;
+                                }
                                 if (e.ExportType == "MaterialExpressionTextureSample" && e.GetOrDefault<FPackageIndex?>("Texture")?.Load<UTexture2D>() is { } tex)
                                 {
                                     queue(tex);
@@ -236,6 +244,7 @@ class WidgetExporter(IFileProvider provider, string outDir, Action<UObject> queu
                             r["Textures"] = textures;
                             r["Scalars"] = scalars;
                             r["Vectors"] = vectors;
+                            if (textureParams.Count > 0) r["TextureParameters"] = textureParams;
                         }
                     }
                     catch (Exception e)

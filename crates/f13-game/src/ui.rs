@@ -901,6 +901,15 @@ fn fill_lobby(hud: &Hud, tree: &mut Widget, lobby: &crate::lobby::NetLobby, me: 
     if let (Some(file), Some(image)) = (hud.lobby_map["Image"].as_str(), tree.find_mut("CurrentMapImage")) {
         image.props["Brush"]["ResourceObject"] = json!({ "File": file });
     }
+    // The ready bar: its glow while the ready button has the focus (its Tick: ReadyFocused; it's the default focus, and
+    // Enter readies here), its text the other way from her (ReadyText, UnreadyText).
+    let ready = lobby.members.iter().any(|m| Some(m.id) == me && m.ready);
+    if let Some(bar) = tree.find_mut("StartBarMaterialImage") {
+        bar.props["Brush"]["ResourceObject"]["Scalars"]["Glow"] = json!(1.0);
+    }
+    if let Some(t) = tree.find_mut("ReadyUnreadyText") {
+        t.props["Text"] = json!({ "LocalizedString": if ready { "U N R E A D Y" } else { "R E A D Y" } });
+    }
     let Some((row, textures, defaults)) = &hud.lobby_row else { return };
     let Some(list) = tree.find_mut("PlayerVerticalBox") else { return };
     list.children.clear();
@@ -1555,7 +1564,10 @@ impl Builder<'_, '_, '_> {
             self.commands.entity(e).insert(MaterialNode(m));
             return;
         }
-        let file = res["File"].as_str().or(textures.first().copied());
+        // A material of texture parameters (LobbyReadyButtonMaterial: its UI Element and UI Glow Element by its Glow):
+        // the glow's past half way. PLACEHOLDER: a lerp's halves for the lerp (its graph is cooked away).
+        let element = if res["Scalars"]["Glow"].as_f64().unwrap_or(0.0) >= 0.5 { "UI Glow Element" } else { "UI Element" };
+        let file = res["File"].as_str().or(textures.first().copied()).or_else(|| res["TextureParameters"][element].as_str());
         match file {
             Some(file) => {
                 let mut image = ImageNode::new(self.assets.load(file.to_string())).with_color(linear(c));
