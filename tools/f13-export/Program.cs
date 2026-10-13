@@ -88,6 +88,10 @@ List<string> WriteAnimSounds()
     // And their post-process blendables (anim_blendables.json: SCPostProcessBlendableNotify: the kills' screen blood).
     var blendables = AnimSounds.Blendables(provider, Mvp.CounselorAnims.Concat(Mvp.KillerAnims), Queue, t => t.GetPathName().Split('.')[0].TrimStart('/').Replace("Game/", "SummerCamp/Content/") + ".dds");
     File.WriteAllText(Path.Combine(outDir, "anim_blendables.json"), blendables.ToString(Newtonsoft.Json.Formatting.Indented));
+    // And their gore (anim_gore.json: SCApplyBloodMaskAnimNotify, SCDetachLimbAnimNotify: the kills' blood and limbs).
+    var gore = AnimSounds.Gore(provider, Mvp.CounselorAnims.Concat(Mvp.KillerAnims), Queue, t => t.GetPathName().Split('.')[0].TrimStart('/').Replace("Game/", "SummerCamp/Content/") + ".png");
+    File.WriteAllText(Path.Combine(outDir, "anim_gore.json"), gore.ToString(Newtonsoft.Json.Formatting.Indented));
+    Console.WriteLine($"anim gore: {gore.Count} takes");
     Console.WriteLine($"anim blendables: {blendables.Count} animations");
     return cues;
 }

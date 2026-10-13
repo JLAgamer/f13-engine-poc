@@ -250,6 +250,90 @@ static class AnimSounds
         return result;
     }
 
+    /// Each take's gore notifies, keyed as [`Props`]: SCApplyBloodMaskAnimNotify ({Time, Kind "Blood", Limb (ELimb's
+    /// name), Mask (texture path), Parameter, Elements}) and SCDetachLimbAnimNotify ({Time, Kind "Detach", Limb, Impulse
+    /// [x, y, z], Mask (BloodMaskOverride, or none), ShowLimb}), in that sequence's time; the masks go to `queue`.
+    public static JObject Gore(IFileProvider provider, IEnumerable<string> animations, Action<UObject> queue, Func<UObject, string> texturePath)
+    {
+        var json = new JObject();
+        foreach (var path in animations)
+        {
+            if (Load(provider, path) is not UAnimSequenceBase anim) continue;
+            var events = new List<(float Time, JObject Info)>();
+            foreach (var n in anim.GetOrDefault<FStructFallback[]>("Notifies", []))
+            {
+                if (n.GetOrDefault<FPackageIndex>("Notify")?.Load() is not { } notify) continue;
+                // Its mask: a texture reference (soft for the detach's override, read either way). Unset, the
+                // notify uses the limb's own (its LimbUVTexture, TextureParameterName, ParentMaterialElementIndices).
+                var maskName = notify.ExportType == "SCDetachLimbAnimNotify" ? "BloodMaskOverride" : "BloodMask";
+                UObject? tex = null;
+                try { tex = notify.GetOrDefault<FPackageIndex?>(maskName)?.Load(); } catch { }
+                if (tex == null && notify.GetOrDefault<FSoftObjectPath?>(maskName) is { } sp && sp.AssetPathName.Text is { Length: > 0 } a && a != "None" && sp.TryLoad(out UObject soft)) tex = soft;
+                string? maskPath = null;
+                if (tex != null)
+                {
+                    queue(tex);
+                    maskPath = texturePath(tex);
+                }
+                var info = notify.ExportType switch
+                {
+                    "SCApplyBloodMaskAnimNotify" => new JObject
+                    {
+                        ["Kind"] = "Blood",
+                        ["Limb"] = notify.GetOrDefault<FName>("Limb").Text,
+                        ["Mask"] = maskPath,
+                        ["Parameter"] = notify.GetOrDefault<FName>("TextureParameter").Text,
+                        ["Elements"] = new JArray(notify.GetOrDefault<int[]>("MaterialElementIndices", [])),
+                    },
+                    "SCDetachLimbAnimNotify" => new JObject
+                    {
+                        ["Kind"] = "Detach",
+                        ["Limb"] = notify.GetOrDefault<FName>("LimbToDetach").Text,
+                        ["Impulse"] = notify.GetOrDefault<CUE4Parse.UE4.Objects.Core.Math.FVector?>("Impulse") is { } i ? new JArray(i.X, i.Y, i.Z) : new JArray(0, 0, 0),
+                        ["Mask"] = maskPath,
+                        ["ShowLimb"] = notify.GetOrDefault("bShowLimbAfterDetach", false),
+                    },
+                    _ => null,
+                };
+                if (info != null) events.Add((n.GetOrDefault<float>("LinkValue"), info));
+            }
+            if (events.Count == 0) continue;
+            void Add(string seq, IEnumerable<JObject> mine)
+            {
+                var names = new List<string> { seq };
+                if (path.Contains("/Characters/Killers/", StringComparison.OrdinalIgnoreCase)) names.Add($"killer/{seq}");
+                if (path.Contains("/Characters/Counselors/", StringComparison.OrdinalIgnoreCase)) names.Add($"counselor/{seq}");
+                var list = mine.ToList();
+                foreach (var name in names)
+                {
+                    if (json[name] is JArray existing) foreach (var e in list) existing.Add(e);
+                    else json[name] = new JArray(list);
+                }
+            }
+            if (anim is UAnimMontage m)
+            {
+                foreach (var slot in m.SlotAnimTracks ?? [])
+                    foreach (var seg in slot.AnimTrack.AnimSegments ?? [])
+                    {
+                        if (seg.AnimReference.ResolvedObject?.Name.Text is not { } seq) continue;
+                        var rate = seg.AnimPlayRate == 0 ? 1f : Math.Abs(seg.AnimPlayRate);
+                        var end = seg.StartPos + (seg.AnimEndTime - seg.AnimStartTime) / rate * Math.Max(seg.LoopingCount, 1);
+                        Add(seq, events.Where(e => e.Time >= seg.StartPos && e.Time < end).Select(e =>
+                        {
+                            var j = (JObject)e.Info.DeepClone();
+                            j["Time"] = seg.AnimStartTime + (e.Time - seg.StartPos) * rate;
+                            return j;
+                        }));
+                    }
+            }
+            else
+            {
+                Add(anim.Name, events.Select(e => { var j = (JObject)e.Info.DeepClone(); j["Time"] = e.Time; return j; }));
+            }
+        }
+        return json;
+    }
+
     static UObject? Load(IFileProvider provider, string path)
     {
         try { return provider.LoadPackageObject(path + "." + path.Split('/')[^1]); }

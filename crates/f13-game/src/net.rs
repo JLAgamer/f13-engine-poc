@@ -209,8 +209,8 @@ pub struct NetCounselor {
     pub escaped: Option<String>,
     /// In a move at a door or window, or on her way onto a special move's spot ([`RemoteMove`] on her twin).
     pub moving: bool,
-    /// Her body parts bloodied (blood.rs Bloodied).
-    pub blood: u8,
+    /// Her gore records (blood.rs Gore): parameter, mask.
+    pub gore: Vec<(String, String)>,
 }
 
 /// A client's twin of a counselor in a move the server plays (at a door or window, or onto a special move's spot).
@@ -795,7 +795,7 @@ fn set<T: PartialEq>(mut c: Mut<T>, v: T) {
 #[allow(clippy::type_complexity)]
 fn update_bodies(
     mut bodies: Query<(&mut NetBody, &Transform, &mut NetAction, Option<&PlayAction>, Has<crate::items::Blocking>)>,
-    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>, Has<crate::voice::Spectating>), (Option<&crate::hiding::Hiding>, Option<&crate::hiding::Breathing>, Option<&crate::interact::Interaction>), (Option<&crate::vehicle::Driving>, Option<&crate::vehicle::Escaped>, Has<crate::interact::MoveToSpot>, Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>, Option<&crate::blood::Bloodied>))>,
+    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>, Has<crate::voice::Spectating>), (Option<&crate::hiding::Hiding>, Option<&crate::hiding::Breathing>, Option<&crate::interact::Interaction>), (Option<&crate::vehicle::Driving>, Option<&crate::vehicle::Escaped>, Has<crate::interact::MoveToSpot>, Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>, Option<&crate::blood::Gore>))>,
     struggle: Option<Res<crate::jason::Struggle>>,
     mut jasons: Query<(&mut NetJason, &crate::jason::Jason, Option<&crate::senses::Knowledge>, Option<&crate::kill_camera::KillCam>)>,
     world_ids: Query<&crate::net_world::WorldId>,
@@ -842,7 +842,7 @@ fn update_bodies(
             driving: driving.and_then(|d| Some((world_ids.get(d.vehicle).ok()?.0, d.seat.map(|s| s as u8), d.starting.as_ref().map(NetHold::of)))),
             escaped: escaped.map(|e| e.how.clone()),
             moving: to_spot || door_move || window_move,
-            blood: blood.map_or(0, |b| b.0),
+            gore: blood.map_or_else(Vec::new, |b| b.0.clone()),
         });
     }
     for (n, j, know, cam) in &mut jasons {
@@ -1081,7 +1081,7 @@ fn mirror(
     mut commands: Commands,
     (real, clock): (Res<Time<Real>>, Res<ServerClock>),
     mut bodies: Query<(&NetBody, &NetAction, Option<&NetCounselor>, Option<&NetJason>, &mut Twin, Option<&Snapshots>)>,
-    mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>, (Option<&Name>, Option<&mut Controls>, Has<LocalPlayer>, Option<&mut crate::senses::Knowledge>), (Has<crate::jason::Held>, Option<&mut crate::items::Trapped>, Has<crate::voice::Spectating>), (Option<&mut crate::hiding::Hiding>, Option<&mut crate::hiding::Breathing>, Option<&mut crate::interact::Interaction>), (Option<&mut crate::vehicle::Driving>, Has<crate::vehicle::Escaped>, Has<RemoteMove>, Option<&crate::blood::Bloodied>))>,
+    mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>, (Option<&Name>, Option<&mut Controls>, Has<LocalPlayer>, Option<&mut crate::senses::Knowledge>), (Has<crate::jason::Held>, Option<&mut crate::items::Trapped>, Has<crate::voice::Spectating>), (Option<&mut crate::hiding::Hiding>, Option<&mut crate::hiding::Breathing>, Option<&mut crate::interact::Interaction>), (Option<&mut crate::vehicle::Driving>, Has<crate::vehicle::Escaped>, Has<RemoteMove>, Option<&crate::blood::Gore>))>,
     mut struggle: Option<ResMut<crate::jason::Struggle>>,
     actors: Res<crate::net_world::Actors>,
     cams: Query<&crate::kill_camera::KillCam>,
@@ -1160,8 +1160,8 @@ fn mirror(
                 }
                 (None, None) => {}
             }
-            if n.blood != blood.map_or(0, |b| b.0) {
-                e.insert(crate::blood::Bloodied(n.blood));
+            if blood.is_none_or(|b| b.0 != n.gore) && (!n.gore.is_empty() || blood.is_some()) {
+                e.insert(crate::blood::Gore(n.gore.clone()));
             }
             match (n.moving, remote_move) {
                 (true, false) => {
