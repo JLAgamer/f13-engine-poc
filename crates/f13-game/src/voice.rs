@@ -3,7 +3,9 @@
 //! which passes each frame to the other players; each machine plays a player's voice from their character
 //! (VoIPAudioComponent on its root, VolumeMultiplier 1.5, spatialized).
 //!
-//! The game's voice is open mic by default (DefaultGame.ini bRequiresPushToTalk=false).
+//! The game's voice is push-to-talk by default: ILLAudioSettingsSaveGame's constructor sets bUsePushToTalk
+//! (bPlayPushToTalkSound off), the player holds GLB_Speak (T; DefaultInput.ini) to talk; DefaultGame.ini
+//! bRequiresPushToTalk=false only means the session doesn't force it. `--open-mic` turns it off.
 //!
 //! Who hears whom, and how, is the listener's machine's call (SCPlayerState.cpp FUN_1403b8150, for each talker): see
 //! [`route`]. Walkie-talkie carriers further apart than MinVoIPDistance hear each other in 2D (by radio); Jason is
@@ -58,6 +60,13 @@ pub(crate) fn protocol(app: &mut App) {
     app.register_message::<VoiceUp>().add_direction(NetworkDirection::ClientToServer);
     app.register_message::<VoiceDown>().add_direction(NetworkDirection::ServerToClient);
 }
+
+/// The player turned push-to-talk off (`--open-mic`; the test tone always sends).
+#[derive(Resource)]
+pub(crate) struct OpenMic;
+
+/// GLB_Speak (DefaultInput.ini): held to talk.
+const SPEAK: KeyCode = KeyCode::KeyT;
 
 /// A dedicated server relays without audio devices of its own (and --no-voice runs without them).
 #[derive(Resource)]
@@ -291,6 +300,16 @@ fn frames(d: &mut Devices) -> Vec<Vec<u8>> {
     out
 }
 
+/// The microphone's frames to send: all of them with an open mic, else only while GLB_Speak is held (the rest are
+/// still taken from the microphone, so a press doesn't send what was said before it).
+fn talking(frames: Vec<Vec<u8>>, keys: &ButtonInput<KeyCode>, open: bool) -> Vec<Vec<u8>> {
+    if open || keys.pressed(SPEAK) {
+        frames
+    } else {
+        Vec::new()
+    }
+}
+
 /// A received frame into its talker's voice.
 fn hear(d: &mut Devices, talker: u64, frame: &[u8]) {
     let Some(dec) = (match d.decoders.entry(talker) {
@@ -318,12 +337,17 @@ fn hear(d: &mut Devices, talker: u64, frame: &[u8]) {
 }
 
 /// On a client: the microphone's frames to the server.
-fn capture(mut d: NonSendMut<Devices>, client: Option<Res<crate::net::NetClient>>, mut senders: Query<&mut MessageSender<VoiceUp>, With<Connected>>) {
+fn capture(
+    mut d: NonSendMut<Devices>,
+    client: Option<Res<crate::net::NetClient>>,
+    mut senders: Query<&mut MessageSender<VoiceUp>, With<Connected>>,
+    (keys, open): (Res<ButtonInput<KeyCode>>, Option<Res<OpenMic>>),
+) {
     // (The server's own player's are taken by `relay`.)
     if client.is_none() {
         return;
     }
-    let frames = frames(&mut d);
+    let frames = talking(frames(&mut d), &keys, open.is_some());
     for mut s in &mut senders {
         for f in &frames {
             s.send::<VoiceChannel>(VoiceUp(f.clone()));
@@ -338,6 +362,7 @@ fn relay(
     mut links: Query<(Entity, &mut MessageReceiver<VoiceUp>)>,
     counselors: Query<(Entity, &crate::net::PlayedBy)>,
     jason_player: Option<Res<crate::lobby::JasonPlayer>>,
+    (keys, open): (Res<ButtonInput<KeyCode>>, Option<Res<OpenMic>>),
     jasons: Query<Entity, With<crate::jason::Jason>>,
     local_counselor: Query<Entity, (With<crate::controls::LocalPlayer>, With<crate::player::Player>)>,
     play_jason: Option<Res<crate::jason_player::PlayJason>>,
@@ -357,7 +382,7 @@ fn relay(
     }
     // The server's own player's voice.
     let own = local_counselor.iter().next().or_else(|| play_jason.as_ref().and_then(|_| jasons.iter().next()));
-    let local = frames(&mut d);
+    let local = talking(frames(&mut d), &keys, open.is_some());
     if let Some(p) = own {
         out.extend(local.into_iter().map(|f| (p.to_bits(), f, None)));
     }

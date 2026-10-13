@@ -270,8 +270,10 @@ In the lobby, 1, 2 and 3 say whether you'd rather be a counselor, have no prefer
 you up; once everyone's ready, the game picks Jason as the game does and the match starts. `--prefer
 counselor|none|jason` sets your preference from the start, and `--dedicated` hosts without playing.
 
-Voice chat is on: open mic from your default microphone, heard from each player's character. `--no-voice` turns it off
-(handy for several games on one machine).
+Voice chat is on, push-to-talk as in the game: hold T to talk into your default microphone (`--open-mic` sends
+whenever you speak). Players hear each other from their characters within about 36 m; two counselors carrying
+walkie-talkies hear each other at any range, Jason only nearby, and the dead and escaped only each other.
+`--no-voice` turns it off (handy for several games on one machine).
 
 ## Host commands
 
