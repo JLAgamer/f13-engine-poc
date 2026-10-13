@@ -9,9 +9,9 @@ Base content (asset paths in the player's install; all gameplay values come from
 ## Todo
 - [ ] Scenario bots on clients: the rest of the scenarios over the network (`--bot-hooks` carries the locked-in
       one's scene changes: placing her, a door, Jason's hearing and abilities; the others change more: cars, items)
-- [ ] The lobby's rest: the match-end lobby as its own screen (SCMatchEndLobbyWidget, its badges' icons and names:
-      SCStatBadge; award sites and classes are read, MODLOG), the counselors' character picks, a full 8-player run
-      (`--lobby` gathers, picks Jason, starts the match and, the match over, starts again for a rematch)
+- [ ] The lobby's rest: its screens as the game's widgets (the lobby and the match-end lobby, SCMatchEndLobbyWidget
+      with its badges' icons: SCStatBadge; the text overlay stands in, the last match's results on it), the
+      counselors' character picks (one counselor exported so far), a full 8-player run
 - [ ] The Tommy Jarvis timer, Tommy Jarvis, and Jason dying
 - [ ] Voice chat: VoIPAudioComponent's real attenuation (UE's defaults stand in); the settings and mutes in the game's
       own menus (the lobby's keys stand in: P push-to-talk, Shift + n mute)

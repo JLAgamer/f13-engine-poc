@@ -149,6 +149,8 @@ struct Args {
     last_jason: Option<u64>,
     /// A server: its players' scenario bots set their scenes up (testing).
     bot_hooks: bool,
+    /// A lobby's server: the last match's results (a rematch's relaunch passes them on).
+    last_match: Option<PathBuf>,
     /// Voice without push-to-talk (the game's default is push-to-talk: T).
     open_mic: bool,
     bot_radio: bool,
@@ -235,7 +237,7 @@ fn parse_args() -> Args {
     let mut play_jason = false;
     let mut override_spawning = false;
     let mut no_voice = false;
-    let (mut net_id, mut last_jason, mut bot_hooks) = (None, None, false);
+    let (mut net_id, mut last_jason, mut bot_hooks, mut last_match) = (None, None, false, None);
     let mut open_mic = false;
     let mut bot_radio = false;
     let mut kill = None;
@@ -324,6 +326,7 @@ fn parse_args() -> Args {
             "--net-id" => net_id = it.next().and_then(|v| v.parse().ok()),
             "--last-jason" => last_jason = it.next().and_then(|v| v.parse().ok()),
             "--bot-hooks" => bot_hooks = true,
+            "--last-match" => last_match = it.next().map(PathBuf::from),
             "--open-mic" => open_mic = true,
             "--bot-radio" => bot_radio = true,
             "--kill" => {
@@ -404,7 +407,7 @@ fn parse_args() -> Args {
         eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass] (or run the installer, lakeside-setup-installer)");
         std::process::exit(2);
     };
-    Args { net, bot_net, bot_spectate, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_passenger, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, override_spawning, no_voice, net_id, last_jason, bot_hooks, open_mic, bot_radio, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, camera, round_time, flashlight, rain }
+    Args { net, bot_net, bot_spectate, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_passenger, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, override_spawning, no_voice, net_id, last_jason, bot_hooks, last_match, open_mic, bot_radio, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, camera, round_time, flashlight, rain }
 }
 
 #[derive(Resource)]
@@ -701,6 +704,7 @@ fn main() {
             net_id: args.net_id,
             last_jason: args.last_jason,
             bot_hooks: args.bot_hooks,
+            last_match: args.last_match.clone(),
         });
     }
     if let Some(port) = args.host.filter(|_| !(args.fly || args.aerial)) {

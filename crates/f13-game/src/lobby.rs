@@ -85,6 +85,40 @@ pub struct NetLobby {
     pub members: Vec<Member>,
     pub countdown: Option<f32>,
     pub jason: Option<u64>,
+    /// The last match's results, back in the lobby after it (SCMatchEndLobbyWidget's: PLACEHOLDER, as text).
+    pub last_match: Vec<MatchResult>,
+}
+
+/// A player's last match: their name, what they played and how it ended, their XP and badges.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct MatchResult {
+    pub name: String,
+    pub outcome: String,
+    pub xp: i32,
+    pub badges: Vec<String>,
+}
+
+/// Where a lobby's server leaves the match's results for the lobby it starts again (`--last-match`).
+pub(crate) fn last_match_file() -> std::path::PathBuf {
+    std::env::temp_dir().join("lakeside-last-match.json")
+}
+
+/// The results of the match that just ended, from its tallies (counselors by name) and Jason's score.
+pub(crate) fn match_results(game: &crate::match_flow::GameMatch, names: &dyn Fn(Entity) -> String, jason: Option<String>) -> Vec<MatchResult> {
+    let mut out: Vec<MatchResult> = game
+        .counselors
+        .iter()
+        .map(|(e, t)| MatchResult {
+            name: names(*e),
+            outcome: if t.record.escaped { "escaped".into() } else if t.record.dead { "died".into() } else { "survived".into() },
+            xp: t.score.total(),
+            badges: t.badges.clone(),
+        })
+        .collect();
+    if let Some(name) = jason {
+        out.push(MatchResult { name, outcome: "Jason".into(), xp: game.killer_score.total(), badges: game.killer_badges.clone() });
+    }
+    out
 }
 
 /// On the server: the lobby is open (nothing simulates: [`crate::net::simulating`]).
@@ -132,8 +166,9 @@ pub(crate) fn protocol(app: &mut App) {
 }
 
 /// The server's lobby: `dedicated`, the server's own player isn't in it.
-pub(crate) fn server(app: &mut App, dedicated: bool, name: String) {
-    let mut lobby = NetLobby { open: true, ..default() };
+pub(crate) fn server(app: &mut App, dedicated: bool, name: String, last_match: Option<std::path::PathBuf>) {
+    let last_match = last_match.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let mut lobby = NetLobby { open: true, last_match, ..default() };
     let mut links = Links::default();
     if !dedicated {
         lobby.members.push(Member { id: 0, name, preference: Preference::NoPreference, ready: false });
@@ -488,6 +523,13 @@ fn show_overlay(
     }
     if let Some(t) = l.countdown {
         s.push_str(&format!("\nthe match in {:.0} s", t.ceil().max(0.0)));
+    }
+    if !l.last_match.is_empty() {
+        s.push_str("\nLAST MATCH\n");
+        for r in &l.last_match {
+            let badges = if r.badges.is_empty() { String::new() } else { format!("  ({})", r.badges.join(", ")) };
+            s.push_str(&format!("{}  -  {}  -  {} XP{}\n", r.name, r.outcome, r.xp, badges));
+        }
     }
     if text.0 != s {
         text.0 = s;

@@ -312,6 +312,8 @@ pub struct NetPlugin {
     pub last_jason: Option<u64>,
     /// A server: its players' scenario bots may set their scenes up (`--bot-hooks`: teleports, locks; testing).
     pub bot_hooks: bool,
+    /// A lobby's server: the last match's results (`--last-match`: a rematch's relaunch passes them on).
+    pub last_match: Option<std::path::PathBuf>,
 }
 
 /// A client's scenario bot's scene change (bot.rs [`crate::bot::BotSetup`]), for the server to make.
@@ -451,7 +453,7 @@ impl Plugin for NetPlugin {
                 crate::net_world::server(app);
                 crate::voice::server(app, self.dedicated);
                 if self.lobby {
-                    crate::lobby::server(app, self.dedicated, self.name.clone());
+                    crate::lobby::server(app, self.dedicated, self.name.clone(), self.last_match.clone());
                     if self.bot && !self.dedicated {
                         app.insert_resource(NetBot { prefer: self.prefer, ..default() })
                             .add_systems(Update, (net_bot_lobby.before(crate::lobby::Keys), host_bot_jason.run_if(resource_exists::<crate::jason_player::PlayJason>)));
