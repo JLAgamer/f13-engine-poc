@@ -8,9 +8,9 @@ Base content (asset paths in the player's install; all gameplay values come from
 
 ## Todo
 - [ ] Scenario bots on clients, the rest (regress.sh runhook: locked, barred, raged, abilities, hide, drown, trap,
-      jason pass; block, drop, dodge pass too): door, heal, power and fight need hooks for --health and the cut power
-      and waits that allow for the network (their steps check the client's state right after acting); escapes,
-      police, car grab, placed kill, spectate and passenger untried
+      jason, heal pass; block, drop, dodge pass too): door gets through most of its steps but a close or a climb
+      sometimes finds its way to the spot blocked on the server; power and fight need hooks for the cut power and
+      waits that allow for the network; escapes, police, car grab, placed kill, spectate and passenger untried
 - [ ] The lobby's rest: the match-end lobby as the game's widget (SCMatchEndLobbyWidget with its badges' icons:
       SCStatBadge; the text overlay stands in, the last match's results on it), the lobby's ready bar
       (LobbyReadyButtonMaterial) and its rows' character select, ping and mute buttons, the counselors' character

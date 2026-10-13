@@ -317,6 +317,10 @@ pub enum BotSetup {
     Rage,
     /// Her `--give` items.
     Give(Vec<String>),
+    /// Her `--health`.
+    Health(f32),
+    /// No Jason (the bots that test her alone).
+    NoJason,
 }
 
 static SETUP: std::sync::Mutex<Vec<BotSetup>> = std::sync::Mutex::new(Vec::new());
@@ -325,14 +329,17 @@ static SETUP: std::sync::Mutex<Vec<BotSetup>> = std::sync::Mutex::new(Vec::new()
 pub(crate) static ON_CLIENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub(crate) fn setup(s: BotSetup) {
-    // (A bot that keeps putting her at the same place sends it once: each one re-settles her on the server.)
-    static LAST_PLACE: std::sync::Mutex<Option<[f32; 3]>> = std::sync::Mutex::new(None);
+    // (A bot that keeps putting her at the same place sends it once: each one re-settles her on the server. Once it
+    // has stopped for a second, the same place goes again: she may have moved since.)
+    static LAST_PLACE: std::sync::Mutex<Option<([f32; 3], std::time::Instant)>> = std::sync::Mutex::new(None);
     if let BotSetup::Place(at) = &s {
         if let Ok(mut last) = LAST_PLACE.lock() {
-            if last.is_some_and(|l| Vec3::from_array(l).distance(Vec3::from_array(*at)) < 0.02) {
+            let now = std::time::Instant::now();
+            let same = last.is_some_and(|(l, t)| Vec3::from_array(l).distance(Vec3::from_array(*at)) < 0.02 && now - t < std::time::Duration::from_secs(1));
+            *last = Some((*at, now));
+            if same {
                 return;
             }
-            *last = Some(*at);
         }
     }
     if let Ok(mut q) = SETUP.lock() {
@@ -1016,8 +1023,10 @@ fn run_bot(
             // after the press (a loading hitch at speed can carry the timer past 2.5 s in the frame after it; a door's
             // open state flips as its move ends, ~1.8 s on).
             // Nor in the frame the tap is let go: the bot runs before the interaction reads the release, and after a
-            // hitch that one frame can carry the 2 s.
-            if bot.timer < 2.5 || bot.timer - bot.pressed_at < 2.0 || !moving.is_empty() || keys.just_released(KeyCode::KeyE) {
+            // hitch that one frame can carry the 2 s. On a client her moves aren't seen (the server plays them): 2 s more,
+            // for the server's frames and the state's way back.
+            let wait = if ON_CLIENT.load(std::sync::atomic::Ordering::Relaxed) { 2.0 } else { 0.0 };
+            if bot.timer < 2.5 + wait || bot.timer - bot.pressed_at < 2.0 + wait || !moving.is_empty() || keys.just_released(KeyCode::KeyE) {
                 return;
             }
             keys.release(KeyCode::ShiftLeft);

@@ -145,7 +145,7 @@ pub(crate) struct PlayerConfig {
     pub(crate) camera: Option<(Vec3, Vec3)>,
     demo: bool,
     fear: f32,
-    health: Option<f32>,
+    pub(crate) health: Option<f32>,
 }
 
 impl Plugin for PlayerPlugin {

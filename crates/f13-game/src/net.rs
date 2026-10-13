@@ -352,6 +352,8 @@ fn bot_hooks(
     mut jasons: Query<(&mut crate::jason::Jason, Option<&mut crate::senses::Knowledge>)>,
     time: Res<Time>,
     (own, mut starts, mut dropped): (Query<(Entity, &Transform), (With<LocalPlayer>, With<Player>, Without<PlayedBy>)>, ResMut<FreeStarts>, Local<bool>),
+    mut players: Query<(&PlayedBy, &mut Player)>,
+    jason_entities: Query<Entity, With<crate::jason::Jason>>,
 ) {
     for (link, mut r) in &mut links {
         for BotSetupMsg(change) in r.receive() {
@@ -396,6 +398,16 @@ fn bot_hooks(
                 crate::bot::BotSetup::Give(classes) => {
                     if let Some((e, _, _)) = counselors.iter().find(|(_, by, _)| by.0 == link) {
                         commands.entity(e).insert(crate::items::GiveItems(classes));
+                    }
+                }
+                crate::bot::BotSetup::Health(h) => {
+                    if let Some((_, mut p)) = players.iter_mut().find(|(by, _)| by.0 == link) {
+                        p.counselor.health = h.clamp(1.0, p.counselor.health.max(100.0));
+                    }
+                }
+                crate::bot::BotSetup::NoJason => {
+                    for e in &jason_entities {
+                        commands.entity(e).despawn();
                     }
                 }
                 crate::bot::BotSetup::Rage => {
@@ -458,6 +470,15 @@ impl Plugin for NetPlugin {
                 protocol(app);
                 if self.bot_hooks {
                     app.add_systems(Update, bot_hooks);
+                    // A test's server draws nothing (it plays no one, and the client's bot shares its GPU: two worlds
+                    // drawn at once lost the device).
+                    app.add_systems(Update, |mut cameras: Query<&mut Camera, With<Camera3d>>| {
+                        for mut c in &mut cameras {
+                            if c.is_active {
+                                c.is_active = false;
+                            }
+                        }
+                    });
                 }
                 if self.lobby {
                     app.insert_resource(Rematch).insert_resource(crate::lobby::LastJason(self.last_jason));
@@ -508,6 +529,13 @@ impl Plugin for NetPlugin {
                         if let Some(g) = give {
                             crate::bot::setup(crate::bot::BotSetup::Give(g.0.clone()));
                             commands.remove_resource::<crate::items::Give>();
+                        }
+                    })
+                    // And its --health (her health is the server's).
+                    .add_systems(Update, |config: Option<Res<crate::player::PlayerConfig>>, mut sent: Local<bool>| {
+                        if let (Some(h), false) = (config.and_then(|c| c.health), *sent) {
+                            crate::bot::setup(crate::bot::BotSetup::Health(h));
+                            *sent = true;
                         }
                     })
                     .add_systems(Update, connect)

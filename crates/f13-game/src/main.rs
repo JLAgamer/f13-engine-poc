@@ -649,6 +649,10 @@ fn main() {
         // The counselor bots test her alone; --bot-jason tests him.
         let bot_alone = args.bot_escape || args.bot_heal || args.bot_drop || args.bot_dodge || args.bot_door || args.bot_trap;
         // A client gets Jason from the server.
+        if bot_alone {
+            // On a client, the server's Jason goes too (a game of its own ignores it).
+            bot::setup(bot::BotSetup::NoJason);
+        }
         if !args.no_jason && !bot_alone {
             app.add_plugins(jason::JasonPlugin { delay: args.jason_delay, kill: args.kill });
         }

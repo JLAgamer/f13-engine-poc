@@ -92,10 +92,11 @@ pub struct NetVehicle {
     pub repairs: Vec<bool>,
 }
 
-/// A cabinet: its drawers' places (local transforms) and whether each is open.
+/// A cabinet: its drawers' places (local transforms), whether each is open, and whether its Open section is done (her
+/// item can be taken: a client's bot holds E then).
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct NetCabinet {
-    pub drawers: Vec<([f32; 7], bool)>,
+    pub drawers: Vec<([f32; 7], bool, bool)>,
 }
 
 /// What the simulation spawned, for a client to show.
@@ -691,7 +692,7 @@ fn hear(mut commands: Commands, actors: Res<Actors>, twins: Res<crate::net::Twin
 fn send_cabinets(cabinets: Query<(&ProxyLink, &crate::cabinets::Cabinet)>, drawers: Query<&Transform>, mut proxies: Query<&mut NetCabinet>) {
     for (link, c) in &cabinets {
         let Ok(n) = proxies.get_mut(link.0) else { continue };
-        let d = c.slots.iter().map(|s| (s.drawer.and_then(|d| drawers.get(d).ok()).map_or([0.0; 7], xf_array), s.open)).collect();
+        let d = c.slots.iter().map(|s| (s.drawer.and_then(|d| drawers.get(d).ok()).map_or([0.0; 7], xf_array), s.open, s.ready)).collect();
         set(n, NetCabinet { drawers: d });
     }
 }
@@ -740,8 +741,9 @@ fn apply_cabinets(actors: Res<Actors>, proxies: Query<(&ProxyOf, &NetCabinet), C
     for (of, n) in &proxies {
         let Some(&e) = actors.0.get(&of.0) else { continue };
         let Ok(mut c) = cabinets.get_mut(e) else { continue };
-        for (slot, (xf, open)) in c.slots.iter_mut().zip(&n.drawers) {
+        for (slot, (xf, open, ready)) in c.slots.iter_mut().zip(&n.drawers) {
             slot.open = *open;
+            slot.ready = *ready;
             if let Some(mut t) = slot.drawer.and_then(|d| transforms.get_mut(d).ok()) {
                 *t = array_xf(xf);
             }
