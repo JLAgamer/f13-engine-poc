@@ -360,6 +360,7 @@ fn bot(
         // Let the map load (real time), then she dies.
         0 if real.elapsed_secs() > 8.0 && b.t > 3.0 => {
             p.counselor.health = 0.0;
+            crate::bot::setup(crate::bot::BotSetup::Die);
             info!("bot: spectate: she dies");
             next(&mut b);
         }

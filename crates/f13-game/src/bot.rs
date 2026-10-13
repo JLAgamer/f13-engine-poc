@@ -101,7 +101,14 @@ pub(crate) fn seat_passenger(
 ) {
     let Ok(d) = driver.single() else { return };
     let Some((e, seated, escaped)) = others.iter().next() else { return };
-    if seated.is_none() && !escaped && d.seat_move.is_none() {
+    // (On a client the server seats her: her seat comes back with her state.)
+    if ON_CLIENT.load(std::sync::atomic::Ordering::Relaxed) {
+        if seated.is_none() && !escaped && !bot.jason_shots.contains(&"seat asked") {
+            bot.jason_shots.push("seat asked");
+            info!("bot: the other counselor gets in as the passenger");
+            setup(BotSetup::SeatPassenger);
+        }
+    } else if seated.is_none() && !escaped && d.seat_move.is_none() {
         let Ok(v) = vehicles.get(d.vehicle) else { return };
         let Some(seat) = v.passengers.first() else {
             error!("bot: the car has no passenger seat");
@@ -333,6 +340,10 @@ pub enum BotSetup {
     PoliceSoon,
     /// Jason stands here.
     PlaceJason([f32; 3]),
+    /// She dies (her health to 0).
+    Die,
+    /// Another counselor gets into her car's first passenger seat.
+    SeatPassenger,
 }
 
 static SETUP: std::sync::Mutex<Vec<BotSetup>> = std::sync::Mutex::new(Vec::new());
@@ -386,12 +397,13 @@ fn run_bot(
     carried: Query<&Item, With<Carried>>,
     cabinets: Query<(&Cabinet, &GlobalTransform)>,
     mut vehicles: Query<(Entity, &Vehicle, &GlobalTransform, &mut Transform), Without<Player>>,
-    (zones, mut doors, windows, mut barricades, mut jasons): (
+    (zones, mut doors, windows, mut barricades, mut jasons, jason_takes): (
         Query<(&EscapeZone, &GlobalTransform)>,
         Query<(Entity, &mut crate::doors::Door, &GlobalTransform)>,
         Query<(Entity, &crate::windows::Window, &GlobalTransform)>,
         Query<&mut crate::windows::Barricade>,
         Query<(&mut crate::jason::Jason, &Transform), (Without<Player>, Without<Vehicle>)>,
+        Query<&crate::character::PlayAction, With<crate::jason::Jason>>,
     ),
     (escaped, spots, mut knowledge, mut game, traps): (
         Option<Single<&Escaped, With<crate::controls::LocalPlayer>>>,
@@ -1610,10 +1622,16 @@ fn run_bot(
                         setup(BotSetup::Heard(pxf.translation.to_array()));
                     }
                 }
-                let placed = bot.fixtures[0].and_then(|e| placed_kills.get(e).ok()).map(|(_, k)| k.takes().2);
-                if matches!(j.state, crate::jason::JasonState::Killing { .. }) && placed == Some(j.kill_move.2) && !bot.jason_shots.contains(&"placed") {
+                let placed = bot.fixtures[0].and_then(|e| placed_kills.get(e).ok()).map(|(_, k)| k.takes());
+                // (On a client: his take is the placed kill's.)
+                let in_it = if ON_CLIENT.load(std::sync::atomic::Ordering::Relaxed) {
+                    placed.is_some_and(|t| jason_takes.iter().any(|a| a.0 == t.0))
+                } else {
+                    matches!(j.state, crate::jason::JasonState::Killing { .. }) && placed.map(|t| t.2) == Some(j.kill_move.2)
+                };
+                if in_it && !bot.jason_shots.contains(&"placed") {
                     bot.jason_shots.push("placed");
-                    info!("bot: Jason is killing her with the placed kill ({})", j.kill_move.2);
+                    info!("bot: Jason is killing her with the placed kill ({})", placed.map_or(j.kill_move.2, |t| t.2));
                 }
             }
             if bot.goal == Goal::Abilities {

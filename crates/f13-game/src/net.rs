@@ -397,6 +397,7 @@ fn bot_hooks(
     (drivers, mut cars): (Query<(&PlayedBy, &crate::vehicle::Driving)>, Query<&mut Transform, (With<crate::props::Vehicle>, Without<PlayedBy>, Without<Player>)>),
     (mut phone_boxes, mut phones, mut game): (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<ResMut<crate::match_flow::GameMatch>>),
     mut jason_xfs: Query<&mut Transform, (With<crate::jason::Jason>, Without<PlayedBy>, Without<Player>, Without<crate::props::Vehicle>)>,
+    (others, vehicles): (Query<(Entity, Has<crate::vehicle::Driving>, Has<crate::vehicle::Escaped>), (With<Player>, Without<PlayedBy>)>, Query<&crate::props::Vehicle>),
 ) {
     for (link, mut r) in &mut links {
         for BotSetupMsg(change) in r.receive() {
@@ -484,6 +485,18 @@ fn bot_hooks(
                 crate::bot::BotSetup::NoJason => {
                     for e in &jason_entities {
                         commands.entity(e).despawn();
+                    }
+                }
+                crate::bot::BotSetup::SeatPassenger => {
+                    let car = drivers.iter().find(|(by, _)| by.0 == link).map(|(_, d)| d.vehicle);
+                    let seat = car.and_then(|c| vehicles.get(c).ok()).and_then(|v| v.passengers.first().map(|s| s.right));
+                    if let (Some(car), Some(right), Some((e, _, _))) = (car, seat, others.iter().find(|(_, seated, escaped)| !seated && !escaped)) {
+                        commands.entity(e).insert((crate::vehicle::Driving::ride(car, 0, right), PlayAction("f_normal_stand_car_enter_right".into())));
+                    }
+                }
+                crate::bot::BotSetup::Die => {
+                    if let Some((_, mut p)) = players.iter_mut().find(|(by, _)| by.0 == link) {
+                        p.counselor.health = 0.0;
                     }
                 }
                 crate::bot::BotSetup::Rage => {
