@@ -11,9 +11,10 @@ Base content (asset paths in the player's install; all gameplay values come from
       jason pass; block, drop, dodge pass too): door, heal, power and fight need hooks for --health and the cut power
       and waits that allow for the network (their steps check the client's state right after acting); escapes,
       police, car grab, placed kill, spectate and passenger untried
-- [ ] The lobby's rest: its screens as the game's widgets (the lobby and the match-end lobby, SCMatchEndLobbyWidget
-      with its badges' icons: SCStatBadge; the text overlay stands in, the last match's results on it), the
-      counselors' character picks (one counselor exported so far), a full 8-player run
+- [ ] The lobby's rest: the match-end lobby as the game's widget (SCMatchEndLobbyWidget with its badges' icons:
+      SCStatBadge; the text overlay stands in, the last match's results on it), the lobby's ready bar
+      (LobbyReadyButtonMaterial) and its rows' character select, ping and mute buttons, the counselors' character
+      picks (one counselor exported so far), a full 8-player run
 - [ ] The Tommy Jarvis timer, Tommy Jarvis, and Jason dying
 - [ ] Voice chat: VoIPAudioComponent's real attenuation (UE's defaults stand in); the settings and mutes in the game's
       own menus (the lobby's keys stand in: P push-to-talk, Shift + n mute)

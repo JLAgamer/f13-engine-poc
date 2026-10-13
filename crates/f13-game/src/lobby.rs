@@ -486,7 +486,7 @@ fn spawn_overlay(mut commands: Commands) {
         Text::new(""),
         TextFont { font_size: FontSize::Px(22.0), ..default() },
         TextLayout::justify(Justify::Center),
-        Node { position_type: PositionType::Absolute, top: Val::Percent(20.0), left: Val::Percent(30.0), width: Val::Percent(40.0), ..default() },
+        Node { position_type: PositionType::Absolute, bottom: Val::Percent(4.0), left: Val::Percent(30.0), width: Val::Percent(40.0), ..default() },
         BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
         GlobalZIndex(20),
         Visibility::Hidden,
@@ -509,12 +509,10 @@ fn show_overlay(
         return;
     };
     let mine = if client.is_some() { me.map(|m| m.id) } else { Some(0) };
-    let mut s = String::from("LOBBY\n\n");
-    for (i, m) in l.members.iter().enumerate() {
-        let you = if Some(m.id) == mine { "  (you)" } else { "" };
-        s.push_str(&format!("{}. {}  -  {}  -  {}{}\n", i + 1, m.name, m.preference.label(), if m.ready { "READY" } else { "not ready" }, you));
-    }
-    s.push_str("\n1 counselor   2 no preference   3 Jason   Enter ready\n");
+    // (The players are on the lobby's own screen: ui.rs LobbyWidget; its keys and the last match here.)
+    let mut s = String::new();
+    let _ = mine;
+    s.push_str("1 counselor   2 no preference   3 Jason   Enter ready\n");
     let open = open_mic.is_some();
     s.push_str(&format!("P push-to-talk (T): {}   Shift+n mute player n\n", if open { "off" } else { "on" }));
     let muted: Vec<&str> = mutes.as_ref().map_or_else(Vec::new, |m| m.0.iter().map(String::as_str).collect());

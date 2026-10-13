@@ -795,6 +795,19 @@ switch (rest[0])
         // M_UI_JasonHud_01's own texture samples (its Smoke and Grime layers).
         ExportAsset("/Game/UI/Materials/UI_Smoke");
         ExportAsset("/Game/UI/Materials/Grime");
+        // The map's definition (SCMapDefinition): the lobby's MapNameText (DisplayName) and CurrentMapImage
+        // (LobbyThumbnailImages' first) for the map played (ui/map.json).
+        {
+            var def = provider.LoadPackage(ToFile("/Game/Blueprints/MapRegistry/MapDef_CrystalLake_Small")).GetExports().FirstOrDefault(e => e.Name.StartsWith("Default__"));
+            var p = def == null ? null : Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(def))["Properties"];
+            var image = p?["LobbyThumbnailImages"]?[0]?["AssetPathName"]?.ToString().Split('.')[0];
+            if (image != null) ExportAsset(image);
+            File.WriteAllText(Path.Combine(outDir, "ui", "map.json"), new Newtonsoft.Json.Linq.JObject
+            {
+                ["Name"] = p?["DisplayName"]?["LocalizedString"]?.ToString(),
+                ["Image"] = image == null ? null : ToFile(image) + ".png",
+            }.ToString());
+        }
         Console.WriteLine($"ui: {n} widgets, {wx.ClassTextures()} class textures, {wx.Fonts(game!)} fonts");
         break;
     }
@@ -1385,6 +1398,9 @@ static class Mvp
         "/Game/UI/HUD/Minimap/Morph_Area_Bad_Cursor",
         // Hers once she's out (dead or escaped).
         "/Game/UI/HUD/Spectator/SpectatorHUDWidget",
+        // The lobby (its player list's rows: LobbyPlayerListWidget adds one per player).
+        "/Game/UI/Lobby/LobbyWidget",
+        "/Game/UI/Lobby/LobbyPlayerListItem",
         // Its key hints (an ActionMapWidget and a title).
         "/Game/UI/Controls/ActionDisplay",
         // The minimap's icons (the SCMinimapIconComponents' DefaultIcon, and Jason's KillerIcon).

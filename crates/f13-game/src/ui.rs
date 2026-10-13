@@ -350,6 +350,11 @@ pub struct Hud {
     ability_popup: Option<Widget>,
     /// The Crosshairs software cursor (DefaultEngine.ini's CrosshairsCursor: Morph_Area_Cursor), his Morph map's.
     morph_cursor: Option<Widget>,
+    /// The lobby (LobbyWidget) and its player list's rows (LobbyPlayerListItem), with the row's textures and colours.
+    lobby: Option<Widget>,
+    lobby_row: Option<(Widget, HashMap<String, String>, Value)>,
+    /// The map played's definition (ui/map.json: SCMapDefinition's DisplayName and first LobbyThumbnailImages).
+    lobby_map: Value,
     export: PathBuf,
     classes: ClassDb,
     /// Texture name -> PNG (ui/textures.json).
@@ -550,6 +555,22 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         police_objective: Widget::load(dir, "Objective_Police_Widget"),
         ability_popup: Widget::load(dir, "AbilityAvailable"),
         morph_cursor: Widget::load(dir, "Morph_Area_Cursor"),
+        lobby: Widget::load(dir, "LobbyWidget").map(|mut w| {
+            // Shown by things not ported (the party, chat and lag icons, the map choice and the custom match).
+            for name in ["HUDLaggingIconWidget", "SaveGameThreadActiveIcon", "PlayerCardRightWidget", "ChatNotificationOverlayWidget_180", "LobbyPrevMapArrowButtonWidget", "LobbyNextMapArrowButtonWidget", "CustomMatchButton", "CustomServerSettings", "MenuActionBarWidget", "MapFocusHighlight", "MapFocusBorderImage"] {
+                if let Some(x) = w.find_mut(name) {
+                    x.set_visibility(Vis::Collapsed);
+                }
+            }
+            action_keys(&mut w);
+            w
+        }),
+        lobby_row: Widget::load(dir, "LobbyPlayerListItem").map(|w| {
+            let v = std::fs::read_to_string(dir.join("ui/LobbyPlayerListItem.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
+            let textures = v["Textures"].as_object().map(|m| m.iter().filter_map(|(k, f)| Some((k.clone(), f.as_str()?.to_string()))).collect()).unwrap_or_default();
+            (w, textures, v["Defaults"].clone())
+        }),
+        lobby_map: std::fs::read_to_string(dir.join("ui/map.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default(),
         spectator: Widget::load(dir, "SpectatorHUDWidget").map(|mut w| {
             action_keys(&mut w);
             w
@@ -564,7 +585,7 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         names: HashMap::new(),
         map,
         scale: 1.0,
-        anims: ["SCCounselorTimerWidget", "SCBreathWidget", "KillerHUDWidget", "ObjectivesWidget", "KillerAbilityWidget", "AbilityAvailable", "RageWidget", "YouDied", "YouSurvived", "SpectatorHUDWidget"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
+        anims: ["SCCounselorTimerWidget", "SCBreathWidget", "KillerHUDWidget", "ObjectivesWidget", "KillerAbilityWidget", "AbilityAvailable", "RageWidget", "YouDied", "YouSurvived", "SpectatorHUDWidget", "LobbyWidget"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
         ability_icon_colors: {
             let d = std::fs::read_to_string(dir.join("ui/KillerAbilityWidget.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
             ["IconUsableColor", "IconUnusableColor", "IconLockedColor"].map(|k| color(&d["Defaults"][k], [1.0; 4]))
@@ -621,8 +642,12 @@ fn build_hud(
     play: Option<Res<crate::jason_player::PlayJason>>,
     game: Option<Res<crate::match_flow::GameMatch>>,
     spectating: Option<Res<crate::spectate::SpectatorStatus>>,
+    (lobby, me, client, mut playing, time): (Query<&crate::lobby::NetLobby>, Option<Res<crate::lobby::Me>>, Option<Res<crate::net::NetClient>>, ResMut<PlayingAnims>, Res<Time>),
 ) {
     let size = window.size();
+    // The lobby while it's open (LobbyWidget, as the game's lobby map shows it).
+    let open_lobby = lobby.iter().next().filter(|l| l.open && hud.lobby.is_some());
+    let my_id = if client.is_some() { me.as_ref().map(|m| m.id) } else { Some(0) };
     let jason = play.is_some() && hud.killer.is_some();
     // Out of the match (dead or escaped): her spectator HUD instead (the game's HUD swaps to it as she spectates).
     let spectator = !jason && hud.spectator.is_some() && spectating.as_ref().is_some_and(|s| s.out);
@@ -642,6 +667,10 @@ fn build_hud(
     if spectator {
         pocket_key = vec![format!("spectator:{next_mode}")];
     }
+    if let Some(l) = open_lobby {
+        pocket_key = l.members.iter().map(|m| format!("lobby:{}:{}:{}:{:?}", m.id, m.name, m.ready, m.preference)).collect();
+        pocket_key.push(format!("countdown:{:?}", l.countdown.map(|t| t.ceil() as i32)));
+    }
     // His score lines on his HUD, hers on hers.
     let score_lines = |g: &crate::match_flow::GameMatch| if jason { g.killer_score_lines().to_vec() } else { g.score_lines().to_vec() };
     let scores = game.as_ref().map_or(vec![], |g| score_lines(g));
@@ -655,7 +684,16 @@ fn build_hud(
     // The window in design units: scaled to fit 1920×1080, the rest added along the longer side.
     let scale = (size.x / DESIGN.x).min(size.y / DESIGN.y);
     let virt = size / scale;
-    let mut tree = if jason {
+    let mut tree = if let Some(l) = open_lobby {
+        // Its contents fade in (AnimIn: LobbyContentsBorder's and LobbyDetailsBorder's content alpha, 0 as built).
+        // PLACEHOLDER: played as it opens (the blueprint's caller not read).
+        if !hud.built.as_ref().is_some_and(|b| b.1.first().is_some_and(|k| k.starts_with("lobby:"))) {
+            playing.play("LobbyWidget", "AnimIn", time.elapsed_secs(), false);
+        }
+        let mut t = hud.lobby.clone().unwrap_or_else(|| hud.hud.clone());
+        fill_lobby(&hud, &mut t, l, my_id);
+        t
+    } else if jason {
         hud.killer.clone().unwrap_or_else(|| hud.hud.clone())
     } else if spectator {
         hud.spectator.clone().unwrap_or_else(|| hud.hud.clone())
@@ -667,10 +705,12 @@ fn build_hud(
             t.props["Text"] = json!({ "LocalizedString": next_mode });
         }
     }
-    if !jason && !spectator {
+    if !jason && !spectator && open_lobby.is_none() {
         fill_inventory(&hud, &mut tree, &pockets, selected);
     }
-    fill_xp_lines(&hud, &mut tree, &scores);
+    if open_lobby.is_none() {
+        fill_xp_lines(&hud, &mut tree, &scores);
+    }
     if police {
         if let Some(w) = tree.find_mut("PoliceTimer") {
             w.set_visibility(Vis::Visible);
@@ -700,15 +740,15 @@ fn build_hud(
     let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names };
     let full = Rect { x: 0.0, y: 0.0, w: virt.x, h: virt.y };
     let laid = tree.layout(full);
-    b.spawn(&laid, root, full, if jason { "KillerHUDWidget" } else if spectator { "SpectatorHUDWidget" } else { "CounselorHUDWidget" });
-    // Her breath meter and interaction dial are hers (Jason's HUD has neither).
-    if let Some(breath) = hud.breath.as_ref().filter(|_| !jason) {
+    b.spawn(&laid, root, full, if open_lobby.is_some() { "LobbyWidget" } else if jason { "KillerHUDWidget" } else if spectator { "SpectatorHUDWidget" } else { "CounselorHUDWidget" });
+    // Her breath meter and interaction dial are hers (Jason's HUD has neither; nor has the lobby).
+    if let Some(breath) = hud.breath.as_ref().filter(|_| !jason && open_lobby.is_none()) {
         let laid = breath.layout(full);
         let e = b.spawn(&laid, root, full, "SCBreathWidget");
         b.commands.entity(e).insert(Visibility::Hidden);
         b.names.insert("SCBreathWidget".into(), e);
     }
-    if let Some(dial) = hud.dial.as_ref().filter(|_| !jason) {
+    if let Some(dial) = hud.dial.as_ref().filter(|_| !jason && open_lobby.is_none()) {
         let laid = dial.layout(full);
         let e = b.spawn(&laid, root, full, "SCInteractMinigame_Widget");
         b.commands.entity(e).insert(Visibility::Hidden);
@@ -723,6 +763,71 @@ fn build_hud(
     hud.root = Some(root);
     hud.scale = scale;
     hud.built = Some((size, pocket_key, jason, (police, game_timer, spectator), lines));
+}
+
+/// The lobby's player list: a LobbyPlayerListItem per member in LobbyPlayerListWidget's PlayerVerticalBox (its
+/// AddPlayerWidget), each its name (PlayerName), its tint (GetPlayerTint: LocalPlayerColor for this player, else
+/// RemoteUnreadyPlayerColor to RemoteReadyPlayerColor by bIsReady), its ready box (Get_ReadyBoxImage_Brush:
+/// Img_Lobby_ReadyBox_Checked_01 or _Empty_01) and the host's arrow; and the travel countdown (CountdownHorizontalBox,
+/// CountdownText). PLACEHOLDERS: the character select buttons show the preference (Jason's or the counselor's), the
+/// ping and the mute button aren't ported.
+fn fill_lobby(hud: &Hud, tree: &mut Widget, lobby: &crate::lobby::NetLobby, me: Option<u64>) {
+    if let Some(cd) = tree.find_mut("CountdownHorizontalBox") {
+        cd.set_visibility(if lobby.countdown.is_some() { Vis::Visible } else { Vis::Hidden });
+    }
+    if let (Some(t), Some(text)) = (lobby.countdown, tree.find_mut("CountdownText")) {
+        text.props["Text"] = json!({ "LocalizedString": format!("{}", t.ceil().max(0.0) as i32) });
+    }
+    // The map (USCLobbyWidget's map display: its definition's DisplayName and LobbyThumbnailImages).
+    if let (Some(name), Some(text)) = (hud.lobby_map["Name"].as_str(), tree.find_mut("MapNameText")) {
+        text.props["Text"] = json!({ "LocalizedString": name });
+    }
+    if let (Some(file), Some(image)) = (hud.lobby_map["Image"].as_str(), tree.find_mut("CurrentMapImage")) {
+        image.props["Brush"]["ResourceObject"] = json!({ "File": file });
+    }
+    let Some((row, textures, defaults)) = &hud.lobby_row else { return };
+    let Some(list) = tree.find_mut("PlayerVerticalBox") else { return };
+    list.children.clear();
+    let tint = |k: &str| color(&defaults[k], [1.0; 4]);
+    for (i, m) in lobby.members.iter().enumerate() {
+        let mut w = row.clone();
+        w.name = format!("LobbyRow{i}");
+        w.slot_kind = "VerticalBoxSlot".into();
+        w.slot = json!({});
+        let c = if Some(m.id) == me {
+            tint("LocalPlayerColor")
+        } else if m.ready {
+            tint("RemoteReadyPlayerColor")
+        } else {
+            tint("RemoteUnreadyPlayerColor")
+        };
+        if let Some(name) = w.find_mut("PlayerName") {
+            name.props["Text"] = json!({ "LocalizedString": m.name });
+            name.props["ColorAndOpacity"] = json!({ "SpecifiedColor": { "R": c[0], "G": c[1], "B": c[2], "A": c[3] } });
+        }
+        let ready = if m.ready { "Img_Lobby_ReadyBox_Checked_01" } else { "Img_Lobby_ReadyBox_Empty_01" };
+        if let (Some(file), Some(image)) = (textures.get(ready), w.find_mut("ReadyBoxImage")) {
+            image.props["Brush"]["ResourceObject"] = json!({ "File": file });
+            image.set_visibility(Vis::Visible);
+        }
+        if let Some(h) = w.find_mut("HostArrowImage") {
+            h.set_visibility(if m.id == 0 { Vis::Visible } else { Vis::Hidden });
+        }
+        for (name, shown) in [
+            ("ConnectingSpinner", false),
+            ("PlayerSpeakIconMuteButton", false),
+            ("PlayerPingDisplayWidget_274", false),
+            ("KillerPickerButtonWidget_0", false),
+            ("SelectionBar", Some(m.id) == me),
+            ("JasonButton", m.preference == crate::lobby::Preference::Killer),
+            ("CounselorButton", m.preference == crate::lobby::Preference::Counselor),
+        ] {
+            if let Some(x) = w.find_mut(name) {
+                x.set_visibility(if shown { Vis::Visible } else { Vis::Hidden });
+            }
+        }
+        list.children.push(w);
+    }
 }
 
 /// Puts an item widget in the inventory's Grid for each pocket item (SCInventory_Widget does it as items are
@@ -862,33 +967,42 @@ fn widget_colors(
 #[derive(Component)]
 struct BaseAlpha(f32);
 
-/// Each Border's content opacity on what's in it: all of it when it changes, and anything new in it.
+/// Each Border's content opacity on what's in it: all of it when it changes, and anything new in it. Nested Borders
+/// multiply (each tints its content: SBorder's ContentScale/ColorAndOpacity), so what's in several takes all of theirs.
 fn content_alpha(
     mut commands: Commands,
     borders: Query<(Entity, Ref<ContentAlpha>)>,
+    alphas: Query<&ContentAlpha>,
     children: Query<&Children>,
+    parents: Query<&ChildOf>,
     mut colors: Query<(Option<&mut ImageNode>, Option<&mut TextColor>, Option<&BaseAlpha>)>,
+    mut bases: Local<HashMap<Entity, f32>>,
 ) {
+    // The bases taken this pass (their BaseAlpha inserts are deferred: a second Border over the same widget would
+    // otherwise take the alpha the first just set as its base).
+    bases.clear();
     for (border, alpha) in &borders {
         let changed = alpha.is_changed();
         for e in children.iter_descendants(border) {
             let Ok((image, text, base)) = colors.get_mut(e) else { continue };
-            if !changed && base.is_some() {
+            if !changed && (base.is_some() || bases.contains_key(&e)) {
                 continue;
             }
             let Some(current) = image.as_ref().map(|i| i.color.alpha()).or(text.as_ref().map(|t| t.0.alpha())) else { continue };
-            let base = match base {
-                Some(b) => b.0,
+            let base = match base.map(|b| b.0).or(bases.get(&e).copied()) {
+                Some(b) => b,
                 None => {
                     commands.entity(e).insert(BaseAlpha(current));
+                    bases.insert(e, current);
                     current
                 }
             };
+            let a: f32 = parents.iter_ancestors(e).filter_map(|p| alphas.get(p).ok()).map(|a| a.0).product();
             if let Some(mut i) = image {
-                i.color.set_alpha(base * alpha.0);
+                i.color.set_alpha(base * a);
             }
             if let Some(mut t) = text {
-                t.0.set_alpha(base * alpha.0);
+                t.0.set_alpha(base * a);
             }
         }
     }
@@ -1336,6 +1450,18 @@ impl Builder<'_, '_, '_> {
                         border: BorderRect { min_inset: Vec2::new(m[0] * sx, m[1] * sy), max_inset: Vec2::new(m[2] * sx, m[3] * sy) },
                         ..default()
                     });
+                }
+                // A tiled brush repeats at its ImageSize (in the HUD's scale; inside a scale box, its too) along its
+                // axes and stretches along the others (Img_Lobby_Frame_01, 1742 wide, shows its left half in 874).
+                // PLACEHOLDER: the texture taken as ImageSize's size.
+                let (tx, ty) = match b["Tiling"].as_str().unwrap_or("").rsplit(':').next().unwrap_or("") {
+                    "Horizontal" => (true, false),
+                    "Vertical" => (false, true),
+                    "Both" => (true, true),
+                    _ => (false, false),
+                };
+                if tx || ty {
+                    image.image_mode = NodeImageMode::Tiled { tile_x: tx, tile_y: ty, stretch_value: self.scale * self.text_scale };
                 }
                 self.commands.entity(e).insert(image);
             }
