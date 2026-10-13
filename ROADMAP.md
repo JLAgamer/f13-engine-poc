@@ -41,11 +41,6 @@ Base content (asset paths in the player's install; all gameplay values come from
 - [ ] The computer Jason and knife pickups: he takes them in passing (no pick-up move) and doesn't go looking for them
 - [ ] Sound: the impact sound when a thrown knife hits a character
 - [ ] Sound: the executions' missing sounds (compare each kill against its montage's sound notifies)
-- [ ] Network (LAN test, 2026-10-12): movement is jittery
-- [ ] Network: the counselor's camera while grabbed is too zoomed in
-- [ ] Network: no struggle bar for a grabbed counselor
-- [ ] Network: a thrown knife spins in place
-- [ ] Network: counselors' item pick-ups work only sometimes
 - [ ] More content, one at a time: maps (with their boat and other escapes), Jasons, counselors, perks, skins,
       emotes, a main menu
 
