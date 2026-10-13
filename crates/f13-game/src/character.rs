@@ -506,6 +506,21 @@ impl Rig {
         let e = commands.spawn((WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(file))), ChildOf(rig))).observe(ready).id();
         self.outfit.push(e);
     }
+
+    /// Puts another mesh in a master-pose part's place (`old`, its PartOf `name`), with its material map.
+    pub(crate) fn swap_part(&mut self, commands: &mut Commands, assets: &AssetServer, rig: Entity, old: Entity, name: &str, file: String, map: &HashMap<String, String>) {
+        let ready = |ev: On<WorldInstanceReady>, mut commands: Commands| {
+            commands.entity(ev.entity).insert(SceneReady);
+        };
+        commands.entity(old).despawn();
+        self.outfit.retain(|&e| e != old);
+        self.outfit_bound.retain(|&e| e != old);
+        let mut e = commands.spawn((WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(file))), ChildOf(rig), PartOf(name.to_string())));
+        if let Some(o) = crate::materials::MaterialOverrides::new(map) {
+            e.insert(o);
+        }
+        self.outfit.push(e.observe(ready).id());
+    }
 }
 
 /// A full-body animation a character plays now (hit reactions, grabs, kills, death), whatever its movement state.

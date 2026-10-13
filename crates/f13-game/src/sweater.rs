@@ -8,7 +8,10 @@
 //!   grabbed, in her stance 3 or 5, in a special move or a context kill, and a killer within AbilityRange (3D) not in
 //!   a context kill or morphing; Activate's area (0x1403a4a40) then calls the killer's FUN_14040b3c0 for each in range
 //!   (2D): his PamelasSweaterStun (10 s, its "Resist" minigame) and the flag at 0x1291 (the kill's condition).
-//! PLACEHOLDERS: her sweater outfit (SweaterOutfit, OnRep_WearingSweater) isn't shown; her SweaterStunnedJasonBadge.
+//! - wearing it (bWearingSweater, OnRep_WearingSweater 0x1403c6780): her outfit's mesh becomes its SweaterOutfitMesh
+//!   (DeferredLoadOutfit loads it as SweaterOutfit) with her slots' materials on it (FUN_1403d0660); nothing takes it
+//!   off. Every peer dresses her from her special items (replicated).
+//! PLACEHOLDERS: her SweaterStunnedJasonBadge.
 
 use bevy::prelude::*;
 
@@ -18,7 +21,7 @@ pub struct SweaterPlugin;
 
 impl Plugin for SweaterPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (equip, use_sweater).chain().run_if(crate::net::simulating));
+        app.add_systems(Update, (equip, use_sweater).chain().run_if(crate::net::simulating)).add_systems(Update, dress);
     }
 }
 
@@ -40,6 +43,37 @@ fn equip(mut commands: Commands, players: Query<(Entity, &crate::interact::Inven
             info!("sweater: {e} put Pamela's sweater on");
             commands.entity(e).insert(Sweater { used: false });
         }
+    }
+}
+
+/// Her rig wears the sweater outfit.
+#[derive(Component)]
+struct SweaterOn;
+
+/// Her outfit with the sweater on (OnRep_WearingSweater): the Outfit part swapped for her outfit's sweater mesh.
+#[allow(clippy::type_complexity)]
+fn dress(
+    mut commands: Commands,
+    assets: Res<AssetServer>,
+    players: Query<(Entity, &crate::interact::Inventory), With<Player>>,
+    items: Query<&crate::props::Item>,
+    mut rigs: Query<(Entity, &ChildOf, &mut crate::character::Rig, &Children), Without<SweaterOn>>,
+    parts: Query<&crate::character::PartOf>,
+) {
+    for (pe, inv) in &players {
+        if !inv.special.iter().any(|&i| items.get(i).is_ok_and(|it| SWEATER_CLASSES.contains(&it.class.as_str()))) {
+            continue;
+        }
+        let Some((re, _, mut rig, children)) = rigs.iter_mut().find(|(_, c, r, _)| c.parent() == pe && r.model == crate::character::Model::Counselor) else { continue };
+        let Some(visual) = rig.visual.clone() else { continue };
+        let Some(old) = children.iter().find(|&c| parts.get(c).is_ok_and(|p| p.0 == "Outfit")) else { continue };
+        commands.entity(re).insert(SweaterOn);
+        let Some((file, map)) = visual.sweater_outfit() else {
+            info!("sweater: {pe}'s outfit has no sweater mesh");
+            continue;
+        };
+        info!("sweater: {pe} wears it ({file})");
+        rig.swap_part(&mut commands, &assets, re, old, "Outfit", file, &map);
     }
 }
 

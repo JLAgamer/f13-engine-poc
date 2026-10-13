@@ -136,12 +136,18 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         public string? SkinMask;
         /// Each ClothingSlot: the mesh's own material at SlotIndex, and its MaterialOptions' material instances.
         public List<OutfitSlot> Slots = new();
+        /// Its SweaterOutfitMesh (Pamela's sweater on: SCCounselorCharacter's SweaterOutfit), if any.
+        public string? Sweater;
     }
 
     public class OutfitSlot
     {
         public string Own = "";
         public List<string> Options = new();
+        /// The sweater mesh's material the slot's option goes on: SCClothingData::GetMaterialIndexFromSlotIndex
+        /// (0x140345b80), the first material whose name contains the slot's SlotMaterialName (ignoring case; none
+        /// when it's empty).
+        public string? SweaterOwn;
     }
 
     /// A physics asset body: its bone's capsules ("Sphyl": Radius, Length between the sphere centres, along the
@@ -978,11 +984,22 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             var o = new Outfit { Class = name, Name = cdo.GetOrDefault<CUE4Parse.UE4.Objects.Core.i18N.FText>("OutfitName")?.Text ?? name, File = MeshFile(mesh) };
             var mask = cdo.GetOrDefault<FSoftObjectPath>("SkinAlphaMask").AssetPathName.Text;
             if (!string.IsNullOrEmpty(mask) && mask != "None") o.SkinMask = Texture(provider.LoadPackageObject<UTexture>(mask));
+            var sweaterPath = cdo.GetOrDefault<FSoftObjectPath>("SweaterOutfitMesh").AssetPathName.Text;
+            USkeletalMesh? sweater = null;
+            if (!string.IsNullOrEmpty(sweaterPath) && sweaterPath != "None")
+            {
+                sweater = provider.LoadPackageObject<USkeletalMesh>(sweaterPath);
+                queue(sweater);
+                o.Sweater = MeshFile(sweater);
+            }
             foreach (var slot in cdo.GetOrDefault<FStructFallback[]>("ClothingSlots", []))
             {
                 var index = slot.GetOrDefault<int>("SlotIndex");
                 if (index >= mesh.SkeletalMaterials.Length || mesh.SkeletalMaterials[index].MaterialInterface?.Load() is not UMaterialInterface own) continue;
                 var s = new OutfitSlot { Own = own.Name };
+                var slotName = slot.GetOrDefault<string>("SlotMaterialName") ?? "";
+                if (sweater != null && slotName.Length > 0)
+                    s.SweaterOwn = sweater.SkeletalMaterials.Select(m => m.MaterialInterface?.Load()?.Name).FirstOrDefault(n => n != null && n.Contains(slotName, StringComparison.OrdinalIgnoreCase));
                 foreach (var option in slot.GetOrDefault<FPackageIndex[]>("MaterialOptions", []))
                 {
                     var mi = option.Load<UBlueprintGeneratedClass>()?.ClassDefaultObject.Load()?.GetOrDefault<FSoftObjectPath>("MaterialInstance").AssetPathName.Text;

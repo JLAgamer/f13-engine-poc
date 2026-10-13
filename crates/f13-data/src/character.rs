@@ -80,6 +80,9 @@ pub struct Outfit {
     pub skin_mask: Option<String>,
     #[serde(default)]
     pub slots: Vec<OutfitSlot>,
+    /// Its SweaterOutfitMesh (Pamela's sweater on), if any.
+    #[serde(default)]
+    pub sweater: Option<String>,
 }
 
 /// A ClothingSlot: the mesh's own material at its SlotIndex and the material instances its MaterialOptions give.
@@ -89,9 +92,33 @@ pub struct OutfitSlot {
     pub own: String,
     #[serde(default)]
     pub options: Vec<String>,
+    /// The sweater mesh's material the slot's option goes on (GetMaterialIndexFromSlotIndex: the first whose name
+    /// contains the slot's SlotMaterialName).
+    #[serde(default)]
+    pub sweater_own: Option<String>,
 }
 
 impl CharacterInfo {
+    /// Her outfit with Pamela's sweater on (SCCounselorCharacter::OnRep_WearingSweater: the SweaterOutfit mesh, then
+    /// FUN_1403d0660 puts each slot's chosen material on it by GetMaterialIndexFromSlotIndex): the mesh and its
+    /// material map. None: her outfit has no sweater mesh.
+    pub fn sweater_outfit(&self) -> Option<(String, HashMap<String, String>)> {
+        let part = self.parts.iter().find(|p| p.name == "Outfit")?;
+        let outfit = self.outfits.iter().find(|o| o.file == part.file)?;
+        let file = outfit.sweater.clone()?;
+        let mut map = HashMap::new();
+        for slot in &outfit.slots {
+            let Some(own) = &slot.sweater_own else { continue };
+            // The chosen option (CurrentOutfit's): the one the outfit part wears; unmapped, the option is the mesh's
+            // own material (the first option's, as the default outfit's).
+            let chosen = part.material_map.get(&slot.own).or(slot.options.first()).unwrap_or(&slot.own);
+            if chosen != own {
+                map.insert(own.clone(), chosen.clone());
+            }
+        }
+        Some((file, map))
+    }
+
     /// Dresses the counselor in another outfit: `spec` its class or name (case-insensitive, a part of it will do),
     /// then optionally `:` and each slot's option index (comma-separated; missing ones are the first). The part
     /// "Outfit" takes its mesh and slot materials, the second skin mask its SkinAlphaMask.
