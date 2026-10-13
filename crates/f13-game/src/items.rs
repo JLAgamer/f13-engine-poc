@@ -574,6 +574,24 @@ impl Trapped {
     pub fn struggle(&self) -> Option<f32> {
         self.out.is_none().then_some(self.wiggle.completion)
     }
+
+    /// On a client: a counselor the server has in a trap (it runs her struggle; `struggle` as [`Trapped::struggle`]).
+    pub fn remote(struggle: Option<f32>) -> Trapped {
+        let mut t = Trapped { trap: Entity::PLACEHOLDER, left: false, enter: "", t: 0.0, wiggle: default(), out: None };
+        t.set_struggle(struggle);
+        t
+    }
+
+    /// On a client: the server's struggle (None once she's stepping out).
+    pub fn set_struggle(&mut self, struggle: Option<f32>) {
+        match struggle {
+            Some(c) => {
+                self.wiggle.completion = c;
+                self.out = None;
+            }
+            None => self.out = Some(self.out.unwrap_or(0.0)),
+        }
+    }
 }
 
 /// SCTrap: TrapDamage (constructor); the bear trap stun's minigame (TotalStunTime 10; PercentPerWiggle and

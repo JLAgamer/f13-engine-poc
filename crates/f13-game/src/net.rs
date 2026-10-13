@@ -180,6 +180,10 @@ pub struct NetCounselor {
     /// Her player's name, and where she looks (her control rotation: yaw, pitch).
     pub name: String,
     pub look: [f32; 2],
+    /// In Jason's hands, and the grab's struggle (its completion).
+    pub held: Option<f32>,
+    /// In a bear trap, and its struggle's completion while she's still in it.
+    pub trapped: Option<Option<f32>>,
 }
 
 /// What Jason's animation reads of his state.
@@ -494,7 +498,8 @@ fn set<T: PartialEq>(mut c: Mut<T>, v: T) {
 #[allow(clippy::type_complexity)]
 fn update_bodies(
     mut bodies: Query<(&mut NetBody, &Transform, &mut NetAction, Option<&PlayAction>, Has<crate::items::Blocking>)>,
-    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>)>,
+    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>))>,
+    struggle: Option<Res<crate::jason::Struggle>>,
     mut jasons: Query<(&mut NetJason, &crate::jason::Jason, Option<&crate::senses::Knowledge>, Option<&crate::kill_camera::KillCam>)>,
     world_ids: Query<&crate::net_world::WorldId>,
     fixed: Res<Time<Fixed>>,
@@ -514,7 +519,7 @@ fn update_bodies(
             a.blocking = blocking;
         }
     }
-    for (n, p, name, controls) in &mut counselors {
+    for (n, p, name, controls, (held, trapped)) in &mut counselors {
         let c = &p.counselor;
         set(n, NetCounselor {
             stance: c.stance as u8,
@@ -531,6 +536,8 @@ fn update_bodies(
             grounded: p.grounded,
             name: name.map_or(String::new(), |n| n.to_string()),
             look: controls.map_or([0.0; 2], |c| [c.yaw, c.pitch]),
+            held: held.then(|| struggle.as_ref().map_or(0.0, |s| s.wiggle.completion)),
+            trapped: trapped.map(|t| t.struggle()),
         });
     }
     for (n, j, know, cam) in &mut jasons {
@@ -767,13 +774,14 @@ fn mirror(
     mut commands: Commands,
     (real, clock): (Res<Time<Real>>, Res<ServerClock>),
     mut bodies: Query<(&NetBody, &NetAction, Option<&NetCounselor>, Option<&NetJason>, &mut Twin, Option<&Snapshots>)>,
-    mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>, (Option<&Name>, Option<&mut Controls>, Has<LocalPlayer>, Option<&mut crate::senses::Knowledge>))>,
+    mut twins: Query<(&mut Transform, Option<&mut Player>, Option<&mut crate::jason::Jason>, Option<&PlayAction>, Has<crate::items::Blocking>, (Option<&Name>, Option<&mut Controls>, Has<LocalPlayer>, Option<&mut crate::senses::Knowledge>), (Has<crate::jason::Held>, Option<&mut crate::items::Trapped>))>,
+    mut struggle: Option<ResMut<crate::jason::Struggle>>,
     actors: Res<crate::net_world::Actors>,
     cams: Query<&crate::kill_camera::KillCam>,
 ) {
     let shown_at = clock.now(&real) - INTERP_DELAY_S;
     for (b, a, nc, nj, mut twin, snaps) in &mut bodies {
-        let Ok((mut xf, player, jason, action, blocking, (name, controls, local, know))) = twins.get_mut(twin.local) else { continue };
+        let Ok((mut xf, player, jason, action, blocking, (name, controls, local, know), (held, trapped))) = twins.get_mut(twin.local) else { continue };
         let (to, yaw) = snaps.and_then(|s| sample(s, shown_at)).unwrap_or((Vec3::from_array(b.pos), b.yaw));
         xf.translation = to;
         xf.rotation = Quat::from_rotation_y(yaw);
@@ -791,6 +799,34 @@ fn mirror(
             p.root_motion = n.root_motion.then_some((Vec2::ZERO, 0.0));
             p.hidden = n.hidden;
             p.grounded = n.grounded;
+            // In his hands or a trap: the grab and trap cameras and the struggle's bar (the server runs the struggle).
+            let mut e = commands.entity(twin.local);
+            match (n.held, held) {
+                (Some(c), _) => {
+                    if !held {
+                        e.insert(crate::jason::Held);
+                    }
+                    if local {
+                        if let Some(s) = struggle.as_deref_mut() {
+                            s.wiggle.completion = c;
+                        }
+                    }
+                }
+                (None, true) => {
+                    e.remove::<crate::jason::Held>();
+                }
+                (None, false) => {}
+            }
+            match (n.trapped, trapped) {
+                (Some(c), Some(mut t)) => t.set_struggle(c),
+                (Some(c), None) => {
+                    e.insert(crate::items::Trapped::remote(c));
+                }
+                (None, Some(_)) => {
+                    e.remove::<crate::items::Trapped>();
+                }
+                (None, None) => {}
+            }
             if !n.name.is_empty() && name.is_none_or(|x| x.as_str() != n.name) {
                 commands.entity(twin.local).insert(Name::new(n.name.clone()));
             }
