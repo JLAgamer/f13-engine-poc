@@ -1483,6 +1483,10 @@ static class Mvp
         // The lobby rows' counselor pick (CharacterSelectButtonWidget: CounselorSelect opens Counselor_Menu).
         "/Game/UI/Controls/Player/CharacterSelectButtonWidget",
         "/Game/UI/Menu/Character/Counselor/Counselor_Menu",
+        // The audio settings (SettingsMenuWidget's audio page: its volumes and push-to-talk).
+        "/Game/UI/Menu/Settings/AudioSettingsMenuWidget",
+        "/Game/UI/Menu/Settings/Controls/SettingsOptionSliderWidget",
+        "/Game/UI/Menu/Settings/Controls/SettingsOptionBooleanWidget",
         // The lobby rows' ping and speaker.
         "/Game/UI/Controls/Player/PlayerPingDisplayWidget",
         "/Game/UI/Controls/Player/PlayerSpeakIconMuteButton",
@@ -1589,6 +1593,9 @@ static class Mvp
         // Counselor_Menu's: a counselor changed (CharacterSelectChange), the pick accepted (UITransitionAll).
         "/Game/UI/Menu/Sounds/CharacterSelectChange.CharacterSelectChange",
         "/Game/UI/Menu/Sounds/UITransitionAll.UITransitionAll",
+        // The settings options': a row focused (MenuButtonFocusCue), a slider's step (MenuSliderStepCue).
+        "/Game/UI/Menu/Sounds/MenuButtonFocusCue.MenuButtonFocusCue",
+        "/Game/UI/Menu/Sounds/MenuSliderStepCue.MenuSliderStepCue",
         "/Game/Sounds/Environment/Lake_AmbienceCue.Lake_AmbienceCue",
         "/Game/Sounds/Environment/Mood_Tone_Ambience.Mood_Tone_Ambience",
         "/Game/Sounds/Environment/SoundWaves/main_campground_ambience_loop.main_campground_ambience_loop",

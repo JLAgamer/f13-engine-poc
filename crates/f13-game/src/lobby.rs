@@ -237,27 +237,18 @@ pub(crate) fn client(app: &mut App) {
 }
 
 pub(crate) fn ui(app: &mut App) {
-    app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay, load_counselor_list, counselor_menu));
+    app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay, load_counselor_list, counselor_menu, crate::audio_settings::audio_menu));
 }
 
-/// The lobby's voice options (PLACEHOLDER keys: the game's are in its audio settings and scoreboard menus): P turns
-/// push-to-talk off and on (SCAudioSettingsSaveGame bUsePushToTalk), Shift + a member's number mutes or unmutes them.
+/// The lobby's voice mutes (PLACEHOLDER keys: the game's are in its scoreboard menu): Shift + a member's number mutes or
+/// unmutes them. (Push-to-talk is in the audio settings: audio_settings.rs.)
 fn voice_keys(
-    mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
     lobby: Query<&NetLobby>,
-    open_mic: Option<Res<crate::voice::OpenMic>>,
     mut mutes: ResMut<crate::voice::VoiceMutes>,
     me: Option<Res<Me>>,
 ) {
     let Some(l) = lobby.iter().next().filter(|l| l.open) else { return };
-    if keys.just_pressed(KeyCode::KeyP) {
-        if open_mic.is_some() {
-            commands.remove_resource::<crate::voice::OpenMic>();
-        } else {
-            commands.insert_resource(crate::voice::OpenMic);
-        }
-    }
     if !keys.pressed(KeyCode::ShiftLeft) && !keys.pressed(KeyCode::ShiftRight) {
         return;
     }
@@ -383,8 +374,12 @@ fn counselor_menu(
     mut lobby: Query<&mut NetLobby>,
     me: Option<Res<Me>>,
     mut senders: Query<&mut MessageSender<LobbyMsg>, With<Connected>>,
+    audio_menu: Option<Res<crate::audio_settings::AudioMenu>>,
 ) {
     let (Some(list), Ok(mut lobby)) = (list.filter(|l| !l.0.is_empty()), lobby.single_mut()) else { return };
+    if audio_menu.is_some() {
+        return;
+    }
     let my_id = me.as_ref().map_or(0, |m| m.id);
     let Some(menu) = menu else {
         if lobby.open && keys.just_pressed(KeyCode::KeyC) {
@@ -440,9 +435,9 @@ fn next_class(character: Option<&crate::character::CounselorCharacter>, current:
 }
 
 /// The server's own player's keys.
-fn local_keys(keys: Res<ButtonInput<KeyCode>>, mut lobby: Query<&mut NetLobby>, character: Option<Res<crate::character::CounselorCharacter>>, menu: Option<Res<CounselorMenu>>) {
-    // (The counselor menu has the keys while it's open.)
-    if menu.is_some() {
+fn local_keys(keys: Res<ButtonInput<KeyCode>>, mut lobby: Query<&mut NetLobby>, character: Option<Res<crate::character::CounselorCharacter>>, menu: Option<Res<CounselorMenu>>, audio_menu: Option<Res<crate::audio_settings::AudioMenu>>) {
+    // (The counselor and audio menus have the keys while they're open.)
+    if menu.is_some() || audio_menu.is_some() {
         return;
     }
     let (Some(msg), Ok(mut lobby)) = (lobby_key(&keys), lobby.single_mut()) else { return };
@@ -608,8 +603,8 @@ fn send_name(me: Option<Res<Me>>, local: Option<Res<crate::character::LocalClass
 }
 
 /// The lobby's keys on a client.
-fn client_keys(keys: Res<ButtonInput<KeyCode>>, lobby: Query<&NetLobby>, me: Option<Res<Me>>, character: Option<Res<crate::character::CounselorCharacter>>, mut senders: Query<&mut MessageSender<LobbyMsg>, With<Connected>>, menu: Option<Res<CounselorMenu>>) {
-    if menu.is_some() {
+fn client_keys(keys: Res<ButtonInput<KeyCode>>, lobby: Query<&NetLobby>, me: Option<Res<Me>>, character: Option<Res<crate::character::CounselorCharacter>>, mut senders: Query<&mut MessageSender<LobbyMsg>, With<Connected>>, menu: Option<Res<CounselorMenu>>, audio_menu: Option<Res<crate::audio_settings::AudioMenu>>) {
+    if menu.is_some() || audio_menu.is_some() {
         return;
     }
     let (Ok(lobby), Some(me)) = (lobby.single(), me) else { return };
@@ -686,10 +681,10 @@ fn show_overlay(
     client: Option<Res<NetClient>>,
     mut overlay: Single<(&mut Text, &mut Visibility), With<Overlay>>,
     (open_mic, mutes): (Option<Res<crate::voice::OpenMic>>, Option<Res<crate::voice::VoiceMutes>>),
-    menu: Option<Res<CounselorMenu>>,
+    (menu, audio_menu): (Option<Res<CounselorMenu>>, Option<Res<crate::audio_settings::AudioMenu>>),
 ) {
     let (ref mut text, ref mut vis) = *overlay;
-    let Some(l) = lobby.iter().next().filter(|l| l.open && menu.is_none()) else {
+    let Some(l) = lobby.iter().next().filter(|l| l.open && menu.is_none() && audio_menu.is_none()) else {
         vis.set_if_neq(Visibility::Hidden);
         return;
     };
@@ -697,9 +692,9 @@ fn show_overlay(
     // (The players are on the lobby's own screen: ui.rs LobbyWidget; its keys and the last match here.)
     let mut s = String::new();
     let _ = mine;
-    s.push_str("1 counselor   2 no preference   3 Jason   C pick a counselor   Enter ready\n");
+    s.push_str("1 counselor   2 no preference   3 Jason   C pick a counselor   O audio settings   Enter ready\n");
     let open = open_mic.is_some();
-    s.push_str(&format!("P push-to-talk (T): {}   Shift+n mute player n\n", if open { "off" } else { "on" }));
+    s.push_str(&format!("push-to-talk (T): {}   Shift+n mute player n\n", if open { "off" } else { "on" }));
     let muted: Vec<&str> = mutes.as_ref().map_or_else(Vec::new, |m| m.0.iter().map(String::as_str).collect());
     if !muted.is_empty() {
         s.push_str(&format!("muted: {}\n", muted.join(", ")));

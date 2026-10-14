@@ -68,13 +68,15 @@ pub struct VoiceDown {
 pub struct VoiceChannel;
 
 pub(crate) fn protocol(app: &mut App) {
+    crate::audio_settings::init(app);
     // Unordered (the decoder takes frames as they come; a late one plays late), above the replication's priority.
     app.add_channel::<VoiceChannel>(ChannelSettings { mode: ChannelMode::UnorderedUnreliable, priority: 10.0, ..default() }).add_direction(NetworkDirection::Bidirectional);
     app.register_message::<VoiceUp>().add_direction(NetworkDirection::ClientToServer);
     app.register_message::<VoiceDown>().add_direction(NetworkDirection::ServerToClient);
 }
 
-/// The player turned push-to-talk off (`--open-mic`, or P in the lobby; the test tone always sends).
+/// The player turned push-to-talk off (`--open-mic`, or the audio settings' bUsePushToTalk: audio_settings.rs; the test
+/// tone always sends).
 #[derive(Resource)]
 pub(crate) struct OpenMic;
 
@@ -514,6 +516,7 @@ fn play_gains(
     characters: Query<(Has<crate::jason::Jason>, Has<Spectating>, Option<&crate::interact::Inventory>, Option<&Name>)>,
     mutes: Option<Res<VoiceMutes>>,
     items: Query<&crate::props::Item>,
+    mixes: Option<Res<crate::audio::SoundMixes>>,
     (local, jasons, play_jason, game, lobby): (
         Query<Entity, (With<crate::controls::LocalPlayer>, With<crate::player::Player>)>,
         Query<Entity, With<crate::jason::Jason>>,
@@ -538,6 +541,8 @@ fn play_gains(
         hearer.at = ear.translation() * 100.0;
     }
     let in_progress = lobby.is_none() && game.is_some_and(|g| g.state.state == crate::match_flow::MatchState::InProgress);
+    // The Voice sound class's volume (DefaultEngine.ini VoiPSoundClass: the audio settings' VolumeVoice).
+    let class = mixes.as_ref().map_or(1.0, |m| m.factors("Voice").0);
     let Ok(mut vs) = d.voices.lock() else { return };
     for (&talker, v) in vs.iter_mut() {
         let entity = match &twins {
@@ -555,7 +560,7 @@ fn play_gains(
         }
         v.gains = match route(in_progress, party(e), hearer) {
             Route::Silent => (0.0, 0.0),
-            Route::Flat => (VOLUME, VOLUME),
+            Route::Flat => (VOLUME * class, VOLUME * class),
             Route::Spatial => {
                 let at = g.translation() + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M;
                 let cm = ear.translation().distance(at) * 100.0;
@@ -563,7 +568,7 @@ fn play_gains(
                 let local = to_listener.transform_point3(at);
                 let (right, front) = (local.x, -local.z);
                 let (l, r) = crate::audio::x3d_stereo(right.atan2(front), right.hypot(front) <= f32::EPSILON);
-                (l * a * VOLUME, r * a * VOLUME)
+                (l * a * VOLUME * class, r * a * VOLUME * class)
             }
         };
     }

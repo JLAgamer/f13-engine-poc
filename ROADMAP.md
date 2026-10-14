@@ -9,7 +9,6 @@ Base content (asset paths in the player's install; all gameplay values come from
 ## Todo
 - [ ] The lobby's rest: a full 8-player run (needs more machines: at most 2 instances run here); the counselor
       menu's 3D preview, perks, clothing and emotes (MODLOG "The counselor menu")
-- [ ] Voice chat: push-to-talk in the game's settings menu (no menus yet: P in the lobby stands in)
 - [ ] Materials: foliage subsurface (its transmission is the deferred light pass's, whose code isn't in the shipped
       global shader cache: MODLOG "Foliage subsurface: blocked")
 - [ ] Counselor model: the eye look against a capture of the game (it rolls the eyes 90 degrees from their bind:

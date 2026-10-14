@@ -24,6 +24,7 @@
 //!   Default: play as Vanessa (see player.rs for controls). --fly: free camera instead.   (screenshot: wait for loading, save one frame, exit)
 
 mod audio;
+mod audio_settings;
 mod blood;
 mod bloom;
 mod bot;
@@ -680,7 +681,7 @@ fn main() {
             app.insert_resource(voice::NoDevices);
         }
         if args.open_mic || std::env::var("F13_VOICE_TONE").is_ok() {
-            app.insert_resource(voice::OpenMic);
+            app.insert_resource(audio_settings::AudioSettings { use_push_to_talk: false, ..audio_settings::AudioSettings::load() });
         }
         if args.override_spawning {
             app.insert_resource(props::OverrideSpawning);

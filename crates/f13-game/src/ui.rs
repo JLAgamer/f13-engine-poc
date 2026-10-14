@@ -357,6 +357,8 @@ pub struct Hud {
     lobby_row: Option<(Widget, HashMap<String, String>, Value)>,
     /// The counselor menu (Counselor_Menu: lobby.rs CounselorMenu).
     counselor_menu: Option<Widget>,
+    /// The audio settings (AudioSettingsMenuWidget: audio_settings.rs AudioMenu).
+    audio_settings: Option<Widget>,
     /// The map played's definition (ui/map.json: SCMapDefinition's DisplayName and first LobbyThumbnailImages).
     lobby_map: Value,
     /// The match's end (MatchEnd: SCMatchEndLobbyWidget) and its XP lines (MatchEndLine).
@@ -599,6 +601,22 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
             action_keys(&mut w);
             w
         }),
+        audio_settings: Widget::load(dir, "AudioSettingsMenuWidget").map(|mut w| {
+            // Not ported: its party status, quick play overlay, save icon and action bar (the keys: audio_settings.rs).
+            // Its header's title (MenuHeaderWidget's construct: TitleText from its Text, "Audio Settings").
+            if let Some(h) = w.find_mut("MenuHeaderWidget") {
+                let title = h.props["Text"].clone();
+                if let Some(t) = h.find_mut("TitleText").filter(|_| title.is_object()) {
+                    t.props["Text"] = title;
+                }
+            }
+            for name in ["SaveGameThreadActiveIcon_0", "QuickPlayOverlayWidget", "PartyStatusWidget", "MenuActionBarWidget"] {
+                if let Some(x) = w.find_mut(name) {
+                    x.set_visibility(Vis::Collapsed);
+                }
+            }
+            w
+        }),
         lobby_row: Widget::load(dir, "LobbyPlayerListItem").map(|w| {
             let json = |n: &str| std::fs::read_to_string(dir.join(format!("ui/{n}.json"))).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
             let (v, speaker, ping) = (json("LobbyPlayerListItem"), json("PlayerSpeakIconMuteButton"), json("PlayerPingDisplayWidget"));
@@ -712,7 +730,13 @@ fn build_hud(
     spectating: Option<Res<crate::spectate::SpectatorStatus>>,
     (lobby, me, client, mut playing, time): (Query<&crate::lobby::NetLobby>, Option<Res<crate::lobby::Me>>, Option<Res<crate::net::NetClient>>, ResMut<PlayingAnims>, Res<Time>),
     (match_tuning, mutes, page, names): (Option<Res<crate::match_flow::MatchTuning>>, Option<Res<crate::voice::VoiceMutes>>, Res<MatchEndPage>, Query<&Name>),
-    (counselor_menu, counselor_list, counselors, player_tuning): (Option<Res<crate::lobby::CounselorMenu>>, Option<Res<crate::lobby::CounselorList>>, Option<Res<crate::character::CounselorCharacter>>, Res<crate::player::PlayerTuning>),
+    (counselor_menu, counselor_list, counselors, player_tuning, audio_menu): (
+        Option<Res<crate::lobby::CounselorMenu>>,
+        Option<Res<crate::lobby::CounselorList>>,
+        Option<Res<crate::character::CounselorCharacter>>,
+        Res<crate::player::PlayerTuning>,
+        Option<Res<crate::audio_settings::AudioMenu>>,
+    ),
 ) {
     let size = window.size();
     // The lobby while it's open (LobbyWidget, as the game's lobby map shows it).
@@ -770,6 +794,9 @@ fn build_hud(
         if let Some(c) = &menu_class {
             pocket_key = vec![format!("counselor_menu:{c}")];
         }
+        if let Some(m) = audio_menu.as_ref().filter(|_| hud.audio_settings.is_some()) {
+            pocket_key = vec![format!("audio_settings:{}:{:?}", m.focus, m.edit)];
+        }
     }
     // His score lines on his HUD, hers on hers.
     let score_lines = |g: &crate::match_flow::GameMatch| if jason { g.killer_score_lines().to_vec() } else { g.score_lines().to_vec() };
@@ -805,6 +832,10 @@ fn build_hud(
         }
         let mut t = hud.match_end.clone().unwrap_or_else(|| hud.hud.clone());
         fill_match_end(&hud, &mut t, lines, g.state.remaining_time);
+        t
+    } else if let (Some(m), Some(t), Some(_)) = (&audio_menu, &hud.audio_settings, open_lobby) {
+        let mut t = t.clone();
+        fill_audio_settings(&mut t, m);
         t
     } else if let (Some(class), Some(_)) = (&menu_class, open_lobby) {
         let mut t = hud.counselor_menu.clone().unwrap_or_else(|| hud.hud.clone());
@@ -1108,6 +1139,60 @@ fn fill_match_end(hud: &Hud, tree: &mut Widget, lines: &[(String, i32)], closing
 /// Img_Lobby_ReadyBox_Checked_01 or _Empty_01) and the host's arrow; and the travel countdown (CountdownHorizontalBox,
 /// CountdownText); each row's ping and speaker. Not ported: the mute button (Shift + its number mutes here), the
 /// connecting spinner, the host's Jason pick.
+/// AudioSettingsMenuWidget's options (SettingsOptionSliderWidget, SettingsOptionBooleanWidget: decompiled) as the menu
+/// edits them: each TitleText its OptionTitle; a slider's ValueSlider at its value and ValueText "{value x 100}%"
+/// (ValueDisplayPercentage, ValueDisplayMax 100, 0 digits), a boolean's ValueText "Yes" / "No" (OnOff unset: its arrows
+/// hidden). The focused row (OnSliderFocus / OnButtonFocus) shows its FocusBar, its title in HoverFont (Bold, 24) and
+/// HoverColor, and a slider's ValueText (ValueTextFade's end, alpha 0.5: hidden otherwise). Not ported: the focus
+/// animations (FocusPulse, FocusBurst, FocusFadeOut) and the fades (their end states shown).
+fn fill_audio_settings(tree: &mut Widget, menu: &crate::audio_settings::AudioMenu) {
+    use crate::audio_settings::{Field, ROWS};
+    let text = |t: &str| json!({ "LocalizedString": t });
+    for (i, (name, field)) in ROWS.iter().enumerate() {
+        let Some(x) = tree.find_mut(name) else { continue };
+        let focused = i == menu.focus;
+        let title = x.props["OptionTitle"].clone();
+        let hover = x.props["HoverColor"]["SpecifiedColor"].clone();
+        if let Some(t) = x.find_mut("TitleText") {
+            if title.is_object() {
+                t.props["Text"] = title;
+            }
+            if focused {
+                t.props["Font"]["TypefaceFontName"] = json!("Bold");
+                t.props["Font"]["Size"] = json!(24);
+                if hover.is_object() {
+                    t.props["ColorAndOpacity"]["SpecifiedColor"] = hover;
+                }
+            }
+        }
+        if let Some(b) = x.find_mut("FocusBar") {
+            b.set_visibility(if focused { Vis::Visible } else { Vis::Hidden });
+        }
+        match *field {
+            Field::Volume(v) => {
+                let value = menu.edit.volume(v);
+                if let Some(s) = x.find_mut("ValueSlider") {
+                    s.props["Value"] = json!(value);
+                }
+                if let Some(t) = x.find_mut("ValueText") {
+                    t.props["Text"] = text(&format!("{}%", (value * 100.0).round() as i32));
+                    t.props["ColorAndOpacity"]["SpecifiedColor"]["A"] = json!(if focused { 0.5 } else { 0.0 });
+                }
+            }
+            Field::Flag(f) => {
+                if let Some(t) = x.find_mut("ValueText") {
+                    t.props["Text"] = text(if menu.edit.flag(f) { "Yes" } else { "No" });
+                }
+                for arrow in ["LeftButton", "RightButton"] {
+                    if let Some(a) = x.find_mut(arrow) {
+                        a.set_visibility(Vis::Collapsed);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Counselor_Menu's SetCounselor (decompiled): FirstNameText the counselor's CharacterName's first word, LastNameText the
 /// rest; NameText and DescriptionText cleared (they show the focused stat, perk or ability's, not ported); each
 /// Stat_Widget's UpdateStat: StatAmount her stat (GetCounselorStatAmount), StatBar at it / 10, TitleName its StatName.
@@ -1773,6 +1858,21 @@ impl Builder<'_, '_, '_> {
                     let off = Vec2::new(o["X"].as_f64().unwrap_or(1.0) as f32, o["Y"].as_f64().unwrap_or(1.0) as f32) * self.scale;
                     t.insert(TextShadow { offset: off, color: linear(shadow) });
                 }
+            }
+            "Slider" => {
+                // SSlider::OnPaint: its bar (BarThickness) across, inset half the thumb each side, centred; the thumb at
+                // Value along the width less its own.
+                let s = &p["WidgetStyle"];
+                let size = |b: &Value, d: f32| Vec2::new(b["ImageSize"]["X"].as_f64().unwrap_or(d as f64) as f32, b["ImageSize"]["Y"].as_f64().unwrap_or(d as f64) as f32);
+                let thumb = size(&s["NormalThumbImage"], 8.0);
+                let thick = s["BarThickness"].as_f64().unwrap_or(2.0) as f32;
+                let value = p["Value"].as_f64().unwrap_or(0.0).clamp(0.0, 1.0) as f32;
+                let k = self.scale;
+                let at = |x: f32, y: f32, w: f32, h: f32| Node { position_type: PositionType::Absolute, left: Val::Px(x * k), top: Val::Px(y * k), width: Val::Px(w * k), height: Val::Px(h * k), ..default() };
+                let bar = self.commands.spawn((at(thumb.x / 2.0, (r.h - thick) / 2.0, (r.w - thumb.x).max(0.0), thick), Pickable::IGNORE, ChildOf(e))).id();
+                self.brush(bar, &s["NormalBarImage"], self.content);
+                let pip = self.commands.spawn((at(value * (r.w - thumb.x).max(0.0), (r.h - thumb.y) / 2.0, thumb.x, thumb.y), Pickable::IGNORE, ChildOf(e))).id();
+                self.brush(pip, &s["NormalThumbImage"], self.content);
             }
             "ProgressBar" => {
                 let s = &p["WidgetStyle"];

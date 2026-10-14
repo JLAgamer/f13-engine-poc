@@ -256,6 +256,7 @@ pub struct AudioPlugin;
 
 impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
+        crate::audio_settings::init(app);
         app.insert_resource(AudioRng(f13_core::spawn::Rng::new(0xa0d1_0f13)))
             .add_systems(Startup, load_sounds)
             .init_resource::<MusicState>()
@@ -1326,6 +1327,13 @@ impl SoundMixes {
         self.ambient.contains(class)
     }
 
+    /// A class's Volume set (the audio settings: audio_settings.rs).
+    pub(crate) fn set_class_volume(&mut self, class: &str, volume: f32) {
+        if let Some(c) = self.classes.get_mut(class) {
+            c.1 = volume;
+        }
+    }
+
     /// Whether `class` is `ancestor` or under it.
     fn is_under(&self, class: &str, ancestor: &str) -> bool {
         let mut c = Some(class.to_string());
@@ -1342,7 +1350,7 @@ impl SoundMixes {
     /// A class's volume and pitch (FAudioDevice::UpdateSoundClassProperties): its own and its parents' properties
     /// multiplied down the hierarchy, then each active mix's adjusters for it (or for an ancestor that applies to its
     /// children), each lerped from 1 by the mix's interpolation.
-    fn factors(&self, class: &str) -> (f32, f32) {
+    pub(crate) fn factors(&self, class: &str) -> (f32, f32) {
         let (mut v, mut p) = (1.0, 1.0);
         let mut c = Some(class.to_string());
         for _ in 0..32 {
