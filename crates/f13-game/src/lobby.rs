@@ -852,6 +852,22 @@ fn lobby_clicks(
             Interaction::Pressed => commands.trigger(crate::audio::PlaySound { cue: "ui_Click01_stereo".into(), at: None }),
             Interaction::None => {}
         }
+        // Hovered, a perk or emote entry takes the highlight (its HighlightImg, the panel's name and description).
+        if let (Some((kind, k)), Interaction::Hovered) = (listed, i) {
+            match kind {
+                "Perk_" => {
+                    if let Some(m) = perk_menu.as_mut().filter(|m| m.index != k) {
+                        m.index = k;
+                    }
+                }
+                "Emote_" => {
+                    if let Some(m) = emote_menu.as_mut().filter(|m| m.list != Some(k)) {
+                        m.list = Some(k);
+                    }
+                }
+                _ => {}
+            }
+        }
         if let (Some((kind, k)), Interaction::Pressed) = (listed, i) {
             match kind {
                 "Perk_" => {
