@@ -289,6 +289,9 @@ pub struct NetJason {
     /// Sense: how long it's still on (s; 0 off) and its length (every machine works out its highlights: senses.rs).
     #[serde(default)]
     pub sense: (f32, f32),
+    /// His stun's minigame (its completion, in hundredths, and StunText), for his player's wiggle widget.
+    #[serde(default)]
+    pub minigame: Option<(u8, String)>,
 }
 
 /// A character's full-body action ([`PlayAction`]), how often it restarted ([`RestartAction`]), its last seek
@@ -884,6 +887,7 @@ fn update_bodies(
             mask_on: j.mask_on,
             health: j.health,
             morph_map: morph_map.as_ref().is_some_and(|m| m.morph),
+            minigame: j.stun_minigame().map(|(c, t)| ((c.clamp(0.0, 1.0) * 100.0).round() as u8, t.to_string())),
             // (Tenths of a second: an unchanged component doesn't go out again.)
             sense: know.map_or((0.0, 0.0), |k| (((k.sense_until - fixed.elapsed_secs()).max(0.0) * 10.0).ceil() / 10.0, k.sense_length)),
             state: j.state_name(),
@@ -1279,6 +1283,7 @@ fn mirror(
                 knife_aim: n.knife_aim,
                 hidden: n.hidden,
                 door: n.door.and_then(|(id, m)| Some((actors.get(id)?, m))),
+                minigame: n.minigame.as_ref().map(|(c, t)| (*c as f32 / 100.0, crate::jason::Stun::TEXTS.iter().find(|x| **x == t.as_str()).copied().unwrap_or("Resist"))),
             });
             j.remote_state = n.state.clone();
             j.cooldown = n.cooldown;

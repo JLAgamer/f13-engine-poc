@@ -37,6 +37,8 @@ pub struct Wall {
     /// Light, Medium and HeavyDestructionThreshold (fractions of BaseHealth).
     pub thresholds: [f32; 3],
     pub broken: bool,
+    /// The damage state its section shows: (stage, from inside) (net_world.rs sends it on).
+    pub shown: Option<(usize, bool)>,
     pub section: Option<Entity>,
     pub collision: Option<Entity>,
     /// BurstExplosionForce, and HitExplosionForce (the force a blow that breaks it gives its chunks: TakeDamage's
@@ -85,21 +87,33 @@ impl Wall {
             }
             return false;
         }
+        self.break_down(commands);
+        true
+    }
+
+    /// Broken through: the section flies apart (BreakApart copies it), its collision goes.
+    pub fn break_down(&mut self, commands: &mut Commands) {
         self.broken = true;
-        // The section flies apart (BreakApart copies it), its collision goes.
         if let Some(s) = self.section {
             commands.entity(s).insert(Visibility::Hidden);
         }
-        if let Some(c) = self.collision {
+        if let Some(c) = self.collision.take() {
             commands.entity(c).despawn();
         }
-        true
+    }
+
+    /// A client: the damage state the server's wall shows (OnRep_Health's SetDestructibleMesh).
+    pub fn show(&mut self, wall: Entity, shown: Option<(usize, bool)>, commands: &mut Commands) {
+        if let Some((stage, inside)) = shown.filter(|s| self.shown != Some(*s)) {
+            self.show_damage(wall, inside, stage, commands);
+        }
     }
 
     /// Swaps the section for damage state `stage`'s mesh on that side (SetDestructibleMesh: a new section entity, same
     /// place).
     fn show_damage(&mut self, wall: Entity, inside: bool, stage: usize, commands: &mut Commands) {
         let Some(scene) = self.damaged[usize::from(!inside)][stage].clone() else { return };
+        self.shown = Some((stage, inside));
         if let Some(old) = self.section {
             commands.entity(old).despawn();
         }
@@ -489,7 +503,7 @@ impl Door {
     }
 
     /// Swaps the leaf for damage state `stage`'s mesh (a new leaf entity on the pivot, same place).
-    fn show_damage(&mut self, stage: usize, commands: &mut Commands) {
+    pub(crate) fn show_damage(&mut self, stage: usize, commands: &mut Commands) {
         let pivot = self.pivot;
         let Some(v) = self.visuals.as_mut() else { return };
         let Some(scene) = v.damaged[stage].clone() else { return };
@@ -706,6 +720,7 @@ mod tests {
             base_health: 60.0,
             thresholds: [0.8, 0.6, 0.4],
             broken: false,
+            shown: None,
             section: None,
             collision: None,
             burst_force: 2000.0,

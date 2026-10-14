@@ -768,6 +768,9 @@ impl Jason {
 
     /// His stun's minigame while it runs: its completion and the stun class's StunText.
     pub fn stun_minigame(&self) -> Option<(f32, &'static str)> {
+        if let Some(r) = &self.remote {
+            return r.minigame;
+        }
         match self.state {
             JasonState::Stunned { stun, .. } if self.stun_done.is_none() && stun.minigame().is_some() => Some((self.stun_wiggle.completion, stun.text()?)),
             _ => None,
@@ -894,6 +897,9 @@ impl Stun {
 
     /// The stun class's StunText (the minigame's prompt): BaseWeaponStun and HeavyShotgunStun "Rise",
     /// FlareGunLightStun "Brush Off", BearTrapLeftFootStun "Open Trap", PoliceShootJasonStun "Resist".
+    /// Every StunText (a client maps the server's back onto these).
+    pub const TEXTS: [&'static str; 4] = ["Rise", "Brush Off", "Open Trap", "Resist"];
+
     pub fn text(self) -> Option<&'static str> {
         Some(match self {
             Stun::Weapon { .. } | Stun::Shotgun => "Rise",
@@ -1383,6 +1389,8 @@ pub struct RemoteView {
     pub hidden: bool,
     /// The door he's opening or breaking down (its entity here).
     pub door: Option<(Entity, DoorMove)>,
+    /// His stun's minigame: its completion and StunText.
+    pub minigame: Option<(f32, &'static str)>,
 }
 
 /// What he's doing at a door.
@@ -3389,13 +3397,17 @@ pub(crate) fn update_jason(
                 }
                 let at = at + dt;
                 walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, None, dt, &t, &world);
-                // Shaking it off: the AI wiggles at a steady rate (the axis flips every 1 / rate s).
+                // Shaking it off: a player's GLB_Wiggle (FUN_1402dcfa0: -1 while E is down, here or from his client;
+                // each press a wiggle); the AI wiggles at a steady rate (the axis flips every 1 / rate s).
                 if let (Some(game), None) = (stun.minigame(), j.stun_done) {
                     // The axis flips every AI wiggle interval.
                     if at >= j.next_wiggle.1 {
                         j.next_wiggle = (-j.next_wiggle.0, at + AI_WIGGLE_INTERVAL.0 + (AI_WIGGLE_INTERVAL.1 - AI_WIGGLE_INTERVAL.0) * rng.0.frand());
                     }
-                    let input = j.next_wiggle.0;
+                    let input = match controls.as_deref() {
+                        Some(c) => if c.keys.pressed(KeyCode::KeyE) { -1.0 } else { 0.0 },
+                        None => j.next_wiggle.0,
+                    };
                     if j.stun_wiggle.tick(dt, input, &game) {
                         info!("Jason: shook off the stun after {at:.1}s");
                         j.stun_done = Some(at);

@@ -49,6 +49,17 @@ pub struct NetDoor {
     pub broken: bool,
 }
 
+/// Used up: a CB radio called on (Tommy's coming), a placed kill used (its bOnlyUseableOnce).
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct NetUsed(pub bool);
+
+/// A destructible wall's state: the damage state its section shows (stage, from inside) and whether it's broken through.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct NetWall {
+    pub shown: Option<(u8, bool)>,
+    pub broken: bool,
+}
+
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct NetWindow {
     pub open: bool,
@@ -227,6 +238,8 @@ pub(crate) fn protocol(app: &mut App) {
     app.component::<ProxyOf>().replicate();
     app.component::<NetDoor>().replicate();
     app.component::<NetWindow>().replicate();
+    app.component::<NetWall>().replicate();
+    app.component::<NetUsed>().replicate();
     app.component::<NetBarricade>().replicate();
     app.component::<NetItem>().replicate();
     app.component::<NetVehicle>().replicate();
@@ -241,11 +254,11 @@ pub(crate) fn protocol(app: &mut App) {
 }
 
 pub(crate) fn server(app: &mut App) {
-    app.add_observer(send_heard).add_systems(PostUpdate, (make_proxies, tag_visuals, (send_fixtures, send_items, send_vehicles, send_cabinets, send_radios, send_visuals)).chain().before(ReplicationSystems::Send));
+    app.add_observer(send_heard).add_systems(PostUpdate, (make_proxies, tag_visuals, (send_fixtures, send_walls, send_used, send_items, send_vehicles, send_cabinets, send_radios, send_visuals)).chain().before(ReplicationSystems::Send));
 }
 
 pub(crate) fn client(app: &mut App) {
-    app.init_resource::<Actors>().add_systems(Update, (index_actors, (apply_fixtures, apply_vehicles, apply_items, apply_traps, apply_cabinets, apply_radios, show_visuals, hear)).chain().after(crate::net::Mirrored));
+    app.init_resource::<Actors>().add_systems(Update, (index_actors, (apply_fixtures, apply_walls, apply_used, apply_vehicles, apply_items, apply_traps, apply_cabinets, apply_radios, show_visuals, hear)).chain().after(crate::net::Mirrored));
 }
 
 fn xf_array(t: &Transform) -> [f32; 7] {
@@ -269,15 +282,21 @@ fn set<T: PartialEq>(mut c: Mut<T>, v: T) {
 fn make_proxies(
     mut commands: Commands,
     actors: Query<
-        (Entity, &WorldId, (Has<crate::doors::Door>, Has<crate::windows::Window>, Has<crate::windows::Barricade>, Has<crate::props::Item>), (Has<crate::props::Vehicle>, Has<crate::power::FuseBox>, Has<crate::police::PhoneBox>, Has<crate::police::Phone>), (Has<crate::cabinets::Cabinet>, Has<crate::radio::Radio>)),
+        (Entity, &WorldId, (Has<crate::doors::Door>, Has<crate::windows::Window>, Has<crate::windows::Barricade>, Has<crate::props::Item>), (Has<crate::props::Vehicle>, Has<crate::power::FuseBox>, Has<crate::police::PhoneBox>, Has<crate::police::Phone>), (Has<crate::cabinets::Cabinet>, Has<crate::radio::Radio>, Has<crate::doors::Wall>, Has<crate::tommy::CbRadio>, Has<crate::placed_kills::PlacedKill>)),
         Without<ProxyLink>,
     >,
 ) {
-    for (e, id, (door, window, barricade, item), (vehicle, fuse, phone_box, phone), (cabinet, radio)) in &actors {
-        if !(door || window || barricade || item || vehicle || fuse || phone_box || phone || cabinet || radio) {
+    for (e, id, (door, window, barricade, item), (vehicle, fuse, phone_box, phone), (cabinet, radio, wall, cb_radio, placed_kill)) in &actors {
+        if !(door || window || barricade || item || vehicle || fuse || phone_box || phone || cabinet || radio || wall || cb_radio || placed_kill) {
             continue;
         }
         let mut p = commands.spawn((ProxyOf(id.0), Replicate::to_clients(NetworkTarget::All)));
+        if cb_radio || placed_kill {
+            p.insert(NetUsed::default());
+        }
+        if wall {
+            p.insert(NetWall::default());
+        }
         if door {
             p.insert(NetDoor::default());
         }
@@ -333,6 +352,49 @@ fn apply_radios(actors: Res<Actors>, proxies: Query<(&ProxyOf, &NetRadio), Chang
 /// On the server: an actor's proxy entity.
 #[derive(Component)]
 struct ProxyLink(Entity);
+
+/// What's used up: CB radios called on, placed kills used.
+fn send_used(actors: Query<(&ProxyLink, Option<&crate::tommy::CbRadio>, Option<&crate::placed_kills::PlacedKill>)>, mut proxies: Query<&mut NetUsed>) {
+    for (link, cb, pk) in &actors {
+        if let Ok(n) = proxies.get_mut(link.0) {
+            set(n, NetUsed(cb.is_some_and(|c| c.called) || pk.is_some_and(|k| k.used)));
+        }
+    }
+}
+
+/// A client: what the server has used up (the prompts here follow it).
+fn apply_used(actors: Res<Actors>, proxies: Query<(&ProxyOf, &NetUsed), Changed<NetUsed>>, mut cbs: Query<&mut crate::tommy::CbRadio>, mut kills: Query<&mut crate::placed_kills::PlacedKill>) {
+    for (of, n) in &proxies {
+        let Some(&e) = actors.0.get(&of.0) else { continue };
+        if let Ok(mut c) = cbs.get_mut(e) {
+            c.called = n.0;
+        }
+        if let Ok(mut k) = kills.get_mut(e) {
+            k.used = n.0;
+        }
+    }
+}
+
+/// Each destructible wall's damage state and break (its OnRep_Health: the section's mesh, broken through).
+fn send_walls(walls: Query<(&ProxyLink, &crate::doors::Wall)>, mut proxies: Query<&mut NetWall>) {
+    for (link, w) in &walls {
+        if let Ok(n) = proxies.get_mut(link.0) {
+            set(n, NetWall { shown: w.shown.map(|(s, inside)| (s as u8, inside)), broken: w.broken });
+        }
+    }
+}
+
+/// A client: the server's walls' damage states and breaks (their pieces fly from its BreakApart shout).
+fn apply_walls(mut commands: Commands, actors: Res<Actors>, proxies: Query<(&ProxyOf, &NetWall), Changed<NetWall>>, mut walls: Query<&mut crate::doors::Wall>) {
+    for (of, n) in &proxies {
+        let Some(&e) = actors.0.get(&of.0) else { continue };
+        let Ok(mut w) = walls.get_mut(e) else { continue };
+        w.show(e, n.shown.map(|(s, inside)| (s as usize, inside)), &mut commands);
+        if n.broken && !w.broken {
+            w.break_down(&mut commands);
+        }
+    }
+}
 
 #[allow(clippy::type_complexity)]
 fn send_fixtures(
@@ -507,6 +569,7 @@ fn resolve(r: &NetRef, actors: &Actors, twins: &crate::net::Twins, children: &Qu
 
 #[allow(clippy::type_complexity)]
 fn apply_fixtures(
+    mut commands: Commands,
     actors: Res<Actors>,
     proxies: Query<
         (&ProxyOf, Option<Ref<NetDoor>>, Option<Ref<NetWindow>>, Option<Ref<NetBarricade>>, (Option<Ref<NetFuseBox>>, Option<Ref<NetPhoneBox>>, Option<Ref<NetPhone>>)),
@@ -528,7 +591,18 @@ fn apply_fixtures(
             if d.target != n.target {
                 d.target = n.target;
             }
+            // The leaf's damage state the hits crossed into (SCDoor's OnRep: its mesh), and broken, the leaf gone
+            // (its pieces fly from the BreakApart shout).
+            let before = d.health;
             d.health = n.health;
+            if n.health < before && !n.broken {
+                if let Some(stage) = d.damage_stage(before) {
+                    d.show_damage(stage, &mut commands);
+                }
+            }
+            if n.broken && !d.broken {
+                commands.entity(d.pivot).insert(Visibility::Hidden);
+            }
             d.broken = n.broken;
         }
         if let (Some(n), Ok(mut w)) = (nw.filter(|n| n.is_changed()), windows.get_mut(e)) {

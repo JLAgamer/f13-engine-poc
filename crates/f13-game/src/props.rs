@@ -589,6 +589,7 @@ fn spawn_props(
             let interact = info.components.iter().find(|c| c.name == "Interactable");
             let damaged = ["Inside", "Outside"].map(|side| ["Light", "Medium", "Heavy"].map(|k| classes.prop(&actor.class, &format!("{k}Destruction{side}MeshFile")).as_str().map(&mut scene)));
             commands.entity(root).insert(crate::doors::Wall {
+                shown: None,
                 health: f("BaseHealth", 150.0),
                 base_health: f("BaseHealth", 150.0),
                 thresholds: [f("LightDestructionThreshold", 0.8), f("MediumDestructionThreshold", 0.6), f("HeavyDestructionThreshold", 0.4)],
