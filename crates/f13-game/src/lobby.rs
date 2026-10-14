@@ -69,6 +69,8 @@ pub enum LobbyMsg {
     Outfit(String),
     /// Their perks for it (perks.rs: perk classes).
     Perks(Vec<String>),
+    /// A Jason picked for the match (a killer Blueprint's name: the export's killers/<name>.json).
+    Killer(String),
 }
 
 pub struct LobbyChannel;
@@ -105,6 +107,12 @@ pub struct NetLobby {
     pub jason: Option<u64>,
     /// The last match's results, back in the lobby after it (SCMatchEndLobbyWidget's: PLACEHOLDER, as text).
     pub last_match: Vec<MatchResult>,
+    /// The Jason this lobby's match plays (its server's: character.rs killer_class), and one picked to change to: the
+    /// server and its members start again with it (each peer loads its Jason at startup).
+    #[serde(default)]
+    pub killer: String,
+    #[serde(default)]
+    pub relaunch_killer: Option<String>,
 }
 
 /// A player's last match: their name, what they played and how it ended, their XP and badges.
@@ -192,7 +200,7 @@ pub(crate) fn protocol(app: &mut App) {
 /// The server's lobby: `dedicated`, the server's own player isn't in it.
 pub(crate) fn server(app: &mut App, dedicated: bool, name: String, last_match: Option<std::path::PathBuf>, class: String) {
     let last_match = last_match.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-    let mut lobby = NetLobby { open: true, last_match, ..default() };
+    let mut lobby = NetLobby { open: true, last_match, killer: crate::character::killer_class().to_string(), ..default() };
     let mut links = Links::default();
     if !dedicated {
         lobby.members.push(Member { id: 0, name, class, ..default() });
@@ -247,6 +255,7 @@ pub(crate) fn client(app: &mut App) {
 pub(crate) fn ui(app: &mut App) {
     app.add_plugins(crate::counselor_preview::CounselorPreviewPlugin);
     app.init_resource::<ReadyFocus>().add_systems(Last, lobby_clicks);
+    app.add_systems(Startup, list_killers).add_systems(Update, killer_relaunch);
     app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay, load_counselor_list, (counselor_menu, crate::wardrobe::wardrobe_menu, crate::emotes::emote_menu, crate::perks::perk_menu).chain(), crate::audio_settings::audio_menu));
 }
 
@@ -316,13 +325,82 @@ fn receive(mut receivers: Query<(Entity, &mut MessageReceiver<LobbyMsg>)>, links
                 LobbyMsg::Class(c) => m.class = c.chars().take(32).collect(),
                 LobbyMsg::Outfit(o) => m.outfit = o.chars().take(96).collect(),
                 LobbyMsg::Perks(p) => m.perks = p.into_iter().take(3).map(|p| p.chars().take(48).collect()).collect(),
+                LobbyMsg::Killer(k) => {
+                    if k != lobby.killer && lobby.relaunch_killer.is_none() && exported_killers().contains(&k) {
+                        info!("lobby: Jason {k} picked: starting again with him");
+                        lobby.relaunch_killer = Some(k);
+                    }
+                    continue;
+                }
             }
             info!("lobby: {} ({}) {} {} {}", m.name, m.id, m.preference.label(), m.class, if m.ready { "ready" } else { "not ready" });
         }
     }
 }
 
-/// The lobby's keys: 1 counselor, 2 no preference, 3 Jason, Enter ready or not.
+/// The Jasons in the export (killers/*.json), by name, sorted (filled at startup: list_killers).
+static KILLER_LIST: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+pub(crate) fn exported_killers() -> Vec<String> {
+    KILLER_LIST.get().cloned().unwrap_or_default()
+}
+
+fn list_killers(export: Res<crate::ExportRoot>) {
+    let mut v: Vec<String> = std::fs::read_dir(export.0.join("killers"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.path().file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .filter(|n| n.starts_with("Jason_"))
+        .collect();
+    v.sort();
+    let _ = KILLER_LIST.set(v);
+}
+
+/// The exported Jason after `current` (wrapping).
+fn next_killer(current: &str) -> String {
+    let all = exported_killers();
+    let i = all.iter().position(|k| k == current).map_or(0, |i| (i + 1) % all.len().max(1));
+    all.get(i).cloned().unwrap_or_else(|| current.to_string())
+}
+
+/// A Jason picked: after a moment (for the members to see it) the lobby's server and its clients start again with him,
+/// the server with `--jason <name>` (as a rematch starts again: net.rs relaunch), the clients likewise with their
+/// netcode id.
+fn killer_relaunch(time: Res<Time>, mut lobby: Query<&mut NetLobby>, me: Option<Res<Me>>, client: Option<Res<crate::net::NetClient>>, mut since: Local<Option<f32>>, mut exit: MessageWriter<AppExit>, mut tested: Local<bool>) {
+    // (F13_PICK_JASON=<name>: the lobby's server picks him once, for testing; not again in the lobby it starts.)
+    if let (Some(name), false, None) = (std::env::var("F13_PICK_JASON").ok(), std::mem::replace(&mut *tested, true), client.as_ref()) {
+        if let Some(mut l) = lobby.iter_mut().next().filter(|l| l.killer != name) {
+            l.relaunch_killer = Some(name);
+        }
+    }
+    // A client joining a lobby whose Jason isn't the one it loaded starts again with him too.
+    let mismatch = lobby.iter().next().filter(|l| client.is_some() && !l.killer.is_empty() && l.killer != crate::character::killer_class()).map(|l| l.killer.clone());
+    let Some(k) = lobby.iter().next().and_then(|l| l.relaunch_killer.clone()).or(mismatch) else {
+        *since = None;
+        return;
+    };
+    let now = time.elapsed_secs();
+    let at = *since.get_or_insert(now);
+    // (The server waits for its clients to have it; they go at once.)
+    if client.is_none() && now - at < 1.5 {
+        return;
+    }
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut add = vec![("--jason", k.clone())];
+    if client.is_some() {
+        if let Some(m) = me.as_ref() {
+            add.push(("--net-id", m.id.to_string()));
+        }
+    }
+    match crate::net::relaunch(&args, &["--jason", "--net-id", "--seed"], &add) {
+        Ok(_) => info!("lobby: starting again with Jason {k}"),
+        Err(e) => warn!("lobby: can't start again with Jason {k}: {e}"),
+    }
+    exit.write(AppExit::Success);
+}
+
+/// The lobby's keys: 1 counselor, 2 no preference, 3 Jason, Enter ready or not, J the next Jason.
 fn lobby_key(keys: &ButtonInput<KeyCode>) -> Option<LobbyMsg> {
     // (Shift + a number mutes a player: voice_keys.)
     if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) {
@@ -336,6 +414,9 @@ fn lobby_key(keys: &ButtonInput<KeyCode>) -> Option<LobbyMsg> {
         Some(LobbyMsg::Preference(Preference::Killer))
     } else if keys.just_pressed(KeyCode::Enter) {
         Some(LobbyMsg::Ready(true))
+    } else if keys.just_pressed(KeyCode::KeyJ) {
+        // (PLACEHOLDER key: the game's KillerPickerButtonWidget.) The next exported Jason.
+        Some(LobbyMsg::Killer(String::new()))
     } else {
         None
     }
@@ -465,6 +546,14 @@ fn local_keys(keys: Res<ButtonInput<KeyCode>>, mut lobby: Query<&mut NetLobby>, 
         LobbyMsg::Name(_) => {}
         LobbyMsg::Class(_) => m.class = next_class(character.as_deref(), &m.class),
         LobbyMsg::Outfit(_) | LobbyMsg::Perks(_) => {}
+        LobbyMsg::Killer(_) => {
+            let next = next_killer(&lobby.killer);
+            if next != lobby.killer && lobby.relaunch_killer.is_none() {
+                info!("lobby: Jason {next} picked: starting again with him");
+                lobby.relaunch_killer = Some(next);
+            }
+            return;
+        }
     }
     info!("lobby: {} {} {} {}", m.name, m.preference.label(), m.class, if m.ready { "ready" } else { "not ready" });
 }
@@ -651,6 +740,9 @@ fn client_keys(keys: Res<ButtonInput<KeyCode>>, lobby: Query<&NetLobby>, me: Opt
     if let LobbyMsg::Class(_) = msg {
         let current = lobby.members.iter().find(|m| m.id == me.id).map_or("", |m| m.class.as_str());
         msg = LobbyMsg::Class(next_class(character.as_deref(), current));
+    }
+    if let LobbyMsg::Killer(_) = msg {
+        msg = LobbyMsg::Killer(next_killer(&lobby.killer));
     }
     for mut s in &mut senders {
         s.send::<LobbyChannel>(msg.clone());

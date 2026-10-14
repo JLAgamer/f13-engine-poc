@@ -27,8 +27,6 @@ Lighting first (the user, 2026-10-14):
       instance buffers 1.3; main world 3.9, PostUpdate 2.5; particles 0.9)
 - [ ] Music: Jason's own music (JasonsMusic, for one spectating him: MODLOG "Jason's music, read further"; Jason is
       spectated only in private matches, so it waits for those)
-- [ ] The lobby's Jason pick (KillerPickerButtonWidget): the picked Jason sent to every peer (today each takes --jason;
-      Part 3, Jason_BigNeck, plays: MODLOG "Part 3 Jason")
 - [ ] More content, one at a time: maps (with their boat and other escapes), Jasons (with their weapons' and hand
       kills: the axe, fire axe and hand kills' limb mesh swaps, exported in anim_gore.json and BodyParts' MeshSwaps),
       counselors, perks, skins, emotes, a main menu
