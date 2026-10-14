@@ -71,6 +71,8 @@ pub enum LobbyMsg {
     Perks(Vec<String>),
     /// A Jason picked for the match (a killer Blueprint's name: the export's killers/<name>.json).
     Killer(String),
+    /// Their loadout for the lobby's Jason (killer_profile.rs: grab kill picks), for when they play him.
+    Loadout(crate::killer_profile::JasonLoadout),
 }
 
 pub struct LobbyChannel;
@@ -95,6 +97,9 @@ pub struct Member {
     pub outfit: String,
     #[serde(default)]
     pub perks: Vec<String>,
+    /// Their loadout for the lobby's Jason (killer_profile.rs).
+    #[serde(default)]
+    pub loadout: crate::killer_profile::JasonLoadout,
 }
 
 /// The lobby as the players see it: open, its members, the countdown to the match (s), and who plays Jason once it's
@@ -256,7 +261,7 @@ pub(crate) fn ui(app: &mut App) {
     app.add_plugins(crate::counselor_preview::CounselorPreviewPlugin);
     app.init_resource::<ReadyFocus>().add_systems(Last, lobby_clicks);
     app.add_systems(Startup, (list_killers, load_jason_list)).add_systems(Update, killer_relaunch);
-    app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay, load_counselor_list, jason_menu, (counselor_menu, crate::wardrobe::wardrobe_menu, crate::emotes::emote_menu, crate::perks::perk_menu).chain(), crate::audio_settings::audio_menu));
+    app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay, load_counselor_list, (jason_menu, crate::killer_profile::kill_menu).chain(), send_loadout, (counselor_menu, crate::wardrobe::wardrobe_menu, crate::emotes::emote_menu, crate::perks::perk_menu).chain(), crate::audio_settings::audio_menu));
 }
 
 /// The lobby's voice mutes (PLACEHOLDER keys: the game's are in its scoreboard menu): Shift + a member's number mutes or
@@ -325,6 +330,10 @@ fn receive(mut receivers: Query<(Entity, &mut MessageReceiver<LobbyMsg>)>, links
                 LobbyMsg::Class(c) => m.class = c.chars().take(32).collect(),
                 LobbyMsg::Outfit(o) => m.outfit = o.chars().take(96).collect(),
                 LobbyMsg::Perks(p) => m.perks = p.into_iter().take(3).map(|p| p.chars().take(48).collect()).collect(),
+                LobbyMsg::Loadout(l) => {
+                    m.loadout = l.sanitized();
+                    continue;
+                }
                 LobbyMsg::Killer(k) => {
                     if k != lobby.killer && lobby.relaunch_killer.is_none() && exported_killers().contains(&k) {
                         info!("lobby: Jason {k} picked: starting again with him");
@@ -559,11 +568,12 @@ fn jason_menu(
     mut lobby: Query<&mut NetLobby>,
     me: Option<Res<Me>>,
     mut senders: Query<&mut MessageSender<LobbyMsg>, With<Connected>>,
-    (audio_menu, counselor_menu): (Option<Res<crate::audio_settings::AudioMenu>>, Option<Res<CounselorMenu>>),
+    (audio_menu, counselor_menu, kill_menu): (Option<Res<crate::audio_settings::AudioMenu>>, Option<Res<CounselorMenu>>, Option<Res<crate::killer_profile::KillMenu>>),
     mut tested: Local<bool>,
 ) {
     let (Some(list), Ok(mut lobby)) = (list.filter(|l| !l.0.is_empty()), lobby.single_mut()) else { return };
-    if audio_menu.is_some() || counselor_menu.is_some() {
+    // (The audio or counselor menu, or the grab kill picker over it, has the keys.)
+    if audio_menu.is_some() || counselor_menu.is_some() || kill_menu.is_some() {
         return;
     }
     let Some(mut menu) = menu else {
@@ -610,6 +620,37 @@ fn jason_menu(
     }
 }
 
+/// Their loadout for the lobby's Jason (killer_profile.rs), to the server as it changes (the server's own: in place).
+fn send_loadout(
+    mut lobby: Query<&mut NetLobby>,
+    me: Option<Res<Me>>,
+    profiles: Option<Res<crate::killer_profile::KillerProfiles>>,
+    mut senders: Query<&mut MessageSender<LobbyMsg>, With<Connected>>,
+    mut sent: Local<Option<crate::killer_profile::JasonLoadout>>,
+) {
+    let (Ok(mut lobby), Some(profiles)) = (lobby.single_mut(), profiles) else { return };
+    if !lobby.open {
+        return;
+    }
+    let loadout = profiles.loadout(&lobby.killer);
+    let id = me.as_ref().map_or(0, |m| m.id);
+    let Some(m) = lobby.members.iter_mut().find(|m| m.id == id) else { return };
+    if m.loadout == loadout {
+        return;
+    }
+    if me.is_none() {
+        m.loadout = loadout;
+        return;
+    }
+    if sent.as_ref() == Some(&loadout) {
+        return;
+    }
+    for mut s in &mut senders {
+        s.send::<LobbyChannel>(LobbyMsg::Loadout(loadout.clone()));
+    }
+    *sent = Some(loadout);
+}
+
 /// The counselor after `current` among the playable ones (by class name; the first after the last).
 fn next_class(character: Option<&crate::character::CounselorCharacter>, current: &str) -> String {
     // (Not Tommy: the game mode's HunterCharacterClass, who comes only when called: SCGameMode::SpawnHunter.)
@@ -633,7 +674,7 @@ fn local_keys(keys: Res<ButtonInput<KeyCode>>, mut lobby: Query<&mut NetLobby>, 
         LobbyMsg::Ready(_) => m.ready = !m.ready,
         LobbyMsg::Name(_) => {}
         LobbyMsg::Class(_) => m.class = next_class(character.as_deref(), &m.class),
-        LobbyMsg::Outfit(_) | LobbyMsg::Perks(_) | LobbyMsg::Killer(_) => {}
+        LobbyMsg::Outfit(_) | LobbyMsg::Perks(_) | LobbyMsg::Killer(_) | LobbyMsg::Loadout(_) => {}
     }
     info!("lobby: {} {} {} {}", m.name, m.preference.label(), m.class, if m.ready { "ready" } else { "not ready" });
 }
@@ -713,6 +754,8 @@ fn count_down(
         }
         info!("lobby: {} plays counselor {c} at {at}", name(id));
     }
+    // His grab kills: the picks of whoever plays him (InitFromPlayerState: their PickedGrabKills), else his own.
+    killer.and_then(|k| lobby.members.iter().find(|m| m.id == k)).map(|m| m.loadout.clone()).unwrap_or_default().apply();
     if let Some(k) = killer {
         commands.init_resource::<crate::jason_player::JasonControls>();
         match link(k) {
@@ -827,11 +870,15 @@ fn client_keys(keys: Res<ButtonInput<KeyCode>>, lobby: Query<&NetLobby>, me: Opt
 }
 
 /// This client plays Jason: his controls and cameras here, and no counselor of its own.
-fn become_jason(mut commands: Commands, jason: Query<(), (With<crate::net::NetJason>, Added<Controlled>)>, local: Query<Entity, (With<LocalPlayer>, With<Player>)>) {
+fn become_jason(mut commands: Commands, jason: Query<(), (With<crate::net::NetJason>, Added<Controlled>)>, local: Query<Entity, (With<LocalPlayer>, With<Player>)>, profiles: Option<Res<crate::killer_profile::KillerProfiles>>) {
     if jason.is_empty() {
         return;
     }
     info!("net: playing Jason");
+    // His grab kill slots on this client's HUD: its own picks (the server has them too: its lobby's Loadout).
+    if let Some(p) = profiles {
+        p.loadout(crate::character::killer_class()).apply();
+    }
     commands.insert_resource(crate::jason_player::PlayJason);
     commands.init_resource::<crate::jason_player::JasonControls>();
     for e in &local {
@@ -988,20 +1035,26 @@ fn lobby_clicks(
     mouse: Res<ButtonInput<MouseButton>>,
     mut key_events: MessageWriter<bevy::input::keyboard::KeyboardInput>,
     mut down: Local<Vec<KeyCode>>,
-    (mut perk_menu, mut emote_menu, mut wardrobe, character, profiles): (
+    (mut perk_menu, mut emote_menu, mut wardrobe, character, profiles, mut kill_menu): (
         Option<ResMut<crate::perks::PerkMenu>>,
         Option<ResMut<crate::emotes::EmoteMenu>>,
         Option<ResMut<crate::wardrobe::WardrobeMenu>>,
         Option<Res<crate::character::CounselorCharacter>>,
         Option<Res<crate::wardrobe::CounselorProfiles>>,
+        Option<ResMut<crate::killer_profile::KillMenu>>,
     ),
     (window, wheel, mut ready_focus): (Option<Single<(Entity, &Window), With<bevy::window::PrimaryWindow>>>, Query<(&Name, &ComputedNode, &UiGlobalTransform)>, ResMut<ReadyFocus>),
     (mut playing, time): (Option<ResMut<crate::ui::PlayingAnims>>, Res<Time>),
 ) {
     // The menus' list entries (ui.rs names them by index): a perk or emote in the panel picked and put in (Enter, as
     // its button's OnClicked SavePerk / AddEmote), an outfit shown, a slot focused, a swatch chosen.
-    let entry = |n: &str| ["Perk_", "Emote_", "Outfit_", "Swatch_", "Slot_Button_0"].iter().find_map(|p| Some((*p, n.strip_prefix(p)?.parse::<usize>().ok()?)));
-    const KEYS: [(&str, KeyCode); 10] = [
+    let entry = |n: &str| ["Perk_", "Emote_", "Outfit_", "Swatch_", "Slot_Button_0", "GrabKill_"].iter().find_map(|p| Some((*p, n.strip_prefix(p)?.parse::<usize>().ok()?)));
+    const KEYS: [(&str, KeyCode); 14] = [
+        // (Jason_Select_Widget's grab kill slots: OnGrabKillButton_Clicked opens the picker on that slot.)
+        ("Kill_Select_Button1", KeyCode::Digit1),
+        ("Kill_Select_Button2", KeyCode::Digit2),
+        ("Kill_Select_Button3", KeyCode::Digit3),
+        ("Kill_Select_Button4", KeyCode::Digit4),
         ("ReadyButton", KeyCode::Enter),
         ("CounselorButton", KeyCode::KeyC),
         // (Her row's JasonButton opens Jason_Select_Widget: LobbyPlayerListItem's KillerSelectButtonWidget click.)
@@ -1065,6 +1118,11 @@ fn lobby_clicks(
                         m.list = Some(k);
                     }
                 }
+                "GrabKill_" => {
+                    if let Some(m) = kill_menu.as_mut().filter(|m| m.index != k) {
+                        m.index = k;
+                    }
+                }
                 _ => {}
             }
         }
@@ -1080,6 +1138,13 @@ fn lobby_clicks(
                 "Emote_" => {
                     if let Some(m) = emote_menu.as_mut() {
                         m.list = Some(k);
+                        send(KeyCode::Enter, bevy::input::ButtonState::Pressed);
+                        down.push(KeyCode::Enter);
+                    }
+                }
+                "GrabKill_" => {
+                    if let Some(m) = kill_menu.as_mut() {
+                        m.index = k;
                         send(KeyCode::Enter, bevy::input::ButtonState::Pressed);
                         down.push(KeyCode::Enter);
                     }

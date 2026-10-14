@@ -369,6 +369,9 @@ pub struct Hud {
     /// (Attribute_Display).
     jason_menu: Option<Widget>,
     attribute: Option<Widget>,
+    /// The grab kill picker (Kill_Select_Widget: killer_profile.rs KillMenu) and its buttons (GrabKillButtonLarge).
+    kill_menu: Option<Widget>,
+    kill_button: Option<Widget>,
     /// The audio settings (AudioSettingsMenuWidget: audio_settings.rs AudioMenu).
     audio_settings: Option<Widget>,
     /// The wardrobe (Counselor_Wardrobe_Menu: wardrobe.rs WardrobeMenu) and its lists' buttons (Counselor_Outfit_Button,
@@ -625,6 +628,23 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
             w
         }),
         attribute: Widget::load(dir, "Attribute_Display"),
+        kill_menu: Widget::load(dir, "Kill_Select_Widget").map(|mut w| {
+            // Not ported: purchases (all owned: the cost, level and purchase lines, the lock), customization points,
+            // its weapon image and its action bar (the keys: killer_profile.rs).
+            if let Some(h) = w.find_mut("MenuHeaderWidget") {
+                let title = h.props["Text"].clone();
+                if let Some(t) = h.find_mut("TitleText").filter(|_| title.is_object()) {
+                    t.props["Text"] = title;
+                }
+            }
+            for name in ["MenuActionBarWidget_148", "MetaRequirements", "LockIcon", "CPBox", "CurrentWeaponImg"] {
+                if let Some(x) = w.find_mut(name) {
+                    x.set_visibility(Vis::Collapsed);
+                }
+            }
+            w
+        }),
+        kill_button: Widget::load(dir, "GrabKillButtonLarge"),
         counselor_menu: Widget::load(dir, "Counselor_Menu").map(|mut w| {
             // Not ported: its 3D preview (CharacterPreviewImage: CounselorCustomizationPreview's render target), perks,
             // ability, clothing and emote buttons, customization points, the locked banner (all unlocked) and its action
@@ -836,7 +856,15 @@ fn build_hud(
         Option<Res<crate::counselor_preview::PreviewImage>>,
     ),
     (wardrobe_menu, emote_wheel, emotes, emote_menu): (Option<Res<crate::wardrobe::WardrobeMenu>>, Option<Res<crate::emotes::EmoteWheel>>, Option<Res<crate::emotes::Emotes>>, Option<Res<crate::emotes::EmoteMenu>>),
-    (perk_menu, perks, profiles, jason_menu, jason_list): (Option<Res<crate::perks::PerkMenu>>, Option<Res<crate::perks::Perks>>, Option<Res<crate::wardrobe::CounselorProfiles>>, Option<Res<crate::lobby::JasonMenu>>, Option<Res<crate::lobby::JasonList>>),
+    (perk_menu, perks, profiles, jason_menu, jason_list, kill_menu, killer_profiles): (
+        Option<Res<crate::perks::PerkMenu>>,
+        Option<Res<crate::perks::Perks>>,
+        Option<Res<crate::wardrobe::CounselorProfiles>>,
+        Option<Res<crate::lobby::JasonMenu>>,
+        Option<Res<crate::lobby::JasonList>>,
+        Option<Res<crate::killer_profile::KillMenu>>,
+        Option<Res<crate::killer_profile::KillerProfiles>>,
+    ),
 ) {
     let size = window.size();
     // The lobby while it's open (LobbyWidget, as the game's lobby map shows it).
@@ -902,7 +930,11 @@ fn build_hud(
             pocket_key = vec![format!("counselor_menu:{c}:{slots:?}")];
         }
         if let Some(k) = &menu_jason {
-            pocket_key = vec![format!("jason_menu:{}", k.0)];
+            let picks = killer_profiles.as_ref().and_then(|p| p.grab_kills.get(&k.0).cloned());
+            pocket_key = vec![format!("jason_menu:{}:{picks:?}", k.0)];
+            if let Some(m) = kill_menu.as_ref().filter(|_| hud.kill_menu.is_some()) {
+                pocket_key = vec![format!("kill_menu:{}:{}:{}:{picks:?}", m.killer, m.slot, m.index)];
+            }
         }
         if let Some(m) = perk_menu.as_ref().filter(|_| hud.perk_menu.is_some()) {
             pocket_key = vec![format!("perks:{}:{}:{}", m.class, m.slot, m.index)];
@@ -968,9 +1000,15 @@ fn build_hud(
         let mut t = t.clone();
         fill_wardrobe(&hud, &mut t, w, c);
         t
-    } else if let (Some((_, killer)), Some(t), Some(_)) = (&menu_jason, &hud.jason_menu, open_lobby) {
+    } else if let (Some((name, killer)), Some(m), Some(t), Some(_)) = (&menu_jason, &kill_menu, &hud.kill_menu, open_lobby) {
         let mut t = t.clone();
-        fill_jason_menu(&hud, &mut t, killer);
+        let picks = killer_profiles.as_ref().and_then(|p| p.grab_kills.get(name).cloned()).unwrap_or_default();
+        fill_kill_menu(&hud, &mut t, m, killer, &picks);
+        t
+    } else if let (Some((name, killer)), Some(t), Some(_)) = (&menu_jason, &hud.jason_menu, open_lobby) {
+        let mut t = t.clone();
+        let picks = killer_profiles.as_ref().and_then(|p| p.grab_kills.get(name).cloned()).unwrap_or_default();
+        fill_jason_menu(&hud, &mut t, killer, &picks);
         t
     } else if let (Some(class), Some(_)) = (&menu_class, open_lobby) {
         let mut t = hud.counselor_menu.clone().unwrap_or_else(|| hud.hud.clone());
@@ -1047,7 +1085,7 @@ fn build_hud(
     let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names, preview };
     let full = Rect { x: 0.0, y: 0.0, w: virt.x, h: virt.y };
     let laid = tree.layout(full);
-    b.spawn(&laid, root, full, if board.is_some() { "ScoreboardWidget" } else if badge.is_some() { "MatchEnd_Badges" } else if ended.is_some() { "MatchEnd" } else if menu_jason.is_some() && open_lobby.is_some() { "Jason_Select_Widget" } else if menu_class.is_some() && open_lobby.is_some() { "Counselor_Menu" } else if open_lobby.is_some() { "LobbyWidget" } else if jason { "KillerHUDWidget" } else if spectator { "SpectatorHUDWidget" } else { "CounselorHUDWidget" });
+    b.spawn(&laid, root, full, if board.is_some() { "ScoreboardWidget" } else if badge.is_some() { "MatchEnd_Badges" } else if ended.is_some() { "MatchEnd" } else if menu_jason.is_some() && kill_menu.is_some() && open_lobby.is_some() && hud.kill_menu.is_some() { "Kill_Select_Widget" } else if menu_jason.is_some() && open_lobby.is_some() { "Jason_Select_Widget" } else if menu_class.is_some() && open_lobby.is_some() { "Counselor_Menu" } else if open_lobby.is_some() { "LobbyWidget" } else if jason { "KillerHUDWidget" } else if spectator { "SpectatorHUDWidget" } else { "CounselorHUDWidget" });
     // Her breath meter and interaction dial are hers (Jason's HUD has neither; nor has the lobby).
     if let Some(breath) = hud.breath.as_ref().filter(|_| !jason && open_lobby.is_none() && ended.is_none()) {
         let laid = breath.layout(full);
@@ -1647,7 +1685,7 @@ fn fill_counselor_menu(tree: &mut Widget, class: &str, counselors: Option<&crate
 /// the kill's ContextKillHUDIcon; none: KillSelectionEmpty_01, its default). The profile's GrabKills taken as his own
 /// slots (InitFromPlayerState with no picks: jason.rs grab_kill_slots). NameText and DescriptionText cleared (the
 /// focused button's).
-fn fill_jason_menu(hud: &Hud, tree: &mut Widget, killer: &Value) {
+fn fill_jason_menu(hud: &Hud, tree: &mut Widget, killer: &Value, picks: &[String]) {
     let menu = &killer["Menu"];
     let text = |t: &str| json!({ "LocalizedString": t });
     let weapon = format!("Weapon: {}", menu["WeaponName"].as_str().unwrap_or(""));
@@ -1680,20 +1718,14 @@ fn fill_jason_menu(hud: &Hud, tree: &mut Widget, killer: &Value) {
                 .collect();
         }
     }
-    // His slots: GrabKillClasses in order, the first empty one his weapon's DefaultGrabKill and the rest empty.
-    let names = &killer["Names"];
-    let mut slots: [Option<String>; 4] = Default::default();
-    for (i, slot) in slots.iter_mut().enumerate() {
-        match names[format!("GrabKillClass{i}")].as_str().unwrap_or("") {
-            "" => {
-                *slot = names["DefaultGrabKill"].as_str().map(str::to_string);
-                break;
-            }
-            class => *slot = Some(class.to_string()),
-        }
-    }
-    for (i, class) in slots.iter().enumerate() {
-        let icon = class.as_deref().and_then(|c| hud.classes.prop(c, "ContextKillHUDIcon").as_str()).and_then(|s| s.split('\'').nth(1)).and_then(|n| hud.textures.get(n).cloned());
+    // His slots: his picks, else his own (GrabKillClasses in order, the first empty one his weapon's DefaultGrabKill).
+    let own = crate::jason::slots_from(&killer["Names"]);
+    let slots: Vec<Option<usize>> = (0..4).map(|i| picks.get(i).filter(|p| !p.is_empty()).and_then(|p| crate::jason::kill_index(p)).or(own[i])).collect();
+    for (i, kill) in slots.iter().enumerate() {
+        let icon = kill.and_then(|k| hud.textures.get(&crate::jason::kills()[k].icon).cloned()).or_else(|| {
+            let class = kill.map(|k| format!("{}_C", crate::jason::kills()[k].class));
+            class.as_deref().and_then(|c| hud.classes.prop(c, "ContextKillHUDIcon").as_str()).and_then(|s| s.split('\'').nth(1)).and_then(|n| hud.textures.get(n).cloned())
+        });
         let Some(b) = tree.find_mut(&format!("Kill_Select_Button{}", i + 1)) else { continue };
         if let (Some(img), Some(icon)) = (b.find_mut("GrabKillImg"), icon) {
             img.props["Brush"]["ResourceObject"] = json!({ "File": icon });
@@ -1701,6 +1733,65 @@ fn fill_jason_menu(hud: &Hud, tree: &mut Widget, killer: &Value) {
         if let Some(h) = b.find_mut("HighlightImg") {
             h.set_visibility(Vis::Hidden);
         }
+    }
+}
+
+/// Kill_Select_Widget (decompiled): FirstNameText / MovieNumber as the Jason menu's; NonWeaponGrabKillsVeritcalBox and
+/// WeaponGrabKillBox a GrabKillList (a row) every ten of its hand kills, then of his weapon's (killer_profile.rs
+/// kill_list), each a GrabKillButtonLarge (GrabKillImage the kill's GetGrabKillImage(class, false): its
+/// ContextKillHUDIcon; AlreadySelectedCheck when it's in another slot; HighlightImg on the focused one); NameText and
+/// DescriptionText the focused kill's FriendlyName and Description (OnFocused_WeaponGrabKill).
+fn fill_kill_menu(hud: &Hud, tree: &mut Widget, m: &crate::killer_profile::KillMenu, killer: &Value, picks: &[String]) {
+    let menu = &killer["Menu"];
+    let text = |t: &str| json!({ "LocalizedString": t });
+    let kills = crate::jason::kills();
+    let (entries, hand) = crate::killer_profile::kill_list(&crate::killer_profile::weapon_of(killer));
+    let focused = entries.get(m.index).map(|&k| &kills[k]);
+    for (w, t) in [
+        ("FirstNameText", menu["CharacterName"].as_str().unwrap_or("")),
+        ("MovieNumber", menu["CharacterTropeName"].as_str().unwrap_or("")),
+        ("NameText", focused.map_or("", |k| k.title.as_str())),
+        ("DescriptionText", focused.map_or("", |k| k.description.as_str())),
+    ] {
+        if let Some(x) = tree.find_mut(w) {
+            x.props["Text"] = text(t);
+        }
+    }
+    let Some(button) = &hud.kill_button else { return };
+    let rows = |range: std::ops::Range<usize>, tag: &str| -> Vec<Widget> {
+        let list: Vec<usize> = range.collect();
+        list.chunks(crate::killer_profile::ROW)
+            .enumerate()
+            .map(|(r, row)| {
+                let buttons = row
+                    .iter()
+                    .map(|&i| {
+                        let k = &kills[entries[i]];
+                        let mut x = button.clone();
+                        x.name = format!("GrabKill_{i}");
+                        x.slot_kind = "HorizontalBoxSlot".into();
+                        x.slot = json!({});
+                        if let (Some(img), Some(icon)) = (x.find_mut("GrabKillImage"), hud.textures.get(&k.icon)) {
+                            img.props["Brush"]["ResourceObject"] = json!({ "File": icon });
+                        }
+                        let elsewhere = picks.iter().enumerate().any(|(s, p)| *p == k.class && s != m.slot);
+                        for (n, shown) in [("HighlightImg", i == m.index), ("AlreadySelectedCheck", elsewhere)] {
+                            if let Some(h) = x.find_mut(n) {
+                                h.set_visibility(if shown { Vis::Visible } else { Vis::Hidden });
+                            }
+                        }
+                        x
+                    })
+                    .collect();
+                Widget::new("HorizontalBox", &format!("{tag}Row_{r}"), json!({}), "VerticalBoxSlot", json!({}), buttons)
+            })
+            .collect()
+    };
+    if let Some(b) = tree.find_mut("NonWeaponGrabKillsVeritcalBox") {
+        b.children = rows(0..hand, "Hand");
+    }
+    if let Some(b) = tree.find_mut("WeaponGrabKillBox") {
+        b.children = rows(hand..entries.len(), "Weapon");
     }
 }
 

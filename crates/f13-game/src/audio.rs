@@ -698,7 +698,7 @@ fn voices(
         }
     };
     let kill = |a: &Option<String>| {
-        a.as_deref().is_some_and(|a| action_line(a).is_some_and(|l| l.ends_with("Kill")) || crate::jason::KILLS.iter().any(|k| k.2 == a))
+        a.as_deref().is_some_and(|a| action_line(a).is_some_and(|l| l.ends_with("Kill")) || crate::jason::kills().iter().any(|k| k.hers == a))
     };
     // PlayVoiceOver says Died only outside a context kill (!bInContextKill, FUN_14031bff0): any kill takes her while
     // he holds her (grab, placed, drown kills), or by her own kill take.

@@ -33,6 +33,7 @@ mod bot;
 mod cabinets;
 mod cinematic;
 mod counselor_preview;
+mod killer_profile;
 mod car_lights;
 mod character;
 mod controls;
@@ -166,8 +167,8 @@ struct Args {
     /// Voice without push-to-talk (the game's default is push-to-talk: T).
     open_mic: bool,
     bot_radio: bool,
-    /// Jason's grab kill, by name (jason::KILLS: e.g. curbstomp); else one at random.
-    kill: Option<usize>,
+    /// Jason's grab kill, by name (its take's end: jason::kill_by_name, e.g. curbstomp); else one at random.
+    kill: Option<String>,
     /// Every fuse box starts destroyed (power.rs; implied by --bot-power).
     cut_power: bool,
     bot_power: bool,
@@ -374,11 +375,7 @@ fn parse_args() -> Args {
             "--bot-kill-jason" => bot_kill_jason = true,
             "--bot-mask" => bot_mask = true,
             "--kill" => {
-                let name = it.next().unwrap_or_default();
-                kill = jason::KILLS.iter().position(|(_, anim, _, _, _)| anim.ends_with(name.as_str()));
-                if kill.is_none() {
-                    eprintln!("--kill {name}: none of {:?}", jason::KILLS.map(|k| k.1));
-                }
+                kill = it.next();
             }
             "--cut-power" => cut_power = true,
             "--bot-power" => (bot_power, cut_power) = (true, true),
@@ -526,6 +523,8 @@ pub(crate) struct GameRng(pub f13_core::spawn::Rng);
 
 fn main() {
     let args = parse_args();
+    // The grab kills (grab_kills.json), before anything asks for them.
+    jason::load_kills(&args.export);
     let load = |name: &str| {
         let p = args.export.join("levels").join(format!("{name}.json"));
         LevelLayout::load(&p).unwrap_or_else(|e| {
@@ -693,7 +692,7 @@ fn main() {
             app.insert_resource(audio_settings::AudioSettings { use_push_to_talk: false, ..audio_settings::AudioSettings::load() });
         }
         wardrobe::plugin(&mut app);
-        app.add_plugins((emotes::EmotesPlugin, perks::PerksPlugin));
+        app.add_plugins((emotes::EmotesPlugin, perks::PerksPlugin, killer_profile::KillerProfilePlugin));
         if args.override_spawning {
             app.insert_resource(props::OverrideSpawning);
         }
@@ -720,7 +719,10 @@ fn main() {
             bot::setup(bot::BotSetup::CutPower);
         }
         if !args.no_jason && !bot_alone {
-            app.add_plugins(jason::JasonPlugin { delay: args.jason_delay, kill: args.kill, health: args.jason_health });
+            if let Some(name) = args.kill.as_deref().filter(|n| jason::kill_by_name(n).is_none()) {
+                eprintln!("--kill {name}: none of {:?}", jason::kills().iter().map(|k| k.his.as_str()).collect::<Vec<_>>());
+            }
+            app.add_plugins(jason::JasonPlugin { delay: args.jason_delay, kill: args.kill.clone(), health: args.jason_health });
         }
     }
     if let Some(path) = args.screenshot.clone() {

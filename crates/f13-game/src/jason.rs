@@ -167,16 +167,44 @@ const BLOCK_LAYER_BLEND_S: f32 = 0.1;
 /// GrabKillClasses in order, the first empty one taking the weapon's DefaultGrabKill and ending the list: every
 /// Jason keeps Jason_Base's GrabKillClasses[0] (Choke_GrabKill) and empties 1-3, so the choke on the right, his
 /// weapon's kill on the bottom (and the click: J2's pickaxe throat hack), nothing on the left or top. From his
-/// export (killers/<name>.json Names: GrabKillClass0..3, DefaultGrabKill), set as he loads; J2's until then.
+/// export (killers/<name>.json Names: GrabKillClass0..3, DefaultGrabKill), set as he loads; J2's until then. Each
+/// slot the player picked (PickedGrabKills: his loadout, lobby.rs JasonLoadout) takes the pick instead.
 pub fn grab_kill_slots() -> [Option<usize>; 4] {
-    *GRAB_KILL_SLOTS.get().unwrap_or(&[Some(5), Some(0), None, None])
+    let slots = *GRAB_KILL_SLOTS.read().unwrap_or_else(|e| e.into_inner());
+    slots.unwrap_or_else(|| {
+        let k = |c: &str| kill_index(c);
+        [k("Choke_GrabKill"), k("Pickaxe_ThroatHack_GrabKill"), None, None]
+    })
 }
 
-static GRAB_KILL_SLOTS: std::sync::OnceLock<[Option<usize>; 4]> = std::sync::OnceLock::new();
+static GRAB_KILL_SLOTS: std::sync::RwLock<Option<[Option<usize>; 4]>> = std::sync::RwLock::new(None);
+static DEFAULT_SLOTS: std::sync::RwLock<Option<[Option<usize>; 4]>> = std::sync::RwLock::new(None);
+
+/// His picks (kill classes, "" none) over his defaults.
+pub fn set_grab_kill_picks(picks: &[String]) {
+    let Some(defaults) = *DEFAULT_SLOTS.read().unwrap_or_else(|e| e.into_inner()) else { return };
+    let mut slots = defaults;
+    for (i, p) in picks.iter().take(4).enumerate() {
+        if let Some(k) = kill_index(p.trim_end_matches("_C")) {
+            slots[i] = Some(k);
+        }
+    }
+    *GRAB_KILL_SLOTS.write().unwrap_or_else(|e| e.into_inner()) = Some(slots);
+}
+
+/// A kill's index in [`kills`] by its class (without "_C").
+pub fn kill_index(class: &str) -> Option<usize> {
+    kills().iter().position(|k| k.class == class)
+}
+
+/// A kill by its take's name's end (`--kill curbstomp`).
+pub fn kill_by_name(name: &str) -> Option<usize> {
+    kills().iter().position(|k| k.his.ends_with(name))
+}
 
 /// His slots from his killer JSON's names (see [`grab_kill_slots`]); a kill this port doesn't have stays empty.
-fn slots_from(names: &serde_json::Value) -> [Option<usize>; 4] {
-    let index = |class: &str| KILLS.iter().position(|k| format!("{}_C", k.3) == class);
+pub(crate) fn slots_from(names: &serde_json::Value) -> [Option<usize>; 4] {
+    let index = |class: &str| kill_index(class.trim_end_matches("_C"));
     let mut slots = [None; 4];
     for (i, slot) in slots.iter_mut().enumerate() {
         match names[format!("GrabKillClass{i}")].as_str().unwrap_or("") {
@@ -190,9 +218,9 @@ fn slots_from(names: &serde_json::Value) -> [Option<usize>; 4] {
     slots
 }
 
-/// The weapon whose kills the AI picks among (with the hand kills): his DefaultGrabKill's (J2's pickaxe until set).
+/// The weapon whose kills the AI picks among (with the hand kills): his slots' weapon kill's (J2's pickaxe until set).
 fn own_weapon() -> &'static str {
-    grab_kill_slots().iter().flatten().map(|&k| KILLS[k].0).find(|w| *w != "hand").unwrap_or("pickaxe")
+    grab_kill_slots().iter().flatten().map(|&k| kills()[k].weapon.as_str()).find(|w| !w.is_empty()).unwrap_or("PickAxe_C")
 }
 
 /// The grab kills' KillBounds by [`KILLS`] index (DoesKillVolumeFit): the box's place in the kill's root
@@ -200,8 +228,8 @@ fn own_weapon() -> &'static str {
 /// KillerGrabWidget's icons (GetGrabKillIcon(slot, true)).
 #[derive(Resource, Default)]
 pub struct GrabKillInfo {
-    pub bounds: [Option<(Transform, Vec3)>; KILLS.len()],
-    pub icons: [Option<String>; KILLS.len()],
+    pub bounds: Vec<Option<(Transform, Vec3)>>,
+    pub icons: Vec<Option<String>>,
 }
 
 /// Which of his four grab kill slots he can use as he holds her (IsGrabKillAvailable 0x1403f5500): bGrabKillsActive
@@ -215,25 +243,79 @@ pub struct GrabKillInfo {
 #[derive(Resource, Default, Debug, PartialEq)]
 pub struct GrabKillsAvailable(pub [bool; 4]);
 
-/// The grab kills: the weapon (its kills' WeaponClass; "hand" for his own), his and her paired montage's take (their
-/// special moves' ContextMontage: the same name but the spear's), the kill class (its camera), and its KillName: the
-/// pickaxe's, his own choke (Choke_GrabKill: Jason_Choke_CK / Counselor_Choke_CK), and the other Jasons' weapons'
-/// DefaultGrabKill (Axe, PigSplitter, Shears, Spear, Machete, FireAxe: Jason_axe_CrotchChop / Counselor_Axe_CrotchChop
-/// and so on).
-pub const KILLS: [(&str, &str, &str, &str, &str); 12] = [
-    ("pickaxe", "cinematic_pickaxe_throathack", "cinematic_pickaxe_throathack", "Pickaxe_ThroatHack_GrabKill", "Pickaxe Throat Hack"),
-    ("pickaxe", "cinematic_pickaxe_head_canopener", "cinematic_pickaxe_head_canopener", "Pickaxe_Canopener_GrabKill", "Pickaxe Can Opener"),
-    ("pickaxe", "cinematic_pickaxe_curbstomp", "cinematic_pickaxe_curbstomp", "PickAxe_CurbStomp_GrabKill", "Pickaxe Curb Stomp"),
-    ("pickaxe", "cinematic_pickaxe_sweeptheleg", "cinematic_pickaxe_sweeptheleg", "PickAxe_SweepTheLeg_GrabKill", "Pickaxe Sweep The Leg"),
-    ("pickaxe", "cinematic_pickaxe_toppopper", "cinematic_pickaxe_toppopper", "PickAxe_TopPopper_GrabKill", "Pickaxe Top Popper"),
-    ("hand", "cinematic_hand_choke", "cinematic_hand_choke", "Choke_GrabKill", "Choke"),
-    ("axe", "cinematic_axe_crotchchop", "cinematic_axe_crotchchop", "Axe_CrotchChop_GrabKill", "Crotch Chop"),
-    ("pigsplitter", "cinematic_pigsplitter_TheJarvis", "cinematic_pigsplitter_TheJarvis", "PigSplitter_TheJarvis_GrabKill", "TheJarvis"),
-    ("shears", "cinematic_shears_lastbreath", "cinematic_shears_lastbreath", "Shears_LastBreath_GrabKill", "Last Breath"),
-    ("spear", "cinematic_m_spear_head_knockdownstab_01", "cinematic_spear_head_knockdownstab_01", "Spear_KnockDown_GrabKill", "Spear Knockdown"),
-    ("machete", "cinematic_machete_eviscerate_stomach", "cinematic_machete_eviscerate_stomach", "Machete_Eviscerate_GrabKill", "Machete Eviscerate"),
-    ("fireaxe", "cinematic_fireaxe_doubletap", "cinematic_fireaxe_doubletap", "Fireaxe_Doubletap_GrabKill", "Double Tap"),
-];
+/// A grab kill: the weapon it needs (its WeaponClass; "" for a hand kill), his and her paired montage's take (their
+/// special moves' ContextMontage), the kill class (without "_C": its camera and KillBounds) and its KillInfo's
+/// KillName. The export's grab_kills.json (f13-export GrabKills: Kill_Select_Widget's NonWeaponGrabKills and
+/// WeaponGrabKills, the kills the menu offers), else [`builtin_kills`].
+#[derive(Clone, Debug)]
+pub struct Kill {
+    pub weapon: String,
+    pub his: String,
+    pub hers: String,
+    pub class: String,
+    pub name: String,
+    /// Its FriendlyName and Description (the menus' picker), and its ContextKillHUDIcon (a texture name).
+    pub title: String,
+    pub description: String,
+    pub icon: String,
+}
+
+static KILL_TABLE: std::sync::OnceLock<Vec<Kill>> = std::sync::OnceLock::new();
+
+/// The grab kills (see [`Kill`]).
+pub fn kills() -> &'static [Kill] {
+    KILL_TABLE.get_or_init(builtin_kills)
+}
+
+/// Reads grab_kills.json (before anything asks for [`kills`]).
+pub fn load_kills(export: &std::path::Path) {
+    let v: Option<serde_json::Value> = std::fs::read_to_string(export.join("grab_kills.json")).ok().and_then(|t| serde_json::from_str(&t).ok());
+    let list: Vec<Kill> = v
+        .as_ref()
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|k| {
+            let s = |n: &str| k[n].as_str().map(str::to_string);
+            Some(Kill {
+                weapon: s("Weapon")?,
+                his: s("HisTake")?,
+                hers: s("HersTake")?,
+                class: s("Class")?.trim_end_matches("_C").to_string(),
+                name: s("KillName")?,
+                title: s("Name").unwrap_or_default(),
+                description: s("Description").unwrap_or_default(),
+                icon: s("Icon").unwrap_or_default(),
+            })
+        })
+        .collect();
+    if list.is_empty() {
+        warn!("no grab_kills.json (re-export: f13-export grabkills): the pickaxe's, the choke and the weapons' defaults only");
+        return;
+    }
+    let _ = KILL_TABLE.set(list);
+}
+
+/// The kills before grab_kills.json: the pickaxe's, the choke, and the other Jasons' weapons' DefaultGrabKill.
+fn builtin_kills() -> Vec<Kill> {
+    [
+        ("PickAxe_C", "cinematic_pickaxe_throathack", "cinematic_pickaxe_throathack", "Pickaxe_ThroatHack_GrabKill", "Pickaxe Throat Hack"),
+        ("PickAxe_C", "cinematic_pickaxe_head_canopener", "cinematic_pickaxe_head_canopener", "Pickaxe_Canopener_GrabKill", "Pickaxe Can Opener"),
+        ("PickAxe_C", "cinematic_pickaxe_curbstomp", "cinematic_pickaxe_curbstomp", "PickAxe_CurbStomp_GrabKill", "Pickaxe Curb Stomp"),
+        ("PickAxe_C", "cinematic_pickaxe_sweeptheleg", "cinematic_pickaxe_sweeptheleg", "PickAxe_SweepTheLeg_GrabKill", "Pickaxe Sweep The Leg"),
+        ("PickAxe_C", "cinematic_pickaxe_toppopper", "cinematic_pickaxe_toppopper", "PickAxe_TopPopper_GrabKill", "Pickaxe Top Popper"),
+        ("", "cinematic_hand_choke", "cinematic_hand_choke", "Choke_GrabKill", "Choke"),
+        ("Axe_C", "cinematic_axe_crotchchop", "cinematic_axe_crotchchop", "Axe_CrotchChop_GrabKill", "Crotch Chop"),
+        ("PigSplitter_C", "cinematic_pigsplitter_TheJarvis", "cinematic_pigsplitter_TheJarvis", "PigSplitter_TheJarvis_GrabKill", "TheJarvis"),
+        ("Shears_C", "cinematic_shears_lastbreath", "cinematic_shears_lastbreath", "Shears_LastBreath_GrabKill", "Last Breath"),
+        ("Spear_C", "cinematic_m_spear_head_knockdownstab_01", "cinematic_spear_head_knockdownstab_01", "Spear_KnockDown_GrabKill", "Spear Knockdown"),
+        ("Machete_C", "cinematic_machete_eviscerate_stomach", "cinematic_machete_eviscerate_stomach", "Machete_Eviscerate_GrabKill", "Machete Eviscerate"),
+        ("FireAxe_C", "cinematic_fireaxe_doubletap", "cinematic_fireaxe_doubletap", "Fireaxe_Doubletap_GrabKill", "Double Tap"),
+    ]
+    .into_iter()
+    .map(|(w, his, hers, class, name)| Kill { weapon: w.into(), his: his.into(), hers: hers.into(), class: class.into(), name: name.into(), title: name.into(), description: String::new(), icon: String::new() })
+    .collect()
+}
 
 const HIT_BACK: &str = "f_normal_stand_hitreaction_back_01";
 const HIT_LEFT: &str = "f_normal_stand_hitreaction_left_01";
@@ -350,8 +432,8 @@ const WANDER_SECONDS: f32 = 40.0;
 pub struct JasonPlugin {
     /// Seconds before he starts hunting.
     pub delay: f32,
-    /// The grab kill he always does (an index into [`KILLS`]; `--kill <name>`), else one at random.
-    pub kill: Option<usize>,
+    /// The grab kill he always does (its take's name's end: [`kill_by_name`]; `--kill <name>`), else one at random.
+    pub kill: Option<String>,
     /// Testing (--jason-health): his health at the start.
     pub health: Option<f32>,
 }
@@ -359,14 +441,14 @@ pub struct JasonPlugin {
 #[derive(Resource)]
 pub(crate) struct JasonConfig {
     delay: f32,
-    kill: Option<usize>,
+    kill: Option<String>,
     health: Option<f32>,
 }
 
 impl Plugin for JasonPlugin {
     fn build(&self, app: &mut App) {
         crate::net_world::sounds(app);
-        app.insert_resource(JasonConfig { delay: self.delay, kill: self.kill, health: self.health })
+        app.insert_resource(JasonConfig { delay: self.delay, kill: self.kill.clone(), health: self.health })
             .init_resource::<GrabKillsAvailable>()
             .add_systems(Update, show_mask)
             .init_resource::<JasonTarget>()
@@ -1132,7 +1214,9 @@ fn load_knife_look(mut commands: Commands, export: Res<crate::ExportRoot>, asset
     let killer = std::fs::read_to_string(export.0.join("killers").join(format!("{}.json", crate::character::killer_class())));
     if let Some(names) = killer.ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).map(|v| v["Names"].clone()) {
         if names.get("DefaultGrabKill").is_some() {
-            let _ = GRAB_KILL_SLOTS.set(slots_from(&names));
+            let slots = slots_from(&names);
+            *DEFAULT_SLOTS.write().unwrap_or_else(|e| e.into_inner()) = Some(slots);
+            *GRAB_KILL_SLOTS.write().unwrap_or_else(|e| e.into_inner()) = Some(slots);
         } else {
             warn!("{}'s grab kills aren't exported (re-export: f13-export killer): Part 2's", crate::character::killer_class());
         }
@@ -1140,8 +1224,8 @@ fn load_knife_look(mut commands: Commands, export: Res<crate::ExportRoot>, asset
     // The grab kills' KillBounds and HUD icons.
     let textures: std::collections::HashMap<String, String> =
         std::fs::read_to_string(export.0.join("ui").join("textures.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-    let mut info = GrabKillInfo::default();
-    for (i, (_, _, _, class, _)) in KILLS.iter().enumerate() {
+    let mut info = GrabKillInfo { bounds: vec![None; kills().len()], icons: vec![None; kills().len()] };
+    for (i, Kill { class, .. }) in kills().iter().enumerate() {
         let Some(c) = classes.get(&format!("{class}_C")) else {
             warn!("{class}_C isn't in classes.json (re-export: f13-export levels): its grab kill always fits and has no icon");
             continue;
@@ -1655,7 +1739,7 @@ fn spawn_jason(
                 // (F13_JASON_KNIVES: another count to start with, testing.)
                 knives: std::env::var("F13_JASON_KNIVES").ok().and_then(|v| v.parse().ok()).unwrap_or(tuning.num_knives),
                 kill: 0,
-                kill_move: (KILLS[0].1, KILLS[0].2, KILLS[0].4),
+                kill_move: (kills()[0].his.as_str(), kills()[0].hers.as_str(), kills()[0].name.as_str()),
                 traps: tuning.trap_count,
                 knife_cooldown: 0.0,
                 trap_spots: Vec::new(),
@@ -3409,9 +3493,11 @@ pub(crate) fn update_jason(
                     // The AI kills after a while; the player with a kill key or a click. One of the weapon's grab kills.
                     let picked = player_input.and_then(|i| grab_kill_slots()[i.presses.kill.unwrap_or(1).min(3)]);
                     // (The AI: PLACEHOLDER, one of his weapon's kills or the hand kills at random.)
-                    let own: Vec<usize> = (0..KILLS.len()).filter(|&k| KILLS[k].0 == "hand" || KILLS[k].0 == own_weapon()).collect();
-                    j.kill = picked.or(config.kill).unwrap_or_else(|| own[rng.0.index(own.len())]);
-                    let (_, his, hers, class, name) = KILLS[j.kill];
+                    // (Only the kills of his slots' weapon this port has, and the hand kills.)
+                    let own: Vec<usize> = (0..kills().len()).filter(|&k| kills()[k].weapon.is_empty() || kills()[k].weapon == own_weapon()).collect();
+                    j.kill = picked.or(config.kill.as_deref().and_then(kill_by_name)).unwrap_or_else(|| own[rng.0.index(own.len())]);
+                    let Kill { his, hers, class, name, .. } = &kills()[j.kill];
+                    let (his, hers, class, name) = (his.as_str(), hers.as_str(), class.as_str(), name.as_str());
                     info!("Jason: {name}");
                     j.kill_move = (his, hers, name);
                     j.kill_score = Some((format!("{class}_C"), "ContextKillComponent"));

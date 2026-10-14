@@ -75,21 +75,24 @@ UStaticMesh? EngineMesh(string path)
     catch (Exception e) { Console.WriteLine($"engine mesh {path}: {e.Message}"); return null; }
 }
 Collision.LoadProfiles(game);
+// The animation lists with every grab kill's montages added (GrabKills: Kill_Select_Widget's), hers and his.
+string[] CounselorAnims() => Mvp.CounselorAnims.Concat(GrabKills.All(provider).Select(g => g.Hers)).Distinct().ToArray();
+string[] KillerAnims() => Mvp.KillerAnims.Concat(GrabKills.All(provider).Select(g => g.His)).Distinct().ToArray();
 // The animations' PlaySound notifies (anim_sounds.json); returns their cues for the sound export.
 List<string> WriteAnimSounds()
 {
-    var (json, cues) = AnimSounds.Collect(provider, Mvp.CounselorAnims.Concat(Mvp.KillerAnims));
+    var (json, cues) = AnimSounds.Collect(provider, CounselorAnims().Concat(KillerAnims()));
     File.WriteAllText(Path.Combine(outDir, "anim_sounds.json"), json.ToString(Newtonsoft.Json.Formatting.Indented));
     Console.WriteLine($"anim sounds: {json.Count} animations, {cues.Distinct().Count()} cues");
     // And their props (anim_props.json: SCPropSpawnerNotifyState), the meshes queued.
-    var props = AnimSounds.Props(provider, Mvp.CounselorAnims.Concat(Mvp.KillerAnims), Queue, m => new SkinnedAssetExporter(m).SavePath + ".glb");
+    var props = AnimSounds.Props(provider, CounselorAnims().Concat(KillerAnims()), Queue, m => new SkinnedAssetExporter(m).SavePath + ".glb");
     File.WriteAllText(Path.Combine(outDir, "anim_props.json"), props.ToString(Newtonsoft.Json.Formatting.Indented));
     Console.WriteLine($"anim props: {props.Count} animations");
     // And their post-process blendables (anim_blendables.json: SCPostProcessBlendableNotify: the kills' screen blood).
-    var blendables = AnimSounds.Blendables(provider, Mvp.CounselorAnims.Concat(Mvp.KillerAnims), Queue, t => t.GetPathName().Split('.')[0].TrimStart('/').Replace("Game/", "SummerCamp/Content/") + ".dds");
+    var blendables = AnimSounds.Blendables(provider, CounselorAnims().Concat(KillerAnims()), Queue, t => t.GetPathName().Split('.')[0].TrimStart('/').Replace("Game/", "SummerCamp/Content/") + ".dds");
     File.WriteAllText(Path.Combine(outDir, "anim_blendables.json"), blendables.ToString(Newtonsoft.Json.Formatting.Indented));
     // And their gore (anim_gore.json: SCApplyBloodMaskAnimNotify, SCDetachLimbAnimNotify: the kills' blood and limbs).
-    var gore = AnimSounds.Gore(provider, Mvp.CounselorAnims.Concat(Mvp.KillerAnims), Queue, t => t.GetPathName().Split('.')[0].TrimStart('/').Replace("Game/", "SummerCamp/Content/") + ".png");
+    var gore = AnimSounds.Gore(provider, CounselorAnims().Concat(KillerAnims()), Queue, t => t.GetPathName().Split('.')[0].TrimStart('/').Replace("Game/", "SummerCamp/Content/") + ".png");
     File.WriteAllText(Path.Combine(outDir, "anim_gore.json"), gore.ToString(Newtonsoft.Json.Formatting.Indented));
     Console.WriteLine($"anim gore: {gore.Count} takes");
     Console.WriteLine($"anim blendables: {blendables.Count} animations");
@@ -370,7 +373,7 @@ void AddClassByName(string name)
 void WriteKillCameras()
 {
     var all = new Newtonsoft.Json.Linq.JObject();
-    foreach (var entry in Mvp.KillCameras)
+    foreach (var entry in Mvp.KillCameras.Concat(GrabKills.All(provider).Select(g => "/Game/" + g.Path.Replace("SummerCamp/Content/", "").Replace("Game/", ""))).Distinct())
     {
         var parts = entry.Split('#');
         var path = parts[0];
@@ -494,7 +497,8 @@ void WriteWeather()
 
 void WriteClasses()
 {
-    foreach (var c in Mvp.Classes) AddClassByName(c);
+    foreach (var c in Mvp.Classes.Concat(GrabKills.All(provider).Select(g => g.Class)).Distinct()) AddClassByName(c);
+    GrabKills.Write(provider, outDir);
     classes.Run();
     // The kills' KillInfo damage types (their ScoreEvent: the killer's Resourceful, Versatile or Seeker).
     var killInfos = classes.Classes.Values.SelectMany(c => c["Components"] as Newtonsoft.Json.Linq.JArray ?? [])
@@ -762,8 +766,8 @@ switch (rest[0])
         WriteSpecialMoves();
         NavMeshExporter.Write(provider, outDir, Mvp.Map);
         AnimExporter.Write(provider, outDir, Mvp.Montages);
-        new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, Mvp.CounselorAnims, Mvp.KeepRoot);
-        new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, Mvp.KillerAnims, Mvp.KeepRoot);
+        new CounselorExporter(provider, outDir, Queue).Export(Mvp.Counselor, CounselorAnims(), Mvp.KeepRoot);
+        new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, KillerAnims(), Mvp.KeepRoot);
         new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TrapMesh, Mvp.TrapAnims); new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.TentMesh, Mvp.TentAnims); new CounselorExporter(provider, outDir, Queue).ExportPropAnims(Mvp.CarMesh, Mvp.CarAnims);
         foreach (var (mesh, anim) in Mvp.PlacedKillProps) new CounselorExporter(provider, outDir, Queue).ExportPropAnims(mesh, [anim]);
         WriteKillCameras();
@@ -809,7 +813,7 @@ switch (rest[0])
         return 0;
     case "counselor": // counselor [Name...]: counselors' parts and animations (and the meshes they need); default the MVP's
         foreach (var name in rest.Count > 1 ? rest.Skip(1) : [Mvp.Counselor.Split('/')[^1].Replace("_Counselor", "")])
-            new CounselorExporter(provider, outDir, Queue).Export($"/Game/Characters/Counselors/{name}/{name}_Counselor", Mvp.CounselorAnims, Mvp.KeepRoot);
+            new CounselorExporter(provider, outDir, Queue).Export($"/Game/Characters/Counselors/{name}/{name}_Counselor", CounselorAnims(), Mvp.KeepRoot);
         new CounselorExporter(provider, outDir, Queue).ExportEmotes();
         new CounselorExporter(provider, outDir, Queue).ExportPerks();
         break;
@@ -923,11 +927,14 @@ switch (rest[0])
     }
     case "killer": // killer [Blueprint...]: Jasons' parts, weapon and animations (and the meshes they need); default the MVP's
         foreach (var bp in rest.Count > 1 ? rest.Skip(1) : [Mvp.Killer])
-            new CounselorExporter(provider, outDir, Queue).ExportKiller(bp, Mvp.KillerAnims, Mvp.KeepRoot);
+            new CounselorExporter(provider, outDir, Queue).ExportKiller(bp, KillerAnims(), Mvp.KeepRoot);
         break;
     case "water": // the map's water volumes (water.json)
         WriteWater();
         break;
+    case "grabkills": // grab_kills.json alone (GrabKills: the grab kills Jason's menu offers)
+        GrabKills.Write(provider, outDir);
+        return 0;
     case "killcams": // the kills' camera splines (kill_cameras.json)
         WriteKillCameras();
         break;
