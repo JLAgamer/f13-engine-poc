@@ -590,6 +590,12 @@ fn skin_gore_material(root: &Path, info: &MaterialInfo, loader: &Loader, fallbac
     if !matches!(base.alpha_mode, AlphaMode::Mask(_)) {
         base.alpha_mode = AlphaMode::Mask(0.3333);
     }
+    // Its normal is Skin Normal (the base pass's t0): every counselor's skin instance also carries the master's
+    // "Normal" (T_Athlete_Girl_Clothes_N, its stitches), which it never samples.
+    if let Some(n) = info.textures.get("Skin Normal").and_then(|p| loader.load(p, Tex::Data)) {
+        base.normal_map_texture = Some(n);
+        base.flip_normal_map_y = true;
+    }
     ExtendedMaterial {
         base,
         extension: SkinMaskExt {
