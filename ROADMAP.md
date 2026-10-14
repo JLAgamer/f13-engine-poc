@@ -17,7 +17,9 @@ Lighting first (the user, 2026-10-14):
 - [ ] Post-processing and lighting: compare against the game's own screenshots (the user's cabin porch reference,
       2026-10-12: its wall lamp's spots light sharp bands up and down the logs)
 - [ ] Jason's HUD: the ability unlock and Morph cursor's shader (M_UI_JasonHud_01, shaders/additive.wgsl) draws a little
-      too faint (the user, 2026-10-14)
+      too faint (the user, 2026-10-14): likely the blend's space: Slate adds a UI material's output to the gamma-encoded
+      image, f13-rs adds the decoded value to the linear one (the same over black, fainter over anything lit: the
+      Morph map); needs the HUD's additive brushes drawn in a gamma-space layer
 - [ ] The lobby's mouse controls (the user, 2026-10-14): its buttons, lists and menus clickable and hoverable, as
       the game's widgets are (today only keys drive it)
 - [ ] The lobby's rest: a full 8-player run (needs more machines: at most 2 instances run here)
