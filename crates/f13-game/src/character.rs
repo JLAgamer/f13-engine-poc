@@ -831,7 +831,13 @@ pub(crate) fn animate(
         // bUseStartStopTransitions, which nothing sets (no constructor, Blueprint or package), so CurrentMoveState is
         // just moving (3) or idle (0) and the AnimBP's Default Locomotion goes straight between Idle and Locomotion.
         // Her special moves' play rate (BeginSpecial's: her perks'): barricades, windows, getting into a hiding spot.
-        let rate = special_move_rate(&p.counselor.perks, barricading, at_window, hiding.is_some_and(|h| h.phase == crate::hiding::HidePhase::Entering));
+        // Her dodge's: her perks' too.
+        let dodge = scripted.is_none() && p.root_motion.is_some() && p.montage.as_deref().is_some_and(|m| m.to_ascii_lowercase().contains("_dodge_"));
+        let rate = if dodge {
+            p.counselor.dodge_rate()
+        } else {
+            special_move_rate(&p.counselor.perks, barricading, at_window, hiding.is_some_and(|h| h.phase == crate::hiding::HidePhase::Entering))
+        };
         rig.set_action(action, dt * rate);
         if let Some(s) = seek {
             rig.seek_action(s.0);

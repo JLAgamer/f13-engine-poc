@@ -60,7 +60,13 @@ impl Counselor {
         !self.dodging() && !s.attacking && !blocking && !s.in_special_move
     }
 
-    /// Tries to dodge. On success pays the stamina and returns the montage to play.
+    /// Her dodge montage's play rate (FUN_140319cc0: Montage_Play at 1 + her perks' DodgeSpeedModifier).
+    pub fn dodge_rate(&self) -> f32 {
+        (1.0 + self.perks.get("DodgeSpeedModifier")).max(0.01)
+    }
+
+    /// Tries to dodge. On success pays the stamina and returns the montage to play (it lasts its length over
+    /// [`Self::dodge_rate`]).
     pub fn try_dodge<'t>(&mut self, dir: DodgeDirection, s: &Situation, blocking: bool, t: &'t DodgeTuning) -> Option<&'t Montage> {
         if !self.can_dodge(s, blocking) {
             return None;
@@ -69,7 +75,7 @@ impl Counselor {
         if montage.length <= 0.0 || !self.try_use_stamina(t.stamina_cost.value(&self.stats, true)) {
             return None;
         }
-        self.dodge_left = montage.length;
+        self.dodge_left = montage.length / self.dodge_rate();
         Some(montage)
     }
 
@@ -88,6 +94,15 @@ mod tests {
         let mut cost = StatModifiedValue::constant(20.0);
         cost.modifiers[Stat::Speed as usize] = 50.0;
         DodgeTuning { stamina_cost: cost, left: m("L"), right: m("R"), back: m("B") }
+    }
+
+    #[test]
+    fn dodge_speed_perk_shortens_it() {
+        let t = tuning();
+        let mut c = Counselor::new([5; STAT_COUNT]);
+        c.perks.0.insert("DodgeSpeedModifier".into(), 0.2);
+        assert!(c.try_dodge(DodgeDirection::Left, &Situation::default(), false, &t).is_some());
+        assert!((c.dodge_left - 0.5).abs() < 1e-5);
     }
 
     #[test]

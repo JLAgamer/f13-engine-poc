@@ -461,7 +461,9 @@ fn update_one(p: &mut Player, intent: &mut Intent, local: bool, config: &PlayerC
         let situation = p.situation();
         if let Some(m) = p.counselor.try_dodge(dir, &situation, false, &t.dodge) {
             info!("dodged {dir:?} (stamina {:.1})", p.counselor.stamina);
-            p.root_motion = root_motion(&m.name, m.length);
+            // (At her dodge rate: the same move, sooner.)
+            let rate = p.counselor.dodge_rate();
+            p.root_motion = root_motion(&m.name, m.length).map(|(v, l)| (v * rate, l / rate));
             p.montage = Some(m.name.clone());
         }
     }
