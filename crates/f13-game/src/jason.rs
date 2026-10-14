@@ -3301,7 +3301,8 @@ pub(crate) fn update_jason(
                 wiggle.percent_per_wiggle *= combat.wiggle_mod(p.counselor.wounded, raged);
                 if struggle.wiggle.tick(dt, input, &wiggle) {
                     // FUN_1403a6c10: BreakFreeStaminaBoost back.
-                    let back = combat.break_free_stamina(&p.counselor.stats);
+                    // (FUN_1403a6c10: x (1 + her perks' BreakGrabStaminaModifier).)
+                    let back = combat.break_free_stamina(&p.counselor.stats) * (1.0 + p.counselor.perks.get("BreakGrabStaminaModifier"));
                     p.counselor.stamina = (p.counselor.stamina + back).min(ptuning.counselor.stamina_max);
                     info!("Vanessa: struggled free after {at:.1}s (stamina +{back:.0})");
                     commands.trigger(Score { who: pe, event: Stun::GrabBreak.score_event().unwrap_or_default() });
