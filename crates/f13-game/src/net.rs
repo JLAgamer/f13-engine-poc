@@ -1788,6 +1788,7 @@ fn net_bot_jason(
     (mut map, window): (ResMut<crate::jason_player::MorphMap>, Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>),
     pickups: Query<(Entity, &crate::props::KnifePickup, &GlobalTransform, Has<crate::props::PickedUp>)>,
     mut exit: MessageWriter<AppExit>,
+    mut cameras: Query<&mut crate::player::PlayerCamera>,
 ) {
     bot.t += time.delta_secs();
     let Ok((body, nj)) = own.single() else { return };
@@ -1863,6 +1864,11 @@ fn net_bot_jason(
                 let (ky, kp) = ((-to.x).atan2(-to.z), to.y.atan2(Vec2::new(to.x, to.z).length()));
                 controls.yaw = ky;
                 controls.pitch = kp;
+                // (And his camera's: his look copies it into the controls each frame, before or after this.)
+                for mut cam in &mut cameras {
+                    cam.yaw = ky;
+                    cam.pitch = kp;
+                }
                 if taken && nj.knives > before {
                     info!("bot: net: the knife pickup taken (hidden here), {} knives", nj.knives);
                     bot.step += 1;

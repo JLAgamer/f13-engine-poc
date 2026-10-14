@@ -246,7 +246,7 @@ pub(crate) fn client(app: &mut App) {
 
 pub(crate) fn ui(app: &mut App) {
     app.add_plugins(crate::counselor_preview::CounselorPreviewPlugin);
-    app.init_resource::<ReadyFocus>().add_systems(Update, lobby_clicks.before(Keys).before(counselor_menu).before(crate::wardrobe::wardrobe_menu).before(crate::emotes::emote_menu).before(crate::perks::perk_menu).before(crate::audio_settings::audio_menu));
+    app.init_resource::<ReadyFocus>().add_systems(Last, lobby_clicks);
     app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay, load_counselor_list, (counselor_menu, crate::wardrobe::wardrobe_menu, crate::emotes::emote_menu, crate::perks::perk_menu).chain(), crate::audio_settings::audio_menu));
 }
 
@@ -807,8 +807,9 @@ impl Default for ReadyFocus {
 /// Enter; a row's CounselorButton: the counselor menu, C; its JasonButton: Jason preferred, 3 (PLACEHOLDER: the game's
 /// opens its killer picker); Counselor_Menu's arrows, its three PerkButton slots (1-3), ClothingButton (X),
 /// CounselorEmoteButton (E)); the right button backs out of an open menu (Escape, PLACEHOLDER for the menus' action
-/// bar Back). The keys go down here, before the menus read them in Update, and up the next frame. (In PreUpdate its
-/// keyboard access reordered the bots' key presses there: netdoor's window step lost its E.) Hovering and pressing play
+/// bar Back). Its keys go out as KeyboardInput messages from Last (down, then up a frame later), read as any key by
+/// the next frame's input: its touching ButtonInput in PreUpdate or Update reordered the bots' presses there (netdoor's
+/// window step, netjasonabilities' knife pickup lost their E). Hovering and pressing play
 /// their style's sounds; their looks (each Blueprint's own OnHovered) aren't ported.
 fn lobby_clicks(
     mut commands: Commands,
@@ -816,7 +817,7 @@ fn lobby_clicks(
     buttons: Query<(Entity, &Name), (Without<Interaction>, With<Node>)>,
     clicked: Query<(Ref<Interaction>, &Name), Changed<Interaction>>,
     mouse: Res<ButtonInput<MouseButton>>,
-    mut keys: ResMut<ButtonInput<KeyCode>>,
+    mut key_events: MessageWriter<bevy::input::keyboard::KeyboardInput>,
     mut down: Local<Vec<KeyCode>>,
     (mut perk_menu, mut emote_menu, mut wardrobe, character, profiles): (
         Option<ResMut<crate::perks::PerkMenu>>,
@@ -825,7 +826,7 @@ fn lobby_clicks(
         Option<Res<crate::character::CounselorCharacter>>,
         Option<Res<crate::wardrobe::CounselorProfiles>>,
     ),
-    (window, wheel, mut ready_focus): (Option<Single<&Window, With<bevy::window::PrimaryWindow>>>, Query<(&Name, &ComputedNode, &UiGlobalTransform)>, ResMut<ReadyFocus>),
+    (window, wheel, mut ready_focus): (Option<Single<(Entity, &Window), With<bevy::window::PrimaryWindow>>>, Query<(&Name, &ComputedNode, &UiGlobalTransform)>, ResMut<ReadyFocus>),
     (mut playing, time): (Option<ResMut<crate::ui::PlayingAnims>>, Res<Time>),
 ) {
     // The menus' list entries (ui.rs names them by index): a perk or emote in the panel picked and put in (Enter, as
@@ -843,8 +844,12 @@ fn lobby_clicks(
         ("ClothingButton", KeyCode::KeyX),
         ("CounselorEmoteButton", KeyCode::KeyE),
     ];
+    let Some(window_entity) = window.as_ref().map(|w| w.0) else { return };
+    let mut send = |key: KeyCode, state: bevy::input::ButtonState| {
+        key_events.write(bevy::input::keyboard::KeyboardInput { key_code: key, logical_key: bevy::input::keyboard::Key::Unidentified(bevy::input::keyboard::NativeKey::Unidentified), state, text: None, repeat: false, window: window_entity });
+    };
     for k in down.drain(..) {
-        keys.release(k);
+        send(k, bevy::input::ButtonState::Released);
     }
     if !lobby.iter().any(|l| l.open) {
         return;
@@ -898,14 +903,14 @@ fn lobby_clicks(
                 "Perk_" => {
                     if let Some(m) = perk_menu.as_mut() {
                         m.index = k;
-                        keys.press(KeyCode::Enter);
+                        send(KeyCode::Enter, bevy::input::ButtonState::Pressed);
                         down.push(KeyCode::Enter);
                     }
                 }
                 "Emote_" => {
                     if let Some(m) = emote_menu.as_mut() {
                         m.list = Some(k);
-                        keys.press(KeyCode::Enter);
+                        send(KeyCode::Enter, bevy::input::ButtonState::Pressed);
                         down.push(KeyCode::Enter);
                     }
                 }
@@ -933,12 +938,12 @@ fn lobby_clicks(
         }
         let Some(&(_, key)) = KEYS.iter().find(|(k, _)| *k == n.as_str()).filter(|_| *i == Interaction::Pressed) else { continue };
         info!("lobby: {} clicked", n.as_str());
-        keys.press(key);
+        send(key, bevy::input::ButtonState::Pressed);
         down.push(key);
     }
     // The emote menu's wheel (CounselorEmoteSelect, its panel not shown): the cursor's direction from its centre picks the
     // section (as the in-game wheel: crate::emotes::section), a click opens its panel (Enter).
-    if let (Some(m), Some(cursor)) = (emote_menu.as_mut().filter(|m| m.list.is_none()), window.as_ref().and_then(|w| w.physical_cursor_position())) {
+    if let (Some(m), Some(cursor)) = (emote_menu.as_mut().filter(|m| m.list.is_none()), window.as_ref().and_then(|w| w.1.physical_cursor_position())) {
         if let Some((_, node, at)) = wheel.iter().find(|(n, ..)| n.as_str() == "CounselorEmoteSelect") {
             let half = node.size() * 0.5;
             let aim = cursor - at.translation;
@@ -948,14 +953,14 @@ fn lobby_clicks(
                     commands.trigger(crate::audio::PlaySound { cue: "MenuButtonFocusCue".into(), at: None });
                 }
                 if mouse.just_pressed(MouseButton::Left) {
-                    keys.press(KeyCode::Enter);
+                    send(KeyCode::Enter, bevy::input::ButtonState::Pressed);
                     down.push(KeyCode::Enter);
                 }
             }
         }
     }
     if mouse.just_pressed(MouseButton::Right) {
-        keys.press(KeyCode::Escape);
+        send(KeyCode::Escape, bevy::input::ButtonState::Pressed);
         down.push(KeyCode::Escape);
     }
 }
