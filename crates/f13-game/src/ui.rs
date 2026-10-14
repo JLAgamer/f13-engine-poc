@@ -3579,7 +3579,7 @@ fn noise_meter(
     if s.next <= 0.0 && !s.active && p.velocity.length() > 0.0 {
         let noise = values.as_ref().map_or(0.0, |v| {
             let c = &p.counselor;
-            f13_core::perception::noise_level(&v.noise, &c.stats, c.stance, c.sprinting, c.running, true)
+            f13_core::perception::noise_level(&v.noise, &c.stats, c.stance, c.sprinting, c.running, true, c.noise_perk())
         });
         s.next = (5.0 + 10.0 * rng.0.frand()) / noise.max(0.001);
         s.active = true;

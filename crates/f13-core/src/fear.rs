@@ -84,8 +84,11 @@ pub struct Fear<K> {
 
 /// Per-tick inputs computed by the caller.
 pub struct FearContext<'a, K> {
-    /// Stat-modified fear modifier plus perk modifiers.
+    /// Stat-modified fear modifier plus perk modifiers (FUN_140331060: the base plus her perks'
+    /// HidespotFearModifier hiding and CounselorsAroundFearModifier).
     pub rate: f32,
+    /// Added for an active event only (FUN_140331060's third argument: her perks' FearModifier).
+    pub rate_active: f32,
     /// `(1 + perk bonus for this event) * max_fear_cap`.
     pub cap: &'a dyn Fn(&K, &FearEventData) -> f32,
     pub has_authority: bool,
@@ -170,7 +173,7 @@ impl<K: PartialEq + Clone> Fear<K> {
                         if cap <= s.removed || s.added <= 0.0 {
                             stuck = true;
                         } else {
-                            let r = ctx.rate * step * d.decrease;
+                            let r = (ctx.rate + if s.active { ctx.rate_active } else { 0.0 }) * step * d.decrease;
                             s.added = (s.added - r).max(0.0);
                             s.removed += r;
                             self.fear -= r;
@@ -186,7 +189,7 @@ impl<K: PartialEq + Clone> Fear<K> {
                 if d.increase_delay <= t {
                     s.increase_timer = d.increase_delay;
                     if s.added < cap {
-                        let r = ctx.rate * step * d.increase * curve;
+                        let r = (ctx.rate + if s.active { ctx.rate_active } else { 0.0 }) * step * d.increase * curve;
                         s.removed = (s.removed - r).max(0.0);
                         s.added += r;
                         self.fear += r;
@@ -257,7 +260,7 @@ mod tests {
 
     fn run(f: &mut Fear<&'static str>, seconds: f32, rate: f32) -> bool {
         let cap = |_: &&str, d: &FearEventData| d.max_fear_cap;
-        let ctx = FearContext { rate, cap: &cap, has_authority: true };
+        let ctx = FearContext { rate, rate_active: 0.0, cap: &cap, has_authority: true };
         let dt = 1.0 / 60.0;
         let mut maxed = false;
         for _ in 0..(seconds / dt).round() as usize {
@@ -320,7 +323,7 @@ mod tests {
         let mut f = Fear::new(0.5);
         f.push("spotted", &jason_spotted(), 0.0);
         let cap = |_: &&str, d: &FearEventData| d.max_fear_cap;
-        let ctx = FearContext { rate: 1.0, cap: &cap, has_authority: true };
+        let ctx = FearContext { rate: 1.0, rate_active: 0.0, cap: &cap, has_authority: true };
         f.tick(0.016, &ctx); // first tick: timer starts at 0 so it updates now with step 0.5
         assert!((f.fear - 5.0).abs() < 1e-5);
         f.tick(0.016, &ctx);

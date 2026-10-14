@@ -385,8 +385,11 @@ pub struct Blocking;
 #[derive(Event)]
 pub struct BlockedHit(pub Entity);
 
-/// Wears the weapon in her hands by `amount`; true when it broke (it's gone from her hands).
-fn wear_weapon(commands: &mut Commands, wear: &mut Query<Option<&mut Wear>>, inv: &mut Inventory, weapon: Entity, durability: f32, amount: f32, name: &str) -> bool {
+/// Wears the weapon in her hands by `amount`; true when it broke (it's gone from her hands). `held`: her durability
+/// factor (her WeaponDurabilityMod + her perks' WeaponDurabilityModifier: the game scales the weapon's durability by it
+/// while she holds it, FUN_140453f20; here the wear is scaled down by it instead).
+fn wear_weapon(commands: &mut Commands, wear: &mut Query<Option<&mut Wear>>, inv: &mut Inventory, weapon: Entity, durability: f32, amount: f32, name: &str, held: f32) -> bool {
+    let amount = amount / held.max(1e-3);
     let left = match wear.get_mut(weapon) {
         Ok(Some(mut w)) => {
             w.0 -= amount;
@@ -489,12 +492,13 @@ fn block(
 }
 
 /// A blocked hit wears the weapon in her hands by its BlockingWear.
-fn wear_on_block(hit: On<BlockedHit>, mut commands: Commands, mut player: Query<&mut Inventory, With<Player>>, items: Query<&Item>, mut wear: Query<Option<&mut Wear>>) {
-    let Ok(mut inv) = player.get_mut(hit.0) else { return };
+fn wear_on_block(hit: On<BlockedHit>, mut commands: Commands, mut player: Query<(&mut Inventory, &Player)>, items: Query<&Item>, mut wear: Query<Option<&mut Wear>>, tuning: Res<crate::player::PlayerTuning>) {
+    let Ok((mut inv, p)) = player.get_mut(hit.0) else { return };
+    let held = tuning.counselor.combat.weapon_durability_mod.value(&p.counselor.stats, false) + p.counselor.perks.get("WeaponDurabilityModifier");
     let Some(hand) = inv.hand else { return };
     let Ok(Item { kind: ItemKind::Weapon(stats) | ItemKind::Gun { stats, .. }, name, .. }) = items.get(hand) else { return };
     let (durability, amount, name) = (stats.durability, stats.blocking_wear, name.clone());
-    wear_weapon(&mut commands, &mut wear, &mut inv, hand, durability, amount, &name);
+    wear_weapon(&mut commands, &mut wear, &mut inv, hand, durability, amount, &name, held);
 }
 
 #[derive(Component)]
@@ -868,7 +872,8 @@ fn tick_action(
                         // No impact effect: a melee hit's path to it, SCWeapon::SpawnHitEffect (0x1404558e0), is never
                         // called in this build (MODLOG "Melee hits spawn no impact effects").
                         let name = items.get(a.item).map_or("weapon".to_string(), |i| i.name.clone());
-                        wear_weapon(&mut commands, &mut wear, &mut inv, a.item, stats.durability, stats.attacking_wear, &name);
+                        let held = tuning.counselor.combat.weapon_durability_mod.value(&p.counselor.stats, false) + p.counselor.perks.get("WeaponDurabilityModifier");
+                        wear_weapon(&mut commands, &mut wear, &mut inv, a.item, stats.durability, stats.attacking_wear, &name, held);
                     }
                 } else {
                     a.done = true; // missed

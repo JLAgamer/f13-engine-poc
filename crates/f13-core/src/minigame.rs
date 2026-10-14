@@ -186,12 +186,13 @@ impl HoldInteraction {
         self.timer = self.hold_time * p + t.min_hold_time;
     }
 
-    /// One tick with the key held.
-    pub fn tick(&mut self, dt: f32, stats: &Stats, t: &MinigameTuning, rng: &mut Rng, events: &mut Vec<MinigameEvent>) {
+    /// One tick with the key held. `repair_perk`: her perks' RepairSpeedModifier sum (the interact timer FUN_1402ec8f0:
+    /// a minigame with pips goes at (1 + it) x the speed stat mod x the bonus).
+    pub fn tick(&mut self, dt: f32, stats: &Stats, repair_perk: f32, t: &MinigameTuning, rng: &mut Rng, events: &mut Vec<MinigameEvent>) {
         let rate = if !self.started {
             1.0
         } else if self.has_pips {
-            t.speed_mod.value(stats, false) * self.bonus
+            (1.0 + repair_perk) * t.speed_mod.value(stats, false) * self.bonus
         } else {
             self.bonus
         };
@@ -299,7 +300,7 @@ mod tests {
         let mut ev = vec![];
         while time < limit {
             ev.clear();
-            h.tick(1.0 / 60.0, &[5; STAT_COUNT], &t, &mut rng, &mut ev);
+            h.tick(1.0 / 60.0, &[5; STAT_COUNT], 0.0, &t, &mut rng, &mut ev);
             time += 1.0 / 60.0;
             if let Some(i) = h.current {
                 let p = h.pips[i];

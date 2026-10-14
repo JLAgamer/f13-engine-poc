@@ -163,6 +163,19 @@ impl PerkMods {
 }
 
 impl Counselor {
+    /// Her perks' share of her noise (GetNoiseLevel 0x1403b7ce0): NoiseModifier, + SwimmingNoiseModifier swimming, else
+    /// + SprintNoiseModifier sprinting.
+    pub fn noise_perk(&self) -> f32 {
+        self.perks.get("NoiseModifier")
+            + if self.stance == Stance::Swimming {
+                self.perks.get("SwimmingNoiseModifier")
+            } else if self.sprinting {
+                self.perks.get("SprintNoiseModifier")
+            } else {
+                0.0
+            }
+    }
+
     pub fn new(stats: Stats) -> Self {
         Self {
             stats,

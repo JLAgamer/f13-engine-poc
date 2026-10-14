@@ -34,8 +34,9 @@ pub struct NoiseTuning {
     pub stat_mod: StatModifiedValue,
 }
 
-/// `GetNoiseLevel` for a counselor moving (`moving`) in `stance`.
-pub fn noise_level(t: &NoiseTuning, stats: &Stats, stance: Stance, sprinting: bool, running: bool, moving: bool) -> f32 {
+/// `GetNoiseLevel` for a counselor moving (`moving`) in `stance`; `perk` her perks' share (Counselor::noise_perk:
+/// the stance's noise x (1 + perk)).
+pub fn noise_level(t: &NoiseTuning, stats: &Stats, stance: Stance, sprinting: bool, running: bool, moving: bool, perk: f32) -> f32 {
     if !moving {
         return 0.0;
     }
@@ -53,7 +54,7 @@ pub fn noise_level(t: &NoiseTuning, stats: &Stats, stance: Stance, sprinting: bo
         Stance::Swimming => t.swimming,
         _ => 0.0,
     };
-    t.stat_mod.value(stats, true) * base
+    t.stat_mod.value(stats, true) * base * (1.0 + perk)
 }
 
 /// The killer's hearing (`SCKillerCharacter`).
@@ -149,7 +150,7 @@ mod tests {
 
     #[test]
     fn standing_still_is_silent() {
-        assert_eq!(noise_level(&noise(), &[5; 7], Stance::Standing, true, true, false), 0.0);
+        assert_eq!(noise_level(&noise(), &[5; 7], Stance::Standing, true, true, false, 0.0), 0.0);
     }
 
     #[test]
@@ -159,11 +160,11 @@ mod tests {
         let mut loud = quiet;
         loud[Stat::Stealth as usize] = 1;
         let t = noise();
-        assert!(noise_level(&t, &quiet, Stance::Standing, true, false, true) < noise_level(&t, &loud, Stance::Standing, true, false, true));
+        assert!(noise_level(&t, &quiet, Stance::Standing, true, false, true, 0.0) < noise_level(&t, &loud, Stance::Standing, true, false, true, 0.0));
         // All stats at the middle-ish 5: near the base noise.
-        let mid = noise_level(&t, &[5; 7], Stance::Standing, false, false, true);
+        let mid = noise_level(&t, &[5; 7], Stance::Standing, false, false, true, 0.0);
         assert!((mid - 2.0).abs() < 0.3, "{mid}");
-        assert_eq!(noise_level(&t, &[5; 7], Stance::Driving, false, false, true), 0.0);
+        assert_eq!(noise_level(&t, &[5; 7], Stance::Driving, false, false, true, 0.0), 0.0);
     }
 
     #[test]

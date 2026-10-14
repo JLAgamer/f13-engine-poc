@@ -39,8 +39,9 @@ pub struct CounselorFear(pub Fear<FearEventId>);
 pub struct CounselorStats {
     pub stats: Stats,
     pub fear_modifier: StatModifiedValue,
-    /// Sum of perk fear-rate modifiers.
+    /// Sum of perk fear-rate modifiers (every event), and those for an active event only.
     pub perk_fear_rate: f32,
+    pub perk_fear_active: f32,
 }
 
 /// Fired by the server when a counselor's fear reaches 100.
@@ -111,7 +112,7 @@ fn tick_fear(
     let cap = |_: &FearEventId, d: &FearEventData| d.max_fear_cap;
     for (e, mut fear, s) in &mut q {
         let rate = s.fear_modifier.value(&s.stats, true) + s.perk_fear_rate;
-        let ctx = FearContext { rate, cap: &cap, has_authority: auth.0 };
+        let ctx = FearContext { rate, rate_active: s.perk_fear_active, cap: &cap, has_authority: auth.0 };
         if fear.0.tick(dt, &ctx) {
             out.write(MaxFearReached(e));
         }

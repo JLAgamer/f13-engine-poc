@@ -1053,7 +1053,7 @@ fn act(
             }
             let h = interaction.hold.get_or_insert_with(|| HoldInteraction::new(crate::cabinets::TAKE_HOLD_S, false));
             let mut events = Vec::new();
-            h.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
+            h.tick(time.delta_secs(), &p.counselor.stats, p.counselor.perks.get("RepairSpeedModifier"), &tuning.minigame, &mut rng.0, &mut events);
             if events.contains(&MinigameEvent::Completed) {
                 commands.trigger(crate::cabinets::CloseCabinet { player: player_entity, take: true });
                 interaction.hold = None;
@@ -1077,7 +1077,7 @@ fn act(
                     hold.press(key, &tuning.minigame, &mut events);
                 }
             }
-            hold.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
+            hold.tick(time.delta_secs(), &p.counselor.stats, p.counselor.perks.get("RepairSpeedModifier"), &tuning.minigame, &mut rng.0, &mut events);
             let mut completed = false;
             for e in events {
                 match e {
@@ -1136,7 +1136,7 @@ fn act(
                     hold.press(key, &tuning.minigame, &mut events);
                 }
             }
-            hold.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
+            hold.tick(time.delta_secs(), &p.counselor.stats, p.counselor.perks.get("RepairSpeedModifier"), &tuning.minigame, &mut rng.0, &mut events);
             if events.contains(&MinigameEvent::Started) {
                 info!("fuse box repair started: {} pips, {:.1}s", hold.pips.len(), hold.hold_time);
             }
@@ -1174,7 +1174,7 @@ fn act(
                     hold.press(key, &tuning.minigame, &mut events);
                 }
             }
-            hold.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
+            hold.tick(time.delta_secs(), &p.counselor.stats, p.counselor.perks.get("RepairSpeedModifier"), &tuning.minigame, &mut rng.0, &mut events);
             if events.contains(&MinigameEvent::Started) {
                 info!("phone box {} started: {} pips, {:.1}s", if fixing { "repair" } else { "fuse" }, hold.pips.len(), hold.hold_time);
                 let to = pb.stand.map_or(*player_xf, |stand| standing_on(player_xf, stand));
@@ -1256,7 +1256,7 @@ fn act(
                     hold.press(key, &tuning.minigame, &mut events);
                 }
             }
-            hold.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
+            hold.tick(time.delta_secs(), &p.counselor.stats, p.counselor.perks.get("RepairSpeedModifier"), &tuning.minigame, &mut rng.0, &mut events);
             if events.contains(&MinigameEvent::Started) {
                 info!("tommy: calling on the CB radio: {:.1}s", hold.hold_time);
                 commands.entity(player_entity).insert(repair_start(crate::tommy::RADIO_TAKE));
@@ -1290,7 +1290,7 @@ fn act(
             }
             let hold = interaction.hold.get_or_insert_with(|| HoldInteraction::new(phone.hold_time, false));
             let mut events = Vec::new();
-            hold.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
+            hold.tick(time.delta_secs(), &p.counselor.stats, p.counselor.perks.get("RepairSpeedModifier"), &tuning.minigame, &mut rng.0, &mut events);
             if events.contains(&MinigameEvent::Started) {
                 info!("calling the police: {:.1}s", hold.hold_time);
                 let to = phone.stand.map_or(*player_xf, |stand| standing_on(player_xf, stand));
@@ -1302,7 +1302,7 @@ fn act(
                 continue;
             }
             end_repair_anim(&mut commands, player_entity, Some(&crate::police::PHONE_TAKE.to_string()), true);
-            crate::police::call_police(&mut commands, &mut phone, game.as_deref_mut(), match_tuning.as_deref(), player_entity);
+            crate::police::call_police(&mut commands, &mut phone, game.as_deref_mut(), match_tuning.as_deref(), player_entity, p.counselor.perks.get("PoliceResponseTimeModifier"));
             interaction.hold = None;
             interaction.target = None;
         }
@@ -1364,7 +1364,7 @@ fn act(
             }
             let h = interaction.hold.get_or_insert_with(|| HoldInteraction::new(door.hold_time, false));
             let mut events = Vec::new();
-            h.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
+            h.tick(time.delta_secs(), &p.counselor.stats, p.counselor.perks.get("RepairSpeedModifier"), &tuning.minigame, &mut rng.0, &mut events);
             // Locking or unlocking (not a barricade): her take while she holds.
             if events.contains(&MinigameEvent::Started) && !barricaded_door {
                 let anim = if door.locked { "f_normal_stand_door_unlock" } else { "f_normal_stand_door_lock" };
@@ -1470,7 +1470,7 @@ fn act(
             }
             let h = interaction.hold.get_or_insert_with(|| HoldInteraction::new(0.5, false));
             let mut events = Vec::new();
-            h.tick(time.delta_secs(), &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
+            h.tick(time.delta_secs(), &p.counselor.stats, p.counselor.perks.get("RepairSpeedModifier"), &tuning.minigame, &mut rng.0, &mut events);
             if events.contains(&MinigameEvent::Completed) {
                 start_window_move(&mut commands, player_entity, w, WindowMoveKind::Close, player_xf.translation, player_xf.translation);
                 let handler = if Window::is_inside(gxf, player_xf.translation) { "CounselorCloseInside" } else { "CounselorCloseOutside" };

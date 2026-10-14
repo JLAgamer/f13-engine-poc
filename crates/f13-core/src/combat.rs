@@ -19,6 +19,9 @@ pub struct CombatTuning {
     pub heavy_attack_modifier: f32,
     pub wounded_stun_mod: f32,
     pub rage_grab_stun_mod: f32,
+    /// WeaponDurabilityMod: her weapon's durability while she holds it x it (FUN_140453f20; FUN_1403b9950 adds her
+    /// perks' WeaponDurabilityModifier).
+    pub weapon_durability_mod: StatModifiedValue,
 }
 
 impl Default for CombatTuning {
@@ -32,6 +35,7 @@ impl Default for CombatTuning {
             heavy_attack_modifier: 1.0,
             wounded_stun_mod: 1.0,
             rage_grab_stun_mod: 1.0,
+            weapon_durability_mod: StatModifiedValue::constant(1.0),
         }
     }
 }

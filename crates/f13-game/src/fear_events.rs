@@ -115,7 +115,7 @@ impl Plugin for FearEventsPlugin {
         app.insert_resource(LockedFear(self.locked))
             .add_systems(Startup, load_surroundings)
             .add_systems(Update, setup)
-            .add_systems(FixedUpdate, push_events.before(crate::player::move_player).run_if(crate::net::simulating));
+            .add_systems(FixedUpdate, (perk_fear, push_events).chain().before(crate::player::move_player).run_if(crate::net::simulating));
     }
 }
 
@@ -150,6 +150,34 @@ fn load_surroundings(mut commands: Commands, level: Res<crate::Level>, export: R
     commands.insert_resource(s);
 }
 
+/// Her perks' share of her fear rate (FUN_140331060, over her ActivePerks): FearModifier for active events;
+/// HidespotFearModifier while she's in a hiding spot; CounselorsAroundFearModifier, Teamwork's (her TeamworkPerk) x the
+/// other living counselors within 20 m (FUN_1403b7ef0, 2000 cm, 3D), Lone Wolf's (her LoneWolfPerk) with none.
+fn perk_fear(
+    perks: Option<Res<crate::perks::Perks>>,
+    mut counselors: Query<(Entity, &Player, &Transform, Option<&crate::perks::CounselorPerks>, Has<Hiding>, &mut f13_bevy::CounselorStats)>,
+) {
+    let Some(perks) = perks else { return };
+    let alive: Vec<(Entity, Vec3)> = counselors.iter().filter(|(_, p, ..)| p.counselor.alive()).map(|(e, _, xf, ..)| (e, xf.translation)).collect();
+    for (e, p, xf, picked, hiding, mut s) in &mut counselors {
+        let mut always = if hiding { p.counselor.perks.get("HidespotFearModifier") } else { 0.0 };
+        let near = alive.iter().filter(|(o, at)| *o != e && at.distance(xf.translation) <= 20.0).count();
+        for name in picked.map_or(&[][..], |c| c.0.as_slice()) {
+            let m = perks.0.get(name).and_then(|d| d.modifiers.get("CounselorsAroundFearModifier")).copied().unwrap_or(0.0);
+            match name.as_str() {
+                "TeamWork" => always += near as f32 * m,
+                "LoneWolf" if near == 0 => always += m,
+                _ => {}
+            }
+        }
+        let active = p.counselor.perks.get("FearModifier");
+        if s.perk_fear_rate != always || s.perk_fear_active != active {
+            s.perk_fear_rate = always;
+            s.perk_fear_active = active;
+        }
+    }
+}
+
 /// Gives the counselor her fear component once she's spawned.
 fn setup(
     mut commands: Commands,
@@ -168,7 +196,7 @@ fn setup(
         }
         commands.entity(e).insert((
             CounselorFear(fear),
-            CounselorStats { stats: p.counselor.stats, fear_modifier: t.fear_modifier.clone(), perk_fear_rate: 0.0 },
+            CounselorStats { stats: p.counselor.stats, fear_modifier: t.fear_modifier.clone(), perk_fear_rate: 0.0, perk_fear_active: 0.0 },
             Pushed::default(),
         ));
     }

@@ -288,12 +288,13 @@ pub fn break_phone_box(b: &mut PhoneBox, phones: &mut Query<&mut Phone>) {
     }
 }
 
-/// The call went through: the police are on their way.
-pub fn call_police(commands: &mut Commands, phone: &mut Phone, game: Option<&mut crate::match_flow::GameMatch>, tuning: Option<&crate::match_flow::MatchTuning>, player: Entity) {
+/// The call went through: the police are on their way (StartPoliceTimer: x (1 + the caller's perks'
+/// PoliceResponseTimeModifier)).
+pub fn call_police(commands: &mut Commands, phone: &mut Phone, game: Option<&mut crate::match_flow::GameMatch>, tuning: Option<&crate::match_flow::MatchTuning>, player: Entity, perk: f32) {
     phone.called = true;
     phone.enabled = false;
     if let (Some(g), Some(t)) = (game, tuning) {
-        g.state.start_police_timer(&t.rules, 0.0);
+        g.state.start_police_timer(&t.rules, perk);
         info!("police called: they arrive in {} s", g.state.police_time_remaining);
     }
     crate::net_world::shout(commands, crate::net_world::Shout::Sound(crate::audio::PlaySound { cue: "PoliceCalled".into(), at: None }));

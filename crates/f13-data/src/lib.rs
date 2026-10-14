@@ -90,6 +90,9 @@ struct CombatJson {
     heavy_attack_modifier: f32,
     wounded_stun_mod: f32,
     rage_grab_stun_mod: f32,
+    /// (Older files: none, x1.)
+    #[serde(default)]
+    weapon_durability_mod: Option<StatJson>,
 }
 
 #[derive(Deserialize)]
@@ -472,6 +475,7 @@ pub fn parse(text: &str) -> Result<Tuning, LoadError> {
                 heavy_attack_modifier: k.heavy_attack_modifier,
                 wounded_stun_mod: k.wounded_stun_mod,
                 rage_grab_stun_mod: k.rage_grab_stun_mod,
+                weapon_durability_mod: k.weapon_durability_mod.map_or(f13_core::stats::StatModifiedValue::constant(1.0), smv),
             },
             None => {
                 eprintln!("tuning.json has no combat stats (re-run f13-installer, or tools/f13-export `tuning`): her hits use flat values");

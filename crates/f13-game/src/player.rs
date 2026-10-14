@@ -484,7 +484,7 @@ fn update_one(p: &mut Player, intent: &mut Intent, local: bool, config: &PlayerC
     }
     let roll = || f13_core::stumble::roll_from_unit(rng.0.frand());
     if p.counselor.tick_stumble(dt, now, &situation, t.stamina_max, &t.stumble, roll) {
-        info!("stumbled (chance {:.0}%)", t.stumble.chance(&p.counselor, p.fear, t.stamina_max));
+        info!("stumbled (chance {:.0}%)", t.stumble.chance(&p.counselor, p.fear, t.stamina_max, 1.0));
         let m = &p.counselor.stumble.montage;
         p.root_motion = root_motion(&m.name, m.length);
         p.montage = Some(m.name.clone());

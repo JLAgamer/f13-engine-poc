@@ -38,6 +38,7 @@ static class Tuning
         ("stumble_cooldown", 0x1403A0D19, "c787cc190000"),
         ("stumble_stat_mod_base", 0x1403A145A, "c78798190000"),
         ("blocking_damage_mod_base", 0x1403A1446, "c78728180000"),
+        ("weapon_durability_mod_base", 0x1403A143C, "c787f8170000"),
         ("dodge_stamina_cost_base", 0x1403A13EC, "c787d8160000"),
         // her combat stats' constructor BaseValues (StrengthAttackMod and StunChanceMod have none: the Blueprint sets them)
         ("hit_killer_stamina_boost_base", 0x1403A1414, "c78738170000"),
@@ -87,7 +88,7 @@ static class Tuning
         ["stamina_hiding_modifier"] = 1.5, ["stamina_sprinting_modifier"] = 2.0, ["dodging_speed_mod"] = 2.0,
         ["stumbling_speed_mod"] = 0.75, ["water_speed_mod"] = 0.699999988079071, ["grabbed_refill_base"] = 2.5,
         ["grabbed_refill_strength"] = 15.0, ["grabbed_refill_composure"] = 15.0, ["stumble_wounded_chance"] = 3.0,
-        ["stumble_cooldown"] = 15.0, ["stumble_stat_mod_base"] = 1.0, ["blocking_damage_mod_base"] = 1.0,
+        ["stumble_cooldown"] = 15.0, ["stumble_stat_mod_base"] = 1.0, ["blocking_damage_mod_base"] = 1.0, ["weapon_durability_mod_base"] = 1.0,
         ["dodge_stamina_cost_base"] = 20.0, ["hit_killer_stamina_boost_base"] = 50.0, ["break_free_stamina_boost_base"] = 50.0,
         ["heavy_attack_modifier"] = 2.0, ["wounded_stun_mod"] = 0.75, ["rage_grab_stun_mod"] = 0.5,
         ["min_interact_hold_time"] = 0.20000000298023224, ["repair_hold_time"] = 15.0, ["allowable_fails_before_killer_notify"] = 3.0,
@@ -312,6 +313,8 @@ static class Tuning
                 ["heavy_attack_modifier"] = Fc("HeavyAttackModifier", "heavy_attack_modifier"),
                 ["wounded_stun_mod"] = Fc("WoundedStunMod", "wounded_stun_mod"),
                 ["rage_grab_stun_mod"] = Fc("RageGrabStunMod", "rage_grab_stun_mod"),
+                // Her weapon's durability while she holds it x WeaponDurabilityMod (+ her perks': FUN_1403b9950).
+                ["weapon_durability_mod"] = Smv("WeaponDurabilityMod", (double)c["weapon_durability_mod_base"]),
             },
             ["stumble"] = new JObject
             {

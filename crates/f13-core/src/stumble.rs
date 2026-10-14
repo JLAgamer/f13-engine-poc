@@ -116,10 +116,11 @@ impl StumbleTuning {
         }
     }
 
-    /// Chance of a stumble per attempt, in percent.
-    pub fn chance(&self, c: &Counselor, fear: f32, stamina_max: f32) -> f32 {
+    /// Chance of a stumble per attempt, in percent. `avoid`: EvaluateStumbleChance's rand() (0..1): the fear term
+    /// counts unless it's under her perks' AvoidFearStumble.
+    pub fn chance(&self, c: &Counselor, fear: f32, stamina_max: f32, avoid: f32) -> f32 {
         let mut chance = 0.0f32;
-        if let Some(f) = &self.fear_chance {
+        if let Some(f) = self.fear_chance.as_ref().filter(|_| c.perks.get("AvoidFearStumble") < avoid) {
             chance = f(fear * 0.01);
         }
         if let Some(f) = &self.stamina_chance {
@@ -186,7 +187,7 @@ impl Counselor {
         s: &Situation,
         stamina_max: f32,
         t: &StumbleTuning,
-        roll: impl FnOnce() -> f32,
+        mut roll: impl FnMut() -> f32,
     ) -> bool {
         if self.stumbling {
             self.stumble.time_left -= dt;
@@ -207,7 +208,9 @@ impl Counselor {
         if self.stumbling || now - self.stumble.last_stumble <= t.cooldown {
             return false;
         }
-        let threshold = 100.0 - t.chance(self, s.fear, stamina_max);
+        // (EvaluateStumbleChance's own rand() first: its perks' fear stumble avoidance.)
+        let avoid = (roll() - 1e-8) * 0.01;
+        let threshold = 100.0 - t.chance(self, s.fear, stamina_max, avoid);
         if threshold < roll() {
             return self.start_stumble(now, false, t);
         }
@@ -250,13 +253,13 @@ mod tests {
     fn chance_adds_fear_and_wounded_and_scales_by_inverted_stats() {
         let mut t = tuning();
         let mut c = counselor();
-        assert_eq!(t.chance(&c, 50.0, 100.0), 50.0);
+        assert_eq!(t.chance(&c, 50.0, 100.0, 1.0), 50.0);
         c.wounded = true;
-        assert_eq!(t.chance(&c, 50.0, 100.0), 55.0);
+        assert_eq!(t.chance(&c, 50.0, 100.0, 1.0), 55.0);
         // Composure 80% swing, inverted: composure 10 → x0.2, composure 1 → x1.8
         t.stat_mod.modifiers[Stat::Composure as usize] = 80.0;
         c.stats[Stat::Composure as usize] = 10;
-        assert!((t.chance(&c, 50.0, 100.0) - 11.0).abs() < 1e-4);
+        assert!((t.chance(&c, 50.0, 100.0, 1.0) - 11.0).abs() < 1e-4);
     }
 
     #[test]

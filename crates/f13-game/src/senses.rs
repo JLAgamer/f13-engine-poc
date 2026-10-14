@@ -215,7 +215,7 @@ fn blips(
             let her = xf.translation + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M;
             let hidden = hiding.is_some_and(|h| matches!(h.phase, HidePhase::Hidden | HidePhase::Killed));
             let moving = !hidden && p.velocity.length_squared() > 1.0;
-            let noise = perception::noise_level(&v.noise, &c.stats, c.stance, c.sprinting, c.running, moving);
+            let noise = perception::noise_level(&v.noise, &c.stats, c.stance, c.sprinting, c.running, moving, c.noise_perk());
             let dist = him.distance(her);
             if noise <= 0.0 || !perception::makes_blip(&v.hearing, noise, dist * 100.0, rage) {
                 continue;

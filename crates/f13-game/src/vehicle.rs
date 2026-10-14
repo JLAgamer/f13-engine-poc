@@ -170,7 +170,7 @@ fn drive(
             HoldInteraction::new(time - time * p.counselor.perks.get("CarStartTimeModifier"), false)
         });
         let mut events = Vec::new();
-        hold.tick(dt, &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
+        hold.tick(dt, &p.counselor.stats, p.counselor.perks.get("RepairSpeedModifier"), &tuning.minigame, &mut rng.0, &mut events);
         if events.contains(&MinigameEvent::Completed) {
             if let Some(k) = take_part(inv, &items, &v.ignition) {
                 commands.entity(k).despawn();
