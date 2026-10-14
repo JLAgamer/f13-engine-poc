@@ -1284,9 +1284,11 @@ static void ResolveParameters(UObject mat, MaterialInfo info)
                 }
             }
             info.Landscape = LandscapeLayers(m);
-            // (Only for a master without its own diffuse parameter: SkinGoreMaster's base layer samples the outfit's
-            // clothes maps, its skin is the Skin Diffuse / Skin Normal parameters.)
-            if (!info.Textures.Keys.Any(k => k.Contains("Diffuse", StringComparison.OrdinalIgnoreCase))) BaseLayerTextures(m, info);
+            // (The name-suffix roles only for the other Jasons' weapons: SkinGoreMaster's base layer samples the outfit's
+            // clothes maps (_D, _N) and its skin is the Skin Diffuse / Skin Normal parameters; every other master keeps
+            // the sampler-first roles it had.)
+            string[] weapons = ["M_JasonV3_Axe", "M_JasonV4_PigSplitter", "M_JasonV5_Shears", "M_JasonV8_Axe", "M_Weapon_Spear_01b_BloodMask"];
+            BaseLayerTextures(m, info, bySuffix: weapons.Contains(m.Name));
             break;
         }
         foreach (var s in m.GetOrDefault<FStructFallback[]>("ScalarParameterValues", []))
@@ -1335,7 +1337,7 @@ static Newtonsoft.Json.Linq.JObject SplineMeshSpline(UObject c)
 // _Normal or _N, _RMA: R roughness, G metallic, B AO, as the master's own input masks still read), else its sampler
 // type (Normal; the other Jasons' weapons' RMA samples are typed Normal too). Parameters of the same names win.
 // (Not parameters, so the mesh export doesn't write the textures: Mvp.Assets lists them.)
-static void BaseLayerTextures(UObject master, MaterialInfo info)
+static void BaseLayerTextures(UObject master, MaterialInfo info, bool bySuffix)
 {
     var calls = master.GetOrDefault<FPackageIndex[]>("Expressions", []).Select(x => x.Load()).OfType<UObject>()
         .Where(e => e.ExportType == "MaterialExpressionMaterialFunctionCall").ToDictionary(e => e.Name, StringComparer.OrdinalIgnoreCase);
@@ -1352,8 +1354,9 @@ static void BaseLayerTextures(UObject master, MaterialInfo info)
                 if (tex == null) continue;
                 var sampler = e.GetOrDefault<FName>("SamplerType").Text;
                 bool Ends(params string[] s) => s.Any(x => tex.EndsWith(x, StringComparison.OrdinalIgnoreCase));
-                var role = Ends("_Diffuse", "_D") ? "Diffuse" : Ends("_Normal", "_N") ? "Normal" : Ends("_RMA") ? "RMA"
-                    : sampler.EndsWith("Normal") ? "Normal" : null;
+                var role = bySuffix
+                    ? Ends("_Diffuse", "_D") ? "Diffuse" : Ends("_Normal", "_N") ? "Normal" : Ends("_RMA") ? "RMA" : sampler.EndsWith("Normal") ? "Normal" : null
+                    : sampler.EndsWith("Normal") ? "Normal" : Ends("_Diffuse") ? "Diffuse" : Ends("_RMA") ? "RMA" : null;
                 if (role != null) info.Textures.TryAdd(role, tex);
             }
         }

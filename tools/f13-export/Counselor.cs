@@ -106,6 +106,8 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         /// The character's music object (MusicObjectClass's defaults: MusicData, idle times, warning cues), object
         /// references as their names ("SoundCue'Name'").
         public Newtonsoft.Json.Linq.JObject? Music;
+        /// Jason_Select_Widget's texts for him (killers): his name, the weapon's, his strengths and weaknesses.
+        public Newtonsoft.Json.Linq.JObject? Menu;
         /// Her body parts (SCCharacterBodyPartComponent, by component name): the clothes' gore mask each sets
         /// (TextureParameterName, its LimbUVTexture, CombatDamageGoreInfo's per weapon class) on the body's materials
         /// (ParentMaterialElementIndices), textures as exported .png paths.
@@ -649,6 +651,40 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             info.Names[$"GrabKillClass{i}"] = ClassArrayObject(cls, "GrabKillClasses", i) ?? "";
         if (weapon.GetOrDefault<FPackageIndex>("DefaultGrabKill") is { } dgk && dgk.Name is { } dgkName)
             info.Names["DefaultGrabKill"] = dgkName;
+        // Jason_Select_Widget's SetJason: FirstNameText his CharacterName ("Part"), MovieNumber his CharacterTropeName
+        // ("3"), WeaponAxeText "Weapon: {WeaponName}" (GetKillerWeaponDetails: the weapon class's text at +0x500,
+        // taken as SCItem's FriendlyName: PLACEHOLDER), StrengthBox / WeaknessesBox an Attribute_Display per
+        // KillerStrengths / KillerWeaknesses class (GetKillerStrengthWeaknessTitle / Description / Icon: its Title,
+        // Description and Icon). Icons as exported .png paths.
+        {
+            string? Text(UStruct? c, string k) => ClassValue<CUE4Parse.UE4.Objects.Core.i18N.FText>(c, k)?.Text;
+            Newtonsoft.Json.Linq.JArray Attributes(string prop)
+            {
+                var list = new Newtonsoft.Json.Linq.JArray();
+                foreach (var a in ClassValue<FPackageIndex[]>(cls, prop) ?? [])
+                {
+                    var c = a.Load<UStruct>();
+                    var icon = c is UBlueprintGeneratedClass bp ? bp.ClassDefaultObject.Load()?.GetOrDefault<FPackageIndex?>("Icon")?.Load<UTexture2D>() : null;
+                    if (icon != null) queue(icon);
+                    list.Add(new Newtonsoft.Json.Linq.JObject
+                    {
+                        ["Class"] = a.Name,
+                        ["Title"] = Text(c, "Title"),
+                        ["Description"] = Text(c, "Description"),
+                        ["Icon"] = icon == null ? null : icon.GetPathName().Split('.')[0].TrimStart('/').Replace("Game/", "SummerCamp/Content/") + ".png",
+                    });
+                }
+                return list;
+            }
+            info.Menu = new Newtonsoft.Json.Linq.JObject
+            {
+                ["CharacterName"] = Text(cls, "CharacterName"),
+                ["CharacterTropeName"] = Text(cls, "CharacterTropeName"),
+                ["WeaponName"] = Text(weaponClass, "FriendlyName"),
+                ["Strengths"] = Attributes("KillerStrengths"),
+                ["Weaknesses"] = Attributes("KillerWeaknesses"),
+            };
+        }
         info.Values = values;
         info.Curves = new();
         foreach (var name in new[] { "SenseFearRadiusCurve", "SenseFearHidingRadiusCurve", "RageSenseDistanceCurve", "TeleportJitterCurve" })

@@ -255,8 +255,8 @@ pub(crate) fn client(app: &mut App) {
 pub(crate) fn ui(app: &mut App) {
     app.add_plugins(crate::counselor_preview::CounselorPreviewPlugin);
     app.init_resource::<ReadyFocus>().add_systems(Last, lobby_clicks);
-    app.add_systems(Startup, list_killers).add_systems(Update, killer_relaunch);
-    app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay, load_counselor_list, (counselor_menu, crate::wardrobe::wardrobe_menu, crate::emotes::emote_menu, crate::perks::perk_menu).chain(), crate::audio_settings::audio_menu));
+    app.add_systems(Startup, (list_killers, load_jason_list)).add_systems(Update, killer_relaunch);
+    app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay, load_counselor_list, jason_menu, (counselor_menu, crate::wardrobe::wardrobe_menu, crate::emotes::emote_menu, crate::perks::perk_menu).chain(), crate::audio_settings::audio_menu));
 }
 
 /// The lobby's voice mutes (PLACEHOLDER keys: the game's are in its scoreboard menu): Shift + a member's number mutes or
@@ -357,13 +357,6 @@ fn list_killers(export: Res<crate::ExportRoot>) {
     let _ = KILLER_LIST.set(v);
 }
 
-/// The exported Jason after `current` (wrapping).
-fn next_killer(current: &str) -> String {
-    let all = exported_killers();
-    let i = all.iter().position(|k| k == current).map_or(0, |i| (i + 1) % all.len().max(1));
-    all.get(i).cloned().unwrap_or_else(|| current.to_string())
-}
-
 /// A Jason picked: after a moment (for the members to see it) the lobby's server and its clients start again with him,
 /// the server with `--jason <name>` (as a rematch starts again: net.rs relaunch), the clients likewise with their
 /// netcode id.
@@ -414,9 +407,6 @@ fn lobby_key(keys: &ButtonInput<KeyCode>) -> Option<LobbyMsg> {
         Some(LobbyMsg::Preference(Preference::Killer))
     } else if keys.just_pressed(KeyCode::Enter) {
         Some(LobbyMsg::Ready(true))
-    } else if keys.just_pressed(KeyCode::KeyJ) {
-        // (PLACEHOLDER key: the game's KillerPickerButtonWidget.) The next exported Jason.
-        Some(LobbyMsg::Killer(String::new()))
     } else {
         None
     }
@@ -469,10 +459,11 @@ fn counselor_menu(
     mut senders: Query<&mut MessageSender<LobbyMsg>, With<Connected>>,
     (audio_menu, wardrobe, emote_menu, perk_menu): (Option<Res<crate::audio_settings::AudioMenu>>, Option<Res<crate::wardrobe::WardrobeMenu>>, Option<Res<crate::emotes::EmoteMenu>>, Option<Res<crate::perks::PerkMenu>>),
     mut tested: Local<bool>,
+    jason_menu: Option<Res<JasonMenu>>,
 ) {
     let (Some(list), Ok(mut lobby)) = (list.filter(|l| !l.0.is_empty()), lobby.single_mut()) else { return };
-    // (The audio menu, or the wardrobe, emotes or perks over it, has the keys.)
-    if audio_menu.is_some() || wardrobe.is_some() || emote_menu.is_some() || perk_menu.is_some() {
+    // (The audio or Jason menu, or the wardrobe, emotes or perks over it, has the keys.)
+    if audio_menu.is_some() || wardrobe.is_some() || emote_menu.is_some() || perk_menu.is_some() || jason_menu.is_some() {
         return;
     }
     let my_id = me.as_ref().map_or(0, |m| m.id);
@@ -522,6 +513,103 @@ fn counselor_menu(
     }
 }
 
+/// Jason_Select_Widget (his row's JasonButton: LobbyPlayerListItem's KillerSelectButtonWidget click pushes it), open: the
+/// Jason shown (an index into its JasonClassList) and the time left before the arrows change him again.
+#[derive(Resource)]
+pub struct JasonMenu {
+    pub index: usize,
+    timer: f32,
+}
+
+/// Jason_Select_Widget's JasonClassList (its defaults: the Jasons in its order), the exported ones, as killer Blueprint
+/// names ("Jason_SackHead"), each with his killer JSON (its Menu texts, Names' grab kills).
+#[derive(Resource, Default)]
+pub struct JasonList(pub Vec<(String, serde_json::Value)>);
+
+fn load_jason_list(mut commands: Commands, export: Res<crate::ExportRoot>) {
+    let read = |p: std::path::PathBuf| std::fs::read_to_string(p).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    let v = read(export.0.join("ui").join("Jason_Select_Widget.json")).unwrap_or_default();
+    // "/Game/Characters/Killers/Jason/J2/Jason_SackHead.Jason_SackHead_C" -> "Jason_SackHead".
+    let list: Vec<(String, serde_json::Value)> = v["Defaults"]["JasonClassList"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.as_object()?.iter().find(|(k, _)| k.starts_with("CharacterClass"))?.1["AssetPathName"].as_str().map(str::to_string))
+        .filter_map(|p| p.rsplit('.').next()?.strip_suffix("_C").map(str::to_string))
+        .filter_map(|k| Some((k.clone(), read(export.0.join("killers").join(format!("{k}.json")))?)))
+        .collect();
+    if list.is_empty() {
+        warn!("lobby: no Jason_Select_Widget JasonClassList (re-export: f13-export ui /Game/UI/Menu/Character/Killer/Jason_Select_Widget): no Jason menu");
+    }
+    commands.insert_resource(JasonList(list));
+}
+
+/// The Jason menu (Jason_Select_Widget, decompiled): J opens it (his row's JasonButton), on the lobby's Jason (SetJasonIndex:
+/// the class picked); Left / Right (or A / D: LeftArrowButton / RightArrowButton) the Jason before or after, round
+/// (CharacterSelectChange, 0.5 s between as the counselor menu's NextCounselorTimer: PLACEHOLDER); Enter (OnClick_Accept:
+/// RequestKillerClass) picks him with UITransitionAll and closes it; Escape closes it. A pick restarts the lobby's peers
+/// with him (killer_relaunch: each loads its Jason at startup).
+#[allow(clippy::too_many_arguments)]
+fn jason_menu(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time<bevy::time::Real>>,
+    menu: Option<ResMut<JasonMenu>>,
+    list: Option<Res<JasonList>>,
+    mut lobby: Query<&mut NetLobby>,
+    me: Option<Res<Me>>,
+    mut senders: Query<&mut MessageSender<LobbyMsg>, With<Connected>>,
+    (audio_menu, counselor_menu): (Option<Res<crate::audio_settings::AudioMenu>>, Option<Res<CounselorMenu>>),
+    mut tested: Local<bool>,
+) {
+    let (Some(list), Ok(mut lobby)) = (list.filter(|l| !l.0.is_empty()), lobby.single_mut()) else { return };
+    if audio_menu.is_some() || counselor_menu.is_some() {
+        return;
+    }
+    let Some(mut menu) = menu else {
+        // (F13_JASON_MENU[=<index>]: opened as the lobby opens, for screenshots.)
+        let test = std::env::var("F13_JASON_MENU").is_ok() && !std::mem::replace(&mut *tested, true);
+        if lobby.open && (keys.just_pressed(KeyCode::KeyJ) || test) {
+            let index = list.0.iter().position(|(k, _)| *k == lobby.killer).unwrap_or(0);
+            let index = if test { std::env::var("F13_JASON_MENU").ok().and_then(|v| v.parse::<usize>().ok()).map_or(index, |i| i % list.0.len()) } else { index };
+            commands.insert_resource(JasonMenu { index, timer: 0.0 });
+        }
+        return;
+    };
+    if !lobby.open || keys.just_pressed(KeyCode::Escape) {
+        commands.remove_resource::<JasonMenu>();
+        return;
+    }
+    menu.timer -= time.delta_secs();
+    let n = list.0.len();
+    let step = if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) {
+        Some(n - 1)
+    } else if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) {
+        Some(1)
+    } else {
+        None
+    };
+    if let Some(step) = step.filter(|_| menu.timer <= 0.0) {
+        menu.index = (menu.index + step) % n;
+        menu.timer = 0.5;
+        commands.trigger(crate::audio::PlaySound { cue: "CharacterSelectChange".into(), at: None });
+    }
+    if keys.just_pressed(KeyCode::Enter) {
+        let killer = list.0[menu.index].0.clone();
+        info!("lobby: picked Jason {killer}");
+        if me.is_some() {
+            for mut s in &mut senders {
+                s.send::<LobbyChannel>(LobbyMsg::Killer(killer.clone()));
+            }
+        } else if killer != lobby.killer && lobby.relaunch_killer.is_none() {
+            info!("lobby: Jason {killer} picked: starting again with him");
+            lobby.relaunch_killer = Some(killer);
+        }
+        commands.trigger(crate::audio::PlaySound { cue: "UITransitionAll".into(), at: None });
+        commands.remove_resource::<JasonMenu>();
+    }
+}
+
 /// The counselor after `current` among the playable ones (by class name; the first after the last).
 fn next_class(character: Option<&crate::character::CounselorCharacter>, current: &str) -> String {
     // (Not Tommy: the game mode's HunterCharacterClass, who comes only when called: SCGameMode::SpawnHunter.)
@@ -533,9 +621,9 @@ fn next_class(character: Option<&crate::character::CounselorCharacter>, current:
 }
 
 /// The server's own player's keys.
-fn local_keys(keys: Res<ButtonInput<KeyCode>>, mut lobby: Query<&mut NetLobby>, character: Option<Res<crate::character::CounselorCharacter>>, menu: Option<Res<CounselorMenu>>, audio_menu: Option<Res<crate::audio_settings::AudioMenu>>) {
-    // (The counselor and audio menus have the keys while they're open.)
-    if menu.is_some() || audio_menu.is_some() {
+fn local_keys(keys: Res<ButtonInput<KeyCode>>, mut lobby: Query<&mut NetLobby>, character: Option<Res<crate::character::CounselorCharacter>>, menu: Option<Res<CounselorMenu>>, (audio_menu, jason_menu): (Option<Res<crate::audio_settings::AudioMenu>>, Option<Res<JasonMenu>>)) {
+    // (The counselor, Jason and audio menus have the keys while they're open.)
+    if menu.is_some() || audio_menu.is_some() || jason_menu.is_some() {
         return;
     }
     let (Some(msg), Ok(mut lobby)) = (lobby_key(&keys), lobby.single_mut()) else { return };
@@ -545,15 +633,7 @@ fn local_keys(keys: Res<ButtonInput<KeyCode>>, mut lobby: Query<&mut NetLobby>, 
         LobbyMsg::Ready(_) => m.ready = !m.ready,
         LobbyMsg::Name(_) => {}
         LobbyMsg::Class(_) => m.class = next_class(character.as_deref(), &m.class),
-        LobbyMsg::Outfit(_) | LobbyMsg::Perks(_) => {}
-        LobbyMsg::Killer(_) => {
-            let next = next_killer(&lobby.killer);
-            if next != lobby.killer && lobby.relaunch_killer.is_none() {
-                info!("lobby: Jason {next} picked: starting again with him");
-                lobby.relaunch_killer = Some(next);
-            }
-            return;
-        }
+        LobbyMsg::Outfit(_) | LobbyMsg::Perks(_) | LobbyMsg::Killer(_) => {}
     }
     info!("lobby: {} {} {} {}", m.name, m.preference.label(), m.class, if m.ready { "ready" } else { "not ready" });
 }
@@ -724,8 +804,8 @@ fn send_name(me: Option<Res<Me>>, local: Option<Res<crate::character::LocalClass
 }
 
 /// The lobby's keys on a client.
-fn client_keys(keys: Res<ButtonInput<KeyCode>>, lobby: Query<&NetLobby>, me: Option<Res<Me>>, character: Option<Res<crate::character::CounselorCharacter>>, mut senders: Query<&mut MessageSender<LobbyMsg>, With<Connected>>, menu: Option<Res<CounselorMenu>>, audio_menu: Option<Res<crate::audio_settings::AudioMenu>>) {
-    if menu.is_some() || audio_menu.is_some() {
+fn client_keys(keys: Res<ButtonInput<KeyCode>>, lobby: Query<&NetLobby>, me: Option<Res<Me>>, character: Option<Res<crate::character::CounselorCharacter>>, mut senders: Query<&mut MessageSender<LobbyMsg>, With<Connected>>, menu: Option<Res<CounselorMenu>>, (audio_menu, jason_menu): (Option<Res<crate::audio_settings::AudioMenu>>, Option<Res<JasonMenu>>)) {
+    if menu.is_some() || audio_menu.is_some() || jason_menu.is_some() {
         return;
     }
     let (Ok(lobby), Some(me)) = (lobby.single(), me) else { return };
@@ -740,9 +820,6 @@ fn client_keys(keys: Res<ButtonInput<KeyCode>>, lobby: Query<&NetLobby>, me: Opt
     if let LobbyMsg::Class(_) = msg {
         let current = lobby.members.iter().find(|m| m.id == me.id).map_or("", |m| m.class.as_str());
         msg = LobbyMsg::Class(next_class(character.as_deref(), current));
-    }
-    if let LobbyMsg::Killer(_) = msg {
-        msg = LobbyMsg::Killer(next_killer(&lobby.killer));
     }
     for mut s in &mut senders {
         s.send::<LobbyChannel>(msg.clone());
@@ -816,7 +893,7 @@ fn show_overlay(
     // (The players are on the lobby's own screen: ui.rs LobbyWidget; its keys and the last match here.)
     let mut s = String::new();
     let _ = mine;
-    s.push_str("1 counselor   2 no preference   3 Jason   C pick a counselor   O audio settings   Enter ready\n");
+    s.push_str("1 counselor   2 no preference   3 Jason   C pick a counselor   J pick a Jason   O audio settings   Enter ready\n");
     let open = open_mic.is_some();
     s.push_str(&format!("push-to-talk (T): {}   Shift+n mute player n\n", if open { "off" } else { "on" }));
     let muted: Vec<&str> = mutes.as_ref().map_or_else(Vec::new, |m| m.0.iter().map(String::as_str).collect());
@@ -927,7 +1004,8 @@ fn lobby_clicks(
     const KEYS: [(&str, KeyCode); 10] = [
         ("ReadyButton", KeyCode::Enter),
         ("CounselorButton", KeyCode::KeyC),
-        ("JasonButton", KeyCode::Digit3),
+        // (Her row's JasonButton opens Jason_Select_Widget: LobbyPlayerListItem's KillerSelectButtonWidget click.)
+        ("JasonButton", KeyCode::KeyJ),
         ("LeftArrowButton", KeyCode::ArrowLeft),
         ("RightArrowButton", KeyCode::ArrowRight),
         ("PerkButton_Slot_1", KeyCode::Digit1),

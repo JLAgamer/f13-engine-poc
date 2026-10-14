@@ -365,6 +365,10 @@ pub struct Hud {
     lobby_row: Option<(Widget, HashMap<String, String>, Value)>,
     /// The counselor menu (Counselor_Menu: lobby.rs CounselorMenu).
     counselor_menu: Option<Widget>,
+    /// The Jason menu (Jason_Select_Widget: lobby.rs JasonMenu) and its strengths' and weaknesses' rows
+    /// (Attribute_Display).
+    jason_menu: Option<Widget>,
+    attribute: Option<Widget>,
     /// The audio settings (AudioSettingsMenuWidget: audio_settings.rs AudioMenu).
     audio_settings: Option<Widget>,
     /// The wardrobe (Counselor_Wardrobe_Menu: wardrobe.rs WardrobeMenu) and its lists' buttons (Counselor_Outfit_Button,
@@ -603,6 +607,24 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
             action_keys(&mut w);
             w
         }),
+        jason_menu: Widget::load(dir, "Jason_Select_Widget").map(|mut w| {
+            // Not ported: its 3D preview (PreviewImage: KillerCustomizationPreview's render target), the weapon
+            // selection, the grab kill picks (the slots shown are his own: no profile), customization points, the
+            // locked banner (all unlocked), the ability order and its action bar (the keys: lobby.rs).
+            if let Some(h) = w.find_mut("MenuHeaderWidget") {
+                let title = h.props["Text"].clone();
+                if let Some(t) = h.find_mut("TitleText").filter(|_| title.is_object()) {
+                    t.props["Text"] = title;
+                }
+            }
+            for name in ["QuickPlayOverlayWidget", "MenuActionBarWidget_455", "CPBox", "LockedBorder", "WeaponSelectionButton", "AbilityUnlockPanelButton", "AbilityOrderText", "PreviewImage", "Fill", "ActionMapPrev", "ActionMapNext"] {
+                if let Some(x) = w.find_mut(name) {
+                    x.set_visibility(Vis::Collapsed);
+                }
+            }
+            w
+        }),
+        attribute: Widget::load(dir, "Attribute_Display"),
         counselor_menu: Widget::load(dir, "Counselor_Menu").map(|mut w| {
             // Not ported: its 3D preview (CharacterPreviewImage: CounselorCustomizationPreview's render target), perks,
             // ability, clothing and emote buttons, customization points, the locked banner (all unlocked) and its action
@@ -814,7 +836,7 @@ fn build_hud(
         Option<Res<crate::counselor_preview::PreviewImage>>,
     ),
     (wardrobe_menu, emote_wheel, emotes, emote_menu): (Option<Res<crate::wardrobe::WardrobeMenu>>, Option<Res<crate::emotes::EmoteWheel>>, Option<Res<crate::emotes::Emotes>>, Option<Res<crate::emotes::EmoteMenu>>),
-    (perk_menu, perks, profiles): (Option<Res<crate::perks::PerkMenu>>, Option<Res<crate::perks::Perks>>, Option<Res<crate::wardrobe::CounselorProfiles>>),
+    (perk_menu, perks, profiles, jason_menu, jason_list): (Option<Res<crate::perks::PerkMenu>>, Option<Res<crate::perks::Perks>>, Option<Res<crate::wardrobe::CounselorProfiles>>, Option<Res<crate::lobby::JasonMenu>>, Option<Res<crate::lobby::JasonList>>),
 ) {
     let size = window.size();
     // The lobby while it's open (LobbyWidget, as the game's lobby map shows it).
@@ -869,6 +891,8 @@ fn build_hud(
     }
     // The counselor menu over the lobby while it's open.
     let menu_class = open_lobby.and(counselor_menu.as_ref()).and_then(|m| counselor_list.as_ref()?.0.get(m.index).cloned()).filter(|_| hud.counselor_menu.is_some());
+    // Or the Jason menu.
+    let menu_jason = open_lobby.and(jason_menu.as_ref()).and_then(|m| jason_list.as_ref()?.0.get(m.index).cloned()).filter(|_| hud.jason_menu.is_some());
     if let Some(l) = open_lobby {
         pocket_key = l.members.iter().map(|m| format!("lobby:{}:{}:{}:{:?}:{}:{}:{}:{}:{}", m.id, m.name, m.ready, m.preference, m.ping, m.talked, m.talking, mutes.as_ref().is_some_and(|x| x.0.contains(&m.name)), m.class)).collect();
         pocket_key.push(format!("ready focus {}", ready_focus.as_ref().is_none_or(|f| f.0)));
@@ -876,6 +900,9 @@ fn build_hud(
         if let Some(c) = &menu_class {
             let slots = profiles.as_ref().map(|p| p.perks.get(c).cloned().unwrap_or_default());
             pocket_key = vec![format!("counselor_menu:{c}:{slots:?}")];
+        }
+        if let Some(k) = &menu_jason {
+            pocket_key = vec![format!("jason_menu:{}", k.0)];
         }
         if let Some(m) = perk_menu.as_ref().filter(|_| hud.perk_menu.is_some()) {
             pocket_key = vec![format!("perks:{}:{}:{}", m.class, m.slot, m.index)];
@@ -940,6 +967,10 @@ fn build_hud(
     } else if let (Some(w), Some(t), Some(_), Some(c)) = (&wardrobe_menu, &hud.wardrobe, open_lobby, counselors.as_deref()) {
         let mut t = t.clone();
         fill_wardrobe(&hud, &mut t, w, c);
+        t
+    } else if let (Some((_, killer)), Some(t), Some(_)) = (&menu_jason, &hud.jason_menu, open_lobby) {
+        let mut t = t.clone();
+        fill_jason_menu(&hud, &mut t, killer);
         t
     } else if let (Some(class), Some(_)) = (&menu_class, open_lobby) {
         let mut t = hud.counselor_menu.clone().unwrap_or_else(|| hud.hud.clone());
@@ -1016,7 +1047,7 @@ fn build_hud(
     let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names, preview };
     let full = Rect { x: 0.0, y: 0.0, w: virt.x, h: virt.y };
     let laid = tree.layout(full);
-    b.spawn(&laid, root, full, if board.is_some() { "ScoreboardWidget" } else if badge.is_some() { "MatchEnd_Badges" } else if ended.is_some() { "MatchEnd" } else if menu_class.is_some() && open_lobby.is_some() { "Counselor_Menu" } else if open_lobby.is_some() { "LobbyWidget" } else if jason { "KillerHUDWidget" } else if spectator { "SpectatorHUDWidget" } else { "CounselorHUDWidget" });
+    b.spawn(&laid, root, full, if board.is_some() { "ScoreboardWidget" } else if badge.is_some() { "MatchEnd_Badges" } else if ended.is_some() { "MatchEnd" } else if menu_jason.is_some() && open_lobby.is_some() { "Jason_Select_Widget" } else if menu_class.is_some() && open_lobby.is_some() { "Counselor_Menu" } else if open_lobby.is_some() { "LobbyWidget" } else if jason { "KillerHUDWidget" } else if spectator { "SpectatorHUDWidget" } else { "CounselorHUDWidget" });
     // Her breath meter and interaction dial are hers (Jason's HUD has neither; nor has the lobby).
     if let Some(breath) = hud.breath.as_ref().filter(|_| !jason && open_lobby.is_none() && ended.is_none()) {
         let laid = breath.layout(full);
@@ -1605,6 +1636,70 @@ fn fill_counselor_menu(tree: &mut Widget, class: &str, counselors: Option<&crate
         }
         if let Some(b) = x.find_mut("StatBar") {
             b.props["Percent"] = json!(v as f32 / 10.0);
+        }
+    }
+}
+
+/// Jason_Select_Widget's SetJason (decompiled): FirstNameText his CharacterName ("Part"), MovieNumber his
+/// CharacterTropeName ("3"), WeaponAxeText "Weapon: {WeaponName}" (his default weapon: no picks), StrengthBox and
+/// WeaknessesBox an Attribute_Display per strength / weakness (AtrributeText its Title, AttrImg its Icon); SetupGrabKills:
+/// Kill_Select_Button1..4 his grab kills (Kill_Select_Button SetGrabKill: GrabKillImg GetGrabKillImage(class, false),
+/// the kill's ContextKillHUDIcon; none: KillSelectionEmpty_01, its default). The profile's GrabKills taken as his own
+/// slots (InitFromPlayerState with no picks: jason.rs grab_kill_slots). NameText and DescriptionText cleared (the
+/// focused button's).
+fn fill_jason_menu(hud: &Hud, tree: &mut Widget, killer: &Value) {
+    let menu = &killer["Menu"];
+    let text = |t: &str| json!({ "LocalizedString": t });
+    let weapon = format!("Weapon: {}", menu["WeaponName"].as_str().unwrap_or(""));
+    for (w, t) in [("FirstNameText", menu["CharacterName"].as_str().unwrap_or("")), ("MovieNumber", menu["CharacterTropeName"].as_str().unwrap_or("")), ("WeaponAxeText", weapon.as_str()), ("NameText", ""), ("DescriptionText", "")] {
+        if let Some(x) = tree.find_mut(w) {
+            x.props["Text"] = text(t);
+        }
+    }
+    if let Some(row) = &hud.attribute {
+        for (b, key) in [("StrengthBox", "Strengths"), ("WeaknessesBox", "Weaknesses")] {
+            let Some(bx) = tree.find_mut(b) else { continue };
+            bx.children = menu[key]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .map(|(i, a)| {
+                    let mut x = row.clone();
+                    x.name = format!("{key}_{i}");
+                    x.slot_kind = "VerticalBoxSlot".into();
+                    x.slot = json!({});
+                    if let Some(t) = x.find_mut("AtrributeText") {
+                        t.props["Text"] = text(a["Title"].as_str().unwrap_or(""));
+                    }
+                    if let (Some(img), Some(icon)) = (x.find_mut("AttrImg"), a["Icon"].as_str()) {
+                        img.props["Brush"]["ResourceObject"] = json!({ "File": icon });
+                    }
+                    x
+                })
+                .collect();
+        }
+    }
+    // His slots: GrabKillClasses in order, the first empty one his weapon's DefaultGrabKill and the rest empty.
+    let names = &killer["Names"];
+    let mut slots: [Option<String>; 4] = Default::default();
+    for (i, slot) in slots.iter_mut().enumerate() {
+        match names[format!("GrabKillClass{i}")].as_str().unwrap_or("") {
+            "" => {
+                *slot = names["DefaultGrabKill"].as_str().map(str::to_string);
+                break;
+            }
+            class => *slot = Some(class.to_string()),
+        }
+    }
+    for (i, class) in slots.iter().enumerate() {
+        let icon = class.as_deref().and_then(|c| hud.classes.prop(c, "ContextKillHUDIcon").as_str()).and_then(|s| s.split('\'').nth(1)).and_then(|n| hud.textures.get(n).cloned());
+        let Some(b) = tree.find_mut(&format!("Kill_Select_Button{}", i + 1)) else { continue };
+        if let (Some(img), Some(icon)) = (b.find_mut("GrabKillImg"), icon) {
+            img.props["Brush"]["ResourceObject"] = json!({ "File": icon });
+        }
+        if let Some(h) = b.find_mut("HighlightImg") {
+            h.set_visibility(Vis::Hidden);
         }
     }
 }
