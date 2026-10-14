@@ -337,6 +337,7 @@ impl Plugin for JasonPlugin {
             .add_systems(Startup, (spawn_jason, load_knife_look))
             .add_systems(FixedUpdate, choose_target.before(crate::senses::perceive).before(grab_kills_available).before(update_jason).run_if(crate::net::simulating))
             .add_systems(FixedUpdate, (grab_kills_available.before(update_jason), update_jason, recover_counselor, fly_knives, pick_up_knives).run_if(crate::net::simulating).run_if(crate::match_flow::in_progress))
+            .add_systems(FixedUpdate, cancel_on_stun.after(update_jason).run_if(crate::net::simulating).run_if(crate::match_flow::in_progress))
             .add_observer(spawn_knife)
             .add_observer(pickup_taken)
             .add_observer(distortion)
@@ -1438,6 +1439,29 @@ pub struct KillJason {
     pub by: Entity,
 }
 
+/// A stun ends his screen-effect abilities (the stun's application FUN_1403f6070, locally controlled: CancelStalk, and
+/// CancelSense if Sense is on): Stalk's recharge timer back to 0, Sense's unused share refunded (as its own cancel).
+/// (Neither can start again while he's stunned, so cancelling whenever he is equals cancelling as it starts.)
+fn cancel_on_stun(time: Res<Time>, mut jasons: Query<(&mut Jason, &mut crate::senses::Knowledge)>) {
+    let now = time.elapsed_secs();
+    for (mut j, mut k) in &mut jasons {
+        if !j.stunned() {
+            continue;
+        }
+        if j.stalk.is_some() {
+            j.stalk = None;
+            k.abilities.consume(Ability::Stalk);
+            info!("Jason: Stalk cancelled (stunned)");
+        }
+        if k.sensing(now) {
+            let unused = (k.sense_until - now) / k.sense_length.max(1e-3);
+            k.abilities.refund(Ability::Sense, unused);
+            k.sense_until = now;
+            info!("Jason: Sense cancelled (stunned)");
+        }
+    }
+}
+
 /// The level's fuse boxes' class (power.rs).
 const FUSE_BOX_CLASS: &str = "PowerGridFuseBox_C";
 /// Jason_AnimBP's BlockMontages (AM_Jason_Combat_Block: its block idle, looped) and BlockingHitMontages (each ends
@@ -2191,7 +2215,16 @@ pub(crate) fn update_jason(
                             info!("Jason: no morph point near that place");
                         }
                     }
-                    if p.stalk && j.stalk.is_none() && ready(&know, Ability::Stalk) {
+                    // KLR_Stalk_PC (FUN_1403e4df0): not with his map out; on, it's cancelled (SERVER_CancelStalk
+                    // 0x1404046d0: bIsStalkActive off, its recharge timer back to 0: no refund); else used if available.
+                    let map_out = morph_map.as_deref().is_some_and(|m| m.open);
+                    if p.stalk && !map_out && j.stalk.is_some() {
+                        if let Some(k) = know.as_mut() {
+                            k.abilities.consume(Ability::Stalk);
+                        }
+                        info!("Jason: Stalk cancelled");
+                        j.stalk = None;
+                    } else if p.stalk && !map_out && ready(&know, Ability::Stalk) {
                         if let Some(k) = know.as_mut() {
                             k.abilities.consume(Ability::Stalk);
                         }

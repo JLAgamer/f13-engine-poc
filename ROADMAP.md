@@ -7,7 +7,6 @@ Base content (asset paths in the player's install; all gameplay values come from
 `Characters/Killers/Jason/J2`, the Chevettes (`Blueprints/Vehicles/DriveableVehicles/Cars/Chevette`), the police.
 
 ## Todo
-- [ ] Stalk's sound changes (what Stalk does to his and the counselors' sounds and music: read the decomp)
 - [ ] Network sync audit: every player action from a client reaching the server, and every result showing on the
       clients (done so far: a client's Jason's Shift, Stalk, Sense and its highlights, Morph, knife pickups:
       --bot-net-abilities; MODLOG "A client's Jason: his abilities over the network")

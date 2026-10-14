@@ -1297,7 +1297,6 @@ fn mirror(
                 twin.kill = key;
             }
             if let Some(mut k) = know {
-                let a = &mut k.abilities;
                 // Sense's timer on this clock.
                 let until = time.elapsed_secs() + n.sense.0;
                 if (until - k.sense_until).abs() > 0.25 || n.sense.0 == 0.0 {
@@ -1760,7 +1759,8 @@ fn net_bot_jason(
         // His abilities: each pressed (held a moment, then let go), then seen on the server.
         10.. => {
             // (Keys' bits: NET_KEYS' order, 1 at bit 8.)
-            const STEPS: [(&str, u32); 4] = [("Shift", 1 << 10), ("Stalk", 1 << 11), ("Sense", 1 << 9), ("Morph", 1 << 8)];
+            // (4 again while Stalk is on cancels it: KLR_Stalk_PC.)
+            const STEPS: [(&str, u32); 5] = [("Shift", 1 << 10), ("Stalk", 1 << 11), ("Unstalk", 1 << 11), ("Sense", 1 << 9), ("Morph", 1 << 8)];
             let i = (bot.step - 10) as usize;
             // Then a knife pickup (E at it): taken on the server, hidden here.
             if i == STEPS.len() {
@@ -1841,6 +1841,7 @@ fn net_bot_jason(
             let seen = match name {
                 "Shift" => nj.shifting || spent(Ability::Shift),
                 "Stalk" => nj.stalking || spent(Ability::Stalk),
+                "Unstalk" => !nj.stalking,
                 // (And on here: its highlights are worked out on this machine.)
                 "Sense" => spent(Ability::Sense) && know.iter().next().is_some_and(|k| k.sensing(time.elapsed_secs())),
                 _ => nj.state == "Morphing" || spent(Ability::Morph),
