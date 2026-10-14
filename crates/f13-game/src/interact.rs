@@ -1670,6 +1670,10 @@ fn small_items(
     }
 }
 
+/// A first aid's uses so far (SCItem TimesUsed).
+#[derive(Component)]
+pub struct TimesUsed(pub u32);
+
 /// The selected small item used (`Inventory::use_small`): first aid here (items.rs throws firecrackers).
 fn use_item(
     mut commands: Commands,
@@ -1677,6 +1681,7 @@ fn use_item(
     tuning: Res<PlayerTuning>,
     mut players: Query<(Entity, &mut Player, &mut Inventory, Option<&mut UsingItem>), Without<Driving>>,
     items: Query<&Item>,
+    used: Query<&TimesUsed>,
 ) {
     for (entity, mut p, mut inv, using) in &mut players {
     if let Some(mut u) = using {
@@ -1684,11 +1689,21 @@ fn use_item(
         if u.left > 0.0 {
             continue;
         }
-        let healed = p.counselor.heal(tuning.first_aid.health_restored, &tuning.counselor);
+        // SCFirstAid's use (FUN_14039d720): HealthRestoredPerUse x (1 + her perks' FirstAidHealingModifier); used up once
+        // its NumUses are (the holder's pickup, FUN_1403722c0: 1 + her ExtraFirstAidUses; the same as she uses it here).
+        let restored = tuning.first_aid.health_restored * (1.0 + p.counselor.perks.get("FirstAidHealingModifier"));
+        let healed = p.counselor.heal(restored, &tuning.counselor);
         info!("used first aid: +{healed:.0} health");
         commands.trigger(ClassScore::new(entity, FIRST_AID, "UseFirstAidScoreEvent"));
-        inv.pockets.retain(|&e| e != u.item);
-        commands.entity(u.item).despawn();
+        let times = used.get(u.item).map_or(0, |t| t.0) + 1;
+        let uses = 1 + p.counselor.perks.get("ExtraFirstAidUses").round().max(0.0) as u32;
+        if times >= uses {
+            inv.pockets.retain(|&e| e != u.item);
+            commands.entity(u.item).despawn();
+        } else {
+            commands.entity(u.item).insert(TimesUsed(times));
+            info!("first aid: {} use(s) left", uses - times);
+        }
         commands.entity(entity).remove::<UsingItem>();
         continue;
     }
