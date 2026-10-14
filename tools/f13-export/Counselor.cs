@@ -684,6 +684,10 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
                 ["CharacterName"] = Text(cls, "CharacterName"),
                 ["CharacterTropeName"] = Text(cls, "CharacterTropeName"),
                 ["WeaponName"] = Text(weaponClass, "FriendlyName"),
+                // His WeaponClass and AllowedWeaponClasses (SCKillerWeaponSelectionWidget::InitializeList: the menu's
+                // list, killer +0x13a0), as class names.
+                ["WeaponClass"] = weaponClass.Name,
+                ["AllowedWeapons"] = new Newtonsoft.Json.Linq.JArray((ClassValue<FSoftObjectPath[]>(cls, "AllowedWeaponClasses") ?? []).Select(w => w.AssetPathName.Text.Split('.')[^1]).Where(w => w.Length > 0 && w != "None")),
                 ["Strengths"] = Attributes("KillerStrengths"),
                 ["Weaknesses"] = Attributes("KillerWeaknesses"),
             };

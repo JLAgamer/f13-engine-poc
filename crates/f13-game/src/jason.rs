@@ -182,6 +182,7 @@ static DEFAULT_SLOTS: std::sync::RwLock<Option<[Option<usize>; 4]>> = std::sync:
 
 /// His picks (kill classes, "" none) over his defaults.
 pub fn set_grab_kill_picks(picks: &[String]) {
+    *LAST_PICKS.write().unwrap_or_else(|e| e.into_inner()) = picks.to_vec();
     let Some(defaults) = *DEFAULT_SLOTS.read().unwrap_or_else(|e| e.into_inner()) else { return };
     let mut slots = defaults;
     for (i, p) in picks.iter().take(4).enumerate() {
@@ -267,8 +268,9 @@ pub fn kills() -> &'static [Kill] {
     KILL_TABLE.get_or_init(builtin_kills)
 }
 
-/// Reads grab_kills.json (before anything asks for [`kills`]).
+/// Reads grab_kills.json and weapons.json (before anything asks for [`kills`] or [`weapons`]).
 pub fn load_kills(export: &std::path::Path) {
+    load_weapons(export);
     let v: Option<serde_json::Value> = std::fs::read_to_string(export.join("grab_kills.json")).ok().and_then(|t| serde_json::from_str(&t).ok());
     let list: Vec<Kill> = v
         .as_ref()
@@ -294,6 +296,154 @@ pub fn load_kills(export: &std::path::Path) {
         return;
     }
     let _ = KILL_TABLE.set(list);
+}
+
+/// A Jason weapon (weapons.json: f13-export Weapons): its class, FriendlyName, ThumbnailImage (.png), ItemMesh3P
+/// (.glb), WeaponStats.Damage, DefaultGrabKill, and its NeutralAttack / ForwardAttack takes (the light and heavy
+/// swings: the pickaxe and axe two-handed, the pig splitter, shears, machete and fire axe one-handed, the spear's
+/// lunge).
+#[derive(Clone, Debug)]
+pub struct WeaponInfo {
+    pub class: String,
+    pub name: String,
+    pub image: String,
+    pub mesh: String,
+    pub damage: f32,
+    pub default_grab_kill: String,
+    pub light: String,
+    pub heavy: String,
+}
+
+static WEAPON_TABLE: std::sync::OnceLock<Vec<WeaponInfo>> = std::sync::OnceLock::new();
+
+/// The weapons (see [`WeaponInfo`]); none before weapons.json.
+pub fn weapons() -> &'static [WeaponInfo] {
+    WEAPON_TABLE.get_or_init(Vec::new)
+}
+
+pub fn weapon_info(class: &str) -> Option<&'static WeaponInfo> {
+    weapons().iter().find(|w| w.class == class)
+}
+
+fn load_weapons(export: &std::path::Path) {
+    let v: Option<serde_json::Value> = std::fs::read_to_string(export.join("weapons.json")).ok().and_then(|t| serde_json::from_str(&t).ok());
+    let list: Vec<WeaponInfo> = v
+        .as_ref()
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|w| {
+            let s = |n: &str| w[n].as_str().map(str::to_string);
+            Some(WeaponInfo {
+                class: s("Class")?,
+                name: s("Name").unwrap_or_default(),
+                image: s("Image").unwrap_or_default(),
+                mesh: s("Mesh").unwrap_or_default(),
+                damage: w["Damage"].as_f64().unwrap_or(20.0) as f32,
+                default_grab_kill: s("DefaultGrabKill").unwrap_or_default().trim_end_matches("_C").to_string(),
+                light: s("LightTake").unwrap_or_default(),
+                heavy: s("HeavyTake").unwrap_or_default(),
+            })
+        })
+        .collect();
+    if list.is_empty() {
+        warn!("no weapons.json (re-export: f13-export weapons): every Jason swings the pickaxe's way");
+    }
+    let _ = WEAPON_TABLE.set(list);
+}
+
+/// The weapon his match uses (InitFromPlayerState: the PlayerState's picked weapon when valid, else his WeaponClass)
+/// and a count of its changes ([`apply_weapon`]).
+static WEAPON: std::sync::RwLock<Option<&'static WeaponInfo>> = std::sync::RwLock::new(None);
+static WEAPON_CHANGES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// His own: his killer JSON's Menu (WeaponClass, AllowedWeaponClasses) and Names (the grab kill defaults), and the
+/// last picks.
+static OWN: std::sync::RwLock<Option<(String, Vec<String>, serde_json::Value)>> = std::sync::RwLock::new(None);
+static LAST_PICKS: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+
+/// The light and heavy swings' takes (his weapon's; the pickaxe's before weapons.json).
+pub(crate) fn attack_take() -> &'static str {
+    WEAPON.read().unwrap_or_else(|e| e.into_inner()).map(|w| w.light.as_str()).filter(|t| !t.is_empty()).unwrap_or(ATTACK)
+}
+
+pub(crate) fn heavy_take() -> &'static str {
+    WEAPON.read().unwrap_or_else(|e| e.into_inner()).map(|w| w.heavy.as_str()).filter(|t| !t.is_empty()).unwrap_or(HEAVY_ATTACK)
+}
+
+/// The weapon he carries now (None: no weapons.json).
+pub fn current_weapon() -> Option<&'static WeaponInfo> {
+    *WEAPON.read().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A Jason's weapon for a pick ("" or one he isn't allowed: his own).
+pub fn weapon_for(own: &str, allowed: &[String], pick: &str) -> String {
+    if !pick.is_empty() && (pick == own || allowed.iter().any(|a| a == pick)) && weapon_info(pick).is_some() {
+        pick.to_string()
+    } else {
+        own.to_string()
+    }
+}
+
+/// His weapon for the match ("" his own; one he isn't allowed: his own), his default slots following its DefaultGrabKill.
+pub fn set_weapon(pick: &str) {
+    let own = OWN.read().unwrap_or_else(|e| e.into_inner()).clone();
+    let Some((own_class, allowed, names)) = own else { return };
+    let class = weapon_for(&own_class, &allowed, pick);
+    let Some(w) = weapon_info(&class) else { return };
+    let changed = current_weapon().is_none_or(|c| c.class != w.class);
+    *WEAPON.write().unwrap_or_else(|e| e.into_inner()) = Some(w);
+    let mut names = names;
+    names["DefaultGrabKill"] = serde_json::Value::String(format!("{}_C", w.default_grab_kill));
+    *DEFAULT_SLOTS.write().unwrap_or_else(|e| e.into_inner()) = Some(slots_from(&names));
+    let picks = LAST_PICKS.read().unwrap_or_else(|e| e.into_inner()).clone();
+    set_grab_kill_picks(&picks);
+    if changed {
+        info!("Jason: his weapon {}", w.name);
+        WEAPON_CHANGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// A rig's weapon as shown ([`WEAPON_CHANGES`] when its mesh was last set).
+#[derive(Component)]
+struct WeaponShown(u32);
+
+/// As his weapon changes: his swings' lengths and windows, his damage (its WeaponStats.Damage x his modifiers), and the
+/// mesh in his hand (the match's Jason's rig: its Weapon part's scene).
+#[allow(clippy::type_complexity)]
+fn apply_weapon(
+    mut commands: Commands,
+    assets: Res<AssetServer>,
+    killer: Option<Res<KillerCharacter>>,
+    tuning: Option<ResMut<KillerTuning>>,
+    rigs: Query<(Entity, &ChildOf, &crate::character::Rig, Option<&WeaponShown>)>,
+    jasons: Query<(), With<Jason>>,
+    mut tuned: Local<u32>,
+) {
+    let (Some(killer), Some(w)) = (killer, current_weapon()) else { return };
+    let changes = WEAPON_CHANGES.load(std::sync::atomic::Ordering::Relaxed);
+    if let Some(mut t) = tuning.filter(|_| *tuned != changes) {
+        *tuned = changes;
+        let info = &killer.0.info;
+        let v = |k: &str, d: f32| info.values.get(k).copied().unwrap_or(d);
+        let fresh = KillerTuning::new(info);
+        t.attack_length = fresh.attack_length;
+        t.attack_window = fresh.attack_window;
+        t.heavy_length = fresh.heavy_length;
+        t.heavy_window = fresh.heavy_window;
+        t.damage = w.damage * v("DamageCharacterModifier", 1.0);
+        t.world_damage = w.damage * v("DamageWorldModifier", 1.0);
+    }
+    let Some(index) = killer.0.info.parts.iter().position(|p| p.name == "Weapon") else { return };
+    for (rig_entity, parent, rig, shown) in &rigs {
+        if shown.is_some_and(|s| s.0 == changes) || !jasons.contains(parent.parent()) {
+            continue;
+        }
+        let Some(part) = rig.part(index) else { continue };
+        if !w.mesh.is_empty() {
+            commands.entity(part).despawn_related::<Children>().insert(bevy::world_serialization::WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(w.mesh.clone()))));
+        }
+        commands.entity(rig_entity).insert(WeaponShown(changes));
+    }
 }
 
 /// The kills before grab_kills.json: the pickaxe's, the choke, and the other Jasons' weapons' DefaultGrabKill.
@@ -450,7 +600,7 @@ impl Plugin for JasonPlugin {
         crate::net_world::sounds(app);
         app.insert_resource(JasonConfig { delay: self.delay, kill: self.kill.clone(), health: self.health })
             .init_resource::<GrabKillsAvailable>()
-            .add_systems(Update, show_mask)
+            .add_systems(Update, (show_mask, apply_weapon))
             .init_resource::<JasonTarget>()
             .add_systems(Startup, (spawn_jason, load_knife_look))
             .add_systems(FixedUpdate, choose_target.before(crate::senses::perceive).before(grab_kills_available).before(update_jason).run_if(crate::net::simulating))
@@ -565,7 +715,7 @@ pub struct KillerTuning {
 impl KillerTuning {
     fn new(info: &f13_data::character::CharacterInfo) -> Self {
         let v = |k: &str, d: f32| info.values.get(k).copied().unwrap_or(d);
-        let attack = info.animations.get(ATTACK);
+        let attack = info.animations.get(attack_take());
         let weapon = v("WeaponDamage", 20.0);
         KillerTuning {
             walk_speed: v("MaxWalkSpeed", 160.0),
@@ -584,8 +734,8 @@ impl KillerTuning {
             world_damage: weapon * v("DamageWorldModifier", 1.0),
             attack_length: attack.map_or(1.0, |a| a.length),
             attack_window: attack.and_then(|a| a.window("AttackTraceNotify")).unwrap_or((0.2, 0.5)),
-            heavy_length: info.animations.get(HEAVY_ATTACK).map_or(1.2, |a| a.length),
-            heavy_window: info.animations.get(HEAVY_ATTACK).and_then(|a| a.window("AttackTraceNotify")).unwrap_or((0.3, 0.6)),
+            heavy_length: info.animations.get(heavy_take()).map_or(1.2, |a| a.length),
+            heavy_window: info.animations.get(heavy_take()).and_then(|a| a.window("AttackTraceNotify")).unwrap_or((0.3, 0.6)),
             num_knives: v("NumKnives", 0.0) as u32,
             knife_cooldown: v("ThrowingKnifeCooldown", 3.5),
             throw_strength: v("ThrowStrength", 1000.0) / CM,
@@ -1212,11 +1362,23 @@ fn load_knife_look(mut commands: Commands, export: Res<crate::ExportRoot>, asset
     }
     // His grab kill slots (his killer JSON's names).
     let killer = std::fs::read_to_string(export.0.join("killers").join(format!("{}.json", crate::character::killer_class())));
-    if let Some(names) = killer.ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).map(|v| v["Names"].clone()) {
+    let killer_json = killer.ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).unwrap_or_default();
+    if let Some(names) = Some(killer_json["Names"].clone()).filter(|n| !n.is_null()) {
         if names.get("DefaultGrabKill").is_some() {
             let slots = slots_from(&names);
             *DEFAULT_SLOTS.write().unwrap_or_else(|e| e.into_inner()) = Some(slots);
             *GRAB_KILL_SLOTS.write().unwrap_or_else(|e| e.into_inner()) = Some(slots);
+            // His own weapon (Menu.WeaponClass, else his DefaultGrabKill's) and the ones he may carry.
+            let menu = &killer_json["Menu"];
+            let own = menu["WeaponClass"].as_str().map(str::to_string).or_else(|| {
+                let d = names["DefaultGrabKill"].as_str().unwrap_or("").trim_end_matches("_C");
+                kill_index(d).map(|k| kills()[k].weapon.clone())
+            });
+            let allowed: Vec<String> = menu["AllowedWeapons"].as_array().into_iter().flatten().filter_map(|w| w.as_str().map(str::to_string)).collect();
+            if let Some(own) = own {
+                *OWN.write().unwrap_or_else(|e| e.into_inner()) = Some((own, allowed, names.clone()));
+                set_weapon("");
+            }
         } else {
             warn!("{}'s grab kills aren't exported (re-export: f13-export killer): Part 2's", crate::character::killer_class());
         }
@@ -2565,7 +2727,7 @@ pub(crate) fn update_jason(
                         info!("Jason: swing");
                         j.state = JasonState::Swinging { t: 0.0, hit: false, heavy: false };
                         j.attack_hold = j.combat.then_some(0.0);
-                        commands.entity(je).insert(PlayAction(ATTACK.into()));
+                        commands.entity(je).insert(PlayAction(attack_take().into()));
                         continue;
                     }
                     // In combat stance he walks at MaxCombatSpeed, facing where the player looks.
@@ -2816,10 +2978,10 @@ pub(crate) fn update_jason(
                     }
                     if can_swing && (!j.wants_grab || dist < t.grab_min_m) {
                         // At a raised guard, the heavy swing (AI choice).
-                        let heavy = blocking && killer.info.animations.contains_key(HEAVY_ATTACK);
+                        let heavy = blocking && killer.info.animations.contains_key(heavy_take());
                         info!("Jason: {}swing ({dist:.2} m, {angle:.0} deg)", if heavy { "heavy " } else { "" });
                         j.state = JasonState::Swinging { t: 0.0, hit: false, heavy };
-                        commands.entity(je).insert(PlayAction(if heavy { HEAVY_ATTACK } else { ATTACK }.into()));
+                        commands.entity(je).insert(PlayAction(if heavy { heavy_take() } else { attack_take() }.into()));
                         continue;
                     }
                 }
@@ -3095,12 +3257,12 @@ pub(crate) fn update_jason(
                 if let Some(h) = j.attack_hold {
                     let held = player_input.is_some_and(|i| i.attack_held) && j.combat;
                     j.attack_hold = held.then_some(h + dt);
-                    if held && h + dt > HEAVY_HOLD_S && !heavy && killer.info.animations.contains_key(HEAVY_ATTACK) {
+                    if held && h + dt > HEAVY_HOLD_S && !heavy && killer.info.animations.contains_key(heavy_take()) {
                         j.attack_hold = None;
                         heavy = true;
                         at = t.heavy_length * (at / t.attack_length.max(1e-3)).min(1.0);
                         info!("Jason: heavy swing");
-                        commands.entity(je).insert((PlayAction(HEAVY_ATTACK.into()), crate::character::SeekAction(at)));
+                        commands.entity(je).insert((PlayAction(heavy_take().into()), crate::character::SeekAction(at)));
                     }
                 }
                 walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(face_dir), dt, &t, &world);

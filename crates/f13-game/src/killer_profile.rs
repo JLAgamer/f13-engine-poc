@@ -20,6 +20,8 @@ use serde::{Deserialize, Serialize};
 pub struct KillerProfiles {
     /// His four grab kill slots (kill classes without "_C"; "" his own).
     pub grab_kills: BTreeMap<String, Vec<String>>,
+    /// His weapon (SelectedWeapon: a weapon class; none: his WeaponClass).
+    pub weapons: BTreeMap<String, String>,
 }
 
 /// (F13_KILLER_PROFILES: another file, for tests.)
@@ -42,7 +44,13 @@ impl KillerProfiles {
 
     /// A Jason's loadout as the lobby carries it.
     pub fn loadout(&self, killer: &str) -> JasonLoadout {
-        JasonLoadout { grab_kills: self.grab_kills.get(killer).cloned().unwrap_or_default() }
+        JasonLoadout { grab_kills: self.grab_kills.get(killer).cloned().unwrap_or_default(), weapon: self.weapons.get(killer).cloned().unwrap_or_default() }
+    }
+
+    /// A Jason's weapon as picked (his own when there's no pick or it's not one he may carry).
+    pub fn weapon_of(&self, killer: &str, json: &serde_json::Value) -> String {
+        let (own, allowed) = own_weapons(json);
+        crate::jason::weapon_for(&own, &allowed, self.weapons.get(killer).map_or("", String::as_str))
     }
 }
 
@@ -51,6 +59,8 @@ impl KillerProfiles {
 #[serde(default)]
 pub struct JasonLoadout {
     pub grab_kills: Vec<String>,
+    /// The PlayerState's picked weapon ("" his own).
+    pub weapon: String,
 }
 
 impl JasonLoadout {
@@ -60,11 +70,13 @@ impl JasonLoadout {
         for k in &mut self.grab_kills {
             k.truncate(64);
         }
+        self.weapon.truncate(64);
         self
     }
 
-    /// His grab kill slots from it (jason.rs).
+    /// His weapon and grab kill slots from it (jason.rs: the weapon first, its DefaultGrabKill his default slot).
     pub fn apply(&self) {
+        crate::jason::set_weapon(&self.weapon);
         crate::jason::set_grab_kill_picks(&self.grab_kills);
     }
 }
@@ -80,10 +92,26 @@ pub struct KillMenu {
 /// Kills in a row (GrabKillList: a NonWeaponGrabKillsBox every ten).
 pub const ROW: usize = 10;
 
-/// A Jason's weapon (his killer JSON's DefaultGrabKill's weapon: his WeaponClass's).
-pub fn weapon_of(killer: &serde_json::Value) -> String {
-    let default = killer["Names"]["DefaultGrabKill"].as_str().unwrap_or("").trim_end_matches("_C");
-    crate::jason::kill_index(default).map(|k| crate::jason::kills()[k].weapon.clone()).unwrap_or_default()
+/// A Jason's own weapon (his killer JSON's Menu.WeaponClass, else his DefaultGrabKill's weapon) and the ones he may
+/// carry (Menu.AllowedWeapons).
+pub fn own_weapons(killer: &serde_json::Value) -> (String, Vec<String>) {
+    let own = killer["Menu"]["WeaponClass"].as_str().map(str::to_string).unwrap_or_else(|| {
+        let default = killer["Names"]["DefaultGrabKill"].as_str().unwrap_or("").trim_end_matches("_C");
+        crate::jason::kill_index(default).map(|k| crate::jason::kills()[k].weapon.clone()).unwrap_or_default()
+    });
+    let allowed = killer["Menu"]["AllowedWeapons"].as_array().into_iter().flatten().filter_map(|w| w.as_str().map(str::to_string)).collect();
+    (own, allowed)
+}
+
+/// The weapons a Jason's menu lists (SCKillerWeaponSelectionWidget::InitializeList: his AllowedWeaponClasses, those
+/// exported; his own first when it isn't among them).
+pub fn weapon_list(killer: &serde_json::Value) -> Vec<&'static crate::jason::WeaponInfo> {
+    let (own, allowed) = own_weapons(killer);
+    let mut list: Vec<String> = allowed;
+    if !list.contains(&own) {
+        list.insert(0, own);
+    }
+    list.iter().filter_map(|c| crate::jason::weapon_info(c)).collect()
 }
 
 /// The picker's entries for his weapon: the hand kills, then his weapon's (indexes into jason.rs kills()); and how
@@ -112,6 +140,72 @@ fn apply_local(play: Option<Res<crate::jason_player::PlayJason>>, lobby: Query<(
     }
 }
 
+/// The weapon picker, open (WeaponSelectionMenu, from Jason_Select_Widget's WeaponSelectionButton): the Jason and the
+/// highlighted weapon (into [`weapon_list`]).
+#[derive(Resource, Clone, Debug)]
+pub struct WeaponMenu {
+    pub killer: String,
+    pub index: usize,
+}
+
+/// The weapon picker (PLACEHOLDER keys: its buttons are mouse and gamepad widgets): Q in the Jason menu opens it
+/// (WeaponSelectionButton); Left / Right (A / D) move; Enter takes the weapon (OnWeaponSelected -> SaveWeaponProfile:
+/// SelectedWeapon; killer_profiles.json), Escape backs out.
+pub(crate) fn weapon_menu(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    menu: Option<ResMut<WeaponMenu>>,
+    jason_menu: Option<Res<crate::lobby::JasonMenu>>,
+    list: Option<Res<crate::lobby::JasonList>>,
+    kill_menu: Option<Res<KillMenu>>,
+    profiles: Option<ResMut<KillerProfiles>>,
+    mut tested: Local<bool>,
+) {
+    let Some(mut profiles) = profiles else { return };
+    if kill_menu.is_some() {
+        return;
+    }
+    let jason = jason_menu.as_ref().and_then(|m| list.as_ref()?.0.get(m.index).cloned());
+    let Some(mut menu) = menu else {
+        // (F13_WEAPON_MENU=<index>: opened over the Jason menu, for screenshots.)
+        let test = std::env::var("F13_WEAPON_MENU").ok().filter(|_| jason.is_some() && !std::mem::replace(&mut *tested, true));
+        if let Some((killer, json)) = jason.filter(|_| keys.just_pressed(KeyCode::KeyQ) || test.is_some()) {
+            let weapons = weapon_list(&json);
+            let current = profiles.weapon_of(&killer, &json);
+            let index = test.and_then(|t| t.parse().ok()).or_else(|| weapons.iter().position(|w| w.class == current)).unwrap_or(0).min(weapons.len().saturating_sub(1));
+            commands.insert_resource(WeaponMenu { killer, index });
+        }
+        return;
+    };
+    let Some((_, json)) = jason.filter(|(k, _)| *k == menu.killer) else {
+        commands.remove_resource::<WeaponMenu>();
+        return;
+    };
+    if keys.just_pressed(KeyCode::Escape) {
+        commands.remove_resource::<WeaponMenu>();
+        return;
+    }
+    let weapons = weapon_list(&json);
+    if keys.just_pressed(KeyCode::Enter) {
+        let Some(w) = weapons.get(menu.index) else { return };
+        info!("weapon: {} carries the {}", menu.killer, w.name);
+        profiles.weapons.insert(menu.killer.clone(), w.class.clone());
+        profiles.save();
+        commands.trigger(crate::audio::PlaySound { cue: "UITransitionAll".into(), at: None });
+        commands.remove_resource::<WeaponMenu>();
+        return;
+    }
+    let step: isize = if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) {
+        -1
+    } else if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) {
+        1
+    } else {
+        return;
+    };
+    menu.index = (menu.index as isize + step).clamp(0, weapons.len() as isize - 1) as usize;
+    commands.trigger(crate::audio::PlaySound { cue: "MenuButtonFocusCue".into(), at: None });
+}
+
 /// The picker (PLACEHOLDER keys: its buttons are mouse and gamepad widgets): 1-4 in the Jason menu open it on that slot
 /// (Kill_Select_Button1..4); the arrows (WASD) move by one or a row; Enter puts the kill in the slot (not if it's in
 /// another: AlreadySelectedGrabKills), Delete or Backspace clears it (his own again), Escape backs out.
@@ -124,8 +218,9 @@ pub(crate) fn kill_menu(
     list: Option<Res<crate::lobby::JasonList>>,
     profiles: Option<ResMut<KillerProfiles>>,
     mut tested: Local<bool>,
+    weapon_menu: Option<Res<WeaponMenu>>,
 ) {
-    let Some(mut profiles) = profiles else { return };
+    let Some(mut profiles) = profiles.filter(|_| weapon_menu.is_none()) else { return };
     let pressed = |a: KeyCode, b: KeyCode| keys.just_pressed(a) || keys.just_pressed(b);
     let jason = jason_menu.as_ref().and_then(|m| list.as_ref()?.0.get(m.index).cloned());
     let Some(mut menu) = menu else {
@@ -135,7 +230,7 @@ pub(crate) fn kill_menu(
         let slot = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4].iter().position(|k| keys.just_pressed(*k));
         let slot = slot.or(test.as_ref().map(|_| n.first().copied().unwrap_or(0).min(3)));
         if let (Some((killer, json)), Some(slot)) = (jason, slot) {
-            let (entries, _) = kill_list(&weapon_of(&json));
+            let (entries, _) = kill_list(&profiles.weapon_of(&killer, &json));
             let current = profiles.grab_kills.get(&killer).and_then(|p| p.get(slot)).cloned().unwrap_or_default();
             let index = n.get(1).copied().or_else(|| entries.iter().position(|&k| crate::jason::kills()[k].class == current)).unwrap_or(0).min(entries.len().saturating_sub(1));
             commands.insert_resource(KillMenu { killer, slot, index });
@@ -150,7 +245,7 @@ pub(crate) fn kill_menu(
         commands.remove_resource::<KillMenu>();
         return;
     }
-    let (entries, _) = kill_list(&weapon_of(&json));
+    let (entries, _) = kill_list(&profiles.weapon_of(&menu.killer, &json));
     let slots = profiles.grab_kills.entry(menu.killer.clone()).or_insert_with(|| vec![String::new(); 4]);
     slots.resize(4, String::new());
     if keys.just_pressed(KeyCode::Enter) {

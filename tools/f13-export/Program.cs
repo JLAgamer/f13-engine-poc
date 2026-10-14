@@ -77,7 +77,9 @@ UStaticMesh? EngineMesh(string path)
 Collision.LoadProfiles(game);
 // The animation lists with every grab kill's montages added (GrabKills: Kill_Select_Widget's), hers and his.
 string[] CounselorAnims() => Mvp.CounselorAnims.Concat(GrabKills.All(provider).Select(g => g.Hers)).Distinct().ToArray();
-string[] KillerAnims() => Mvp.KillerAnims.Concat(GrabKills.All(provider).Select(g => g.His)).Distinct().ToArray();
+// (And every Jason weapon's light and heavy swings: Weapons.)
+string[] KillerAnims() => Mvp.KillerAnims.Concat(GrabKills.All(provider).Select(g => g.His))
+    .Concat(Weapons.All(provider, Mvp.Jasons).SelectMany(w => new[] { w.Light, w.Heavy }).Where(m => m.Length > 0)).Distinct().ToArray();
 // The animations' PlaySound notifies (anim_sounds.json); returns their cues for the sound export.
 List<string> WriteAnimSounds()
 {
@@ -926,11 +928,15 @@ switch (rest[0])
         break;
     }
     case "killer": // killer [Blueprint...]: Jasons' parts, weapon and animations (and the meshes they need); default the MVP's
+        Weapons.Write(provider, outDir, Mvp.Jasons, Queue);
         foreach (var bp in rest.Count > 1 ? rest.Skip(1) : [Mvp.Killer])
             new CounselorExporter(provider, outDir, Queue).ExportKiller(bp, KillerAnims(), Mvp.KeepRoot);
         break;
     case "water": // the map's water volumes (water.json)
         WriteWater();
+        break;
+    case "weapons": // weapons.json (Weapons: the Jasons' weapons), their meshes and thumbnails
+        Weapons.Write(provider, outDir, Mvp.Jasons, Queue);
         break;
     case "grabkills": // grab_kills.json alone (GrabKills: the grab kills Jason's menu offers)
         GrabKills.Write(provider, outDir);
@@ -2059,6 +2065,14 @@ static class Mvp
         "/Game/Props/SkeletalMeshes/Traps/Animation/A_Trap_Bear_01_Close_Idle_01",
     ];
 
+    /// The Jasons f13-game plays (killers/: Jason_Select_Widget's first seven).
+    public static readonly string[] Jasons =
+    [
+        "/Game/Characters/Killers/Jason/J2/Jason_SackHead", "/Game/Characters/Killers/Jason/J3/Jason_BigNeck",
+        "/Game/Characters/Killers/Jason/J4/Jason_J4", "/Game/Characters/Killers/Jason/J5/Jason_J5",
+        "/Game/Characters/Killers/Jason/J6/Jason_Utility", "/Game/Characters/Killers/Jason/J7/Jason_Zombie",
+        "/Game/Characters/Killers/Jason/J8/Jason_Manhattan",
+    ];
     public static readonly string[] KillerAnims =
     [
         $"{JasonAnim}/normal_stand_idle_01",

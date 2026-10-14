@@ -127,7 +127,7 @@ fn show_preview(
     image: Option<Res<PreviewImage>>,
     (menu, list, wardrobe, profiles): (Option<Res<crate::lobby::CounselorMenu>>, Option<Res<crate::lobby::CounselorList>>, Option<Res<crate::wardrobe::WardrobeMenu>>, Option<Res<crate::wardrobe::CounselorProfiles>>),
     (emote_menu, emotes): (Option<Res<crate::emotes::EmoteMenu>>, Option<Res<crate::emotes::Emotes>>),
-    (jason_menu, jason_list, killer): (Option<Res<crate::lobby::JasonMenu>>, Option<Res<crate::lobby::JasonList>>, Option<Res<crate::character::KillerCharacter>>),
+    (jason_menu, jason_list, killer, killer_profiles): (Option<Res<crate::lobby::JasonMenu>>, Option<Res<crate::lobby::JasonList>>, Option<Res<crate::character::KillerCharacter>>, Option<Res<crate::killer_profile::KillerProfiles>>),
     character: Option<Res<CounselorCharacter>>,
     preview: Option<Res<Preview>>,
     mut rigs: Query<&mut PreviewRig>,
@@ -136,7 +136,11 @@ fn show_preview(
     let Some(character) = character else { return };
     let outfit = |c: &str| profiles.as_ref().map_or("", |p| p.outfit(c)).to_string();
     // (The perk menu has no preview.)
-    let jason = jason_menu.as_ref().and_then(|m| jason_list.as_ref()?.0.get(m.index)).map(|(k, _)| (Which::Killer, k.clone(), String::new()));
+    // (His weapon: the profile's pick, else his own; it respawns him as it changes.)
+    let jason = jason_menu.as_ref().and_then(|m| jason_list.as_ref()?.0.get(m.index)).map(|(k, json)| {
+        let weapon = killer_profiles.as_ref().map_or_else(|| crate::killer_profile::own_weapons(json).0, |p| p.weapon_of(k, json));
+        (Which::Killer, k.clone(), weapon)
+    });
     let shown = match (&emote_menu, &wardrobe, &menu) {
         _ if jason.is_some() => jason,
         (Some(e), _, _) => Some((Which::Emote, e.class.clone(), outfit(&e.class))),
@@ -268,7 +272,13 @@ fn show_preview(
     let actor = crate::to_transform(&f13_data::level::Xform { t: [n(t, "X", 0.0), n(t, "Y", 0.0), n(t, "Z", 0.0)], r: [n(r, "X", 0.0), n(r, "Y", 0.0), n(r, "Z", 0.0), n(r, "W", 1.0)], s: [1.0; 3] });
     if *which == Which::Killer {
         // His looks (the class's killer JSON) on the loaded Jason's skeleton and animations (every Jason's: Jason_Base's).
-        let looks = jason_list.as_ref().and_then(|l| l.0.iter().find(|(k, _)| k == class)).and_then(|(_, v)| serde_json::from_value::<f13_data::character::CharacterInfo>(v.clone()).ok());
+        let mut looks = jason_list.as_ref().and_then(|l| l.0.iter().find(|(k, _)| k == class)).and_then(|(_, v)| serde_json::from_value::<f13_data::character::CharacterInfo>(v.clone()).ok());
+        // His weapon in his hand (the Weapon part's mesh).
+        if let (Some(l), Some(w)) = (looks.as_mut(), crate::jason::weapon_info(outfit).filter(|w| !w.mesh.is_empty())) {
+            if let Some(p) = l.parts.iter_mut().find(|p| p.name == "Weapon") {
+                p.file = w.mesh.clone();
+            }
+        }
         if let (Some(looks), Some(killer)) = (looks, killer.as_ref()) {
             let feet = actor * Transform::from_translation(Vec3::NEG_Y * looks.capsule_half_height / 100.0) * Transform::from_rotation(FACING.inverse());
             let owner = commands.spawn((feet, Visibility::default(), ChildOf(root))).id();

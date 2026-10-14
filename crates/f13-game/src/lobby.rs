@@ -118,6 +118,9 @@ pub struct NetLobby {
     pub killer: String,
     #[serde(default)]
     pub relaunch_killer: Option<String>,
+    /// The match's Jason's weapon (his player's pick, else his own: jason.rs set_weapon), for every peer.
+    #[serde(default)]
+    pub jason_weapon: String,
 }
 
 /// A player's last match: their name, what they played and how it ended, their XP and badges.
@@ -261,7 +264,7 @@ pub(crate) fn ui(app: &mut App) {
     app.add_plugins(crate::counselor_preview::CounselorPreviewPlugin);
     app.init_resource::<ReadyFocus>().add_systems(Last, lobby_clicks);
     app.add_systems(Startup, (list_killers, load_jason_list)).add_systems(Update, killer_relaunch);
-    app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay, load_counselor_list, (jason_menu, crate::killer_profile::kill_menu).chain(), send_loadout, (counselor_menu, crate::wardrobe::wardrobe_menu, crate::emotes::emote_menu, crate::perks::perk_menu).chain(), crate::audio_settings::audio_menu));
+    app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay, load_counselor_list, (jason_menu, crate::killer_profile::kill_menu, crate::killer_profile::weapon_menu).chain(), send_loadout, follow_weapon, (counselor_menu, crate::wardrobe::wardrobe_menu, crate::emotes::emote_menu, crate::perks::perk_menu).chain(), crate::audio_settings::audio_menu));
 }
 
 /// The lobby's voice mutes (PLACEHOLDER keys: the game's are in its scoreboard menu): Shift + a member's number mutes or
@@ -568,12 +571,12 @@ fn jason_menu(
     mut lobby: Query<&mut NetLobby>,
     me: Option<Res<Me>>,
     mut senders: Query<&mut MessageSender<LobbyMsg>, With<Connected>>,
-    (audio_menu, counselor_menu, kill_menu): (Option<Res<crate::audio_settings::AudioMenu>>, Option<Res<CounselorMenu>>, Option<Res<crate::killer_profile::KillMenu>>),
+    (audio_menu, counselor_menu, kill_menu, weapon_menu): (Option<Res<crate::audio_settings::AudioMenu>>, Option<Res<CounselorMenu>>, Option<Res<crate::killer_profile::KillMenu>>, Option<Res<crate::killer_profile::WeaponMenu>>),
     mut tested: Local<bool>,
 ) {
     let (Some(list), Ok(mut lobby)) = (list.filter(|l| !l.0.is_empty()), lobby.single_mut()) else { return };
     // (The audio or counselor menu, or the grab kill picker over it, has the keys.)
-    if audio_menu.is_some() || counselor_menu.is_some() || kill_menu.is_some() {
+    if audio_menu.is_some() || counselor_menu.is_some() || kill_menu.is_some() || weapon_menu.is_some() {
         return;
     }
     let Some(mut menu) = menu else {
@@ -617,6 +620,15 @@ fn jason_menu(
         }
         commands.trigger(crate::audio::PlaySound { cue: "UITransitionAll".into(), at: None });
         commands.remove_resource::<JasonMenu>();
+    }
+}
+
+/// The match's Jason's weapon as the lobby has it (its server's pick: jason.rs set_weapon), here too.
+fn follow_weapon(lobby: Query<&NetLobby>, mut applied: Local<String>) {
+    let Some(w) = lobby.iter().next().map(|l| l.jason_weapon.clone()).filter(|w| !w.is_empty()) else { return };
+    if *applied != w {
+        crate::jason::set_weapon(&w);
+        *applied = w;
     }
 }
 
@@ -754,8 +766,10 @@ fn count_down(
         }
         info!("lobby: {} plays counselor {c} at {at}", name(id));
     }
-    // His grab kills: the picks of whoever plays him (InitFromPlayerState: their PickedGrabKills), else his own.
+    // His weapon and grab kills: the picks of whoever plays him (InitFromPlayerState: their PickedGrabKills and weapon),
+    // else his own; the weapon for every peer (follow_weapon).
     killer.and_then(|k| lobby.members.iter().find(|m| m.id == k)).map(|m| m.loadout.clone()).unwrap_or_default().apply();
+    lobby.jason_weapon = crate::jason::current_weapon().map(|w| w.class.clone()).unwrap_or_default();
     if let Some(k) = killer {
         commands.init_resource::<crate::jason_player::JasonControls>();
         match link(k) {
@@ -1035,21 +1049,24 @@ fn lobby_clicks(
     mouse: Res<ButtonInput<MouseButton>>,
     mut key_events: MessageWriter<bevy::input::keyboard::KeyboardInput>,
     mut down: Local<Vec<KeyCode>>,
-    (mut perk_menu, mut emote_menu, mut wardrobe, character, profiles, mut kill_menu): (
+    (mut perk_menu, mut emote_menu, mut wardrobe, character, profiles, mut kill_menu, mut weapon_menu): (
         Option<ResMut<crate::perks::PerkMenu>>,
         Option<ResMut<crate::emotes::EmoteMenu>>,
         Option<ResMut<crate::wardrobe::WardrobeMenu>>,
         Option<Res<crate::character::CounselorCharacter>>,
         Option<Res<crate::wardrobe::CounselorProfiles>>,
         Option<ResMut<crate::killer_profile::KillMenu>>,
+        Option<ResMut<crate::killer_profile::WeaponMenu>>,
     ),
     (window, wheel, mut ready_focus): (Option<Single<(Entity, &Window), With<bevy::window::PrimaryWindow>>>, Query<(&Name, &ComputedNode, &UiGlobalTransform)>, ResMut<ReadyFocus>),
     (mut playing, time): (Option<ResMut<crate::ui::PlayingAnims>>, Res<Time>),
 ) {
     // The menus' list entries (ui.rs names them by index): a perk or emote in the panel picked and put in (Enter, as
     // its button's OnClicked SavePerk / AddEmote), an outfit shown, a slot focused, a swatch chosen.
-    let entry = |n: &str| ["Perk_", "Emote_", "Outfit_", "Swatch_", "Slot_Button_0", "GrabKill_"].iter().find_map(|p| Some((*p, n.strip_prefix(p)?.parse::<usize>().ok()?)));
-    const KEYS: [(&str, KeyCode); 14] = [
+    let entry = |n: &str| ["Perk_", "Emote_", "Outfit_", "Swatch_", "Slot_Button_0", "GrabKill_", "Weapon_"].iter().find_map(|p| Some((*p, n.strip_prefix(p)?.parse::<usize>().ok()?)));
+    const KEYS: [(&str, KeyCode); 15] = [
+        // (Jason_Select_Widget's weapon button: WeaponSelectionMenu.)
+        ("WeaponSelectionButton", KeyCode::KeyQ),
         // (Jason_Select_Widget's grab kill slots: OnGrabKillButton_Clicked opens the picker on that slot.)
         ("Kill_Select_Button1", KeyCode::Digit1),
         ("Kill_Select_Button2", KeyCode::Digit2),
@@ -1123,6 +1140,11 @@ fn lobby_clicks(
                         m.index = k;
                     }
                 }
+                "Weapon_" => {
+                    if let Some(m) = weapon_menu.as_mut().filter(|m| m.index != k) {
+                        m.index = k;
+                    }
+                }
                 _ => {}
             }
         }
@@ -1144,6 +1166,13 @@ fn lobby_clicks(
                 }
                 "GrabKill_" => {
                     if let Some(m) = kill_menu.as_mut() {
+                        m.index = k;
+                        send(KeyCode::Enter, bevy::input::ButtonState::Pressed);
+                        down.push(KeyCode::Enter);
+                    }
+                }
+                "Weapon_" => {
+                    if let Some(m) = weapon_menu.as_mut() {
                         m.index = k;
                         send(KeyCode::Enter, bevy::input::ButtonState::Pressed);
                         down.push(KeyCode::Enter);
