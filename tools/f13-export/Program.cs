@@ -1650,6 +1650,8 @@ static class Mvp
         "/Game/UI/Menu/Sounds/UITransitionAll.UITransitionAll",
         // The settings options': a row focused (MenuButtonFocusCue), a slider's step (MenuSliderStepCue).
         "/Game/UI/Menu/Sounds/MenuButtonFocusCue.MenuButtonFocusCue",
+        // The lobby buttons' WidgetStyle PressedSlateSound (a wave: a one-node cue).
+        "/Game/UI/Menu/Sounds/ui_Click01_stereo.ui_Click01_stereo",
         "/Game/UI/Menu/Sounds/MenuSliderStepCue.MenuSliderStepCue",
         "/Game/Sounds/Environment/Lake_AmbienceCue.Lake_AmbienceCue",
         "/Game/Sounds/Environment/Mood_Tone_Ambience.Mood_Tone_Ambience",

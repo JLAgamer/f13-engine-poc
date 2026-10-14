@@ -796,7 +796,8 @@ mod tests {
 /// Enter; a row's CounselorButton: the counselor menu, C; its JasonButton: Jason preferred, 3 (PLACEHOLDER: the game's
 /// opens its killer picker); Counselor_Menu's arrows, its three PerkButton slots (1-3), ClothingButton (X),
 /// CounselorEmoteButton (E)); the right button backs out of an open menu (Escape, PLACEHOLDER for the menus' action
-/// bar Back). The keys go down here, right after the input's own, and up the next frame.
+/// bar Back). The keys go down here, right after the input's own, and up the next frame. Hovering and pressing play
+/// their style's sounds; their looks (each Blueprint's own OnHovered) aren't ported.
 fn lobby_clicks(
     mut commands: Commands,
     lobby: Query<&NetLobby>,
@@ -831,6 +832,15 @@ fn lobby_clicks(
         }
     }
     for (i, n) in &clicked {
+        if !KEYS.iter().any(|(k, _)| *k == n.as_str()) {
+            continue;
+        }
+        // Their WidgetStyle's HoveredSlateSound (MenuButtonFocusCue) and PressedSlateSound (ui_Click01_stereo).
+        match i {
+            Interaction::Hovered => commands.trigger(crate::audio::PlaySound { cue: "MenuButtonFocusCue".into(), at: None }),
+            Interaction::Pressed => commands.trigger(crate::audio::PlaySound { cue: "ui_Click01_stereo".into(), at: None }),
+            Interaction::None => {}
+        }
         let Some(&(_, key)) = KEYS.iter().find(|(k, _)| *k == n.as_str()).filter(|_| *i == Interaction::Pressed) else { continue };
         info!("lobby: {} clicked", n.as_str());
         keys.press(key);
