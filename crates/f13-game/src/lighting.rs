@@ -7,11 +7,11 @@
 //!   1.2. That's Bevy's exposure at `ev100 = 0`. Tonemapping is the game's own (tonemap.rs).
 //! - **Lights**:
 //!   - The moon's Intensity is its illuminance (lux).
-//!   - An inverse-square light's Intensity is UE 4.18's legacy unit, 16 / 100^2 candela (the shader's attenuation is
-//!     1 / distance^2 in cm; UE 4.19's ULocalLightComponent::GetUnitsConversionFactor keeps it as Unitless, x16 to
-//!     candela x 100^2): about 1/49.7 lumen ([`inverse_squared_lumens`]). PLACEHOLDER source: the engine's (4.19's
-//!     conversion), not found in the game's binary; read as lumens, the outro's and the campfires' lights washed
-//!     their scenes out.
+//!   - An inverse-square light's Intensity is 1 / 100^2 candela ([`inverse_squared_lumens`]): its proxy's Color is
+//!     Intensity x LightColor (FLightSceneProxy's constructor 0x14139fd00) and the game's deferred light shader
+//!     (TDeferredLightPS in its global shader cache) lights LightColor x rcp(distance^2 + 1), distance in cm, the same
+//!     LightColor the falloff lights below take as lux; no x16 anywhere in them (UE 4.19's "legacy scale of 16" isn't
+//!     this build's). Unchecked: the deferred light uniform's fill (MODLOG "The local lights' unit, the shaders").
 //!   - A light without inverse-square falloff lights `Intensity * (1 - (d/R)^2)^FalloffExponent` lux at distance
 //!     `d` within its radius `R` (DeferredLightingCommon's RadialAttenuation). Bevy has only the inverse-square law,
 //!     so its point light shading is patched ([`patch_falloff`]): a light whose sphere radius is negative takes that
@@ -166,10 +166,10 @@ impl PlacedLight {
     }
 }
 
-/// Bevy lumens (a spot's as a point light's: Bevy's cone only masks) for an inverse-square light's Intensity: 16 / 100^2
+/// Bevy lumens (a spot's as a point light's: Bevy's cone only masks) for an inverse-square light's Intensity: 1 / 100^2
 /// candela per unit, x 4 pi (see the module notes).
 pub(crate) fn inverse_squared_lumens(intensity: f32) -> f32 {
-    intensity * 16.0 / 10_000.0 * 4.0 * std::f32::consts::PI
+    intensity / 10_000.0 * 4.0 * std::f32::consts::PI
 }
 
 /// Bevy intensity for a light without inverse-square falloff: its Intensity (lux at its centre) x 4 pi, so the
