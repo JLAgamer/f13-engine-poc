@@ -54,13 +54,44 @@ impl Plugin for TonemapPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shaders/tonemap.wgsl");
         app.add_plugins((ExtractComponentPlugin::<GameTonemap>::default(), UniformComponentPlugin::<TonemapUniform>::default()))
-            .add_systems(Update, (setup, killer_grade));
+            .add_plugins(bevy::render::extract_resource::ExtractResourcePlugin::<SceneCopy>::default())
+            .add_systems(Startup, make_scene_copy)
+            .add_systems(Update, (setup, killer_grade, size_scene_copy));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else { return };
         render_app
             .init_gpu_resource::<SpecializedRenderPipelines<TonemapPipeline>>()
             .add_systems(RenderStartup, init_pipeline)
             .add_systems(Render, prepare_pipelines.in_set(RenderSystems::Prepare))
             .add_systems(Core3d, game_tonemap.after(tonemapping).in_set(Core3dSystems::PostProcess));
+    }
+}
+
+/// The scene as the tonemap pass leaves it (display-referred, before the UI), copied for the UI materials that blend in
+/// Slate's gamma space (ui.rs Additive: Jason's HUD): the window's size, the SDR view target's format.
+#[derive(Resource, Clone, bevy::render::extract_resource::ExtractResource)]
+pub struct SceneCopy(pub Handle<Image>);
+
+fn scene_image(width: u32, height: u32) -> Image {
+    let mut image = Image::default();
+    image.texture_descriptor.size = Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 };
+    image.texture_descriptor.format = TextureFormat::Rgba8UnormSrgb;
+    image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST;
+    image.data = None;
+    image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+    image
+}
+
+fn make_scene_copy(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    commands.insert_resource(SceneCopy(images.add(scene_image(1, 1))));
+}
+
+/// Kept at the window's size (its physical pixels: the view target's).
+fn size_scene_copy(copy: Res<SceneCopy>, window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>, mut images: ResMut<Assets<Image>>, mut size: Local<UVec2>) {
+    let Some(w) = window else { return };
+    let want = w.physical_size();
+    if want != *size && want.x > 0 && want.y > 0 {
+        *size = want;
+        let _ = images.insert(&copy.0, scene_image(want.x, want.y));
     }
 }
 
@@ -502,6 +533,7 @@ pub(crate) fn game_tonemap(
     uniforms: Res<ComponentUniforms<TonemapUniform>>,
     images: Res<RenderAssets<GpuImage>>,
     mut ctx: RenderContext,
+    copy: Option<Res<SceneCopy>>,
 ) {
     let (target, settings, id, index, bloom) = view.into_inner();
     // Before Jason's camera picks a grade: the Stalk one (at weight 0).
@@ -524,4 +556,12 @@ pub(crate) fn game_tonemap(
     pass.set_pipeline(render_pipeline);
     pass.set_bind_group(0, &bind_group, &[index.index()]);
     pass.draw(0..3, 0..1);
+    drop(pass);
+    // The scene for the gamma-space UI materials (SceneCopy), when it matches the target.
+    let main = target.main_texture();
+    if let Some(gpu) = copy.as_ref().and_then(|c| images.get(&c.0)) {
+        if gpu.texture.size() == main.size() && gpu.texture.format() == main.format() {
+            ctx.command_encoder().copy_texture_to_texture(main.as_image_copy(), gpu.texture.as_image_copy(), main.size());
+        }
+    }
 }

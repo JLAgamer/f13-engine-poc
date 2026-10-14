@@ -198,6 +198,10 @@ pub struct Additive {
     #[texture(7)]
     #[sampler(8)]
     grime: Handle<Image>,
+    /// The scene under it (tonemap.rs SceneCopy): its add is made in Slate's gamma space.
+    #[texture(9)]
+    #[sampler(10)]
+    scene: Handle<Image>,
 }
 
 impl UiMaterial for Additive {
@@ -251,7 +255,10 @@ fn additive_brushes(
     brushes: Query<(Entity, Ref<AdditiveBrush>, Option<&MaterialNode<Additive>>)>,
     assets: Res<AssetServer>,
     mut layers: Local<Option<(Handle<Image>, Handle<Image>)>>,
+    scene: Option<Res<crate::tonemap::SceneCopy>>,
 ) {
+    // (No tonemapper: the default 1 x 1 image, the linear add.)
+    let scene = scene.map(|s| s.0.clone()).unwrap_or_default();
     // The material's own samples (UI_Smoke, Grime): wrapped, as their textures' default address mode.
     let (smoke, grime) = layers
         .get_or_insert_with(|| {
@@ -285,7 +292,7 @@ fn additive_brushes(
                 }
             }
             None => {
-                let m = materials.add(Additive { color, params, coords, texture: b.texture.clone(), smoke: smoke.clone(), grime: grime.clone() });
+                let m = materials.add(Additive { color, params, coords, texture: b.texture.clone(), smoke: smoke.clone(), grime: grime.clone(), scene: scene.clone() });
                 commands.entity(e).insert(MaterialNode(m));
             }
         }
