@@ -13,7 +13,7 @@
 //!
 //! Her perks' StartingItems (FUN_1403a5880, once at possession, authority): each perk's classes spawned and picked up
 //! (FUN_1402e2e00) unless it's a weapon (SCWeapon) and she holds one, or she already has one and is at its positive
-//! MaxCount. Here they come from a reserve the match world sets aside on every peer (props.rs: [`MAX_COUNSELORS`] of
+//! InventoryMax. Here they come from a reserve the match world sets aside on every peer (props.rs: [`MAX_COUNSELORS`] of
 //! each class any perk starts with), as Tommy's kit does.
 
 use bevy::prelude::*;
