@@ -418,6 +418,22 @@ fn spawn_props(
         });
     }
 
+    // The perks' starting items (perks.rs give_starting_items), set aside like his kit: MAX_COUNSELORS of each class.
+    let perk_items = world.actors.len();
+    for class in crate::perks::starting_item_classes(&export.0).iter().filter(|c| classes.get(c).is_some()) {
+        let large = f13_core::spawn::ClassQuery::is_large(&classes, class);
+        for _ in 0..crate::perks::MAX_COUNSELORS {
+            world.actors.push(f13_data::world::MatchActor {
+                class: class.clone(),
+                transform: Xform { t: [0.0, 0.0, -100000.0], r: [0.0, 0.0, 0.0, 1.0], s: [1.0; 3] },
+                from_level: false,
+                spawned_by: None,
+                kind: Some(if large { SpawnKind::LargeItem } else { SpawnKind::SmallItem }),
+            });
+        }
+    }
+    let perk_items = perk_items..world.actors.len();
+
     let mut scenes: HashMap<String, Handle<WorldAsset>> = HashMap::new();
     let mut scene = |file: &str| {
         scenes.entry(file.to_string()).or_insert_with(|| assets.load(GltfAssetLabel::Scene(0).from_asset(file.to_string()))).clone()
@@ -436,6 +452,9 @@ fn spawn_props(
         }
         if id == hunter_weapon {
             commands.entity(root).insert((crate::tommy::HunterWeapon, crate::interact::Carried, Visibility::Hidden));
+        }
+        if perk_items.contains(&id) {
+            commands.entity(root).insert((crate::perks::PerkItemReserve, crate::interact::Carried, Visibility::Hidden));
         }
         if id == killer_mask {
             commands.entity(root).insert((crate::jason_death::KillerMask, crate::interact::Carried, Visibility::Hidden));

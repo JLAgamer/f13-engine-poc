@@ -9,8 +9,12 @@
 //! the sum over her ActivePerks where it applies (f13-core counselor.rs: stamina and speed).
 //!
 //! f13-rs has no backend: every perk is in the library once, at its class's own values (PLACEHOLDER: no rolls, rarity
-//! or legendary modifiers). Not ported: the perks' StartingItems (the match world sets items aside before the picks are
-//! known), and the modifiers other than f13-core's stamina and speed ones.
+//! or legendary modifiers).
+//!
+//! Her perks' StartingItems (FUN_1403a5880, once at possession, authority): each perk's classes spawned and picked up
+//! (FUN_1402e2e00) unless it's a weapon (SCWeapon) and she holds one, or she already has one and is at its positive
+//! MaxCount. Here they come from a reserve the match world sets aside on every peer (props.rs: [`MAX_COUNSELORS`] of
+//! each class any perk starts with), as Tommy's kit does.
 
 use bevy::prelude::*;
 use serde::Deserialize;
@@ -53,7 +57,6 @@ impl Perks {
         self.0.keys().cloned().collect()
     }
 
-    /// Her ActivePerks' modifiers, summed.
     /// The sum of `field` over her picked perks that her weapon `weapon` (its class) qualifies for: Jason's TakeDamage
     /// (FUN_14040b600) adds a perk's WeaponStunDurationModifier when its RequiredWeapon is unset or the weapon's class
     /// (an exact match here; the game takes the loaded class) and its RequiredCharacterClassToHit unset or his
@@ -67,12 +70,82 @@ impl Perks {
             .sum()
     }
 
+    /// Her ActivePerks' modifiers, summed.
     pub fn mods(&self, picked: &[String]) -> f13_core::counselor::PerkMods {
         let mut m = f13_core::counselor::PerkMods::default();
         for p in picked.iter().filter_map(|p| self.0.get(p)) {
             m.add(p.modifiers.iter());
         }
         m
+    }
+}
+
+/// Counselors in a match at most (eight players, one of them Jason): the starting items' reserve of each class.
+pub const MAX_COUNSELORS: usize = 7;
+
+/// Every item class (`..._C`) some perk starts with, from the export's perks.json (the same on every peer).
+pub fn starting_item_classes(export: &std::path::Path) -> Vec<String> {
+    let perks: BTreeMap<String, PerkDef> = std::fs::read_to_string(export.join("perks.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let mut classes: Vec<String> = perks.values().flat_map(|p| p.starting_items.iter().map(|c| format!("{c}_C"))).collect();
+    classes.sort();
+    classes.dedup();
+    classes
+}
+
+/// A starting item set aside (hidden, carried by no one) until a counselor's perks give it.
+#[derive(Component)]
+pub struct PerkItemReserve;
+
+/// Her perks' starting items are given (the player state's +0x824).
+#[derive(Component)]
+pub struct StartingItemsGiven;
+
+/// FUN_1403a5880's StartingItems: once she has her perks and the match's items exist.
+#[allow(clippy::type_complexity)]
+fn give_starting_items(
+    mut commands: Commands,
+    perks: Res<Perks>,
+    mut counselors: Query<(Entity, &CounselorPerks, &mut crate::interact::Inventory), (With<crate::player::Player>, Without<StartingItemsGiven>)>,
+    reserve: Query<(Entity, &crate::props::Item), With<PerkItemReserve>>,
+    items: Query<&crate::props::Item>,
+) {
+    if reserve.is_empty() {
+        return; // the match hasn't spawned yet (or no perk starts with anything)
+    }
+    let mut taken: Vec<Entity> = Vec::new();
+    for (pe, picked, mut inv) in &mut counselors {
+        commands.entity(pe).insert(StartingItemsGiven);
+        for class in picked.0.iter().filter_map(|p| perks.0.get(p)).flat_map(|d| d.starting_items.iter().map(|c| format!("{c}_C"))) {
+            let Some((e, item)) = reserve.iter().find(|(e, i)| i.class == class && !taken.contains(e)) else {
+                warn!("perks: no {class} set aside");
+                continue;
+            };
+            let weapon = matches!(item.kind, crate::props::ItemKind::Weapon(_) | crate::props::ItemKind::Gun { .. });
+            if weapon {
+                if inv.hand.is_some_and(|h| items.get(h).is_ok_and(|i| matches!(i.kind, crate::props::ItemKind::Weapon(_) | crate::props::ItemKind::Gun { .. }))) {
+                    continue;
+                }
+            } else {
+                let have = inv.hand.into_iter().chain(inv.pockets.iter().copied()).chain(inv.special.iter().copied()).filter(|&h| items.get(h).is_ok_and(|i| i.class == class)).count();
+                if have > 0 && item.inventory_max > 0 && have >= item.inventory_max as usize {
+                    continue;
+                }
+            }
+            // As a pickup sorts it: a special item apart, a large one in her hands, else a pocket.
+            if item.special {
+                inv.special.push(e);
+            } else if item.large {
+                if inv.hand.is_some() {
+                    continue; // (a large non-weapon with her hands full: none start so)
+                }
+                inv.hand = Some(e);
+            } else {
+                inv.pockets.push(e);
+            }
+            taken.push(e);
+            commands.entity(e).remove::<PerkItemReserve>();
+            info!("perks: {pe} starts with {}", item.name);
+        }
     }
 }
 
@@ -84,7 +157,7 @@ pub struct PerksPlugin;
 
 impl Plugin for PerksPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Perks>().add_systems(Startup, load).add_systems(Update, (apply, dress_local));
+        app.init_resource::<Perks>().add_systems(Startup, load).add_systems(Update, (apply, dress_local, give_starting_items.run_if(crate::net::simulating).run_if(resource_exists::<Perks>)));
     }
 }
 
