@@ -97,7 +97,7 @@ const TRAP_RADIUS_M: f32 = 0.45;
 const JASON_RADIUS_M: f32 = 0.34;
 const JASON_HEIGHT_M: f32 = 1.76;
 
-const SWING_1H: [&str; 2] = ["f_combat_stand_1h_melee_light_01", "f_combat_stand_1h_melee_heavy_01"];
+pub(crate) const SWING_1H: [&str; 2] = ["f_combat_stand_1h_melee_light_01", "f_combat_stand_1h_melee_heavy_01"];
 /// The weapons' NeutralAttack / ForwardAttack montages (her female ones; every melee weapon class names one of these
 /// two pairs) whose segments are the takes above: their root motion carries her through the swing (anims.json).
 const SWING_MONTAGES: [(&str, &str); 4] = [
@@ -112,7 +112,7 @@ fn swing_root(anims: &crate::Anims, take: &str) -> Option<Vec2> {
     let (_, montage) = SWING_MONTAGES.iter().find(|(t, _)| *t == take)?;
     anims.0.get(&format!("{montage}/{take}")).copied()
 }
-const SWING_2H: [&str; 2] = ["f_combat_stand_2h_melee_light_01", "f_combat_stand_2h_melee_heavy_01"];
+pub(crate) const SWING_2H: [&str; 2] = ["f_combat_stand_2h_melee_light_01", "f_combat_stand_2h_melee_heavy_01"];
 const FLARE_FIRE: &str = "f_normal_stand_flare_shoot";
 const SHOTGUN_FIRE: &str = "combat_stand_rifle_fire_01";
 const THROW: &str = "m_normal_stand_firecracker_throw";
@@ -796,7 +796,8 @@ fn tick_action(
     // Her eye and look: the local counselor's camera; another's control rotation from her eyes.
     let (look_yaw, look_pitch) = pads.look(pe);
     let (eye, look) = if local { (camera.1.translation(), camera.1.forward().as_vec3()) } else { (xf.translation + Vec3::Y * (crate::player::CAPSULE_HALF_HEIGHT_M + crate::interact::BASE_EYE_HEIGHT_M), PlayerCamera { yaw: look_yaw, pitch: look_pitch }.look()) };
-    a.t += time.delta_secs();
+    // A swing plays at her attack rate (her perks').
+    a.t += time.delta_secs() * if matches!(a.what, Use::Swing { .. }) { p.counselor.attack_rate() } else { 1.0 };
     // SCCharacter's tick: held past 0.1 s in combat stance, the light swing becomes the weapon's ForwardAttack
     // (MULTICAST_Attack(true): the anim instance switches to it at the same fraction of the swing).
     if let (Some(h), Use::Swing { stats, heavy: false, .. }) = (a.hold, a.what.clone()) {

@@ -833,8 +833,12 @@ pub(crate) fn animate(
         // Her special moves' play rate (BeginSpecial's: her perks'): barricades, windows, getting into a hiding spot.
         // Her dodge's: her perks' too.
         let dodge = scripted.is_none() && p.root_motion.is_some() && p.montage.as_deref().is_some_and(|m| m.to_ascii_lowercase().contains("_dodge_"));
+        // A melee swing's: her attack rate.
+        let swing = action.is_some_and(|a| crate::items::SWING_1H.contains(&a) || crate::items::SWING_2H.contains(&a));
         let rate = if dodge {
             p.counselor.dodge_rate()
+        } else if swing {
+            p.counselor.attack_rate()
         } else {
             special_move_rate(&p.counselor.perks, barricading, at_window, hiding.is_some_and(|h| h.phase == crate::hiding::HidePhase::Entering))
         };

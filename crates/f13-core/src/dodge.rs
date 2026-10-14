@@ -60,6 +60,12 @@ impl Counselor {
         !self.dodging() && !s.attacking && !blocking && !s.in_special_move
     }
 
+    /// Her melee attack montages' play rate (FUN_140318a60: the weapon's NeutralAttack / ForwardAttack Montage_Play at
+    /// 1 + her perks' AttackSpeedModifier).
+    pub fn attack_rate(&self) -> f32 {
+        (1.0 + self.perks.get("AttackSpeedModifier")).max(0.01)
+    }
+
     /// Her dodge montage's play rate (FUN_140319cc0: Montage_Play at 1 + her perks' DodgeSpeedModifier).
     pub fn dodge_rate(&self) -> f32 {
         (1.0 + self.perks.get("DodgeSpeedModifier")).max(0.01)
@@ -103,6 +109,9 @@ mod tests {
         c.perks.0.insert("DodgeSpeedModifier".into(), 0.2);
         assert!(c.try_dodge(DodgeDirection::Left, &Situation::default(), false, &t).is_some());
         assert!((c.dodge_left - 0.5).abs() < 1e-5);
+        assert_eq!(c.attack_rate(), 1.0);
+        c.perks.0.insert("AttackSpeedModifier".into(), 0.2);
+        assert!((c.attack_rate() - 1.2).abs() < 1e-6);
     }
 
     #[test]

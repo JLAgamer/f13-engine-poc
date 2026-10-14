@@ -532,7 +532,7 @@ pub(crate) fn move_player(
         let right = Vec2::new(cos, -sin);
         let repairing = interaction.is_some_and(|i| i.busy());
         // A swing's montage moves her by its root motion while it plays (RootMotionFromMontagesOnly), her input ignored.
-        let swing_root = item_action.and_then(|a| a.root);
+        let swing_root = item_action.and_then(|a| a.root).map(|r| r * p.counselor.attack_rate());
         let item_action = item_action.is_some();
         // Aiming a gun: the controller ignores move input (SetIgnoreMoveInput) and she takes the control yaw (items.rs).
         let aiming = gun_aim.is_some_and(|a| a.aiming);
