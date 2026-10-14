@@ -84,7 +84,13 @@ pub(crate) struct ForcedPose(String, f32);
 
 /// Vanessa's and Jason's Blueprints, as the exporter names their files.
 const COUNSELOR: &str = "Athlete_Counselor";
-const KILLER: &str = "Jason_SackHead";
+/// The Jason played: his killer Blueprint's name (the export's killers/<name>.json; `--jason <name>`, default Part 2's
+/// Jason_SackHead; Part 3's Jason_BigNeck exported too).
+pub static KILLER_CLASS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+pub fn killer_class() -> &'static str {
+    KILLER_CLASS.get().map_or("Jason_SackHead", |s| s.as_str())
+}
 
 impl Plugin for CharacterPlugin {
     fn build(&self, app: &mut App) {
@@ -126,7 +132,7 @@ impl Plugin for CharacterPlugin {
                 info!("counselors: {:?}", { let mut k: Vec<_> = classes.keys().collect(); k.sort(); k });
                 commands.insert_resource(CounselorCharacter(c, classes, male));
             }
-            if let Some(c) = CharacterModel::load(&export.join("killers").join(format!("{KILLER}.json")), &export, &mut clips, &mut graphs) {
+            if let Some(c) = CharacterModel::load(&export.join("killers").join(format!("{}.json", killer_class())), &export, &mut clips, &mut graphs) {
                 commands.insert_resource(KillerCharacter(c));
             }
         })

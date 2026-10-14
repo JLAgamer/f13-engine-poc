@@ -3316,6 +3316,8 @@ pub(crate) fn update_jason(
                 let raged = know.as_ref().is_some_and(|k| k.abilities.rage_active);
                 let mut wiggle = grab_struggle(&p.counselor.stats);
                 wiggle.percent_per_wiggle *= combat.wiggle_mod(p.counselor.wounded, raged);
+                // x his GrabModifier (Part 3's 0.9: his grip holds harder; constructor 1).
+                wiggle.percent_per_wiggle *= killer.info.values.get("GrabModifier").copied().unwrap_or(1.0);
                 // The stun's time x its StunTimeModifier: 1 + her perks' BreakGrabDurationModifier (TakeDamage
                 // FUN_1403d7410, the instigator Jason; the stun's timer FUN_1402ddfd0).
                 wiggle.total_time *= 1.0 + p.counselor.perks.get("BreakGrabDurationModifier");

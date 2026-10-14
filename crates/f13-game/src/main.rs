@@ -356,6 +356,11 @@ fn parse_args() -> Args {
             }
             "--perf" => perf = true,
             "--play-jason" => play_jason = true,
+            "--jason" => {
+                if let Some(name) = it.next() {
+                    let _ = character::KILLER_CLASS.set(name);
+                }
+            }
             "--override-spawning" => override_spawning = true,
             "--no-voice" => no_voice = true,
             "--net-id" => net_id = it.next().and_then(|v| v.parse().ok()),

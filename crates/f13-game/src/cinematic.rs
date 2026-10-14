@@ -518,8 +518,8 @@ fn start(
         done.0 = true;
         return;
     }
-    // The killer stand-in's body and mask: J2's (GetKillerDefaultMeshAndMask for the picked killer).
-    let killer: Option<Value> = std::fs::read_to_string(root.join("killers").join("Jason_SackHead.json")).ok().and_then(|t| serde_json::from_str(&t).ok());
+    // The killer stand-in's body and mask: the played Jason's (GetKillerDefaultMeshAndMask for the picked killer).
+    let killer: Option<Value> = std::fs::read_to_string(root.join("killers").join(format!("{}.json", crate::character::killer_class()))).ok().and_then(|t| serde_json::from_str(&t).ok());
     let killer_body = killer.as_ref().and_then(|k| k["Body"].as_str().map(str::to_string));
     let killer_mask = killer.as_ref().and_then(|k| k["Parts"].as_array()?.iter().find(|p| p["Name"] == "Mask")?["File"].as_str().map(str::to_string));
     // His weapon on the staged trident (Savini_Jason_Trident_LOD0_18 / _LOD1), for every killer: IntroStarted's sequence

@@ -632,6 +632,17 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         // The sound blip actor's lifetime (InitialLifeSpan).
         if (ClassValue<FPackageIndex>(cls, "SoundBlipClass")?.Load<UStruct>() is { } blip)
             values["SoundBlipLifeSpan"] = ClassValue<float?>(blip, "InitialLifeSpan") ?? 0;
+        // Each Jason's own: his abilities' unlock and recharge times (Jason_Base's, some overridden by index: J3's
+        // AbilityRechargeTime[1] and [3]), his GrabModifier (constructor 1) and his KillerMaskPickupClass.
+        for (var i = 0; i < 4; i++)
+        {
+            if (ClassArrayValue(cls, "AbilityUnlockTime", i) is { } u) values[$"AbilityUnlockTime{i}"] = u;
+            if (ClassArrayValue(cls, "AbilityRechargeTime", i) is { } r) values[$"AbilityRechargeTime{i}"] = r;
+        }
+        values["GrabModifier"] = ClassValue<float?>(cls, "GrabModifier") ?? 1f;
+        info.Names ??= new();
+        if (ClassValue<FPackageIndex>(cls, "KillerMaskPickupClass") is { } mask && mask.Name is { } maskName)
+            info.Names["KillerMaskPickupClass"] = maskName;
         info.Values = values;
         info.Curves = new();
         foreach (var name in new[] { "SenseFearRadiusCurve", "SenseFearHidingRadiusCurve", "RageSenseDistanceCurve", "TeleportJitterCurve" })
@@ -1182,6 +1193,16 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         };
         var props = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(cdo))["Properties"];
         return props == null ? null : Flatten(props) as Newtonsoft.Json.Linq.JObject;
+    }
+
+    /// A fixed array property's element `index` as the class chain's CDOs set it (the nearest override of that index).
+    static float? ClassArrayValue(UStruct? cls, string name, int index)
+    {
+        for (; cls != null; cls = cls.SuperStruct?.Load<UStruct>())
+            if (cls is UBlueprintGeneratedClass bp && bp.ClassDefaultObject.Load() is { } cdo)
+                foreach (var p in cdo.Properties)
+                    if (p.Name.Text == name && p.ArrayIndex == index && p.Tag?.GetValue(typeof(float)) is float f) return f;
+        return null;
     }
 
     static T? ClassValue<T>(UStruct? cls, string name)

@@ -910,8 +910,9 @@ switch (rest[0])
         Console.WriteLine($"ui: {n} widgets, {wx.ClassTextures()} class textures, {wx.Fonts(game!)} fonts");
         break;
     }
-    case "killer": // the MVP Jason's parts, weapon and animations (and the meshes they need)
-        new CounselorExporter(provider, outDir, Queue).ExportKiller(Mvp.Killer, Mvp.KillerAnims, Mvp.KeepRoot);
+    case "killer": // killer [Blueprint...]: Jasons' parts, weapon and animations (and the meshes they need); default the MVP's
+        foreach (var bp in rest.Count > 1 ? rest.Skip(1) : [Mvp.Killer])
+            new CounselorExporter(provider, outDir, Queue).ExportKiller(bp, Mvp.KillerAnims, Mvp.KeepRoot);
         break;
     case "water": // the map's water volumes (water.json)
         WriteWater();
@@ -1465,7 +1466,7 @@ static class Mvp
         // Jason's death (his JasonKillClass: a context kill) and Pamela's sweater's ability (its SweaterAbilityClass).
         "JasonDeath_C",
         // His mask, knocked off (Jason_SackHead_C's KillerMaskPickupClass: an SCKillerMask).
-        "J2_MaskPickup_C"];
+        "J2_MaskPickup_C", "J3_MaskPickup_C"];
     // Montages whose length or root motion the rules use (anims.json).
     const string Shared = "/Game/Characters/Counselors/Base/Shared";
     public static readonly string[] Montages =

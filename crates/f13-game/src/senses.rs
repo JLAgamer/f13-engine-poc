@@ -151,12 +151,23 @@ fn setup(
             max_visibility: cv("MaxVisibilityDistance", 6000.0),
         });
     }
+    // His own abilities' unlock and recharge times (each Jason's AbilityUnlockTime / AbilityRechargeTime, Jason_Base's
+    // overridden by index: Part 2's recharge [20, 15, 40, 30], Part 3's [30, 20, 30, 40]).
+    let mut tuned = a.0.clone();
+    for i in 0..4 {
+        if let Some(&v) = k.info.values.get(&format!("AbilityUnlockTime{i}")) {
+            tuned.unlock_time[i] = v;
+        }
+        if let Some(&v) = k.info.values.get(&format!("AbilityRechargeTime{i}")) {
+            tuned.recharge_time[i] = v;
+        }
+    }
     for j in &jasons {
         commands.entity(j).insert(Knowledge {
             sees: false,
             last_known: None,
             hiding_spot: None,
-            abilities: KillerAbilities::new(a.0.clone(), None),
+            abilities: KillerAbilities::new(tuned.clone(), None),
             sense_until: 0.0,
             sense_length: 0.0,
             sense_shows: None,

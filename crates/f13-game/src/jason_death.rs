@@ -28,8 +28,18 @@ impl Plugin for JasonDeathPlugin {
     }
 }
 
-/// Jason_SackHead_C's KillerMaskPickupClass.
-pub const KILLER_MASK_PICKUP: &str = "J2_MaskPickup_C";
+/// The played Jason's KillerMaskPickupClass (his killers/<name>.json Names; Part 2's J2_MaskPickup_C, Part 3's
+/// J3_MaskPickup_C), read once from the export.
+pub fn killer_mask_pickup(export: &std::path::Path) -> &'static str {
+    static CLASS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CLASS.get_or_init(|| {
+        std::fs::read_to_string(export.join("killers").join(format!("{}.json", crate::character::killer_class())))
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .and_then(|v| v["Names"]["KillerMaskPickupClass"].as_str().map(str::to_string))
+            .unwrap_or_else(|| "J2_MaskPickup_C".into())
+    })
+}
 
 /// The match's mask pickup, set aside (props.rs) until his mask is knocked off.
 #[derive(Component)]
@@ -314,6 +324,7 @@ pub(crate) fn bot_mask(
     jasons: Query<(&crate::jason::Jason, &Transform), Without<Player>>,
     mut camera: Query<&mut crate::player::PlayerCamera>,
     mut exit: MessageWriter<AppExit>,
+    export: Res<crate::ExportRoot>,
 ) {
     bot.t += time.delta_secs();
     keys.release(KeyCode::KeyE);
@@ -357,7 +368,7 @@ pub(crate) fn bot_mask(
         }
         // At the mask, once it's down.
         2 if bot.t > 1.0 => {
-            let Some((_, _, g)) = items.iter().find(|(_, i, _)| i.class == KILLER_MASK_PICKUP) else {
+            let Some((_, _, g)) = items.iter().find(|(_, i, _)| i.class == killer_mask_pickup(&export.0)) else {
                 fail("no mask on the ground");
                 bot.step = 9;
                 return;
@@ -372,7 +383,7 @@ pub(crate) fn bot_mask(
         }
         3 => {
             // (Pocketed, it's Carried: out of `items`.)
-            let picked = items.iter().all(|(_, i, _)| i.class != KILLER_MASK_PICKUP);
+            let picked = items.iter().all(|(_, i, _)| i.class != killer_mask_pickup(&export.0));
             if picked && !inv.pockets.is_empty() {
                 info!("bot: mask: in her pockets");
                 info!("bot: mask: passed");

@@ -408,9 +408,9 @@ fn spawn_props(
     }
     // Jason's mask (his KillerMaskPickupClass), set aside until it's knocked off (jason_death.rs).
     let killer_mask = world.actors.len();
-    if classes.get(crate::jason_death::KILLER_MASK_PICKUP).is_some() {
+    if classes.get(crate::jason_death::killer_mask_pickup(&export.0)).is_some() {
         world.actors.push(f13_data::world::MatchActor {
-            class: crate::jason_death::KILLER_MASK_PICKUP.into(),
+            class: crate::jason_death::killer_mask_pickup(&export.0).into(),
             transform: Xform { t: [0.0, 0.0, -100000.0], r: [0.0, 0.0, 0.0, 1.0], s: [1.0; 3] },
             from_level: false,
             spawned_by: None,
