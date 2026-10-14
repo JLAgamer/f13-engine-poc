@@ -149,6 +149,7 @@ impl Plugin for UiPlugin {
             .add_systems(Startup, load_hud)
             .init_resource::<MatchEndPage>()
             .add_systems(Update, lobby_mute_clicks)
+            .add_systems(Update, entry_hover.run_if(resource_exists::<Hud>))
             .add_systems(Update, (match_end_page, build_hud, (stamina, timer, breath, dial, minimap, map_icons, killer_map_icons, (map_screen, counselor_map_icons).chain(), jason_hud, ability_popup, morph_cursor, rage_hud, noise_meter, xp_lines, wiggle_state.pipe(wiggle_widget)), prompts::prompts, spectator_hud, widget_anims, fear_widgets, content_alpha, widget_colors, additive_brushes, hide_for_jason).chain().run_if(resource_exists::<Hud>));
     }
 }
@@ -733,7 +734,7 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         names: HashMap::new(),
         map,
         scale: 1.0,
-        anims: ["SCCounselorTimerWidget", "SCBreathWidget", "KillerHUDWidget", "ObjectivesWidget", "KillerAbilityWidget", "AbilityAvailable", "RageWidget", "YouDied", "YouSurvived", "SpectatorHUDWidget", "LobbyWidget", "MatchEnd", "MatchEnd_Badges"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
+        anims: ["SCCounselorTimerWidget", "SCBreathWidget", "KillerHUDWidget", "ObjectivesWidget", "KillerAbilityWidget", "AbilityAvailable", "RageWidget", "YouDied", "YouSurvived", "SpectatorHUDWidget", "LobbyWidget", "MatchEnd", "MatchEnd_Badges", "Counselor_Menu"].iter().map(|c| (c.to_string(), load_anims(dir, c))).collect(),
         ability_icon_colors: {
             let d = std::fs::read_to_string(dir.join("ui/KillerAbilityWidget.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
             ["IconUsableColor", "IconUnusableColor", "IconLockedColor"].map(|k| color(&d["Defaults"][k], [1.0; 4]))
@@ -1971,14 +1972,52 @@ fn load_anims(dir: &std::path::Path, class: &str) -> HashMap<String, WidgetAnim>
 pub struct PlayingAnims(Vec<(String, String, f32, bool)>);
 
 impl PlayingAnims {
-    fn play(&mut self, owner: &str, anim: &str, now: f32, reverse: bool) {
+    pub(crate) fn play(&mut self, owner: &str, anim: &str, now: f32, reverse: bool) {
         self.0.retain(|(o, a, _, _)| !(o == owner && a == anim));
         self.0.push((owner.to_string(), anim.to_string(), now, reverse));
     }
 }
 
+/// The lobby menus' list buttons as the mouse enters and leaves them (lobby.rs gives them Interaction): each
+/// button's Blueprint plays its Highlight on hover and reversed as it leaves (Counselor_Outfit_Button and
+/// Counselor_Swatch_Button: Border_0's BrushColor; Counselor_Slot_Button: HighlightBorder's), 0.15 s long; here its end
+/// colour (start colour on leaving) at once. (The perk and emote entries take the menu's highlight instead.)
+fn entry_hover(
+    hud: Res<Hud>,
+    mut loaded: Local<HashMap<String, HashMap<String, WidgetAnim>>>,
+    changed: Query<(Entity, Ref<Interaction>, &Name), Changed<Interaction>>,
+    children: Query<&Children>,
+    names: Query<&Name>,
+    mut colors: Query<&mut WidgetColor>,
+) {
+    for (e, i, n) in &changed {
+        // (A rebuilt tree's new button starts at None.)
+        if i.is_added() {
+            continue;
+        }
+        let class = if n.starts_with("Outfit_") {
+            "Counselor_Outfit_Button"
+        } else if n.starts_with("Swatch_") {
+            "Counselor_Swatch_Button"
+        } else if n.starts_with("Slot_Button_0") {
+            "Counselor_Slot_Button"
+        } else {
+            continue;
+        };
+        let anims = loaded.entry(class.to_string()).or_insert_with(|| load_anims(&hud.export, class));
+        let Some(anim) = anims.get("Highlight") else { continue };
+        let t = if *i == Interaction::None { 0.0 } else { anim.length };
+        for (widget, curves) in anim.colors.iter().chain(&anim.brush_colors) {
+            let Some(d) = children.iter_descendants(e).find(|d| names.get(*d).is_ok_and(|x| x.as_str() == widget)) else { continue };
+            if let Ok(mut c) = colors.get_mut(d) {
+                c.set_if_neq(WidgetColor(curves.each_ref().map(|k| if k.keys.is_empty() { 1.0 } else { k.eval(t) })));
+            }
+        }
+    }
+}
+
 /// Plays the widget animations: each track's Border content alpha at the animation's time (backwards when reversed).
-fn widget_anims(time: Res<Time>, hud: Res<Hud>, playing: Res<PlayingAnims>, mut borders: Query<&mut ContentAlpha>, mut colors: Query<&mut WidgetColor>, mut nodes: Query<&mut Node>) {
+fn widget_anims(mut commands: Commands, time: Res<Time>, hud: Res<Hud>, playing: Res<PlayingAnims>, mut borders: Query<&mut ContentAlpha>, mut colors: Query<&mut WidgetColor>, (mut nodes, mut xforms): (Query<&mut Node>, Query<&mut UiTransform>)) {
     let now = time.elapsed_secs();
     for (owner, name, start, reverse) in &playing.0 {
         let Some(anim) = hud.anims.get(owner).and_then(|a| a.get(name)) else { continue };
@@ -1994,6 +2033,21 @@ fn widget_anims(time: Res<Time>, hud: Res<Hud>, playing: Res<PlayingAnims>, mut 
         for (widget, curves) in anim.colors.iter().chain(&anim.brush_colors) {
             if let Some(mut c) = hud.names.get(&format!("{owner}.{widget}")).and_then(|&e| colors.get_mut(e).ok()) {
                 c.set_if_neq(WidgetColor(curves.each_ref().map(|k| if k.keys.is_empty() { 1.0 } else { k.eval(x) })));
+            }
+        }
+        // Its RenderTransform's scale (Counselor_Menu's HoverLeftArrow / HoverRightArrow).
+        for (widget, [sx, sy]) in &anim.scales {
+            let Some(&e) = hud.names.get(&format!("{owner}.{widget}")) else { continue };
+            let v = Vec2::new(sx.eval(x), sy.eval(x));
+            match xforms.get_mut(e) {
+                Ok(mut t) => {
+                    if t.scale != v {
+                        t.scale = v;
+                    }
+                }
+                Err(_) => {
+                    commands.entity(e).insert(UiTransform { scale: v, ..default() });
+                }
             }
         }
         // A canvas slot's offsets (point anchors at the canvas's top left: position and size).

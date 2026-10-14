@@ -825,6 +825,7 @@ fn lobby_clicks(
         Option<Res<crate::wardrobe::CounselorProfiles>>,
     ),
     (window, wheel, mut ready_focus): (Option<Single<&Window, With<bevy::window::PrimaryWindow>>>, Query<(&Name, &ComputedNode, &UiGlobalTransform)>, ResMut<ReadyFocus>),
+    (mut playing, time): (Option<ResMut<crate::ui::PlayingAnims>>, Res<Time>),
 ) {
     // The menus' list entries (ui.rs names them by index): a perk or emote in the panel picked and put in (Enter, as
     // its button's OnClicked SavePerk / AddEmote), an outfit shown, a slot focused, a swatch chosen.
@@ -858,6 +859,12 @@ fn lobby_clicks(
         let listed = entry(n.as_str());
         if !KEYS.iter().any(|(k, _)| *k == n.as_str()) && listed.is_none() {
             continue;
+        }
+        // Counselor_Menu's arrows: HoverLeftArrow / HoverRightArrow on hover, reversed as it leaves.
+        if let (Some(anim), Some(p)) = (match n.as_str() { "LeftArrowButton" => Some("HoverLeftArrow"), "RightArrowButton" => Some("HoverRightArrow"), _ => None }, playing.as_mut()) {
+            if !r.is_added() && *i != Interaction::Pressed {
+                p.play("Counselor_Menu", anim, time.elapsed_secs(), *i == Interaction::None);
+            }
         }
         // (A rebuilt tree's new button starts at None: not a leave.)
         if n.as_str() == "ReadyButton" && !r.is_added() {
