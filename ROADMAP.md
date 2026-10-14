@@ -7,11 +7,7 @@ Base content (asset paths in the player's install; all gameplay values come from
 `Characters/Killers/Jason/J2`, the Chevettes (`Blueprints/Vehicles/DriveableVehicles/Cars/Chevette`), the police.
 
 ## Todo
-- [ ] The lobby's rest: a full 8-player run (needs more machines: at most 2 instances run here)
-- [ ] Materials: foliage subsurface (its transmission is the deferred light pass's, whose code isn't in the shipped
-      global shader cache: MODLOG "Foliage subsurface: blocked")
-- [ ] Counselor model: the eye look against a capture of the game (it rolls the eyes 90 degrees from their bind:
-      MODLOG "The eyes' look", "The counselor's face")
+Lighting first (the user, 2026-10-14):
 - [ ] Lighting: Enlighten GI (the map's indirect light: its precomputed systems and probe sets are Geomerics'
       runtime data, undocumented; the solver is in the exe)
 - [ ] Lighting: the local lights' shadow caching and fade (which lights qualify is the game's; without the caching
@@ -20,6 +16,15 @@ Base content (asset paths in the player's install; all gameplay values come from
       deferred light uniform's fill to close it (MODLOG "The local lights' unit, the shaders")
 - [ ] Post-processing and lighting: compare against the game's own screenshots (the user's cabin porch reference,
       2026-10-12: its wall lamp's spots light sharp bands up and down the logs)
+- [ ] Bugs from the user's test (2026-10-14): players walk through each other (the characters' capsules don't block
+      one another); on a client, Jason's grab-kill UI doesn't highlight when a kill is available; Jason has no
+      interaction prompt for breaking doors and walls; the counselor's door lock prompt shows the repair wheel instead
+      of its own prompt
+- [ ] The lobby's rest: a full 8-player run (needs more machines: at most 2 instances run here)
+- [ ] Materials: foliage subsurface (its transmission is the deferred light pass's, whose code isn't in the shipped
+      global shader cache: MODLOG "Foliage subsurface: blocked")
+- [ ] Counselor model: the eye look against a capture of the game (it rolls the eyes 90 degrees from their bind:
+      MODLOG "The eyes' look", "The counselor's face")
 - [ ] Optimize performance (2026-10-13, a counselor at her start, --perf --features profile: 11.4 ms a frame, the render
       world's CPU the critical path: encoding 4.4 ms, submit 1.6, preprocess bind groups 1.3, the shadow phases'
       instance buffers 1.3; main world 3.9, PostUpdate 2.5; particles 0.9)
