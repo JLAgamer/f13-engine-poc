@@ -629,7 +629,7 @@ fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
 }
 
 /// Fixed exposure and its fog on every 3D camera (tonemap.rs puts the game's tonemapper on them).
-fn setup_cameras(mut commands: Commands, cameras: Query<Entity, (With<Camera3d>, Without<Lit>, Without<crate::sense_view::SenseMaskCamera>)>) {
+fn setup_cameras(mut commands: Commands, cameras: Query<Entity, (With<Camera3d>, Without<Lit>, Without<crate::sense_view::SenseMaskCamera>, Without<crate::counselor_preview::PreviewCamera>)>) {
     for e in &cameras {
         commands.entity(e).insert((Lit, Exposure { ev100: 0.0 }));
     }

@@ -175,7 +175,7 @@ pub(super) fn prompts(
                 continue;
             }
             let mut names = HashMap::new();
-            let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names };
+            let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names, preview: None };
             let Some((root, wsize)) = build(&mut b, &hud.export, &p.widget, p.icon.as_deref()) else {
                 warn!("ui: no ui/{}.json (re-export with f13-export ui): no prompt", p.widget);
                 continue;

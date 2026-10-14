@@ -227,7 +227,7 @@ fn setup(
     export: Res<crate::ExportRoot>,
     mut images: ResMut<Assets<Image>>,
     mut built: Local<Option<GameTonemap>>,
-    cameras: Query<Entity, (With<Camera3d>, Without<GameTonemap>, Without<crate::sense_view::SenseMaskCamera>)>,
+    cameras: Query<Entity, (With<Camera3d>, Without<GameTonemap>, Without<crate::sense_view::SenseMaskCamera>, Without<crate::counselor_preview::PreviewCamera>)>,
 ) {
     if built.is_none() {
         let Some(level) = level else { return };

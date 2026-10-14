@@ -31,7 +31,7 @@ const BLEND_RATE: f32 = 4.0;
 /// Montage blend in/out (Unreal's default 0.25 s): weight change per second.
 const MONTAGE_BLEND_RATE: f32 = 4.0;
 
-const IDLE: &str = "F_normal_stand_idle_01";
+pub(crate) const IDLE: &str = "F_normal_stand_idle_01";
 const HURT_IDLE: &str = "F_hurt_stand_idle_01";
 const MOVE: [&str; 3] = ["F_normal_stand_walk_forward", "F_normal_stand_run_forward", "F_normal_stand_sprint_forward"];
 const CROUCH_IDLE: &str = "f_normal_crouch_idle_01";

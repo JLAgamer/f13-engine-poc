@@ -593,7 +593,7 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
                     t.props["Text"] = title;
                 }
             }
-            for name in ["CharacterPreviewImage", "PerkButton_Slot_1", "PerkButton_Slot_2", "PerkButton_Slot_3", "AbilityButton", "ClothingButton", "ClothesBorder", "CounselorEmoteButton", "EmotesBorder", "CPBox", "LockedBorder", "ActionBarWidget", "QuickPlayOverlayWidget"] {
+            for name in ["PerkButton_Slot_1", "PerkButton_Slot_2", "PerkButton_Slot_3", "AbilityButton", "ClothingButton", "ClothesBorder", "CounselorEmoteButton", "EmotesBorder", "CPBox", "LockedBorder", "ActionBarWidget", "QuickPlayOverlayWidget"] {
                 if let Some(x) = w.find_mut(name) {
                     x.set_visibility(Vis::Collapsed);
                 }
@@ -730,12 +730,13 @@ fn build_hud(
     spectating: Option<Res<crate::spectate::SpectatorStatus>>,
     (lobby, me, client, mut playing, time): (Query<&crate::lobby::NetLobby>, Option<Res<crate::lobby::Me>>, Option<Res<crate::net::NetClient>>, ResMut<PlayingAnims>, Res<Time>),
     (match_tuning, mutes, page, names): (Option<Res<crate::match_flow::MatchTuning>>, Option<Res<crate::voice::VoiceMutes>>, Res<MatchEndPage>, Query<&Name>),
-    (counselor_menu, counselor_list, counselors, player_tuning, audio_menu): (
+    (counselor_menu, counselor_list, counselors, player_tuning, audio_menu, preview_image): (
         Option<Res<crate::lobby::CounselorMenu>>,
         Option<Res<crate::lobby::CounselorList>>,
         Option<Res<crate::character::CounselorCharacter>>,
         Res<crate::player::PlayerTuning>,
         Option<Res<crate::audio_settings::AudioMenu>>,
+        Option<Res<crate::counselor_preview::PreviewImage>>,
     ),
 ) {
     let size = window.size();
@@ -894,7 +895,8 @@ fn build_hud(
     }
     let root = commands.spawn((Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, Pickable::IGNORE)).id();
     let mut names = HashMap::new();
-    let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names };
+    let preview = preview_image.map(|p| p.0.clone());
+    let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names, preview };
     let full = Rect { x: 0.0, y: 0.0, w: virt.x, h: virt.y };
     let laid = tree.layout(full);
     b.spawn(&laid, root, full, if board.is_some() { "ScoreboardWidget" } else if badge.is_some() { "MatchEnd_Badges" } else if ended.is_some() { "MatchEnd" } else if menu_class.is_some() && open_lobby.is_some() { "Counselor_Menu" } else if open_lobby.is_some() { "LobbyWidget" } else if jason { "KillerHUDWidget" } else if spectator { "SpectatorHUDWidget" } else { "CounselorHUDWidget" });
@@ -1776,6 +1778,8 @@ struct Builder<'a, 'w, 's> {
     /// Inside borders: their ContentColorAndOpacity's colour, multiplied (it tints everything in them).
     content: [f32; 4],
     names: &'a mut HashMap<String, Entity>,
+    /// The counselor menu's preview capture (counselor_preview.rs: CustomizationPreviewMaterial's texture).
+    preview: Option<Handle<Image>>,
 }
 
 fn linear(c: [f32; 4]) -> Color {
@@ -1941,6 +1945,13 @@ impl Builder<'_, '_, '_> {
         }
         if res["Parent"].as_str() == Some("M_UI_JasonHud_01") && !textures.is_empty() {
             self.commands.entity(e).insert(AdditiveBrush::new(self.assets.load(textures[0].to_string()), c, &res["Scalars"]));
+            return;
+        }
+        // CustomizationPreviewMaterial: the preview's capture (its colour, opacity 1 - its alpha: the image's alpha here).
+        if res["Name"].as_str() == Some("Material'CustomizationPreviewMaterial'") {
+            if let Some(image) = self.preview.clone() {
+                self.commands.entity(e).insert(ImageNode::new(image).with_color(linear(c)));
+            }
             return;
         }
         if textures.len() == 2 && res["Scalars"]["Alpha"].is_number() {
@@ -2334,7 +2345,7 @@ fn map_screen(
     let virt = size / scale;
     let root = commands.spawn((Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, GlobalZIndex(10), Pickable::IGNORE)).id();
     let mut names = HashMap::new();
-    let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names };
+    let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names, preview: None };
     let full = Rect { x: 0.0, y: 0.0, w: virt.x, h: virt.y };
     let laid = tree.layout(full);
     b.spawn(&laid, root, full, "ObjectivesWidget");
@@ -2964,7 +2975,7 @@ fn ability_popup(
         let virt = size / scale;
         let full = Rect { x: 0.0, y: 0.0, w: virt.x, h: virt.y };
         let mut names = HashMap::new();
-        let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names };
+        let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names, preview: None };
         let e = b.spawn(&tree.layout(full), root, full, "AbilityAvailable");
         b.commands.entity(e).insert(ZIndex(-1));
         hud.names.extend(names);
@@ -3019,7 +3030,7 @@ fn morph_cursor(
             let none = Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 };
             let scale = hud.scale;
             let mut names = HashMap::new();
-            let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names };
+            let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names, preview: None };
             b.spawn(&tree.layout(none), e, none, "Morph_Area_Cursor");
             hud.names.extend(names);
             *spawned = Some(e);

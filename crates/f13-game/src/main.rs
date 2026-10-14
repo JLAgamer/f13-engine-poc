@@ -30,6 +30,7 @@ mod bloom;
 mod bot;
 mod cabinets;
 mod cinematic;
+mod counselor_preview;
 mod car_lights;
 mod character;
 mod controls;

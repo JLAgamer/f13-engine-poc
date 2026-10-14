@@ -872,6 +872,30 @@ switch (rest[0])
             characters["Classes"] = picks;
             File.WriteAllText(Path.Combine(outDir, "ui", "characters.json"), characters.ToString());
         }
+        // Counselor_Menu's preview (CounselorCustomizationPreview: an SCActorPreview): its CaptureComponent's place and
+        // FOVAngle, its spot lights (each component's properties, relative to its root) and its PostProcess component's
+        // ambient cubemap (mean radiance x AmbientCubemapIntensity) (ui/counselor_preview.json).
+        {
+            var preview = new Newtonsoft.Json.Linq.JObject();
+            var lights = new Newtonsoft.Json.Linq.JArray();
+            foreach (var e in provider.LoadPackage(ToFile("/Game/UI/Menu/Character/Counselor/CounselorCustomizationPreview")).GetExports())
+            {
+                var props = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(e))["Properties"] as Newtonsoft.Json.Linq.JObject ?? new();
+                if (e.ExportType == "SceneCaptureComponent2D")
+                    preview["Capture"] = props;
+                else if (e.ExportType == "SpotLightComponent")
+                    lights.Add(props);
+                else if (e.ExportType == "PostProcessComponent" && e.GetOrDefault<FStructFallback?>("Settings") is { } pp)
+                {
+                    var cube = pp.GetOrDefault<FPackageIndex?>("AmbientCubemap")?.Load<UTextureCube>();
+                    if (cube != null && CubeAverage(cube) is { } avg)
+                        preview["AmbientCubemapAverage"] = new Newtonsoft.Json.Linq.JArray(avg);
+                    preview["AmbientCubemapIntensity"] = pp.GetOrDefault("AmbientCubemapIntensity", 1f);
+                }
+            }
+            preview["SpotLights"] = lights;
+            File.WriteAllText(Path.Combine(outDir, "ui", "counselor_preview.json"), preview.ToString());
+        }
         Console.WriteLine($"ui: {n} widgets, {wx.ClassTextures()} class textures, {wx.Fonts(game!)} fonts");
         break;
     }

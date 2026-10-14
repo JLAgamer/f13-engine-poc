@@ -237,6 +237,7 @@ pub(crate) fn client(app: &mut App) {
 }
 
 pub(crate) fn ui(app: &mut App) {
+    app.add_plugins(crate::counselor_preview::CounselorPreviewPlugin);
     app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay, load_counselor_list, counselor_menu, crate::audio_settings::audio_menu));
 }
 
@@ -375,6 +376,7 @@ fn counselor_menu(
     me: Option<Res<Me>>,
     mut senders: Query<&mut MessageSender<LobbyMsg>, With<Connected>>,
     audio_menu: Option<Res<crate::audio_settings::AudioMenu>>,
+    mut tested: Local<bool>,
 ) {
     let (Some(list), Ok(mut lobby)) = (list.filter(|l| !l.0.is_empty()), lobby.single_mut()) else { return };
     if audio_menu.is_some() {
@@ -382,10 +384,13 @@ fn counselor_menu(
     }
     let my_id = me.as_ref().map_or(0, |m| m.id);
     let Some(menu) = menu else {
-        if lobby.open && keys.just_pressed(KeyCode::KeyC) {
+        // (F13_COUNSELOR_MENU[=<index>]: opened as the lobby opens, for screenshots.)
+        let test = std::env::var("F13_COUNSELOR_MENU").is_ok() && !std::mem::replace(&mut *tested, true);
+        if lobby.open && (keys.just_pressed(KeyCode::KeyC) || test) {
             let current = lobby.members.iter().find(|m| m.id == my_id).map_or("", |m| m.class.as_str());
             let current = if current.is_empty() { crate::character::DEFAULT_CLASS } else { current };
             let index = list.0.iter().position(|c| c == current).unwrap_or(0);
+            let index = if test { std::env::var("F13_COUNSELOR_MENU").ok().and_then(|v| v.parse::<usize>().ok()).map_or(index, |i| i % list.0.len()) } else { index };
             commands.insert_resource(CounselorMenu { index, timer: 0.0 });
         }
         return;
