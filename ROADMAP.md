@@ -20,9 +20,9 @@ Lighting first (the user, 2026-10-14):
       too faint (the user, 2026-10-14): likely the blend's space: Slate adds a UI material's output to the gamma-encoded
       image, f13-rs adds the decoded value to the linear one (the same over black, fainter over anything lit: the
       Morph map); needs the HUD's additive brushes drawn in a gamma-space layer
-- [ ] The lobby's mouse controls (the user, 2026-10-14): its buttons click now (lobby.rs lobby_clicks: they press the
-      keys their menus take); still to do: clicking the menus' list entries (perks, outfits, swatches, emotes) and the
-      buttons' hovered / pressed looks (their Button styles)
+- [ ] The lobby's mouse controls (the user, 2026-10-14): buttons, list entries and the sounds click now (lobby.rs
+      lobby_clicks); still to do: the buttons' hovered looks (each Blueprint's OnHovered: the ready button's glow, the
+      list buttons' highlights) and the emote wheel's sections by the mouse; untested with a real mouse here
 - [ ] The lobby's rest: a full 8-player run (needs more machines: at most 2 instances run here)
 - [ ] Materials: foliage subsurface (its transmission is the deferred light pass's, whose code isn't in the shipped
       global shader cache: MODLOG "Foliage subsurface: blocked")

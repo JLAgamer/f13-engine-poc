@@ -806,7 +806,17 @@ fn lobby_clicks(
     mouse: Res<ButtonInput<MouseButton>>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut down: Local<Vec<KeyCode>>,
+    (mut perk_menu, mut emote_menu, mut wardrobe, character, profiles): (
+        Option<ResMut<crate::perks::PerkMenu>>,
+        Option<ResMut<crate::emotes::EmoteMenu>>,
+        Option<ResMut<crate::wardrobe::WardrobeMenu>>,
+        Option<Res<crate::character::CounselorCharacter>>,
+        Option<Res<crate::wardrobe::CounselorProfiles>>,
+    ),
 ) {
+    // The menus' list entries (ui.rs names them by index): a perk or emote in the panel picked and put in (Enter, as
+    // its button's OnClicked SavePerk / AddEmote), an outfit shown, a slot focused, a swatch chosen.
+    let entry = |n: &str| ["Perk_", "Emote_", "Outfit_", "Swatch_", "Slot_Button_0"].iter().find_map(|p| Some((*p, n.strip_prefix(p)?.parse::<usize>().ok()?)));
     const KEYS: [(&str, KeyCode); 10] = [
         ("ReadyButton", KeyCode::Enter),
         ("CounselorButton", KeyCode::KeyC),
@@ -826,13 +836,14 @@ fn lobby_clicks(
         return;
     }
     for (e, n) in &buttons {
-        if KEYS.iter().any(|(k, _)| *k == n.as_str()) {
+        if KEYS.iter().any(|(k, _)| *k == n.as_str()) || entry(n.as_str()).is_some() {
             commands.entity(e).try_insert(Interaction::None);
             debug!("lobby: {} takes clicks", n.as_str());
         }
     }
     for (i, n) in &clicked {
-        if !KEYS.iter().any(|(k, _)| *k == n.as_str()) {
+        let listed = entry(n.as_str());
+        if !KEYS.iter().any(|(k, _)| *k == n.as_str()) && listed.is_none() {
             continue;
         }
         // Their WidgetStyle's HoveredSlateSound (MenuButtonFocusCue) and PressedSlateSound (ui_Click01_stereo).
@@ -840,6 +851,44 @@ fn lobby_clicks(
             Interaction::Hovered => commands.trigger(crate::audio::PlaySound { cue: "MenuButtonFocusCue".into(), at: None }),
             Interaction::Pressed => commands.trigger(crate::audio::PlaySound { cue: "ui_Click01_stereo".into(), at: None }),
             Interaction::None => {}
+        }
+        if let (Some((kind, k)), Interaction::Pressed) = (listed, i) {
+            match kind {
+                "Perk_" => {
+                    if let Some(m) = perk_menu.as_mut() {
+                        m.index = k;
+                        keys.press(KeyCode::Enter);
+                        down.push(KeyCode::Enter);
+                    }
+                }
+                "Emote_" => {
+                    if let Some(m) = emote_menu.as_mut() {
+                        m.list = Some(k);
+                        keys.press(KeyCode::Enter);
+                        down.push(KeyCode::Enter);
+                    }
+                }
+                "Outfit_" => {
+                    if let (Some(w), Some(c), Some(p)) = (wardrobe.as_mut(), character.as_ref(), profiles.as_ref()) {
+                        w.row = 0;
+                        w.set_outfit(k, c, p);
+                    }
+                }
+                "Slot_Button_0" => {
+                    if let Some(w) = wardrobe.as_mut() {
+                        w.row = k.min(w.picks.len());
+                    }
+                }
+                _ => {
+                    if let Some(w) = wardrobe.as_mut().filter(|w| w.row > 0) {
+                        let slot = w.row - 1;
+                        if let Some(p) = w.picks.get_mut(slot) {
+                            *p = k;
+                        }
+                    }
+                }
+            }
+            continue;
         }
         let Some(&(_, key)) = KEYS.iter().find(|(k, _)| *k == n.as_str()).filter(|_| *i == Interaction::Pressed) else { continue };
         info!("lobby: {} clicked", n.as_str());

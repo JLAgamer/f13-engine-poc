@@ -69,6 +69,19 @@ pub struct WardrobeMenu {
 }
 
 impl WardrobeMenu {
+    /// Outfit `i` shown, its slots as saved for it, else their first options (the outfit list's step).
+    pub fn set_outfit(&mut self, i: usize, character: &crate::character::CounselorCharacter, profiles: &CounselorProfiles) {
+        let looks = character.looks(&self.class);
+        let Some(outfit) = looks.outfits.get(i) else { return };
+        self.outfit = i;
+        let saved = character.dressed(&self.class, profiles.outfit(&self.class)).current_outfit();
+        self.picks = match saved {
+            Some((o, p)) if o == i => p,
+            _ => vec![0; outfit.slots.len()],
+        };
+        self.row = self.row.min(outfit.slots.len());
+    }
+
     /// Its outfit as CounselorOutfit's spec.
     pub fn spec(&self, character: &crate::character::CounselorCharacter) -> String {
         character.looks(&self.class).outfit_spec(self.outfit, &self.picks).unwrap_or_default()
@@ -204,15 +217,8 @@ pub(crate) fn wardrobe_menu(
     };
     let wrap = |i: usize, n: usize| ((i as isize + step).rem_euclid(n.max(1) as isize)) as usize;
     if menu.row == 0 {
-        menu.outfit = wrap(menu.outfit, looks.outfits.len());
-        // Its slots as saved for it, else their first options.
-        let saved = character.dressed(&menu.class, profiles.outfit(&menu.class)).current_outfit();
-        let slots = looks.outfits[menu.outfit].slots.len();
-        menu.picks = match saved {
-            Some((o, p)) if o == menu.outfit => p,
-            _ => vec![0; slots],
-        };
-        menu.row = menu.row.min(slots);
+        let next = wrap(menu.outfit, looks.outfits.len());
+        menu.set_outfit(next, &character, &profiles);
     } else {
         let slot = menu.row - 1;
         let n = outfit.slots[slot].options.len();
