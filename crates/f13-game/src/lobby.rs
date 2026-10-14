@@ -246,7 +246,7 @@ pub(crate) fn client(app: &mut App) {
 
 pub(crate) fn ui(app: &mut App) {
     app.add_plugins(crate::counselor_preview::CounselorPreviewPlugin);
-    app.add_systems(PreUpdate, lobby_clicks.after(bevy::input::InputSystems));
+    app.init_resource::<ReadyFocus>().add_systems(PreUpdate, lobby_clicks.after(bevy::input::InputSystems));
     app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay, load_counselor_list, (counselor_menu, crate::wardrobe::wardrobe_menu, crate::emotes::emote_menu, crate::perks::perk_menu).chain(), crate::audio_settings::audio_menu));
 }
 
@@ -792,6 +792,17 @@ mod tests {
     }
 }
 
+/// LobbyWidget's ReadyFocused (its ReadyButton's hover events set and clear it; its tick lights the ready bar's Glow
+/// by it). On until the mouse leaves the button (the button is the default focus, and Enter readies).
+#[derive(Resource, PartialEq)]
+pub struct ReadyFocus(pub bool);
+
+impl Default for ReadyFocus {
+    fn default() -> Self {
+        ReadyFocus(true)
+    }
+}
+
 /// The lobby's buttons by the mouse: a click on one presses the key its menu already takes (LobbyWidget's ReadyButton:
 /// Enter; a row's CounselorButton: the counselor menu, C; its JasonButton: Jason preferred, 3 (PLACEHOLDER: the game's
 /// opens its killer picker); Counselor_Menu's arrows, its three PerkButton slots (1-3), ClothingButton (X),
@@ -802,7 +813,7 @@ fn lobby_clicks(
     mut commands: Commands,
     lobby: Query<&NetLobby>,
     buttons: Query<(Entity, &Name), (Without<Interaction>, With<Node>)>,
-    clicked: Query<(&Interaction, &Name), Changed<Interaction>>,
+    clicked: Query<(Ref<Interaction>, &Name), Changed<Interaction>>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut down: Local<Vec<KeyCode>>,
@@ -813,6 +824,7 @@ fn lobby_clicks(
         Option<Res<crate::character::CounselorCharacter>>,
         Option<Res<crate::wardrobe::CounselorProfiles>>,
     ),
+    (window, wheel, mut ready_focus): (Option<Single<&Window, With<bevy::window::PrimaryWindow>>>, Query<(&Name, &ComputedNode, &UiGlobalTransform)>, ResMut<ReadyFocus>),
 ) {
     // The menus' list entries (ui.rs names them by index): a perk or emote in the panel picked and put in (Enter, as
     // its button's OnClicked SavePerk / AddEmote), an outfit shown, a slot focused, a swatch chosen.
@@ -841,10 +853,15 @@ fn lobby_clicks(
             debug!("lobby: {} takes clicks", n.as_str());
         }
     }
-    for (i, n) in &clicked {
+    for (r, n) in &clicked {
+        let i = &*r;
         let listed = entry(n.as_str());
         if !KEYS.iter().any(|(k, _)| *k == n.as_str()) && listed.is_none() {
             continue;
+        }
+        // (A rebuilt tree's new button starts at None: not a leave.)
+        if n.as_str() == "ReadyButton" && !r.is_added() {
+            ready_focus.set_if_neq(ReadyFocus(*i != Interaction::None));
         }
         // Their WidgetStyle's HoveredSlateSound (MenuButtonFocusCue) and PressedSlateSound (ui_Click01_stereo).
         match i {
@@ -910,6 +927,24 @@ fn lobby_clicks(
         info!("lobby: {} clicked", n.as_str());
         keys.press(key);
         down.push(key);
+    }
+    // The emote menu's wheel (CounselorEmoteSelect, its panel not shown): the cursor's direction from its centre picks the
+    // section (as the in-game wheel: crate::emotes::section), a click opens its panel (Enter).
+    if let (Some(m), Some(cursor)) = (emote_menu.as_mut().filter(|m| m.list.is_none()), window.as_ref().and_then(|w| w.physical_cursor_position())) {
+        if let Some((_, node, at)) = wheel.iter().find(|(n, ..)| n.as_str() == "CounselorEmoteSelect") {
+            let half = node.size() * 0.5;
+            let aim = cursor - at.translation;
+            if aim.x.abs() <= half.x && aim.y.abs() <= half.y {
+                if let Some(section) = crate::emotes::section(aim).filter(|s| *s != m.section) {
+                    m.section = section;
+                    commands.trigger(crate::audio::PlaySound { cue: "MenuButtonFocusCue".into(), at: None });
+                }
+                if mouse.just_pressed(MouseButton::Left) {
+                    keys.press(KeyCode::Enter);
+                    down.push(KeyCode::Enter);
+                }
+            }
+        }
     }
     if mouse.just_pressed(MouseButton::Right) {
         keys.press(KeyCode::Escape);

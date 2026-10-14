@@ -796,7 +796,7 @@ fn build_hud(
     game: Option<Res<crate::match_flow::GameMatch>>,
     spectating: Option<Res<crate::spectate::SpectatorStatus>>,
     (lobby, me, client, mut playing, time): (Query<&crate::lobby::NetLobby>, Option<Res<crate::lobby::Me>>, Option<Res<crate::net::NetClient>>, ResMut<PlayingAnims>, Res<Time>),
-    (match_tuning, mutes, page, names): (Option<Res<crate::match_flow::MatchTuning>>, Option<Res<crate::voice::VoiceMutes>>, Res<MatchEndPage>, Query<&Name>),
+    (match_tuning, mutes, page, names, ready_focus): (Option<Res<crate::match_flow::MatchTuning>>, Option<Res<crate::voice::VoiceMutes>>, Res<MatchEndPage>, Query<&Name>, Option<Res<crate::lobby::ReadyFocus>>),
     (counselor_menu, counselor_list, counselors, player_tuning, audio_menu, preview_image): (
         Option<Res<crate::lobby::CounselorMenu>>,
         Option<Res<crate::lobby::CounselorList>>,
@@ -863,6 +863,7 @@ fn build_hud(
     let menu_class = open_lobby.and(counselor_menu.as_ref()).and_then(|m| counselor_list.as_ref()?.0.get(m.index).cloned()).filter(|_| hud.counselor_menu.is_some());
     if let Some(l) = open_lobby {
         pocket_key = l.members.iter().map(|m| format!("lobby:{}:{}:{}:{:?}:{}:{}:{}:{}:{}", m.id, m.name, m.ready, m.preference, m.ping, m.talked, m.talking, mutes.as_ref().is_some_and(|x| x.0.contains(&m.name)), m.class)).collect();
+        pocket_key.push(format!("ready focus {}", ready_focus.as_ref().is_none_or(|f| f.0)));
         pocket_key.push(format!("countdown:{:?}", l.countdown.map(|t| t.ceil() as i32)));
         if let Some(c) = &menu_class {
             let slots = profiles.as_ref().map(|p| p.perks.get(c).cloned().unwrap_or_default());
@@ -944,7 +945,7 @@ fn build_hud(
             playing.play("LobbyWidget", "AnimIn", time.elapsed_secs(), false);
         }
         let mut t = hud.lobby.clone().unwrap_or_else(|| hud.hud.clone());
-        fill_lobby(&hud, &mut t, l, my_id, mutes.as_deref());
+        fill_lobby(&hud, &mut t, l, my_id, mutes.as_deref(), ready_focus.as_ref().is_none_or(|f| f.0));
         t
     } else if jason {
         hud.killer.clone().unwrap_or_else(|| hud.hud.clone())
@@ -1600,7 +1601,7 @@ fn fill_counselor_menu(tree: &mut Widget, class: &str, counselors: Option<&crate
     }
 }
 
-fn fill_lobby(hud: &Hud, tree: &mut Widget, lobby: &crate::lobby::NetLobby, me: Option<u64>, mutes: Option<&crate::voice::VoiceMutes>) {
+fn fill_lobby(hud: &Hud, tree: &mut Widget, lobby: &crate::lobby::NetLobby, me: Option<u64>, mutes: Option<&crate::voice::VoiceMutes>, ready_focus: bool) {
     if let Some(cd) = tree.find_mut("CountdownHorizontalBox") {
         cd.set_visibility(if lobby.countdown.is_some() { Vis::Visible } else { Vis::Hidden });
     }
@@ -1614,11 +1615,12 @@ fn fill_lobby(hud: &Hud, tree: &mut Widget, lobby: &crate::lobby::NetLobby, me: 
     if let (Some(file), Some(image)) = (hud.lobby_map["Image"].as_str(), tree.find_mut("CurrentMapImage")) {
         image.props["Brush"]["ResourceObject"] = json!({ "File": file });
     }
-    // The ready bar: its glow while the ready button has the focus (its Tick: ReadyFocused; it's the default focus, and
-    // Enter readies here), its text the other way from her (ReadyText, UnreadyText).
+    // The ready bar: its glow while the ready button has the focus (its Tick: ReadyFocused, which its hover sets and
+    // clears: lobby.rs ReadyFocus; on at first, the default focus, as Enter readies here), its text the other way from
+    // her (ReadyText, UnreadyText).
     let ready = lobby.members.iter().any(|m| Some(m.id) == me && m.ready);
     if let Some(bar) = tree.find_mut("StartBarMaterialImage") {
-        bar.props["Brush"]["ResourceObject"]["Scalars"]["Glow"] = json!(1.0);
+        bar.props["Brush"]["ResourceObject"]["Scalars"]["Glow"] = json!(if ready_focus { 1.0 } else { 0.0 });
     }
     if let Some(t) = tree.find_mut("ReadyUnreadyText") {
         t.props["Text"] = json!({ "LocalizedString": if ready { "U N R E A D Y" } else { "R E A D Y" } });
