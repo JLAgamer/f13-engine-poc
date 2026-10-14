@@ -364,6 +364,8 @@ pub struct Hud {
     wardrobe: Option<Widget>,
     outfit_button: Option<Widget>,
     swatch_button: Option<Widget>,
+    /// The emote wheel (Counselor_Emote_Select: emotes.rs EmoteWheel).
+    emote_wheel: Option<Widget>,
     /// The map played's definition (ui/map.json: SCMapDefinition's DisplayName and first LobbyThumbnailImages).
     lobby_map: Value,
     /// The match's end (MatchEnd: SCMatchEndLobbyWidget) and its XP lines (MatchEndLine).
@@ -639,6 +641,7 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
             w
         }),
         outfit_button: Widget::load(dir, "Counselor_Outfit_Button"),
+        emote_wheel: Widget::load(dir, "Counselor_Emote_Select"),
         swatch_button: Widget::load(dir, "Counselor_Swatch_Button"),
         lobby_row: Widget::load(dir, "LobbyPlayerListItem").map(|w| {
             let json = |n: &str| std::fs::read_to_string(dir.join(format!("ui/{n}.json"))).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
@@ -761,7 +764,7 @@ fn build_hud(
         Option<Res<crate::audio_settings::AudioMenu>>,
         Option<Res<crate::counselor_preview::PreviewImage>>,
     ),
-    wardrobe_menu: Option<Res<crate::wardrobe::WardrobeMenu>>,
+    (wardrobe_menu, emote_wheel, emotes): (Option<Res<crate::wardrobe::WardrobeMenu>>, Option<Res<crate::emotes::EmoteWheel>>, Option<Res<crate::emotes::Emotes>>),
 ) {
     let size = window.size();
     // The lobby while it's open (LobbyWidget, as the game's lobby map shows it).
@@ -781,6 +784,9 @@ fn build_hud(
     let selected = player.as_ref().and_then(|p| **p).map_or(0, |inv| inv.selected);
     // Rebuilt when they or the selection change.
     let mut pocket_key: Vec<String> = pockets.iter().cloned().chain([format!("#{selected}")]).collect();
+    if let Some(w) = &emote_wheel {
+        pocket_key.push(format!("wheel:{:?}", w.section));
+    }
     // The spectator HUD's next-mode title is set as it's built (its ActionDisplays share their widgets' names).
     let next_mode = spectating.as_ref().map_or("", |s| s.next);
     if spectator {
@@ -896,6 +902,19 @@ fn build_hud(
     }
     if !jason && !spectator && open_lobby.is_none() && ended.is_none() {
         fill_inventory(&hud, &mut tree, &pockets, selected);
+        // The emote wheel over it (SCInGameHUD's EmoteWidgetInstance, AddToViewport ZOrder 10), centred.
+        if let (Some(w), Some(mut wheel), Some(emotes)) = (&emote_wheel, hud.emote_wheel.clone(), &emotes) {
+            fill_emote_wheel(&mut wheel, w, emotes);
+            tree.children.push(Widget {
+                kind: "Counselor_Emote_Select_C".into(),
+                name: "EmoteWheel".into(),
+                class: Some("Counselor_Emote_Select".into()),
+                props: json!({}),
+                slot_kind: "CanvasPanelSlot".into(),
+                slot: json!({ "LayoutData": { "Anchors": { "Minimum": { "X": 0.0, "Y": 0.0 }, "Maximum": { "X": 1.0, "Y": 1.0 } }, "Offsets": { "Left": 0.0, "Top": 0.0, "Right": 0.0, "Bottom": 0.0 } }, "ZOrder": 10 }),
+                children: vec![wheel],
+            });
+        }
     }
     if open_lobby.is_none() && ended.is_none() {
         fill_xp_lines(&hud, &mut tree, &scores);
@@ -1222,6 +1241,28 @@ fn fill_audio_settings(tree: &mut Widget, menu: &crate::audio_settings::AudioMen
                     }
                 }
             }
+        }
+    }
+}
+
+/// Counselor_Emote_Select as emotes.rs has it: each EmoteIcon's EmoteImage its emote's EmoteIcon (SetEmoteIcon), the
+/// highlight (HLGradient, HLLines, Arrow: GetHighlightVisibility, OnUpdateHighlightRotation) turned to the highlighted
+/// section (45 degrees each, about the wheel's centre: their RenderTransformPivot), hidden with none.
+fn fill_emote_wheel(tree: &mut Widget, w: &crate::emotes::EmoteWheel, emotes: &crate::emotes::Emotes) {
+    for (i, name) in emotes.wheel().iter().enumerate().take(8) {
+        let icon = emotes.emotes.get(name).and_then(|e| e.icon.clone());
+        if let (Some(x), Some(icon)) = (tree.find_mut(&format!("EmoteIcon{i}")).and_then(|x| x.find_mut("EmoteImage")), icon) {
+            x.props["Brush"]["ResourceObject"] = json!({ "File": format!("{icon}.png") });
+        }
+    }
+    for name in ["HLGradient", "HLLines", "Arrow"] {
+        let Some(x) = tree.find_mut(name) else { continue };
+        match w.section {
+            Some(s) => {
+                x.set_visibility(Vis::Visible);
+                x.props["RenderTransform"] = json!({ "Angle": s as f64 * 45.0 });
+            }
+            None => x.set_visibility(Vis::Hidden),
         }
     }
 }
@@ -1947,7 +1988,12 @@ impl Builder<'_, '_, '_> {
         if rt.is_object() {
             let s = |k: &str| rt["Scale"][k].as_f64().unwrap_or(1.0) as f32;
             let angle = rt["Angle"].as_f64().unwrap_or(0.0) as f32;
-            self.commands.entity(e).insert(UiTransform { scale: Vec2::new(s("X"), s("Y")), rotation: Rot2::degrees(angle), ..default() });
+            // Turned about its RenderTransformPivot (a fraction of its size; the centre by default): Bevy turns it
+            // about its centre, so it moves by d - R d, d the pivot from the centre.
+            let pivot = &p["RenderTransformPivot"];
+            let d = Vec2::new((pivot["X"].as_f64().unwrap_or(0.5) as f32 - 0.5) * r.w, (pivot["Y"].as_f64().unwrap_or(0.5) as f32 - 0.5) * r.h) * self.scale;
+            let t = d - Rot2::degrees(angle) * d;
+            self.commands.entity(e).insert(UiTransform { translation: Val2::px(t.x, t.y), scale: Vec2::new(s("X"), s("Y")), rotation: Rot2::degrees(angle) });
         }
         match w.kind.as_str() {
             "Image" => {

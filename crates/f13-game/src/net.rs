@@ -706,6 +706,7 @@ fn protocol(app: &mut App) {
     crate::net_world::protocol(app);
     crate::lobby::protocol(app);
     crate::voice::protocol(app);
+    crate::emotes::protocol(app);
 }
 
 #[derive(Resource)]

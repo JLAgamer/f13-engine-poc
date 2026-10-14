@@ -338,7 +338,7 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         // there is one, under the female sequences' names.
         var female = ClassValue<bool?>(cls, "bIsFemale") != false;
         (info.Names ??= new())["Gender"] = female ? "Female" : "Male";
-        WriteAnimations(info, skeleton, animations.Concat(MenuPoses()).Distinct(), "anims", keepRoot, female ? null : MaleCounterpart);
+        WriteAnimations(info, skeleton, animations.Concat(MenuPoses()).Concat(EmoteMontages()).Distinct(), "anims", keepRoot, female ? null : MaleCounterpart);
         Save(info, "counselors");
     }
 
@@ -984,6 +984,49 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
     {
         var path = p.AssetPathName.Text;
         return string.IsNullOrEmpty(path) || path == "None" ? null : Texture(provider.LoadPackageObject<UTexture>(path));
+    }
+
+    /// The emotes (Blueprints/Emotes/*: SCEmoteData), by class name, in path order.
+    IEnumerable<(string Name, UObject Cdo)> Emotes() => provider.Files.Keys.Where(k => k.StartsWith("SummerCamp/Content/Blueprints/Emotes/") && k.EndsWith(".uasset")).Order()
+        .Select(f => f[..^".uasset".Length])
+        .Select(p => (p.Split('/')[^1], provider.LoadPackageObject(p + "." + p.Split('/')[^1] + "_C") is UBlueprintGeneratedClass bp ? bp.ClassDefaultObject.Load() : null))
+        .Where(e => e.Item2 != null).Select(e => (e.Item1, e.Item2!));
+
+    /// Every emote's FemaleMontage ("/Game/..." path): a male counselor's export takes each one's male counterpart
+    /// (MaleCounterpart: AM_f_ -> AM_m_, its MaleMontage) under the female sequences' names.
+    IEnumerable<string> EmoteMontages() => Emotes()
+        .Select(e => e.Cdo.GetOrDefault<FPackageIndex?>("FemaleMontage")?.Load<UAnimMontage>()?.GetPathName().Split('.')[0])
+        .OfType<string>().Distinct();
+
+    /// emotes.json: each emote's EmoteName, EmoteIcon, bLooping and its FemaleMontage's first sequence (the counselors'
+    /// animations name it so: MaleCounterpart), and Base_Counselor's DefaultEmotes (SCCounselorCharacter +0x1c78).
+    public void ExportEmotes()
+    {
+        var emotes = new Newtonsoft.Json.Linq.JObject();
+        foreach (var (name, cdo) in Emotes())
+        {
+            var montage = cdo.GetOrDefault<FPackageIndex?>("FemaleMontage")?.Load<UAnimMontage>()?.GetPathName().Split('.')[0];
+            var take = montage == null ? null : Sequences(montage).FirstOrDefault()?.Name;
+            if (take == null) continue;
+            string? icon = null;
+            if (cdo.GetOrDefault<FPackageIndex?>("EmoteIcon")?.Load<UTexture>() is { } tex)
+                icon = Texture(tex);
+            emotes[name] = new Newtonsoft.Json.Linq.JObject
+            {
+                ["Name"] = cdo.GetOrDefault<CUE4Parse.UE4.Objects.Core.i18N.FText>("EmoteName")?.Text ?? name,
+                ["Icon"] = icon,
+                ["Looping"] = cdo.GetOrDefault<bool>("bLooping"),
+                ["Take"] = take,
+            };
+        }
+        var defaults = new Newtonsoft.Json.Linq.JArray();
+        var basePath = "SummerCamp/Content/Characters/Counselors/Base/Base_Counselor";
+        if (provider.LoadPackageObject(basePath + ".Base_Counselor_C") is UBlueprintGeneratedClass b && b.ClassDefaultObject.Load() is { } baseCdo)
+            foreach (var e in baseCdo.GetOrDefault<FPackageIndex[]>("DefaultEmotes", []))
+                if (e.Name is { } n) defaults.Add(n.EndsWith("_C") ? n[..^2] : n);
+        var json = new Newtonsoft.Json.Linq.JObject { ["Emotes"] = emotes, ["Default"] = defaults };
+        File.WriteAllText(Path.Combine(outDir, "emotes.json"), json.ToString());
+        Console.WriteLine($"emotes.json: {emotes.Count} emotes, {defaults.Count} default");
     }
 
     /// An outfit's MenuAnimation montage ("/Game/..." path), if any.

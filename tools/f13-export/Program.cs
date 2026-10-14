@@ -800,6 +800,7 @@ switch (rest[0])
     case "counselor": // counselor [Name...]: counselors' parts and animations (and the meshes they need); default the MVP's
         foreach (var name in rest.Count > 1 ? rest.Skip(1) : [Mvp.Counselor.Split('/')[^1].Replace("_Counselor", "")])
             new CounselorExporter(provider, outDir, Queue).Export($"/Game/Characters/Counselors/{name}/{name}_Counselor", Mvp.CounselorAnims, Mvp.KeepRoot);
+        new CounselorExporter(provider, outDir, Queue).ExportEmotes();
         break;
     case "ui": // ui [widget...]: widget trees and their textures (default: Mvp.Widgets)
     {
@@ -1522,6 +1523,9 @@ static class Mvp
         "/Game/UI/Menu/Character/Counselor/Counselor_Slot_02_Swatch_List",
         "/Game/UI/Menu/Character/Counselor/Counselor_Slot_03_Swatch_List",
         "/Game/UI/Menu/Character/Counselor/Counselor_Swatch_Button",
+        // The emote wheel (SCInGameHUD EmoteWidgetClass: CSLR_ShowEmote) and its icons.
+        "/Game/UI/Menu/Character/Counselor/Counselor_Emote_Select",
+        "/Game/UI/Menu/Character/Counselor/EmoteIcon",
         // The audio settings (SettingsMenuWidget's audio page: its volumes and push-to-talk).
         "/Game/UI/Menu/Settings/AudioSettingsMenuWidget",
         "/Game/UI/Menu/Settings/Controls/SettingsOptionSliderWidget",

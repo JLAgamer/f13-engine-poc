@@ -208,8 +208,10 @@ pub(crate) fn look(
     driving: Query<&crate::vehicle::Driving, With<Player>>,
     mut camera: Single<(&mut PlayerCamera, &Projection)>,
     windows: Query<&Window>,
+    wheel: Option<Res<crate::emotes::EmoteWheel>>,
 ) {
-    if cursor.grab_mode != CursorGrabMode::Locked || play_jason.is_some() {
+    // (The emote wheel takes the mouse while it's open.)
+    if cursor.grab_mode != CursorGrabMode::Locked || play_jason.is_some() || wheel.is_some() {
         return;
     }
     let (ref mut cam, proj) = *camera;
