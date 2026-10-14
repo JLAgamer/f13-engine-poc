@@ -48,7 +48,13 @@ impl CombatTuning {
 
     /// The stun roll, from a uniform `unit` in 0..1 (rand() / 32768).
     pub fn stun_roll(&self, stats: &Stats, unit: f32) -> i32 {
-        let m = self.stun_chance_mod.value(stats, false) as i32;
+        self.stun_roll_with(stats, 0.0, unit)
+    }
+
+    /// [`Self::stun_roll`] with her perks' share added to StunChanceMod first (FUN_1403a3870: WeaponStunChanceModifier
+    /// x 100 each).
+    pub fn stun_roll_with(&self, stats: &Stats, perks: f32, unit: f32) -> i32 {
+        let m = (self.stun_chance_mod.value(stats, false) + perks) as i32;
         let n = 101 - m;
         if n <= 0 {
             return 0;

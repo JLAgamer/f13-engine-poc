@@ -70,6 +70,30 @@ impl Perks {
             .sum()
     }
 
+    /// Her melee hit's perk sums on Jason (the hit's lambdas in FUN_1403cbef0), over the perks her weapon qualifies for
+    /// (RequiredWeapon as [`Self::weapon_mod`]; RequiredCharacterClassToHit unset or his):
+    /// - damage (FUN_1403a3df0, x (1 + it)): her PotentRangerPerk while she's Tommy (bIsHunter) its
+    ///   TommyJarvisWeaponDamageModifier; her FriendshipPerk its WeaponDamageModifier x the other counselors within 20 m
+    ///   (FUN_1403b7ef0, 2000 cm); any other its WeaponDamageModifier;
+    /// - stun chance (FUN_1403a3870, added to StunChanceMod before the roll): WeaponStunChanceModifier x 100.
+    pub fn attack_mods(&self, picked: &[String], weapon: &str, hunter: bool, friends_near: usize) -> (f32, f32) {
+        let mut damage = 0.0;
+        let mut stun = 0.0;
+        for (name, d) in picked.iter().filter_map(|n| Some((n, self.0.get(n)?))) {
+            if d.required_weapon.as_deref().is_some_and(|w| w != weapon) {
+                continue;
+            }
+            let m = |k: &str| d.modifiers.get(k).copied().unwrap_or(0.0);
+            damage += match name.as_str() {
+                "PotentRanger" if hunter => m("TommyJarvisWeaponDamageModifier"),
+                "Friendship" => m("WeaponDamageModifier") * friends_near as f32,
+                _ => m("WeaponDamageModifier"),
+            };
+            stun += m("WeaponStunChanceModifier") * 100.0;
+        }
+        (damage, stun)
+    }
+
     /// Her ActivePerks' modifiers, summed.
     pub fn mods(&self, picked: &[String]) -> f13_core::counselor::PerkMods {
         let mut m = f13_core::counselor::PerkMods::default();

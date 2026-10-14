@@ -796,8 +796,10 @@ fn tick_action(
     mut assets: (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>),
     (globals, killer, character, rigs, killer_model): (Query<&GlobalTransform>, Option<Res<crate::jason::KillerTuning>>, Option<Res<CounselorCharacter>>, Query<(&ChildOf, &Rig)>, Option<Res<crate::character::KillerCharacter>>),
     sounds: Option<Res<crate::audio::Sounds>>,
-    perks: (Option<Res<crate::perks::Perks>>, Query<&crate::perks::CounselorPerks>),
+    perks: (Option<Res<crate::perks::Perks>>, Query<&crate::perks::CounselorPerks>, Query<(), With<crate::tommy::Hunter>>, Query<(Entity, &Transform, &Player), Without<ItemAction>>),
 ) {
+    // The living counselors (Friendship's count).
+    let alive: Vec<(Entity, Vec3)> = player.iter().filter(|(.., p, _)| p.counselor.alive()).map(|(e, _, _, xf, ..)| (e, xf.translation)).chain(perks.3.iter().filter(|(_, _, p)| p.counselor.alive()).map(|(e, xf, _)| (e, xf.translation))).collect();
     for (pe, mut a, mut inv, xf, mut p, local) in &mut player {
     // Her eye and look: the local counselor's camera; another's control rotation from her eyes.
     let (look_yaw, look_pitch) = pads.look(pe);
@@ -859,13 +861,20 @@ fn tick_action(
                         // FUN_1403cbef0: her damage (StrengthAttackMod x the weapon's, x2 heavy), the stun roll against
                         // the weapon's StunChance, and HitKillerStaminaBoost back (f13-core::combat). His health isn't
                         // modelled: the damage is logged.
-                        let combat = &tuning.counselor.combat;
+                        // Her perks' StatModifiers[0] add to her StrengthAttackMod's Strength weight (FUN_1403a5880, at
+                        // possession: +0x179c).
+                        let mut combat = tuning.counselor.combat.clone();
+                        combat.strength_attack_mod.modifiers[f13_core::stats::Stat::Strength as usize] += p.counselor.perks.get("StatModifiers.0");
+                        let combat = &combat;
                         let heavy = matches!(a.what, Use::Swing { heavy: true, .. });
-                        let damage = combat.damage(stats.damage, &p.counselor.stats, heavy);
-                        let roll = combat.stun_roll(&p.counselor.stats, rng.0.frand());
+                        // Her perks' weapon damage and stun chance (FUN_1403a3df0 / FUN_1403a3870).
+                        let class = items.get(a.item).map_or("", |i| i.class.as_str());
+                        let near = alive.iter().filter(|(o, at)| *o != pe && at.distance(xf.translation) <= 20.0).count();
+                        let (perk_damage, perk_stun) = perks.0.as_ref().zip(perks.1.get(pe).ok()).map_or((0.0, 0.0), |(d, c)| d.attack_mods(&c.0, class, perks.2.contains(pe), near));
+                        let damage = combat.damage(stats.damage, &p.counselor.stats, heavy) * (1.0 + perk_damage);
+                        let roll = combat.stun_roll_with(&p.counselor.stats, perk_stun, rng.0.frand());
                         let stun = f13_core::combat::CombatTuning::stuns(stats.stun_chance, roll);
                         let back = combat.hit_stamina(&p.counselor.stats);
-                        let class = items.get(a.item).map_or("", |i| i.class.as_str());
                         let stun_scale = 1.0 + perks.0.as_ref().zip(perks.1.get(pe).ok()).map_or(0.0, |(d, c)| d.weapon_mod(&c.0, "WeaponStunDurationModifier", class));
                         p.counselor.stamina = (p.counselor.stamina + back).min(tuning.counselor.stamina_max);
                         // Which of his sides she hit: his right is -X of his facing (+Z).
