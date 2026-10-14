@@ -877,7 +877,7 @@ switch (rest[0])
         // CounselorWardrobePreview): the CaptureComponent's place, FOVAngle and target's size, the spot lights (each
         // component's properties, relative to the root) and a PostProcess component's ambient cubemap (mean radiance x
         // AmbientCubemapIntensity) (ui/counselor_preview.json, ui/wardrobe_preview.json).
-        foreach (var (package, file) in new[] { ("CounselorCustomizationPreview", "counselor_preview.json"), ("CounselorWardrobePreview", "wardrobe_preview.json") })
+        foreach (var (package, file) in new[] { ("CounselorCustomizationPreview", "counselor_preview.json"), ("CounselorWardrobePreview", "wardrobe_preview.json"), ("CounselorEmotePreview", "emote_preview.json") })
         {
             var preview = new Newtonsoft.Json.Linq.JObject();
             var lights = new Newtonsoft.Json.Linq.JArray();
@@ -1526,6 +1526,10 @@ static class Mvp
         // The emote wheel (SCInGameHUD EmoteWidgetClass: CSLR_ShowEmote) and its icons.
         "/Game/UI/Menu/Character/Counselor/Counselor_Emote_Select",
         "/Game/UI/Menu/Character/Counselor/EmoteIcon",
+        // The counselor menu's emotes (CounselorEmoteButton: the wheel's slots and the list to fill them).
+        "/Game/UI/Menu/Character/Counselor/Counselor_Emote_Menu",
+        "/Game/UI/Menu/Character/Counselor/Counselor_Emote_Panel",
+        "/Game/UI/Menu/Character/Counselor/EmoteButtonLarge",
         // The audio settings (SettingsMenuWidget's audio page: its volumes and push-to-talk).
         "/Game/UI/Menu/Settings/AudioSettingsMenuWidget",
         "/Game/UI/Menu/Settings/Controls/SettingsOptionSliderWidget",

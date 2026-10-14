@@ -14,9 +14,14 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Each class's outfit (as CharacterInfo::choose_outfit takes it: "<outfit class>:<option>,...").
+/// The counselors' profiles (FSCCounselorCharacterProfile, by class): each one's outfit (as CharacterInfo::choose_outfit
+/// takes it: "<outfit class>:<option>,...") and emotes (the wheel's eight, by emote class: emotes.rs).
 #[derive(Resource, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct CounselorProfiles(pub BTreeMap<String, String>);
+#[serde(default)]
+pub struct CounselorProfiles {
+    pub outfits: BTreeMap<String, String>,
+    pub emotes: BTreeMap<String, Vec<String>>,
+}
 
 /// (F13_COUNSELOR_PROFILES: another file, for tests.)
 fn path() -> std::path::PathBuf {
@@ -25,10 +30,12 @@ fn path() -> std::path::PathBuf {
 
 impl CounselorProfiles {
     pub fn load() -> Self {
-        std::fs::read_to_string(path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+        let Some(t) = std::fs::read_to_string(path()).ok() else { return Self::default() };
+        // (The first files: just the outfits, by class.)
+        serde_json::from_str::<BTreeMap<String, String>>(&t).map(|outfits| Self { outfits, ..default() }).or_else(|_| serde_json::from_str(&t)).unwrap_or_default()
     }
 
-    fn save(&self) {
+    pub(crate) fn save(&self) {
         let p = path();
         let _ = std::fs::create_dir_all(p.parent().unwrap_or(std::path::Path::new(".")));
         if let Err(e) = serde_json::to_string_pretty(self).map_err(|e| e.to_string()).and_then(|t| std::fs::write(&p, t).map_err(|e| e.to_string())) {
@@ -38,7 +45,7 @@ impl CounselorProfiles {
 
     /// A class's outfit (empty: its default).
     pub fn outfit(&self, class: &str) -> &str {
-        self.0.get(class).map_or("", String::as_str)
+        self.outfits.get(class).map_or("", String::as_str)
     }
 }
 
@@ -132,8 +139,13 @@ pub(crate) fn wardrobe_menu(
     character: Option<Res<crate::character::CounselorCharacter>>,
     mut profiles: ResMut<CounselorProfiles>,
     mut tested: Local<bool>,
+    emote_menu: Option<Res<crate::emotes::EmoteMenu>>,
 ) {
     let Some(character) = character else { return };
+    // (The emote menu over the counselor menu has the keys.)
+    if emote_menu.is_some() {
+        return;
+    }
     let Some(mut menu) = menu else {
         let class = counselor_menu.as_ref().and_then(|m| list.as_ref()?.0.get(m.index).cloned());
         // (F13_WARDROBE=<outfit>,<row>: opened over the counselor menu, for screenshots.)
@@ -165,7 +177,7 @@ pub(crate) fn wardrobe_menu(
     if keys.just_pressed(KeyCode::Enter) {
         let spec = menu.spec(&character);
         info!("wardrobe: {} wears {spec}", menu.class);
-        profiles.0.insert(menu.class.clone(), spec);
+        profiles.outfits.insert(menu.class.clone(), spec);
         profiles.save();
         commands.remove_resource::<WardrobeMenu>();
         return;

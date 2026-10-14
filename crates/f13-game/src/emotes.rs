@@ -13,7 +13,16 @@
 //! f13-rs: the emote plays as her action (character.rs PlayAction: replicated); a client asks the server with
 //! [`EmoteMsg`]. PLACEHOLDER: the wheel's highlight from the mouse's travel since it opened (the radial widget's cursor
 //! mapping not read), and CanPlayEmote's checks as f13-rs's states have them. Not ported: the looping emotes' 0.35 s
-//! SetIgnoreMoveInput, the profiles' own emote picks (Counselor_Emote_Menu).
+//! SetIgnoreMoveInput.
+//!
+//! The counselor menu's emotes (Counselor_Emote_Menu, SCCounselorEmoteMenuWidget: decompiled): its CounselorEmoteButton
+//! pushes it on the counselor shown; its wheel (Counselor_Emote_Select, not in game) shows her eight, picking a section
+//! (OnSelect: PendingIndex, ShowEmoteBox) shows the panel (Counselor_Emote_Panel: GetAvailableEmotesForCounselor's
+//! unlocked ones as EmoteButtonLarges, rows of nine), whose highlighted one her preview plays (CounselorEmotePreview:
+//! PlayPreviewEmote) and whose pick takes the section (SetEmote), back to the wheel (HideEmoteBox); Back from the panel
+//! returns to the wheel, from the wheel to the counselor menu with the profiles (SetUnsavedCounselorProfile; f13-rs
+//! saves them then: counselor_profiles.json). All unlocked; the available ones in emotes.json's order (PLACEHOLDER: the
+//! native list's order not read).
 
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
@@ -46,9 +55,112 @@ pub struct Emotes {
 }
 
 impl Emotes {
-    /// A counselor's wheel (GetEmotesForCounselor: no profile picks here, so her class's DefaultEmotes).
-    pub fn wheel(&self) -> &[String] {
-        &self.default
+    /// A counselor's wheel (GetEmotesForCounselor: her profile's emotes, else her class's DefaultEmotes).
+    pub fn wheel<'a>(&'a self, class: &str, profiles: Option<&'a crate::wardrobe::CounselorProfiles>) -> &'a [String] {
+        profiles.and_then(|p| p.emotes.get(class)).filter(|e| !e.is_empty()).map_or(&self.default, |e| e.as_slice())
+    }
+
+    /// The emotes she can pick (GetAvailableEmotesForCounselor: all of them unlocked).
+    pub fn available(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.emotes.keys().cloned().collect();
+        v.sort();
+        v
+    }
+}
+
+/// The counselor menu's emotes, open on a class: her wheel's emotes as edited, the section highlighted and (the panel
+/// shown) the emote highlighted in it (an index into [`Emotes::available`]).
+#[derive(Resource, Clone, Debug)]
+pub struct EmoteMenu {
+    pub class: String,
+    pub slots: Vec<String>,
+    pub section: usize,
+    pub list: Option<usize>,
+}
+
+/// The emote menu (PLACEHOLDER keys: its wheel and panel are mouse and gamepad widgets): E in the counselor menu opens
+/// it; on the wheel Left / Right (A / D) step the section (MenuButtonFocusCue), Enter shows the panel on its emote,
+/// Escape keeps them (counselor_profiles.json) and backs out; in the panel the arrows (WASD) move by one or a row of
+/// nine, Enter puts the emote in the section and Escape returns to the wheel.
+pub(crate) fn emote_menu(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    menu: Option<ResMut<EmoteMenu>>,
+    counselor_menu: Option<Res<crate::lobby::CounselorMenu>>,
+    list: Option<Res<crate::lobby::CounselorList>>,
+    emotes: Res<Emotes>,
+    mut profiles: ResMut<crate::wardrobe::CounselorProfiles>,
+    mut tested: Local<bool>,
+) {
+    let pressed = |a: KeyCode, b: KeyCode| keys.just_pressed(a) || keys.just_pressed(b);
+    let Some(mut menu) = menu else {
+        let class = counselor_menu.as_ref().and_then(|m| list.as_ref()?.0.get(m.index).cloned());
+        // (F13_EMOTE_MENU=<section>[,<panel index>]: opened over the counselor menu, for screenshots.)
+        let test = std::env::var("F13_EMOTE_MENU").ok().filter(|_| class.is_some() && !std::mem::replace(&mut *tested, true));
+        if let Some(class) = class.filter(|_| (keys.just_pressed(KeyCode::KeyE) || test.is_some()) && !emotes.default.is_empty()) {
+            let mut slots = emotes.wheel(&class, Some(&profiles)).to_vec();
+            slots.resize(8, String::new());
+            let n: Vec<usize> = test.as_deref().unwrap_or("").split(',').filter_map(|v| v.parse().ok()).collect();
+            commands.insert_resource(EmoteMenu { class, slots, section: n.first().copied().unwrap_or(0) % 8, list: n.get(1).copied() });
+        }
+        return;
+    };
+    if counselor_menu.is_none() {
+        commands.remove_resource::<EmoteMenu>();
+        return;
+    }
+    let available = emotes.available();
+    let focus = |commands: &mut Commands| commands.trigger(crate::audio::PlaySound { cue: "MenuButtonFocusCue".into(), at: None });
+    match menu.list {
+        None => {
+            if keys.just_pressed(KeyCode::Escape) {
+                if profiles.emotes.get(&menu.class) != Some(&menu.slots) {
+                    profiles.emotes.insert(menu.class.clone(), menu.slots.clone());
+                    profiles.save();
+                    info!("emotes: {} has {:?}", menu.class, menu.slots);
+                }
+                // (HandleBackButton's UITransitionAll.)
+                commands.trigger(crate::audio::PlaySound { cue: "UITransitionAll".into(), at: None });
+                commands.remove_resource::<EmoteMenu>();
+            } else if pressed(KeyCode::ArrowLeft, KeyCode::KeyA) {
+                menu.section = (menu.section + 7) % 8;
+                focus(&mut commands);
+            } else if pressed(KeyCode::ArrowRight, KeyCode::KeyD) {
+                menu.section = (menu.section + 1) % 8;
+                focus(&mut commands);
+            } else if keys.just_pressed(KeyCode::Enter) {
+                let at = available.iter().position(|e| *e == menu.slots[menu.section]).unwrap_or(0);
+                menu.list = Some(at);
+            }
+        }
+        Some(i) => {
+            let n = available.len().max(1);
+            if keys.just_pressed(KeyCode::Escape) {
+                menu.list = None;
+            } else if keys.just_pressed(KeyCode::Enter) {
+                if let Some(e) = available.get(i) {
+                    let s = menu.section;
+                    menu.slots[s] = e.clone();
+                }
+                menu.list = None;
+            } else {
+                let step: isize = if pressed(KeyCode::ArrowLeft, KeyCode::KeyA) {
+                    -1
+                } else if pressed(KeyCode::ArrowRight, KeyCode::KeyD) {
+                    1
+                } else if pressed(KeyCode::ArrowUp, KeyCode::KeyW) {
+                    -9
+                } else if pressed(KeyCode::ArrowDown, KeyCode::KeyS) {
+                    9
+                } else {
+                    0
+                };
+                if step != 0 {
+                    menu.list = Some((i as isize + step).clamp(0, n as isize - 1) as usize);
+                    focus(&mut commands);
+                }
+            }
+        }
     }
 }
 
@@ -58,6 +170,8 @@ impl Emotes {
 pub struct EmoteWheel {
     pub aim: Vec2,
     pub section: Option<usize>,
+    /// Her eight (GetEmotesForCounselor as it opened).
+    pub slots: Vec<String>,
 }
 
 /// Playing an emote (CurrentEmote): its time in, length, bLooping, and whether her movement is locked out.
@@ -134,8 +248,8 @@ fn wheel(
     keys: Res<ButtonInput<KeyCode>>,
     motion: Res<AccumulatedMouseMotion>,
     open: Option<ResMut<EmoteWheel>>,
-    emotes: Res<Emotes>,
-    local: Query<(Entity, CanEmote, Option<&Emoting>), With<LocalPlayer>>,
+    (emotes, profiles): (Res<Emotes>, Option<Res<crate::wardrobe::CounselorProfiles>>),
+    local: Query<(Entity, CanEmote, Option<&Emoting>, Option<&crate::character::CounselorClass>), With<LocalPlayer>>,
     (client, play_jason, map): (Option<Res<crate::net::NetClient>>, Option<Res<crate::jason_player::PlayJason>>, Option<Res<crate::items::MapScreen>>),
     mut senders: Query<&mut MessageSender<EmoteMsg>, With<Connected>>,
     mut tested: Local<bool>,
@@ -143,7 +257,7 @@ fn wheel(
     // (F13_EMOTE=<emote>: played once she can; F13_EMOTE_WHEEL=<section>: the wheel held open on it. Screenshots.)
     let test_wheel = std::env::var("F13_EMOTE_WHEEL").ok().and_then(|v| v.parse::<usize>().ok());
     let mut request = None;
-    if let (Ok((e, can, None)), Ok(emote), false) = (local.single(), std::env::var("F13_EMOTE"), *tested) {
+    if let (Ok((e, can, None, _)), Ok(emote), false) = (local.single(), std::env::var("F13_EMOTE"), *tested) {
         if can_emote(&can) {
             *tested = true;
             request = Some((e, emote));
@@ -152,22 +266,25 @@ fn wheel(
     if let (Some(s), None, Ok(_), false) = (test_wheel, &open, local.single(), *tested) {
         *tested = true;
         let a = (s as f32 * 45.0).to_radians();
-        commands.insert_resource(EmoteWheel { aim: Vec2::new(a.sin(), -a.cos()) * 100.0, section: Some(s % 8) });
+        let class = local.single().ok().and_then(|l| l.3).map_or(crate::character::DEFAULT_CLASS, |c| c.0.as_str());
+        commands.insert_resource(EmoteWheel { aim: Vec2::new(a.sin(), -a.cos()) * 100.0, section: Some(s % 8), slots: emotes.wheel(class, profiles.as_deref()).to_vec() });
         return;
     }
     if test_wheel.is_some() {
         return;
     }
-    let Ok((e, can, emoting)) = local.single() else {
+    let Ok((e, can, emoting, class)) = local.single() else {
         if open.is_some() {
             commands.remove_resource::<EmoteWheel>();
         }
         return;
     };
+    let class = class.map_or(crate::character::DEFAULT_CLASS, |c| c.0.as_str());
+    let slots = emotes.wheel(class, profiles.as_deref());
     match open {
         None => {
-            if keys.just_pressed(KeyCode::KeyV) && play_jason.is_none() && !map.is_some_and(|m| m.0) && emoting.is_none() && can_emote(&can) && !emotes.wheel().is_empty() {
-                commands.insert_resource(EmoteWheel::default());
+            if keys.just_pressed(KeyCode::KeyV) && play_jason.is_none() && !map.is_some_and(|m| m.0) && emoting.is_none() && can_emote(&can) && !slots.is_empty() {
+                commands.insert_resource(EmoteWheel { slots: slots.to_vec(), ..default() });
             }
         }
         Some(mut wheel) => {
@@ -182,7 +299,7 @@ fn wheel(
             }
             if !keys.pressed(KeyCode::KeyV) {
                 commands.remove_resource::<EmoteWheel>();
-                request = wheel.section.and_then(|i| emotes.wheel().get(i)).cloned().map(|emote| (e, emote));
+                request = wheel.section.and_then(|i| wheel.slots.get(i)).filter(|e| !e.is_empty()).cloned().map(|emote| (e, emote));
             }
         }
     }

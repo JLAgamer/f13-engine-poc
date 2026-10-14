@@ -364,8 +364,11 @@ pub struct Hud {
     wardrobe: Option<Widget>,
     outfit_button: Option<Widget>,
     swatch_button: Option<Widget>,
-    /// The emote wheel (Counselor_Emote_Select: emotes.rs EmoteWheel).
+    /// The emote wheel (Counselor_Emote_Select: emotes.rs EmoteWheel), the counselor menu's emotes (Counselor_Emote_Menu:
+    /// emotes.rs EmoteMenu) and its panel's buttons (EmoteButtonLarge).
     emote_wheel: Option<Widget>,
+    emote_menu: Option<Widget>,
+    emote_button: Option<Widget>,
     /// The map played's definition (ui/map.json: SCMapDefinition's DisplayName and first LobbyThumbnailImages).
     lobby_map: Value,
     /// The match's end (MatchEnd: SCMatchEndLobbyWidget) and its XP lines (MatchEndLine).
@@ -642,6 +645,23 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
         }),
         outfit_button: Widget::load(dir, "Counselor_Outfit_Button"),
         emote_wheel: Widget::load(dir, "Counselor_Emote_Select"),
+        emote_menu: Widget::load(dir, "Counselor_Emote_Menu").map(|mut w| {
+            // Its header's title (MenuHeaderWidget: TitleText its Text, "Emotes").
+            if let Some(h) = w.find_mut("MenuHeaderWidget") {
+                let title = h.props["Text"].clone();
+                if let Some(t) = h.find_mut("TitleText").filter(|_| title.is_object()) {
+                    t.props["Text"] = title;
+                }
+            }
+            // Not ported: its action bar ("More Emotes": the store) and gamepad image (the keys: emotes.rs).
+            for name in ["ActionBarWidget", "ControllerImage"] {
+                if let Some(x) = w.find_mut(name) {
+                    x.set_visibility(Vis::Collapsed);
+                }
+            }
+            w
+        }),
+        emote_button: Widget::load(dir, "EmoteButtonLarge"),
         swatch_button: Widget::load(dir, "Counselor_Swatch_Button"),
         lobby_row: Widget::load(dir, "LobbyPlayerListItem").map(|w| {
             let json = |n: &str| std::fs::read_to_string(dir.join(format!("ui/{n}.json"))).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
@@ -764,7 +784,7 @@ fn build_hud(
         Option<Res<crate::audio_settings::AudioMenu>>,
         Option<Res<crate::counselor_preview::PreviewImage>>,
     ),
-    (wardrobe_menu, emote_wheel, emotes): (Option<Res<crate::wardrobe::WardrobeMenu>>, Option<Res<crate::emotes::EmoteWheel>>, Option<Res<crate::emotes::Emotes>>),
+    (wardrobe_menu, emote_wheel, emotes, emote_menu): (Option<Res<crate::wardrobe::WardrobeMenu>>, Option<Res<crate::emotes::EmoteWheel>>, Option<Res<crate::emotes::Emotes>>, Option<Res<crate::emotes::EmoteMenu>>),
 ) {
     let size = window.size();
     // The lobby while it's open (LobbyWidget, as the game's lobby map shows it).
@@ -825,6 +845,9 @@ fn build_hud(
         if let Some(c) = &menu_class {
             pocket_key = vec![format!("counselor_menu:{c}")];
         }
+        if let Some(m) = emote_menu.as_ref().filter(|_| hud.emote_menu.is_some()) {
+            pocket_key = vec![format!("emotes:{}:{:?}:{}:{:?}", m.class, m.slots, m.section, m.list)];
+        }
         if let Some(w) = wardrobe_menu.as_ref().filter(|_| hud.wardrobe.is_some()) {
             pocket_key = vec![format!("wardrobe:{}:{}:{:?}:{}", w.class, w.outfit, w.picks, w.row)];
         }
@@ -871,6 +894,10 @@ fn build_hud(
         let mut t = t.clone();
         fill_audio_settings(&mut t, m);
         t
+    } else if let (Some(m), Some(t), Some(_), Some(e)) = (&emote_menu, &hud.emote_menu, open_lobby, &emotes) {
+        let mut t = t.clone();
+        fill_emote_menu(&hud, &mut t, m, e, counselors.as_deref());
+        t
     } else if let (Some(w), Some(t), Some(_), Some(c)) = (&wardrobe_menu, &hud.wardrobe, open_lobby, counselors.as_deref()) {
         let mut t = t.clone();
         fill_wardrobe(&hud, &mut t, w, c);
@@ -904,7 +931,7 @@ fn build_hud(
         fill_inventory(&hud, &mut tree, &pockets, selected);
         // The emote wheel over it (SCInGameHUD's EmoteWidgetInstance, AddToViewport ZOrder 10), centred.
         if let (Some(w), Some(mut wheel), Some(emotes)) = (&emote_wheel, hud.emote_wheel.clone(), &emotes) {
-            fill_emote_wheel(&mut wheel, w, emotes);
+            fill_emote_wheel(&mut wheel, &w.slots, w.section, emotes);
             tree.children.push(Widget {
                 kind: "Counselor_Emote_Select_C".into(),
                 name: "EmoteWheel".into(),
@@ -945,7 +972,7 @@ fn build_hud(
     }
     let root = commands.spawn((Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, Pickable::IGNORE)).id();
     let mut names = HashMap::new();
-    let preview = preview_image.map(|p| (p.counselor.clone(), p.wardrobe.clone()));
+    let preview = preview_image.map(|p| (p.counselor.clone(), p.wardrobe.clone(), p.emote.clone()));
     let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names, preview };
     let full = Rect { x: 0.0, y: 0.0, w: virt.x, h: virt.y };
     let laid = tree.layout(full);
@@ -1245,11 +1272,68 @@ fn fill_audio_settings(tree: &mut Widget, menu: &crate::audio_settings::AudioMen
     }
 }
 
+/// Counselor_Emote_Menu as emotes.rs has it: her names; its wheel (CounselorEmoteSelect: her eight, the section
+/// highlighted) or, the panel shown (ShowEmoteBox: the wheel hidden), CounselorEmotePanel's EmoteBox of
+/// EmoteButtonLarges, rows of nine (PerkHorizontalBox: AddEmote), each its emote's icon, the highlighted one's
+/// HighlightImg; EmoteName the highlighted emote's name (OnUpdateHighlightRotation, the panel's highlight).
+fn fill_emote_menu(hud: &Hud, tree: &mut Widget, m: &crate::emotes::EmoteMenu, emotes: &crate::emotes::Emotes, counselors: Option<&crate::character::CounselorCharacter>) {
+    let text = |t: &str| json!({ "LocalizedString": t });
+    let name = counselors.map(|c| c.looks(&m.class)).and_then(|l| l.names.get("CharacterName").cloned()).unwrap_or_else(|| m.class.clone());
+    let (first, rest) = name.split_once(' ').unwrap_or((name.as_str(), ""));
+    for (n, t) in [("FirstNameText", first), ("LastNameText", rest)] {
+        if let Some(x) = tree.find_mut(n) {
+            x.props["Text"] = text(t);
+        }
+    }
+    let available = emotes.available();
+    let highlighted = match m.list {
+        Some(i) => available.get(i).cloned(),
+        None => m.slots.get(m.section).cloned(),
+    };
+    let label = highlighted.and_then(|e| emotes.emotes.get(&e)).map_or(String::new(), |d| d.name.clone());
+    if let Some(x) = tree.find_mut("EmoteName") {
+        x.props["Text"] = text(&label);
+    }
+    if let Some(select) = tree.find_mut("CounselorEmoteSelect") {
+        select.set_visibility(if m.list.is_some() { Vis::Hidden } else { Vis::Visible });
+        fill_emote_wheel(select, &m.slots, Some(m.section), emotes);
+    }
+    let Some(panel) = tree.find_mut("CounselorEmotePanel") else { return };
+    panel.set_visibility(if m.list.is_some() { Vis::Visible } else { Vis::Hidden });
+    // (ShowEmoteList's end: the panel faded in from its alpha 0 as built.)
+    panel.props["ColorAndOpacity"]["A"] = json!(1.0);
+    let (Some(i), Some(button), Some(b)) = (m.list, &hud.emote_button, panel.find_mut("EmoteBox")) else { return };
+    b.children = available
+        .chunks(9)
+        .enumerate()
+        .map(|(r, row)| {
+            let buttons = row
+                .iter()
+                .enumerate()
+                .map(|(k, e)| {
+                    let mut x = button.clone();
+                    x.name = format!("Emote_{}", r * 9 + k);
+                    x.slot_kind = "HorizontalBoxSlot".into();
+                    x.slot = json!({});
+                    if let (Some(img), Some(icon)) = (x.find_mut("EmoteImage"), emotes.emotes.get(e).and_then(|d| d.icon.clone())) {
+                        img.props["Brush"]["ResourceObject"] = json!({ "File": format!("{icon}.png") });
+                    }
+                    if let Some(h) = x.find_mut("HighlightImg") {
+                        h.set_visibility(if r * 9 + k == i { Vis::Visible } else { Vis::Hidden });
+                    }
+                    x
+                })
+                .collect();
+            Widget::new("HorizontalBox", &format!("EmoteRow_{r}"), json!({}), "VerticalBoxSlot", json!({}), buttons)
+        })
+        .collect();
+}
+
 /// Counselor_Emote_Select as emotes.rs has it: each EmoteIcon's EmoteImage its emote's EmoteIcon (SetEmoteIcon), the
 /// highlight (HLGradient, HLLines, Arrow: GetHighlightVisibility, OnUpdateHighlightRotation) turned to the highlighted
 /// section (45 degrees each, about the wheel's centre: their RenderTransformPivot), hidden with none.
-fn fill_emote_wheel(tree: &mut Widget, w: &crate::emotes::EmoteWheel, emotes: &crate::emotes::Emotes) {
-    for (i, name) in emotes.wheel().iter().enumerate().take(8) {
+fn fill_emote_wheel(tree: &mut Widget, slots: &[String], section: Option<usize>, emotes: &crate::emotes::Emotes) {
+    for (i, name) in slots.iter().enumerate().take(8) {
         let icon = emotes.emotes.get(name).and_then(|e| e.icon.clone());
         if let (Some(x), Some(icon)) = (tree.find_mut(&format!("EmoteIcon{i}")).and_then(|x| x.find_mut("EmoteImage")), icon) {
             x.props["Brush"]["ResourceObject"] = json!({ "File": format!("{icon}.png") });
@@ -1257,7 +1341,7 @@ fn fill_emote_wheel(tree: &mut Widget, w: &crate::emotes::EmoteWheel, emotes: &c
     }
     for name in ["HLGradient", "HLLines", "Arrow"] {
         let Some(x) = tree.find_mut(name) else { continue };
-        match w.section {
+        match section {
             Some(s) => {
                 x.set_visibility(Vis::Visible);
                 x.props["RenderTransform"] = json!({ "Angle": s as f64 * 45.0 });
@@ -1947,7 +2031,7 @@ struct Builder<'a, 'w, 's> {
     names: &'a mut HashMap<String, Entity>,
     /// The menus' preview captures (counselor_preview.rs: CustomizationPreviewMaterial's and WardrobePreviewMaterial's
     /// textures).
-    preview: Option<(Handle<Image>, Handle<Image>)>,
+    preview: Option<(Handle<Image>, Handle<Image>, Handle<Image>)>,
 }
 
 fn linear(c: [f32; 4]) -> Color {
@@ -2125,11 +2209,12 @@ impl Builder<'_, '_, '_> {
         let capture = match res["Name"].as_str() {
             Some("Material'CustomizationPreviewMaterial'") => Some(0),
             Some("Material'WardrobePreviewMaterial'") => Some(1),
+            Some("Material'EmotePreviewMaterial'") => Some(2),
             _ => None,
         };
         if let Some(i) = capture {
-            if let Some((counselor, wardrobe)) = self.preview.clone() {
-                self.commands.entity(e).insert(ImageNode::new(if i == 0 { counselor } else { wardrobe }).with_color(linear(c)));
+            if let Some((counselor, wardrobe, emote)) = self.preview.clone() {
+                self.commands.entity(e).insert(ImageNode::new([counselor, wardrobe, emote][i].clone()).with_color(linear(c)));
             }
             return;
         }

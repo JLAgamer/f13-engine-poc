@@ -8,7 +8,9 @@
 //! her profile's (SetCurrentOutfit(.., bUseMenuPose): SCCounselorCharacter::DeferredLoadOutfit then plays the outfit's
 //! MenuAnimation, a montage whose section loops) or, with none, RevertToDefaultOutfit (SetCurrentOutfit(.., false): no
 //! menu pose, the AnimBP's stand idle). The wardrobe's SCCounselorWardrobeWidget::SetPreviewClass (0x140442060) spawns
-//! her at its preview's root (no MenuTransform) and SetPreviewOutfit (0x140442e80) dresses her with the menu pose.
+//! her at its preview's root (no MenuTransform) and SetPreviewOutfit (0x140442e80) dresses her with the menu pose. The
+//! emote menu's (CounselorEmotePreview) is set up as the wardrobe's; PlayPreviewEmote plays the emote highlighted in its
+//! panel on her (none: her pose as above).
 //!
 //! Each capture (SceneCaptureComponent2D) sees only her, lit by its preview's spot lights and (Counselor_Menu's) its
 //! PostProcess component's ambient cubemap (f13-rs: its mean radiance, as lighting.rs does the map's); the menus'
@@ -43,11 +45,13 @@ impl Plugin for CounselorPreviewPlugin {
     }
 }
 
-/// The captures' images (the menus' CharacterPreviewImage brushes: ui.rs): Counselor_Menu's and the wardrobe's.
+/// The captures' images (the menus' CharacterPreviewImage brushes: ui.rs): Counselor_Menu's, the wardrobe's and the
+/// emote menu's.
 #[derive(Resource)]
 pub struct PreviewImage {
     pub counselor: Handle<Image>,
     pub wardrobe: Handle<Image>,
+    pub emote: Handle<Image>,
 }
 
 /// The capture camera (no game lighting, fog, listener or tonemapping on it).
@@ -58,6 +62,7 @@ pub struct PreviewCamera;
 enum Which {
     Counselor,
     Wardrobe,
+    Emote,
 }
 
 /// What the preview shows (which menu's, the class and her outfit) and its root.
@@ -67,14 +72,16 @@ struct Preview {
     root: Entity,
 }
 
-/// Her rig, and the animation it plays: her outfit's MenuAnimation, or (none) the stand idle.
+/// Her rig, and the animation it plays: an emote (the emote menu's highlighted one), her outfit's MenuAnimation, or
+/// (none) the stand idle; and the menu pose it falls back to.
 #[derive(Component)]
-struct PreviewRig(Option<String>);
+struct PreviewRig(Option<String>, Option<String>);
 
 /// The previews' setups (ui/counselor_preview.json, ui/wardrobe_preview.json) and Counselor_Menu's CharacterClassList.
 struct Setup {
     counselor: Value,
     wardrobe: Value,
+    emote: Value,
     menu: Value,
 }
 
@@ -84,7 +91,8 @@ fn make_targets(mut commands: Commands, mut images: ResMut<Assets<Image>>, expor
     let mut target = |s: u32| images.add(Image::new_target_texture(s, s, TextureFormat::Rgba16Float, None));
     let counselor = target(size("counselor_preview.json", 1080));
     let wardrobe = target(size("wardrobe_preview.json", 2048));
-    commands.insert_resource(PreviewImage { counselor, wardrobe });
+    let emote = target(size("emote_preview.json", 2048));
+    commands.insert_resource(PreviewImage { counselor, wardrobe, emote });
 }
 
 /// A component's RelativeLocation / RelativeRotation (Unreal) in Bevy's space under its root.
@@ -104,16 +112,28 @@ fn show_preview(
     export: Res<crate::ExportRoot>,
     image: Option<Res<PreviewImage>>,
     (menu, list, wardrobe, profiles): (Option<Res<crate::lobby::CounselorMenu>>, Option<Res<crate::lobby::CounselorList>>, Option<Res<crate::wardrobe::WardrobeMenu>>, Option<Res<crate::wardrobe::CounselorProfiles>>),
+    (emote_menu, emotes): (Option<Res<crate::emotes::EmoteMenu>>, Option<Res<crate::emotes::Emotes>>),
     character: Option<Res<CounselorCharacter>>,
     preview: Option<Res<Preview>>,
+    mut rigs: Query<&mut PreviewRig>,
     mut data: Local<Option<Setup>>,
 ) {
     let Some(character) = character else { return };
-    let shown = match (&wardrobe, &menu) {
-        (Some(w), _) => Some((Which::Wardrobe, w.class.clone(), w.spec(&character))),
-        (None, Some(m)) => list.as_ref().and_then(|l| l.0.get(m.index)).map(|c| (Which::Counselor, c.clone(), profiles.as_ref().map_or("", |p| p.outfit(c)).to_string())),
+    let outfit = |c: &str| profiles.as_ref().map_or("", |p| p.outfit(c)).to_string();
+    let shown = match (&emote_menu, &wardrobe, &menu) {
+        (Some(e), _, _) => Some((Which::Emote, e.class.clone(), outfit(&e.class))),
+        (None, Some(w), _) => Some((Which::Wardrobe, w.class.clone(), w.spec(&character))),
+        (None, None, Some(m)) => list.as_ref().and_then(|l| l.0.get(m.index)).map(|c| (Which::Counselor, c.clone(), outfit(c))),
         _ => None,
     };
+    // The emote menu's panel: its highlighted emote plays (PlayPreviewEmote).
+    let emote = emote_menu.as_ref().and_then(|m| emotes.as_ref()?.available().get(m.list?).and_then(|e| emotes.as_ref()?.emotes.get(e)).map(|d| d.take.clone()));
+    for mut r in &mut rigs {
+        let pose = emote.clone().or_else(|| r.1.clone());
+        if r.0 != pose {
+            r.0 = pose;
+        }
+    }
     let Some(shown) = shown else {
         if let Some(p) = preview {
             commands.entity(p.root).despawn();
@@ -127,7 +147,7 @@ fn show_preview(
     let Some(image) = image else { return };
     let setup = data.get_or_insert_with(|| {
         let read = |f: &str| std::fs::read_to_string(export.0.join("ui").join(f)).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
-        let s = Setup { counselor: read("counselor_preview.json"), wardrobe: read("wardrobe_preview.json"), menu: read("Counselor_Menu.json") };
+        let s = Setup { counselor: read("counselor_preview.json"), wardrobe: read("wardrobe_preview.json"), emote: read("emote_preview.json"), menu: read("Counselor_Menu.json") };
         if s.counselor.is_null() || s.wardrobe.is_null() {
             warn!("no ui/counselor_preview.json or ui/wardrobe_preview.json (re-export: f13-export ui): no counselor preview");
         }
@@ -140,6 +160,7 @@ fn show_preview(
     let (json, target) = match which {
         Which::Counselor => (&setup.counselor, image.counselor.clone()),
         Which::Wardrobe => (&setup.wardrobe, image.wardrobe.clone()),
+        Which::Emote => (&setup.emote, image.emote.clone()),
     };
     let root = commands.spawn((Transform::from_translation(PLACE), Visibility::default(), Propagate(RenderLayers::layer(PREVIEW_LAYER)), Name::new("CounselorPreview"))).id();
     // The capture: Unreal's FOVAngle is horizontal (the targets are square), looking along its +X.
@@ -205,7 +226,7 @@ fn show_preview(
         // root (SpawnPreviewActor: identity, snapped), facing its +X, which the capture (at -222 cm) looks along; the
         // wardrobe's only turns are the player's (its NativeTick and mouse move: AddActorLocalRotation by
         // ControllerInputDelta or the drag), so what faces her front is not found.
-        Which::Wardrobe => serde_json::json!({ "Rotation": { "X": 0.0, "Y": 0.0, "Z": 1.0, "W": 0.0 } }),
+        Which::Wardrobe | Which::Emote => serde_json::json!({ "Rotation": { "X": 0.0, "Y": 0.0, "Z": 1.0, "W": 0.0 } }),
     };
     let n = |v: &Value, k: &str, d: f32| v[k].as_f64().map_or(d, |x| x as f32);
     let (t, r) = (&menu_transform["Translation"], &menu_transform["Rotation"]);
@@ -216,14 +237,14 @@ fn show_preview(
     // The menu pose with an outfit set (her profile's, the wardrobe's), its MenuAnimation.
     let pose = (*which == Which::Wardrobe || !outfit.is_empty()).then(|| looks.current_outfit().and_then(|(o, _)| looks.outfits[o].menu_animation.clone())).flatten();
     let (model, _) = character.model_for(&looks);
-    crate::character::spawn_model_as(&mut commands, &assets, model, Some(looks.clone()), Model::Counselor, owner, PreviewRig(pose));
+    crate::character::spawn_model_as(&mut commands, &assets, model, Some(looks.clone()), Model::Counselor, owner, PreviewRig(emote.or(pose.clone()), pose));
     commands.insert_resource(Preview { shown, root });
 }
 
 /// Her animation: her outfit's MenuAnimation, looping (its section's next is itself), or the stand idle.
 fn pose(time: Res<Time>, character: Option<Res<CounselorCharacter>>, mut rigs: Query<(&mut crate::character::Rig, &mut AnimationPlayer, &PreviewRig)>) {
     let Some(character) = character else { return };
-    for (mut rig, mut anim, PreviewRig(pose)) in &mut rigs {
+    for (mut rig, mut anim, PreviewRig(pose, _)) in &mut rigs {
         let model = character.model(rig.male);
         let clip = pose.as_deref().filter(|p| model.length(p).is_some()).unwrap_or(crate::character::IDLE);
         let targets = std::collections::HashMap::from([(clip, 1.0)]);

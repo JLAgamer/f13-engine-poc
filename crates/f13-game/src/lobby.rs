@@ -242,7 +242,7 @@ pub(crate) fn client(app: &mut App) {
 
 pub(crate) fn ui(app: &mut App) {
     app.add_plugins(crate::counselor_preview::CounselorPreviewPlugin);
-    app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay, load_counselor_list, (counselor_menu, crate::wardrobe::wardrobe_menu).chain(), crate::audio_settings::audio_menu));
+    app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay, load_counselor_list, (counselor_menu, crate::wardrobe::wardrobe_menu, crate::emotes::emote_menu).chain(), crate::audio_settings::audio_menu));
 }
 
 /// The lobby's voice mutes (PLACEHOLDER keys: the game's are in its scoreboard menu): Shift + a member's number mutes or
@@ -380,12 +380,12 @@ fn counselor_menu(
     mut lobby: Query<&mut NetLobby>,
     me: Option<Res<Me>>,
     mut senders: Query<&mut MessageSender<LobbyMsg>, With<Connected>>,
-    (audio_menu, wardrobe): (Option<Res<crate::audio_settings::AudioMenu>>, Option<Res<crate::wardrobe::WardrobeMenu>>),
+    (audio_menu, wardrobe, emote_menu): (Option<Res<crate::audio_settings::AudioMenu>>, Option<Res<crate::wardrobe::WardrobeMenu>>, Option<Res<crate::emotes::EmoteMenu>>),
     mut tested: Local<bool>,
 ) {
     let (Some(list), Ok(mut lobby)) = (list.filter(|l| !l.0.is_empty()), lobby.single_mut()) else { return };
-    // (The audio menu or the wardrobe over it has the keys.)
-    if audio_menu.is_some() || wardrobe.is_some() {
+    // (The audio menu, or the wardrobe or emotes over it, has the keys.)
+    if audio_menu.is_some() || wardrobe.is_some() || emote_menu.is_some() {
         return;
     }
     let my_id = me.as_ref().map_or(0, |m| m.id);
