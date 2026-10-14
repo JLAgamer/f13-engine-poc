@@ -166,6 +166,15 @@ enum Target {
 }
 
 impl Interaction {
+    /// What she'd use for her prompt (ui/prompts.rs): its actor and, when it has several interactables, which.
+    pub fn prompt_target(&self) -> Option<(Entity, Option<&'static str>)> {
+        Some(match self.target? {
+            Target::Cabinet(e, i) => (e, Some(if i == 0 { "Interactable" } else { "Interactable2" })),
+            Target::Item(e) | Target::Door(e) | Target::Window(e) | Target::Hide(e) | Target::FuseBox(e) | Target::Phone(e) | Target::Radio(e) | Target::CbRadio(e) | Target::KillJason(e) => (e, None),
+            Target::Repair(e, _) | Target::Seat(e, _) | Target::PhoneBox(e) => (e, None),
+        })
+    }
+
     /// What she'd use, for logs (testing).
     pub(crate) fn target_name(&self) -> String {
         format!("{:?}", self.target)

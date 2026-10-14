@@ -974,6 +974,12 @@ fn run_bot(
                 return;
             }
             let step = &FX_STEPS[i];
+            // Its first pipless hold (a lock) half way: its prompt's hold ring (ui/prompts.rs).
+            if !bot.jason_shots.contains(&"hold ring") && interaction.hold.as_ref().is_some_and(|h| h.started && h.pips.is_empty() && h.progress(&tuning.minigame) > 0.4) {
+                bot.jason_shots.push("hold ring");
+                let path = std::env::temp_dir().join("f13-bot-fixture-hold.png");
+                commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+            }
             // Placed on the step's first frame however long it was (a hitch at speed can pass 0.5 s at once).
             let first_frame = bot.timer <= dt + 1e-6;
             let target = bot.fixtures[step.fx as usize];

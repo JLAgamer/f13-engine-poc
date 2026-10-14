@@ -1783,6 +1783,11 @@ struct WidgetColor([f32; 4]);
 #[derive(Component)]
 struct ColorBase([f32; 4]);
 
+/// A [`RadialFill`] brush's material colour (its Color vector), which its widget's played ColorAndOpacity tints with
+/// its brush's (the hold ring: hidden until its widget's OnInteractable fades it in).
+#[derive(Component)]
+struct RadialTint([f32; 4]);
+
 #[derive(Component)]
 struct TintBase([f32; 4]);
 
@@ -1793,6 +1798,7 @@ fn widget_colors(
     children: Query<&Children>,
     mut nodes: Query<(Option<&mut ImageNode>, Option<&mut TextColor>, Option<&TintBase>)>,
     mut additive: Query<&mut AdditiveBrush>,
+    (radial, mut radials): (Query<(&MaterialNode<RadialFill>, &RadialTint)>, ResMut<Assets<RadialFill>>),
 ) {
     for (e, c, base) in &colors {
         if !c.is_changed() {
@@ -1809,6 +1815,8 @@ fn widget_colors(
                 _ => {
                     if let Ok(mut a) = additive.get_mut(e) {
                         a.color = mul(b.0, c.0);
+                    } else if let Some(mut m) = radial.get(e).ok().and_then(|(m, t)| Some((radials.get_mut(&m.0)?, t))) {
+                        m.0.color = LinearRgba::from(linear(mul(mul(b.0, c.0), m.1 .0)));
                     }
                 }
             }
@@ -2335,6 +2343,19 @@ impl Builder<'_, '_, '_> {
             if let Some((counselor, wardrobe, emote)) = self.preview.clone() {
                 self.commands.entity(e).insert(ImageNode::new([counselor, wardrobe, emote][i].clone()).with_color(linear(c)));
             }
+            return;
+        }
+        if res["Name"].as_str() == Some("Material'HoldInteractMaterial'") && !textures.is_empty() {
+            // The interaction widgets' hold ring (SCInteractWidget's tick sets its Alpha: ui/prompts.rs).
+            let v = res["Vectors"]["Color"].as_array().map_or([1.0; 4], |a| [0, 1, 2, 3].map(|i| a.get(i).and_then(|x| x.as_f64()).unwrap_or(1.0) as f32));
+            let ring: Handle<Image> = self.assets.load(textures[0].to_string());
+            let m = self.materials.add(RadialFill {
+                color: LinearRgba::from(linear(mul(c, v))),
+                fill: Vec4::new(res["Scalars"]["Alpha"].as_f64().unwrap_or(0.0) as f32, 0.0, 2.0, 0.0),
+                ring: ring.clone(),
+                gradient: ring,
+            });
+            self.commands.entity(e).insert((MaterialNode(m), RadialTint(v)));
             return;
         }
         if textures.len() == 2 && res["Scalars"]["Alpha"].is_number() {
@@ -3597,8 +3618,9 @@ struct DialPips {
     arcs: Vec<Entity>,
 }
 
-/// The interaction dial while a hold interaction runs (repairs; doors and windows have no pips): progress, the
-/// needle, the pips by state, the next pip's mouse button.
+/// The interaction dial while a hold interaction with pips runs (repairs): progress, the needle, the pips by state, the
+/// next pip's mouse button. A hold without pips (a door's lock, a barricade) fills its prompt's hold ring instead
+/// (SCInteractWidget::ShowHoldRing: only when its interactable has no pips; ui/prompts.rs).
 fn dial(
     mut commands: Commands,
     hud: Res<Hud>,
@@ -3613,7 +3635,7 @@ fn dial(
 ) {
     use f13_core::minigame::PipState;
     let Some(&root) = hud.names.get("SCInteractMinigame_Widget") else { return };
-    let hold = interaction.single().ok().and_then(|i| i.hold.as_ref()).filter(|h| h.started);
+    let hold = interaction.single().ok().and_then(|i| i.hold.as_ref()).filter(|h| h.started && !h.pips.is_empty());
     if let Ok(mut v) = vis.get_mut(root) {
         v.set_if_neq(if hold.is_some() { Visibility::Inherited } else { Visibility::Hidden });
     }

@@ -54,6 +54,9 @@ pub struct Prompt {
     pub best: bool,
     /// Widgets in it (by name) shown or hidden by its Blueprint's own visibility bindings.
     pub shown: Vec<(String, bool)>,
+    /// Its hold ring's fill (SCInteractWidget's tick: the hold's progress into DynamicHoldMaterial's Alpha), while
+    /// ShowHoldRing shows it.
+    pub hold: Option<f32>,
 }
 
 /// The prompts listed this frame (highlighted or best); one missing is neither.
@@ -149,6 +152,7 @@ pub(super) fn prompts(
     mut materials: ResMut<Assets<RadialFill>>,
     camera: Query<(&Camera, &GlobalTransform), With<PlayerCamera>>,
     mut nodes: Query<(&mut Node, &mut Visibility)>,
+    rings: Query<&MaterialNode<RadialFill>>,
     (mut colors, mut alphas, mut xforms): (Query<&mut WidgetColor>, Query<&mut ContentAlpha>, Query<&mut UiTransform>),
 ) {
     let now = time.elapsed_secs();
@@ -193,9 +197,18 @@ pub(super) fn prompts(
         let s = ui.shown.get_mut(&p.id).expect("built");
         s.at = p.at;
         update(s, highlight, best, now);
-        for (name, on) in &p.shown {
+        // ShowHoldRing / ShowHoldRingBackground (their visibility bindings): while she holds it, a hold without pips.
+        let ring = [("HoldMeter".to_string(), p.hold.is_some()), ("HoldMeterBackground".to_string(), p.hold.is_some())];
+        for (name, on) in p.shown.iter().chain(&ring) {
             if let Some((_, mut v)) = s.names.get(&format!("{}.{name}", s.widget)).and_then(|&e| nodes.get_mut(e).ok()) {
                 v.set_if_neq(if *on { Visibility::Inherited } else { Visibility::Hidden });
+            }
+        }
+        if let (Some(fill), Some(m)) = (p.hold, s.names.get(&format!("{}.HoldMeter", s.widget)).and_then(|&e| rings.get(e).ok())) {
+            if materials.get(&m.0).is_some_and(|m| (m.fill.x - fill).abs() > 1e-3) {
+                if let Some(mut m) = materials.get_mut(&m.0) {
+                    m.fill.x = fill;
+                }
             }
         }
     }

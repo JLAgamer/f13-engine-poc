@@ -39,7 +39,7 @@ impl Plugin for PlacedKillsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_placed_kills)
             .add_systems(FixedUpdate, orient_toward_killer.before(crate::jason::update_jason).run_if(crate::net::simulating))
-            .add_systems(Update, (prompts, door_prompts));
+            .add_systems(Update, (prompts, door_prompts, counselor_prompts));
     }
 }
 
@@ -323,6 +323,7 @@ fn prompts(
                 highlighted,
                 best: is_best,
                 shown: vec![],
+                hold: None,
             })
         })
         .collect();
@@ -416,6 +417,7 @@ fn door_prompts(
                 highlighted,
                 best: is_best,
                 shown: vec![("ActionMapWidgetUse".into(), !attack), ("ActionMapWidgetAttack".into(), attack)],
+                hold: None,
             })
         })
         .collect();
@@ -431,7 +433,7 @@ fn door_prompts(
         let highlighted = p.0.highlights(at, g.rotation() * Vec3::X, center) && !occlusion.blocked(&p.0, e, name, eyes, at);
         let is_best = best_knife == Some(e);
         if highlighted || is_best {
-            prompts.push(Prompt { source: PromptSource::Door, id: (e, 0), at, widget: p.0.widget.clone(), icon: p.0.icon.clone(), highlighted, best: is_best, shown: vec![] });
+            prompts.push(Prompt { source: PromptSource::Door, id: (e, 0), at, widget: p.0.widget.clone(), icon: p.0.icon.clone(), highlighted, best: is_best, shown: vec![], hold: None });
         }
     }
     list.set(PromptSource::Door, prompts);
@@ -469,4 +471,47 @@ fn spawn_placed_kills(mut commands: Commands, level: Res<crate::Level>, export: 
         }
     }
     info!("placed kills: {n} ({props} skeletal props)");
+}
+
+/// The local counselor's prompt: her interactable manager's best (her interaction target, interact.rs) shows its
+/// InteractionWidgetClass with its InteractionIconWidgetClass (the actor's interactable component, from its class),
+/// at its interaction point. A door's SCInteractionDoorWidget shows a counselor its Use key, not its Attack
+/// (Get_ActionMapWidgetUse / Attack_Visibility_0). Her hold on it without pips fills its hold ring (SCInteractWidget's
+/// tick: the hold's progress into DynamicHoldMaterial's Alpha; ShowHoldRing only for an interactable without pips).
+/// PLACEHOLDER: only the best shows (the others' highlight previews within their HighlightDistance aren't listed for
+/// her), and the ring's progress is her hold's (vt+0xd68 not read further).
+fn counselor_prompts(
+    export: Res<crate::ExportRoot>,
+    mut classes: Local<Option<ClassDb>>,
+    play: Option<Res<crate::jason_player::PlayJason>>,
+    local: Query<&crate::interact::Interaction, (With<crate::controls::LocalPlayer>, With<crate::player::Player>)>,
+    actors: Query<(&GlobalTransform, Option<&Name>)>,
+    tuning: Res<crate::player::PlayerTuning>,
+    mut list: ResMut<crate::ui::Prompts>,
+) {
+    use crate::ui::{Prompt, PromptSource};
+    let target = local.iter().next().filter(|_| play.is_none()).and_then(|i| Some((i, i.prompt_target()?)));
+    let Some((interaction, (e, which))) = target else {
+        list.set(PromptSource::Counselor, []);
+        return;
+    };
+    let classes = classes.get_or_insert_with(|| ClassDb::load(&export.0.join("classes.json")).unwrap_or_default());
+    let Ok((gxf, name)) = actors.get(e) else {
+        list.set(PromptSource::Counselor, []);
+        return;
+    };
+    let Some(info) = name.and_then(|n| classes.get(n.as_str())) else {
+        list.set(PromptSource::Counselor, []);
+        return;
+    };
+    let interactables: Vec<_> = info.components.iter().filter(|c| classes.is_child_of(&c.kind, "ILLInteractableComponent")).collect();
+    let Some((i, comp)) = interactables.iter().enumerate().find(|(_, c)| which.is_none_or(|w| c.name == w)).or_else(|| interactables.iter().enumerate().next()) else {
+        list.set(PromptSource::Counselor, []);
+        return;
+    };
+    let kp = KillPrompt::of(classes, comp);
+    let at = gxf.transform_point(crate::to_transform(&comp.local.unwrap_or(Xform::IDENTITY)).translation);
+    let hold = interaction.hold.as_ref().filter(|h| h.started && h.pips.is_empty()).map(|h| h.progress(&tuning.minigame).clamp(0.0, 1.0));
+    let shown = if kp.widget == "SCInteractionDoorWidget" { vec![("ActionMapWidgetUse".into(), true), ("ActionMapWidgetAttack".into(), false)] } else { vec![] };
+    list.set(PromptSource::Counselor, [Prompt { source: PromptSource::Counselor, id: (e, i as u8), at, widget: kp.widget, icon: kp.icon, highlighted: true, best: true, shown, hold }]);
 }
