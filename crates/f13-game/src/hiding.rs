@@ -530,7 +530,8 @@ fn update_hiding(
     let Some(model) = model else { return };
     let dt = time.delta_secs();
     for (pe, mut h, mut xf, mut p, mut vis) in &mut players {
-        h.t += dt;
+        // (Getting in: her perks' special move rate.)
+        h.t += dt * crate::character::special_move_rate(&p.counselor.perks, false, false, h.phase == HidePhase::Entering);
         p.velocity = Vec2::ZERO;
         let Ok((mut spot, gxf)) = spots.get_mut(h.spot) else { continue };
         let side = spot.sides[h.side].clone();

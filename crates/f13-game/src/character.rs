@@ -447,6 +447,19 @@ fn build_clip(data: &AnimData, length: f32, animated: &[&str]) -> AnimationClip 
 /// the owner's transform times this is the Unreal actor's.
 pub const FACING: Quat = Quat::from_xyzw(0.0, -std::f32::consts::FRAC_1_SQRT_2, 0.0, std::f32::consts::FRAC_1_SQRT_2);
 
+/// A counselor's special move's rate (SCSpecialMoveComponent::BeginSpecial's third argument): 1 + her perks'
+/// BarricadeSpeedModifier for a barricade (FUN_140332460), WindowHidespotInteractionSpeedModifier for a window or getting
+/// into a hiding spot (FUN_14037f990, FUN_140370670); else 1.
+pub fn special_move_rate(perks: &f13_core::counselor::PerkMods, barricade: bool, window: bool, hiding_spot: bool) -> f32 {
+    if barricade {
+        1.0 + perks.get("BarricadeSpeedModifier")
+    } else if window || hiding_spot {
+        1.0 + perks.get("WindowHidespotInteractionSpeedModifier")
+    } else {
+        1.0
+    }
+}
+
 /// A character transform kept upright (yaw only, unit scale).
 pub fn flat(t: Transform) -> Transform {
     let f = t.rotation * Vec3::Z;
@@ -771,7 +784,7 @@ pub(crate) fn animate(
     tuning: Res<PlayerTuning>,
     forced: Option<Res<ForcedPose>>,
     anim_sounds: Option<Res<crate::audio::AnimSounds>>,
-    players: Query<(Entity, &Player, &Transform, Option<&crate::interact::UsingItem>, Option<&PlayAction>, Has<crate::items::Blocking>, Has<RestartAction>, Option<&SeekAction>, (Option<&crate::items::GunAim>, Option<&crate::interact::Inventory>))>,
+    players: Query<(Entity, &Player, &Transform, Option<&crate::interact::UsingItem>, Option<&PlayAction>, Has<crate::items::Blocking>, Has<RestartAction>, Option<&SeekAction>, (Option<&crate::items::GunAim>, Option<&crate::interact::Inventory>), (Has<crate::interact::BarricadeMove>, Has<crate::interact::WindowMove>, Option<&crate::hiding::Hiding>))>,
     items: Query<(&crate::props::Item, Has<crate::items::Spent>)>,
     mut rigs: Query<(&ChildOf, &mut Rig, &mut AnimationPlayer), Without<crate::ragdoll::Ragdolled>>,
     mut layers: Query<&mut LayeredBlend, With<Player>>,
@@ -795,7 +808,7 @@ pub(crate) fn animate(
         return;
     }
     for (parent, mut rig, mut anim) in &mut rigs {
-        let Ok((pe, p, xf, using, scripted, blocking, restart, seek, (gun_aim, inv))) = players.get(parent.parent()) else { continue };
+        let Ok((pe, p, xf, using, scripted, blocking, restart, seek, (gun_aim, inv), (barricading, at_window, hiding))) = players.get(parent.parent()) else { continue };
         // Her animations (a male counselor's are the male ones).
         let character = character.model(rig.male);
         if restart {
@@ -817,7 +830,9 @@ pub(crate) fn animate(
         // No start or stop takes: SCAnimInstance's update (FUN_140311d00) runs its start/stop states only with
         // bUseStartStopTransitions, which nothing sets (no constructor, Blueprint or package), so CurrentMoveState is
         // just moving (3) or idle (0) and the AnimBP's Default Locomotion goes straight between Idle and Locomotion.
-        rig.set_action(action, dt);
+        // Her special moves' play rate (BeginSpecial's: her perks'): barricades, windows, getting into a hiding spot.
+        let rate = special_move_rate(&p.counselor.perks, barricading, at_window, hiding.is_some_and(|h| h.phase == crate::hiding::HidePhase::Entering));
+        rig.set_action(action, dt * rate);
         if let Some(s) = seek {
             rig.seek_action(s.0);
             commands.entity(pe).remove::<SeekAction>();

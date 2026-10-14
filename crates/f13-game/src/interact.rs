@@ -270,12 +270,12 @@ fn window_moves(
     mut commands: Commands,
     time: Res<Time>,
     model: Option<Res<crate::character::CounselorCharacter>>,
-    mut players: Query<(Entity, &mut WindowMove, &mut Transform), With<Player>>,
+    mut players: Query<(Entity, &mut WindowMove, &mut Transform, &Player)>,
     mut windows: Query<&mut Window>,
     mut rigs: Query<(&ChildOf, &mut crate::character::Rig)>,
 ) {
-    for (pe, mut m, mut xf) in &mut players {
-        m.t += time.delta_secs();
+    for (pe, mut m, mut xf, p) in &mut players {
+        m.t += time.delta_secs() * crate::character::special_move_rate(&p.counselor.perks, false, true, false);
         let (take, length, effect_at) = m.kind.take();
         let length = model.as_ref().and_then(|c| c.length(take)).unwrap_or(length);
         match m.root {
@@ -642,12 +642,12 @@ const BARRICADE_UP: &str = "f_normal_stand_barricade_pushup";
 fn barricade_moves(
     mut commands: Commands,
     time: Res<Time>,
-    mut players: Query<(Entity, &mut BarricadeMove), With<Player>>,
+    mut players: Query<(Entity, &mut BarricadeMove, &Player)>,
     mut barricades: Query<&mut Barricade>,
     mut transforms: Query<&mut Transform, Without<Player>>,
 ) {
-    for (pe, mut m) in &mut players {
-        m.t += time.delta_secs();
+    for (pe, mut m, p) in &mut players {
+        m.t += time.delta_secs() * crate::character::special_move_rate(&p.counselor.perks, true, false, false);
         // UseBarricadeDriverTick.
         if let (Some(c), false) = (&m.curve, m.flipped) {
             if (m.driver.0..m.driver.1).contains(&m.t) {
