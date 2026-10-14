@@ -364,22 +364,31 @@ void AddClassByName(string name)
 // kill_cameras.json: each kill's camera spline (its SCCameraSplineComponent template's SplineCurves: Position, Rotation,
 // Scale (the handicam strength), FOVCurve, HoldTimeCurve, TimeToNextCurve as Unreal InterpCurve points; curves left at
 // their defaults are absent), by kill class. Each also keeps the spline component's RelativeLocation and RelativeRotation
-// (its place under the kill's root: a grab kill's spline is beside the kill, turned).
+// (its place under the kill's root: a grab kill's spline is beside the kill, turned). A path#spline#camera entry names the
+// spline and the SCSplineCamera riding it (a kill with several: "<kill>_<spline>"); each entry also keeps its camera's
+// HandicamShakeFrequency when it sets one.
 void WriteKillCameras()
 {
     var all = new Newtonsoft.Json.Linq.JObject();
-    foreach (var path in Mvp.KillCameras)
+    foreach (var entry in Mvp.KillCameras)
     {
-        var name = path.Split('/')[^1];
+        var parts = entry.Split('#');
+        var path = parts[0];
+        var name = parts.Length > 1 ? path.Split('/')[^1] + "_" + parts[1] : path.Split('/')[^1];
         try
         {
-            var spline = provider.LoadPackage(ToFile(path)).GetExports().FirstOrDefault(e => e.ExportType == "SCCameraSplineComponent");
+            var exports = provider.LoadPackage(ToFile(path)).GetExports().ToList();
+            bool Named(UObject e, int i) => parts.Length <= i || e.Name == parts[i] + "_GEN_VARIABLE" || e.Name == parts[i];
+            var spline = exports.FirstOrDefault(e => e.ExportType == "SCCameraSplineComponent" && Named(e, 1));
+            var camera = exports.FirstOrDefault(e => e.ExportType == "SCSplineCamera" && Named(e, 2));
             var props = spline == null ? null : Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(spline))["Properties"];
             var curves = props?["SplineCurves"] as Newtonsoft.Json.Linq.JObject;
             if (curves != null)
             {
                 if (props["RelativeLocation"] != null) curves["RelativeLocation"] = props["RelativeLocation"];
                 if (props["RelativeRotation"] != null) curves["RelativeRotation"] = props["RelativeRotation"];
+                var cameraProps = camera == null ? null : Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(camera))["Properties"];
+                if (cameraProps?["HandicamShakeFrequency"] != null) curves["HandicamShakeFrequency"] = cameraProps["HandicamShakeFrequency"];
             }
             if (curves == null)
             {
@@ -1862,6 +1871,10 @@ static class Mvp
         "/Game/Blueprints/ContextKills/WallHeadPunch_PlacedKill",
         // Jason's drowning kill (his UnderwaterContextKillClass).
         "/Game/Blueprints/ContextKills/Underwater_GrabKill",
+        // Jason's death (JasonDeath_C): a spline per weapon, each ridden by its SCSplineCamera (KillerWeaponKillClasses'
+        // KillCameraNames): path#spline#camera.
+        "/Game/Blueprints/ContextKills/JasonDeath#AxeSpline#Axe_SCSplineCamera",
+        "/Game/Blueprints/ContextKills/JasonDeath#Machete_Spline#Machete_SCSplineCamera",
     ];
     // Jason_AnimBP's BS_Jason_Normal_Move (SpeedState 0 idle, 1 walk, 2 fast walk, 3 run), the pickaxe's combat idle,
     // attacks (PickAxe's NeutralAttack and ForwardAttack), the grab, and the grab kill.

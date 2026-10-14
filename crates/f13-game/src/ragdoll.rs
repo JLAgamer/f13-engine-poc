@@ -77,6 +77,11 @@ fn start_ragdolls(
         if rig.model != Model::Counselor || rig.bones.is_empty() || players.get(parent.parent()).map_or(true, |p| p.counselor.alive()) {
             continue;
         }
+        // Her take's FreezeAnimation notify passed: bIgnoreDeathRagdoll (Base_Counselor_AnimBP), she stays as it froze.
+        let frozen = rig.action.as_ref().is_some_and(|(a, t)| character.info.animations.get(a.as_str()).and_then(|i| i.window("FreezeAnimation")).is_some_and(|w| *t >= w.0));
+        if frozen {
+            continue;
+        }
         let Some(r) = build(&character.info, &rig.bones, None, &transforms, &globals) else {
             warn!("no ragdoll: the counselor export has no physics asset (re-export with tools/f13-export counselor)");
             let mut sim = Ragdoll::default();

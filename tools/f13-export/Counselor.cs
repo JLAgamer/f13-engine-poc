@@ -693,7 +693,11 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
     {
         var obj = provider.LoadPackageObject(path + "." + path.Split('/')[^1]);
         var list = obj.GetOrDefault<FStructFallback[]>("Notifies", [])
-            .Select(n => (Name: n.GetOrDefault<FName>("NotifyName").Text, Start: n.GetOrDefault<float>("LinkValue"), Duration: n.GetOrDefault<float>("Duration"),
+            // (SCAnimNotifyState_SloMo's NotifyName rounds its SloMoSpeed: the window carries the value itself.)
+            .Select(n => (Name: n.GetOrDefault<FPackageIndex>("NotifyStateClass")?.Load() is { ExportType: "SCAnimNotifyState_SloMo" } slomo
+                    ? "SloMo " + slomo.GetOrDefault<float>("SloMoSpeed", 1f).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    : n.GetOrDefault<FName>("NotifyName").Text,
+                Start: n.GetOrDefault<float>("LinkValue"), Duration: n.GetOrDefault<float>("Duration"),
                 Named: n.GetOrDefault<FPackageIndex>("Notify") is not { IsNull: false } && n.GetOrDefault<FPackageIndex>("NotifyStateClass") is not { IsNull: false }))
             .Where(n => n.Duration > 0 || n.Named)
             .Select(n => new Window { Name = n.Name, Start = n.Start, End = n.Start + n.Duration })

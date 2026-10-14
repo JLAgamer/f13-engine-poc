@@ -160,6 +160,9 @@ enum Target {
     Radio(Entity),
     /// The CB radio, to call Tommy Jarvis (tommy.rs).
     CbRadio(Entity),
+    /// Jason kneeling in his kill stance, her axe or machete in hand: JasonDeath's Interactable (jason_death.rs
+    /// starts the kill on her press).
+    KillJason(Entity),
 }
 
 impl Interaction {
@@ -794,7 +797,7 @@ fn choose_target(
     windows: Query<(Entity, &Window, &GlobalTransform)>,
     barricades: Query<&Barricade>,
     (spots, fuse_boxes, males): (Query<(Entity, &crate::hiding::HidingSpot, &GlobalTransform)>, Query<(Entity, &crate::power::FuseBox)>, Query<(), With<crate::character::Male>>),
-    (phone_boxes, phones, radios, cb_radios): (Query<(Entity, &crate::police::PhoneBox)>, Query<(Entity, &crate::police::Phone)>, Query<(Entity, &crate::radio::Radio)>, Query<(Entity, &crate::tommy::CbRadio)>),
+    (phone_boxes, phones, radios, cb_radios, (kneeling, death)): (Query<(Entity, &crate::police::PhoneBox)>, Query<(Entity, &crate::police::Phone)>, Query<(Entity, &crate::radio::Radio)>, Query<(Entity, &crate::tommy::CbRadio)>, (Query<(Entity, &crate::jason::Jason, &Transform), Without<Player>>, Option<Res<crate::jason_death::DeathActor>>)),
     (limits, globals, collision, dynamic, parents, no_world_dynamic, (names, actor_tris, no_visibility, (not_visibility, not_world_dynamic))): (
         Query<&InteractLimits>,
         Query<&GlobalTransform>,
@@ -944,6 +947,16 @@ fn choose_target(
     for (e, r) in &radios {
         if r.usable() {
             consider(e, "Interactable", r.interact, r.reach, Target::Radio(e));
+        }
+    }
+    // JasonDeath's Interactable (ILLInteractableComponent's DistanceLimit 200; its CanInteractWith: her weapon one of
+    // WeaponRequirements, FUN_14033a130).
+    if inv.hand.and_then(|h| carried.get(h).ok()).is_some_and(|i| crate::jason_death::kills_jason(&i.class)) {
+        for (e, j, jxf) in &kneeling {
+            if j.kneeling() {
+                let at = death.as_deref().map_or(jxf.translation + Vec3::Y, |d| d.interact_at(jxf));
+                consider(e, "Interactable", at, 200.0, Target::KillJason(e));
+            }
         }
     }
     let target = best.map(|(_, t)| t);
@@ -1221,6 +1234,8 @@ fn act(
             });
             interaction.target = None;
         }
+        // (Her press starts the kill there: jason_death.rs.)
+        Target::KillJason(_) => {}
         Target::CbRadio(r) => {
             // Calling for Tommy: the radio's hold with its minigame (bShowMinigameProperties), her CB radio take.
             let Ok(mut radio) = cb_radios.get_mut(r) else { continue };
@@ -1757,6 +1772,7 @@ fn update_prompt(
                     _ => "[Hold E] Put the fuse in the phone box".into(),
                 });
             }
+            Some(Target::KillJason(_)) => lines.push("[E] Kill Jason".into()),
             Some(Target::CbRadio(_)) => lines.push(match &interaction.hold {
                 Some(h) if h.started => format!("Calling for help: {:.0}%", h.progress(&tuning.minigame) * 100.0),
                 _ => "[Hold E] Call for help on the CB radio".into(),

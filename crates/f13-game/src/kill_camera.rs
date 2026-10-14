@@ -14,7 +14,8 @@ use f13_core::camera_spline::{quaternion, rotator, CameraSpline, Handicam};
 use f13_data::level::Xform;
 use std::collections::HashMap;
 
-/// The kills' SCSplineCamera templates' HandicamShakeFrequency (the throat hack's) (HandicamShakeFrequenceRandomizer is left at 0).
+/// The kills' SCSplineCamera templates' HandicamShakeFrequency where the export has none for a kill (the throat hack's)
+/// (HandicamShakeFrequenceRandomizer is left at 0).
 const HANDICAM_FREQUENCY: Vec3 = Vec3::new(1.0, 1.0, 0.5);
 
 /// The kill, blend-back and escape cameras (the spectator's fixed views come after).
@@ -34,7 +35,7 @@ impl Plugin for KillCameraPlugin {
 
 /// Each kill's camera spline, and its place under the kill's root (Unreal cm and rotation).
 #[derive(Resource, Default)]
-pub struct KillCameras(HashMap<String, CameraSpline>, HashMap<String, (Vec3, Quat)>);
+pub struct KillCameras(HashMap<String, CameraSpline>, HashMap<String, (Vec3, Quat)>, HashMap<String, Vec3>);
 
 /// The kill camera's BlendBackTime (the kills' special moves: 0.5 s): the camera eases from where the kill camera
 /// left it to the follow camera.
@@ -104,6 +105,7 @@ fn load(export: Res<crate::ExportRoot>, mut cameras: ResMut<KillCameras>) {
         Err(e) => warn!("kill cameras: {e} (f13-export killcams): kills keep the follow camera"),
     }
     cameras.1 = f13_data::kill_camera::load_frames(&path).unwrap_or_default();
+    cameras.2 = f13_data::kill_camera::load_frequencies(&path).unwrap_or_default();
 }
 
 pub(crate) fn kill_camera(
@@ -132,7 +134,8 @@ pub(crate) fn kill_camera(
         return;
     }
     let p = spline.at(k.t);
-    let shake = k.handicam.tick(dt, HANDICAM_FREQUENCY, 0.0, 0.0, p.shake);
+    let frequency = cameras.2.get(k.kill.as_str()).copied().unwrap_or(HANDICAM_FREQUENCY);
+    let shake = k.handicam.tick(dt, frequency, 0.0, 0.0, p.shake);
     let (mut at, mut r) = (p.location, quaternion(rotator(p.rotation) + shake));
     // A grab kill's spline sits at its own place under the kill's root.
     if let Some(&(t, q)) = k.at_root.then(|| cameras.1.get(k.kill.as_str())).flatten() {

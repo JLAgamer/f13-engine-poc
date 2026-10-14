@@ -62,6 +62,13 @@ pub fn frame(v: &Value) -> (Vec3, Quat) {
     (vec3(&v["RelativeLocation"]), rotation)
 }
 
+/// Kill class -> its SCSplineCamera's HandicamShakeFrequency, where the export has it.
+pub fn load_frequencies(path: &Path) -> Result<HashMap<String, Vec3>, crate::LoadError> {
+    let text = std::fs::read_to_string(path).map_err(crate::LoadError::Io)?;
+    let v: Value = serde_json::from_str(&text).map_err(|e| crate::LoadError::Invalid(format!("{}: {e}", path.display())))?;
+    Ok(v.as_object().map_or(HashMap::new(), |o| o.iter().filter(|(_, v)| v["HandicamShakeFrequency"].is_object()).map(|(k, v)| (k.clone(), vec3(&v["HandicamShakeFrequency"]))).collect()))
+}
+
 /// Kill class -> its camera spline.
 pub fn load(path: &Path) -> Result<HashMap<String, CameraSpline>, crate::LoadError> {
     let text = std::fs::read_to_string(path).map_err(crate::LoadError::Io)?;

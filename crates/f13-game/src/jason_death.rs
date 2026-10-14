@@ -12,7 +12,9 @@
 //! PickedUpMaskFearEvent). Carried, she doesn't set off Jason's CounselorInLair (0x1403c41b8; the lair isn't ported).
 //! The shotgun can't kill him: its Gun takes are in the weapon-specific lists, but WeaponRequirements gates the
 //! interaction (FUN_14033a130: her current weapon must be one of its classes) and a gun's hit doesn't start his kill
-//! stance. PLACEHOLDERS: its camera splines (Axe_SCSplineCamera, Machete_SCSplineCamera), the prompt.
+//! stance. She's put at its ContextKillComponent (LocationAndRotation; he stays), her take from there; its camera rides
+//! her weapon's spline (Axe_SCSplineCamera on AxeSpline, Machete_SCSplineCamera on Machete_Spline), seen by every
+//! player (bPlayForEveryone). PLACEHOLDER: the prompt's text (interact.rs Target::KillJason; no widget port).
 
 use bevy::prelude::*;
 
@@ -22,7 +24,7 @@ pub struct JasonDeathPlugin;
 
 impl Plugin for JasonDeathPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (start_kill, hold_killer, drop_mask).run_if(crate::net::simulating));
+        app.add_systems(Startup, load_actor).add_systems(Update, (start_kill, hold_killer, drop_mask).run_if(crate::net::simulating));
     }
 }
 
@@ -50,16 +52,54 @@ fn drop_mask(mut commands: Commands, jasons: Query<(&crate::jason::Jason, &Trans
 /// The Interactable's reach (ILLInteractableComponent's DistanceLimit default), m.
 const REACH_M: f32 = 2.0;
 
-/// Her take and his, by her weapon's class.
-const TAKES: [(&str, &str, &str); 2] = [
-    ("CounselorTwoHandedAxe_C", "m_cinematic_death_sequence_axe", "cinematic_death_sequence_axe"),
-    ("CounselorMachete_C", "m_cinematic_death_sequence_machete", "cinematic_death_sequence_machete"),
+/// Her take and his, and the spline its camera rides (KillerWeaponKillClasses' KillCameraNames: Axe_SCSplineCamera on
+/// AxeSpline, Machete_SCSplineCamera on Machete_Spline), by her weapon's class.
+const TAKES: [(&str, &str, &str, &str); 2] = [
+    ("CounselorTwoHandedAxe_C", "m_cinematic_death_sequence_axe", "cinematic_death_sequence_axe", "AxeSpline"),
+    ("CounselorMachete_C", "m_cinematic_death_sequence_machete", "cinematic_death_sequence_machete", "Machete_Spline"),
 ];
 
-/// She's killing him: her take's origin and how long it runs.
+/// JasonDeath_C's layout (classes.json, actor space): its ContextKillComponent (where she's put:
+/// InteractorPositionRequirement LocationAndRotation; he stays, the victim's default) and its camera splines.
+#[derive(Resource, Default)]
+pub(crate) struct DeathActor {
+    kill: Transform,
+    splines: std::collections::HashMap<String, Transform>,
+    /// Its Interactable (actor space).
+    interact: Vec3,
+}
+
+impl DeathActor {
+    /// Its Interactable's place with JasonDeath at a Jason standing at `jason` (it's spawned at him).
+    pub(crate) fn interact_at(&self, jason: &Transform) -> Vec3 {
+        let root = Transform::from_matrix(jason.to_matrix() * Transform::from_rotation(crate::character::FACING).to_matrix());
+        root.transform_point(self.interact)
+    }
+}
+
+/// A weapon class JasonDeath takes (its ContextKillComponent's WeaponRequirements).
+pub(crate) fn kills_jason(class: &str) -> bool {
+    TAKES.iter().any(|(c, ..)| *c == class)
+}
+
+fn load_actor(mut commands: Commands, export: Res<crate::ExportRoot>) {
+    let Ok(classes) = f13_data::classes::ClassDb::load(&export.0.join("classes.json")) else { return };
+    let Some(info) = classes.get("JasonDeath_C") else {
+        warn!("jason death: no JasonDeath_C in classes.json (re-export: f13-export levels): its takes play at him");
+        return;
+    };
+    let local = |c: &f13_data::level::ComponentInfo| crate::to_transform(&c.local.unwrap_or(f13_data::level::Xform::IDENTITY));
+    let kill = info.components.iter().find(|c| c.name == "ContextKillComponent").map_or(Transform::IDENTITY, local);
+    let splines = info.components.iter().filter(|c| c.kind == "SCCameraSplineComponent").map(|c| (c.name.clone(), local(c))).collect();
+    let interact = info.components.iter().find(|c| c.name == "Interactable").map_or(Vec3::ZERO, |c| local(c).translation);
+    commands.insert_resource(DeathActor { kill, splines, interact });
+}
+
+/// She's killing him: her take's origin, where it ends, and how long it runs.
 #[derive(Component)]
 pub struct KillingJason {
     origin: Transform,
+    end: Transform,
     t: f32,
     length: f32,
 }
@@ -72,25 +112,35 @@ pub(crate) fn start_kill(
     items: Query<&crate::props::Item>,
     jasons: Query<(Entity, &crate::jason::Jason, &Transform), Without<Player>>,
     model: Option<Res<crate::character::CounselorCharacter>>,
+    actor: Option<Res<DeathActor>>,
 ) {
     let Some(model) = model else { return };
     for (e, mut xf, mut p, inv) in &mut counselors {
         if !p.counselor.alive() || !pads.just_pressed(e, crate::controls::Button::Interact) {
             continue;
         }
-        let Some((_, hers, his)) = inv.hand.and_then(|h| items.get(h).ok()).and_then(|i| TAKES.iter().find(|(c, ..)| *c == i.class)) else { continue };
+        let Some(&(_, hers, his, spline)) = inv.hand.and_then(|h| items.get(h).ok()).and_then(|i| TAKES.iter().find(|(c, ..)| *c == i.class)) else { continue };
         let Some((je, _, jxf)) = jasons.iter().find(|(_, j, jxf)| j.kneeling() && jxf.translation.distance(xf.translation) <= REACH_M) else { continue };
         info!("jason death: {e} kills Jason ({hers})");
-        let (origin, _) = model.place(hers, *jxf);
+        // JasonDeath is spawned at him (EnterKillStance's SpawnActor): his actor's transform is its root. She's put at
+        // its ContextKillComponent (turned as characters face), and her take starts there.
+        let root = Transform::from_matrix(jxf.to_matrix() * Transform::from_rotation(crate::character::FACING).to_matrix());
+        let actor = actor.as_deref();
+        let at = actor.map_or(*jxf, |a| crate::interact::standing_on(&xf, root.mul_transform(a.kill)));
+        let (origin, end) = model.place(hers, at);
         *xf = origin;
         p.velocity = Vec2::ZERO;
         let length = model.length(hers).unwrap_or(5.0);
-        commands.entity(e).insert((crate::character::PlayAction(hers.to_string()), KillingJason { origin, t: 0.0, length }));
+        commands.entity(e).insert((crate::character::PlayAction(hers.to_string()), KillingJason { origin, end, t: 0.0, length }));
         commands.entity(je).insert(crate::jason::KillJason { take: his, by: e });
+        // Its camera (bPlayForEveryone: every player watches): her weapon's spline, in its own frame under the root.
+        if let Some(s) = actor.and_then(|a| a.splines.get(spline)) {
+            commands.entity(je).insert(crate::kill_camera::KillCam::at(&format!("JasonDeath_{spline}"), root.mul_transform(*s)));
+        }
     }
 }
 
-/// She stays on her take's origin while it plays.
+/// She stays on her take's origin while it plays (its root motion is in the pose), then stands where it ends.
 fn hold_killer(mut commands: Commands, time: Res<Time>, mut killers: Query<(Entity, &mut Transform, &mut Player, &mut KillingJason)>) {
     for (e, mut xf, mut p, mut k) in &mut killers {
         k.t += time.delta_secs();
@@ -98,6 +148,7 @@ fn hold_killer(mut commands: Commands, time: Res<Time>, mut killers: Query<(Enti
         p.velocity = Vec2::ZERO;
         if k.t >= k.length {
             info!("jason death: {e}'s kill is over");
+            *xf = k.end;
             commands.entity(e).remove::<(KillingJason, crate::character::PlayAction)>();
         }
     }

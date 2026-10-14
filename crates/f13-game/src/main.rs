@@ -557,6 +557,7 @@ fn main() {
     let mut app = App::new();
     // Gameplay randomness (stumbles, ...), separate from the match layout so both repeat with --seed.
     app.insert_resource(Anims::load(&args.export));
+    app.insert_resource(character::GameSpeed(args.speed));
     if args.speed != 1.0 {
         // Virtual time drives Update and FixedUpdate, so the whole simulation (and the bots) runs faster.
         let speed = args.speed;

@@ -8,11 +8,11 @@ Base content (asset paths in the player's install; all gameplay values come from
 
 ## Todo
 - [ ] Network sync audit: every player action from a client reaching the server, and every result showing on the
-      clients (done so far: a client's Jason's Shift, Stalk, Sense and its highlights, Morph, knife pickups:
-      --bot-net-abilities; MODLOG "A client's Jason: his abilities over the network")
+      clients (MODLOG "Network sync audit"); left: who sees a kill camera (the game: killer and victim unless
+      bPlayForEveryone; here everyone)
 - [ ] The lobby's rest: its counselor pick widget (the pick is C for now; the fourteen counselors play), a full
       8-player run
-- [ ] Jason dying, its rest (MODLOG "Jason's death"): the kill's camera splines and prompt, a network run
+- [ ] Jason dying, its rest (MODLOG "Jason's death"): a network run
 - [ ] Tommy Jarvis: his intro at his start (FUN_14040fe60), HunterIntroComplete's pawn setup, a network bot run
 - [ ] Voice chat: push-to-talk in the game's settings menu (no menus yet: P in the lobby stands in)
 - [ ] Materials: foliage subsurface (its transmission is the deferred light pass's, whose code isn't in the shipped

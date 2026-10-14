@@ -131,6 +131,7 @@ impl Plugin for CharacterPlugin {
             }
         })
         .add_systems(Update, (assemble, animate).chain())
+        .add_systems(Update, time_dilation.after(animate))
         .add_systems(Startup, load_anim_props)
         .add_systems(PostUpdate, anim_props.before(bevy::transform::TransformSystems::Propagate))
         .init_resource::<LayerRestore>()
@@ -520,6 +521,45 @@ impl Rig {
             e.insert(o);
         }
         self.outfit.push(e.observe(ready).id());
+    }
+}
+
+/// The game's speed (--speed: testing), what time dilation scales.
+#[derive(Resource, Clone, Copy)]
+pub struct GameSpeed(pub f32);
+
+/// SCAnimNotifyState_SloMo (NotifyBegin 0x140315540: the world settings' SetTimeDilation(SloMoSpeed), clamped to
+/// Min/MaxGlobalTimeDilation (0x1417e52b0); NotifyEnd 0x14031eb30: back to 1): while a character's action is in a
+/// "SloMo <speed>" window, the whole game runs at that speed (WorldSettings.TimeDilation replicates: every player's
+/// game slows; here every machine works it out from the actions it plays).
+pub(crate) fn time_dilation(
+    speed: Option<Res<GameSpeed>>,
+    counselor: Option<Res<CounselorCharacter>>,
+    killer: Option<Res<KillerCharacter>>,
+    rigs: Query<&Rig>,
+    mut time: ResMut<Time<Virtual>>,
+    mut last: Local<Option<f32>>,
+) {
+    let mut dilation = 1.0;
+    for rig in &rigs {
+        let Some((name, t)) = &rig.action else { continue };
+        let model = match rig.model {
+            Model::Counselor => counselor.as_deref().map(|c| c.model(rig.male)),
+            _ => killer.as_deref().map(|k| &k.0),
+        };
+        let Some(info) = model.and_then(|m| m.info.animations.get(name.as_str())) else { continue };
+        for w in info.windows.iter().filter(|w| w.start <= *t && *t < w.end) {
+            if let Some(v) = w.name.strip_prefix("SloMo ").and_then(|v| v.parse::<f32>().ok()) {
+                dilation = v.clamp(0.0001, 20.0);
+            }
+        }
+    }
+    if *last != Some(dilation) {
+        *last = Some(dilation);
+        if dilation != 1.0 {
+            info!("time dilation x{dilation}");
+        }
+        time.set_relative_speed(speed.map_or(1.0, |s| s.0) * dilation);
     }
 }
 
@@ -1216,9 +1256,12 @@ impl Rig {
                 continue;
             }
             let at = if self.action.as_ref().is_some_and(|(a, _)| a == name) {
-                // Loop sections (a stun's middle, a drawer's Idle) repeat; the rest hold their last frame.
+                // Loop sections (a stun's middle, a drawer's Idle) repeat; the rest hold their last frame, or the frame
+                // of their FreezeAnimation notify (the anim Blueprints' AnimNotify_FreezeAnimation: Jason's
+                // Montage_Pause, a counselor's Mesh.bPauseAnims).
                 let t = self.action.as_ref().unwrap().1;
-                if name.contains("_loop") || name.contains("_cycle") || name.ends_with("_idle") { t % len.max(1e-3) } else { t.min(len) }
+                let freeze = model.info.animations.get(name.as_str()).and_then(|a| a.window("FreezeAnimation")).map(|w| w.0);
+                if name.contains("_loop") || name.contains("_cycle") || name.ends_with("_idle") { t % len.max(1e-3) } else { t.min(freeze.unwrap_or(len)).min(len) }
             } else if let Some(&t) = self.fading.get(name) {
                 // (Blending out: on from where it was, held at its end; a loop section repeats.)
                 if name.contains("_loop") || name.contains("_cycle") || name.ends_with("_idle") { t % len.max(1e-3) } else { t.min(len) }
