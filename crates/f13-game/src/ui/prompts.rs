@@ -189,6 +189,7 @@ pub(super) fn prompts(
                     ui.anims.insert(class.clone(), load_anims(&hud.export, class));
                 }
             }
+            debug!("ui: prompt {} ({:?}) at {:.1}", p.widget, p.icon, p.at);
             ui.shown.insert(
                 p.id,
                 Shown { root, names, widget: p.widget.clone(), icon: p.icon.clone(), size: wsize, at: p.at, highlighted: false, best: false, icons: false, anims: vec![], stopped: None },

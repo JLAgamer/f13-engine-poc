@@ -98,6 +98,7 @@ impl Plugin for PlayJasonPlugin {
                 Update,
                 jason_camera.after(look).after(crate::counselor_camera::counselor_camera).after(crate::hiding::hiding_camera).before(crate::kill_camera::kill_camera).run_if(on),
             )
+            .add_systems(Update, place_for_test.run_if(on).run_if(|| std::env::var("F13_JASON_AT").is_ok()))
             .add_systems(Startup, spawn_hud)
             .add_observer(anim_shake);
     }
@@ -808,4 +809,15 @@ fn hud(
     if text.0 != s {
         text.0 = s;
     }
+}
+
+/// Testing (F13_JASON_AT=x,y,z,yaw: Bevy metres, the view's yaw in degrees): the played Jason put there once, for
+/// screenshots of what he sees there (his prompts); held there every frame.
+fn place_for_test(mut jasons: Query<&mut Transform, With<crate::jason::Jason>>, mut controls: ResMut<JasonControls>, mut done: Local<u32>) {
+    let v: Vec<f32> = std::env::var("F13_JASON_AT").unwrap_or_default().split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    let (Some(mut xf), [x, y, z, yaw]) = (jasons.iter_mut().next(), v.as_slice()) else { return };
+    // Held there (his moves would take him on).
+    *done += 1;
+    xf.translation = Vec3::new(*x, *y, *z);
+    controls.yaw = yaw.to_radians();
 }

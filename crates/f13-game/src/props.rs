@@ -641,6 +641,9 @@ fn spawn_props(
                 hit_particle: classes.prop(&actor.class, "HitParticle").as_str().and_then(|s| s.split('\'').nth(1)).map(str::to_string),
                 destroy_particle: classes.prop(&actor.class, "DestroyParticle").as_str().and_then(|s| s.split('\'').nth(1)).map(str::to_string),
             });
+            if let Some(c) = interact {
+                commands.entity(root).insert(crate::placed_kills::InteractPrompt(crate::placed_kills::KillPrompt::of(&classes, c)));
+            }
             *counts.entry("walls").or_default() += 1;
             let p = to_transform(&actor.transform);
             debug!("wall at {:.1} facing {:.1}", p.translation, p.rotation * Vec3::X);

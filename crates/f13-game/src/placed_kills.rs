@@ -341,6 +341,7 @@ pub struct Occlusion<'w, 's> {
     actor_tris: Option<Res<'w, crate::collision::ActorTris>>,
     not_visibility: Option<Res<'w, crate::collision::NotVisibility>>,
     not_world_dynamic: Option<Res<'w, crate::collision::NotWorldDynamic>>,
+    parents: Query<'w, 's, &'static ChildOf>,
 }
 
 impl Occlusion<'_, '_> {
@@ -348,7 +349,8 @@ impl Occlusion<'_, '_> {
     pub fn blocked(&self, prompt: &KillPrompt, actor: Entity, name: Option<&Name>, eyes: Vec3, at: Vec3) -> bool {
         let Some(world) = self.collision.as_ref().filter(|_| prompt.occlusion) else { return false };
         let passes = |c: Entity| if prompt.visibility { self.no_visibility.contains(c) } else { self.no_world_dynamic.contains(c) };
-        let (grid, lists) = world.without(&self.dynamic, |c| passes(c) || c == actor);
+        // (The trace ignores the interactable's actor: its colliders too, a wall's section among them.)
+        let (grid, lists) = world.without(&self.dynamic, |c| passes(c) || c == actor || self.parents.iter_ancestors(c).any(|a| a == actor));
         let own = name.and_then(|n| self.actor_tris.as_ref()?.0.get(n.as_str()));
         let glass = if prompt.visibility { self.not_visibility.as_ref().map(|g| &g.0) } else { self.not_world_dynamic.as_ref().map(|g| &g.0) };
         let level = crate::collision::Excluding(grid, own);
@@ -380,7 +382,7 @@ fn door_prompts(
         Query<&crate::interact::InteractLimits>,
         Option<Res<crate::jason_player::JasonControls>>,
     ),
-    barricades: Query<&crate::windows::Barricade>,
+    (barricades, walls): (Query<&crate::windows::Barricade>, Query<(Entity, &crate::doors::Wall, &InteractPrompt, &GlobalTransform, Option<&Name>)>),
     mut list: ResMut<crate::ui::Prompts>,
     occlusion: Occlusion,
 ) {
@@ -434,6 +436,22 @@ fn door_prompts(
         let is_best = best_knife == Some(e);
         if highlighted || is_best {
             prompts.push(Prompt { source: PromptSource::Door, id: (e, 0), at, widget: p.0.widget.clone(), icon: p.0.icon.clone(), highlighted, best: is_best, shown: vec![], hold: None });
+        }
+    }
+    // The destructible walls (their Interactable: SCAttackInteractionWidget with WallInteractionIcons, bCanHighlight,
+    // HighlightDistance 1000): unbroken ones (PLACEHOLDER: SCDestructableWall::CanInteractWith is bound by name and not
+    // read; the killer's and not broken, as a door's), the best one within its DistanceLimit (its attack breaks it:
+    // bCanAttackToInteract). The widget's bindings: NormalActionMap without rage, RageActionMap with it.
+    for (e, w, p, g, name) in &walls {
+        if w.broken {
+            continue;
+        }
+        let at = g.transform_point(w.interact);
+        let highlighted = p.0.highlights(at, g.rotation() * Vec3::X, center) && !occlusion.blocked(&p.0, e, name, eyes, at);
+        let is_best = highlighted && at.distance(center) * 100.0 <= w.reach;
+        if highlighted || is_best {
+            let shown = vec![("NormalActionMap".into(), !rage), ("RageActionMap".into(), rage)];
+            prompts.push(Prompt { source: PromptSource::Door, id: (e, 0), at, widget: p.0.widget.clone(), icon: p.0.icon.clone(), highlighted, best: is_best, shown, hold: None });
         }
     }
     list.set(PromptSource::Door, prompts);
