@@ -10,8 +10,9 @@ Base content (asset paths in the player's install; all gameplay values come from
 Lighting first (the user, 2026-10-14):
 - [ ] Lighting: Enlighten GI (the map's indirect light: its precomputed systems and probe sets are Geomerics'
       runtime data, undocumented; the solver is in the exe)
-- [ ] Lighting: the local lights' shadow caching and fade (which lights qualify is the game's; without the caching
-      only the four nearest whose range reaches the camera render: MODLOG "Local lights' shadows")
+- [ ] Lighting: the local lights' shadow caching and fade: whole-map caching gains nothing (the shadowed lights are near
+      her, so always dirty: tried, MODLOG "Shadow caching: tried and reverted"); it needs UE's static / movable split, two
+      shadow views a face in a reworked bevy_pbr
 - [ ] Post-processing and lighting: compare against the game's own screenshots (the user's cabin porch reference,
       2026-10-12: its wall lamp's spots light sharp bands up and down the logs)
 - [ ] The lobby's mouse controls: all wired (lobby.rs lobby_clicks, ui.rs entry_hover: buttons, list entries, the emote
