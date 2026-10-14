@@ -65,6 +65,8 @@ pub enum LobbyMsg {
     Ready(bool),
     /// Their counselor pick (a class: "Athlete", "Hero", ...).
     Class(String),
+    /// Their outfit for it (their wardrobe's: SCPlayerState ServerReceivePerksAndOutfit; character.rs CounselorOutfit).
+    Outfit(String),
 }
 
 pub struct LobbyChannel;
@@ -82,9 +84,11 @@ pub struct Member {
     pub ping: u32,
     pub talked: bool,
     pub talking: bool,
-    /// Their counselor pick (empty: the default).
+    /// Their counselor pick (empty: the default) and its outfit (empty: its default).
     #[serde(default)]
     pub class: String,
+    #[serde(default)]
+    pub outfit: String,
 }
 
 /// The lobby as the players see it: open, its members, the countdown to the match (s), and who plays Jason once it's
@@ -238,7 +242,7 @@ pub(crate) fn client(app: &mut App) {
 
 pub(crate) fn ui(app: &mut App) {
     app.add_plugins(crate::counselor_preview::CounselorPreviewPlugin);
-    app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay, load_counselor_list, counselor_menu, crate::audio_settings::audio_menu));
+    app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay, load_counselor_list, (counselor_menu, crate::wardrobe::wardrobe_menu).chain(), crate::audio_settings::audio_menu));
 }
 
 /// The lobby's voice mutes (PLACEHOLDER keys: the game's are in its scoreboard menu): Shift + a member's number mutes or
@@ -305,6 +309,7 @@ fn receive(mut receivers: Query<(Entity, &mut MessageReceiver<LobbyMsg>)>, links
                 LobbyMsg::Preference(p) => m.preference = p,
                 LobbyMsg::Ready(r) => m.ready = r,
                 LobbyMsg::Class(c) => m.class = c.chars().take(32).collect(),
+                LobbyMsg::Outfit(o) => m.outfit = o.chars().take(96).collect(),
             }
             info!("lobby: {} ({}) {} {} {}", m.name, m.id, m.preference.label(), m.class, if m.ready { "ready" } else { "not ready" });
         }
@@ -375,11 +380,12 @@ fn counselor_menu(
     mut lobby: Query<&mut NetLobby>,
     me: Option<Res<Me>>,
     mut senders: Query<&mut MessageSender<LobbyMsg>, With<Connected>>,
-    audio_menu: Option<Res<crate::audio_settings::AudioMenu>>,
+    (audio_menu, wardrobe): (Option<Res<crate::audio_settings::AudioMenu>>, Option<Res<crate::wardrobe::WardrobeMenu>>),
     mut tested: Local<bool>,
 ) {
     let (Some(list), Ok(mut lobby)) = (list.filter(|l| !l.0.is_empty()), lobby.single_mut()) else { return };
-    if audio_menu.is_some() {
+    // (The audio menu or the wardrobe over it has the keys.)
+    if audio_menu.is_some() || wardrobe.is_some() {
         return;
     }
     let my_id = me.as_ref().map_or(0, |m| m.id);
@@ -452,6 +458,7 @@ fn local_keys(keys: Res<ButtonInput<KeyCode>>, mut lobby: Query<&mut NetLobby>, 
         LobbyMsg::Ready(_) => m.ready = !m.ready,
         LobbyMsg::Name(_) => {}
         LobbyMsg::Class(_) => m.class = next_class(character.as_deref(), &m.class),
+        LobbyMsg::Outfit(_) => {}
     }
     info!("lobby: {} {} {} {}", m.name, m.preference.label(), m.class, if m.ready { "ready" } else { "not ready" });
 }
@@ -490,6 +497,7 @@ fn count_down(
     info!("lobby: the match starts: Jason is {}", killer.map_or("nobody".into(), name));
     let link = |id: u64| links.0.iter().find(|(i, _)| *i == id).and_then(|(_, l)| *l);
     let class = |id: u64| lobby.members.iter().find(|m| m.id == id).map(|m| m.class.clone()).filter(|c| !c.is_empty());
+    let outfit = |id: u64| lobby.members.iter().find(|m| m.id == id).map(|m| m.outfit.clone()).filter(|o| !o.is_empty());
     // The server's own counselor: hers if she's a counselor, else gone (her start free again).
     let local_plays = links.0.iter().find(|(_, l)| l.is_none()).map(|(i, _)| *i);
     if local_plays.is_none() || local_plays == killer {
@@ -501,6 +509,9 @@ fn count_down(
         commands.entity(e).insert(Name::new(name(id)));
         if let Some(c) = class(id) {
             commands.entity(e).insert(crate::character::CounselorClass(c));
+        }
+        if let Some(o) = outfit(id) {
+            commands.entity(e).insert(crate::character::CounselorOutfit(o));
         }
     }
     for &(id, _) in &members {
@@ -515,6 +526,9 @@ fn count_down(
         };
         let c = crate::player::spawn_counselor(&mut commands, &assets, character.as_deref(), &tuning, at, &class(id).unwrap_or_else(|| crate::character::DEFAULT_CLASS.to_string()));
         commands.entity(c).insert((PlayedBy(l), ControlledBy { owner: l, lifetime: default() }, Name::new(name(id))));
+        if let Some(o) = outfit(id) {
+            commands.entity(c).insert(crate::character::CounselorOutfit(o));
+        }
         info!("lobby: {} plays counselor {c} at {at}", name(id));
     }
     if let Some(k) = killer {

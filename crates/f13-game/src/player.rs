@@ -281,25 +281,34 @@ pub(crate) fn spawn_counselor(commands: &mut Commands, assets: &AssetServer, cha
     other
 }
 
-/// A counselor whose class changed (her lobby pick, her own as the server has it): her looks and stats as that
-/// class's (her model respawned).
+/// A counselor whose class or outfit changed (her lobby pick and wardrobe as the server has them; Tommy's): her looks
+/// and stats as that class's in that outfit (her model respawned).
+#[allow(clippy::type_complexity)]
 fn restyle(
     mut commands: Commands,
     assets: Res<AssetServer>,
     character: Option<Res<crate::character::CounselorCharacter>>,
     tuning: Res<PlayerTuning>,
-    mut changed: Query<(Entity, &crate::character::CounselorClass, &mut Player, Has<crate::controls::LocalPlayer>), Changed<crate::character::CounselorClass>>,
-    rigs: Query<(Entity, &ChildOf, &crate::character::Rig)>,
+    mut counselors: Query<(Entity, &crate::character::CounselorClass, Option<&crate::character::CounselorOutfit>, &mut Player, Has<crate::controls::LocalPlayer>)>,
+    rigs: Query<(Entity, &ChildOf, &crate::character::Rig, Option<&crate::character::Styled>)>,
 ) {
     let Some(character) = character else { return };
-    for (e, class, mut p, local) in &mut changed {
-        let looks = character.looks(&class.0);
-        let Some((rig, _, r)) = rigs.iter().find(|(_, c, r)| c.parent() == e && r.model == crate::character::Model::Counselor) else { continue };
-        if r.visual.as_ref().is_some_and(|v| v.name == looks.name) {
+    for (e, class, outfit, mut p, local) in &mut counselors {
+        let outfit = outfit.map_or("", |o| o.0.as_str());
+        let Some((rig, _, r, styled)) = rigs.iter().find(|(_, c, r, _)| c.parent() == e && r.model == crate::character::Model::Counselor) else { continue };
+        // Never restyled: as spawned, her class's looks in its default outfit.
+        let now = match styled {
+            Some(s) => (s.0.as_str(), s.1.as_str()),
+            None => (r.visual.as_ref().map_or("", |v| v.name.strip_suffix("_Counselor").unwrap_or(&v.name)), ""),
+        };
+        if now == (class.0.as_str(), outfit) {
             continue;
         }
-        info!("counselor {e}: now {}", class.0);
-        p.counselor.stats = tuning.stats_of(&class.0);
+        info!("counselor {e}: now {} {}", class.0, if outfit.is_empty() { "(default outfit)" } else { outfit });
+        if now.0 != class.0 {
+            p.counselor.stats = tuning.stats_of(&class.0);
+        }
+        let looks = character.dressed(&class.0, outfit);
         commands.entity(rig).despawn();
         let (model, male) = character.model_for(&looks);
         if male {
@@ -307,10 +316,11 @@ fn restyle(
         } else {
             commands.entity(e).remove::<crate::character::Male>();
         }
+        let styled = crate::character::Styled(class.0.clone(), outfit.to_string());
         if local {
-            crate::character::spawn_model_as(&mut commands, &assets, model, Some(looks.clone()), crate::character::Model::Counselor, e, PlayerPart);
+            crate::character::spawn_model_as(&mut commands, &assets, model, Some(looks), crate::character::Model::Counselor, e, (PlayerPart, styled));
         } else {
-            crate::character::spawn_model_as(&mut commands, &assets, model, Some(looks.clone()), crate::character::Model::Counselor, e, ());
+            crate::character::spawn_model_as(&mut commands, &assets, model, Some(looks), crate::character::Model::Counselor, e, styled);
         }
     }
 }

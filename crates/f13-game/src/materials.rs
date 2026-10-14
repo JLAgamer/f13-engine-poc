@@ -1132,7 +1132,8 @@ fn apply_materials(
         };
         let mut e = commands.entity(entity);
         if let (Built::Skin(h), Some(masks)) = (&built, parents.iter_ancestors(entity).find_map(|a| skin_masks.get(a).ok())) {
-            let key = format!("{key}|skin");
+            // (Per skin masks: the same skin under another outfit is clipped by that outfit's.)
+            let key = format!("{key}|skin|{}", masks.0.join("|"));
             let skin = match index.skins.get(&key) {
                 Some(s) => Some(s.clone()),
                 None => {

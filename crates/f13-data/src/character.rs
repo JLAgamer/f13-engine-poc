@@ -83,6 +83,14 @@ pub struct Outfit {
     /// Its SweaterOutfitMesh (Pamela's sweater on), if any.
     #[serde(default)]
     pub sweater: Option<String>,
+    /// Its MenuAnimation's sequence (the menus' preview plays it: SetCurrentOutfit with bUseMenuPose).
+    #[serde(default)]
+    pub menu_animation: Option<String>,
+    /// Its OutfitIcon (export-relative, no extension) and OutfitDescription.
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// A ClothingSlot: the mesh's own material at its SlotIndex and the material instances its MaterialOptions give.
@@ -92,6 +100,13 @@ pub struct OutfitSlot {
     pub own: String,
     #[serde(default)]
     pub options: Vec<String>,
+    /// Its SlotName, SlotIcon and each option's SwatchIcon (export-relative, no extension).
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub option_icons: Vec<Option<String>>,
     /// The sweater mesh's material the slot's option goes on (GetMaterialIndexFromSlotIndex: the first whose name
     /// contains the slot's SlotMaterialName).
     #[serde(default)]
@@ -117,6 +132,28 @@ impl CharacterInfo {
             }
         }
         Some((file, map))
+    }
+
+    /// The outfit she wears (the part "Outfit"'s mesh) and each slot's option (its material on the part; unmapped, the
+    /// slot's own).
+    pub fn current_outfit(&self) -> Option<(usize, Vec<usize>)> {
+        let part = self.parts.iter().find(|p| p.name == "Outfit")?;
+        let i = self.outfits.iter().position(|o| o.file == part.file)?;
+        let picks = self.outfits[i]
+            .slots
+            .iter()
+            .map(|s| {
+                let worn = part.material_map.get(&s.own).unwrap_or(&s.own);
+                s.options.iter().position(|o| o == worn).unwrap_or(0)
+            })
+            .collect();
+        Some((i, picks))
+    }
+
+    /// [`choose_outfit`](Self::choose_outfit)'s spec for an outfit (by index) and its slots' options.
+    pub fn outfit_spec(&self, outfit: usize, picks: &[usize]) -> Option<String> {
+        let o = self.outfits.get(outfit)?;
+        Some(format!("{}:{}", o.class, picks.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",")))
     }
 
     /// Dresses the counselor in another outfit: `spec` its class or name (case-insensitive, a part of it will do),
@@ -654,7 +691,10 @@ mod tests {
               {"Class":"A_Swimwear_Outfit","Name":"Swimwear","File":"swim.glb","SkinMask":"swim_mask","Slots":[{"Own":"S","Options":["S1","S2"]}]}]}"#,
         )
         .unwrap();
+        assert_eq!(info.current_outfit(), Some((0, vec![0])));
         assert_eq!(info.choose_outfit("swim:1").unwrap(), "Swimwear");
+        assert_eq!(info.current_outfit(), Some((1, vec![1])));
+        assert_eq!(info.outfit_spec(1, &[1]).as_deref(), Some("A_Swimwear_Outfit:1"));
         assert_eq!(info.parts[0].file, "swim.glb");
         assert_eq!(info.parts[0].material_map.get("S").map(String::as_str), Some("S2"));
         assert_eq!(info.skin_masks, ["face", "swim_mask"]);

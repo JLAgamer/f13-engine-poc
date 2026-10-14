@@ -872,17 +872,23 @@ switch (rest[0])
             characters["Classes"] = picks;
             File.WriteAllText(Path.Combine(outDir, "ui", "characters.json"), characters.ToString());
         }
-        // Counselor_Menu's preview (CounselorCustomizationPreview: an SCActorPreview): its CaptureComponent's place and
-        // FOVAngle, its spot lights (each component's properties, relative to its root) and its PostProcess component's
-        // ambient cubemap (mean radiance x AmbientCubemapIntensity) (ui/counselor_preview.json).
+        // The menus' previews (SCActorPreviews: Counselor_Menu's CounselorCustomizationPreview, Counselor_Wardrobe_Menu's
+        // CounselorWardrobePreview): the CaptureComponent's place, FOVAngle and target's size, the spot lights (each
+        // component's properties, relative to the root) and a PostProcess component's ambient cubemap (mean radiance x
+        // AmbientCubemapIntensity) (ui/counselor_preview.json, ui/wardrobe_preview.json).
+        foreach (var (package, file) in new[] { ("CounselorCustomizationPreview", "counselor_preview.json"), ("CounselorWardrobePreview", "wardrobe_preview.json") })
         {
             var preview = new Newtonsoft.Json.Linq.JObject();
             var lights = new Newtonsoft.Json.Linq.JArray();
-            foreach (var e in provider.LoadPackage(ToFile("/Game/UI/Menu/Character/Counselor/CounselorCustomizationPreview")).GetExports())
+            foreach (var e in provider.LoadPackage(ToFile("/Game/UI/Menu/Character/Counselor/" + package)).GetExports())
             {
                 var props = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(e))["Properties"] as Newtonsoft.Json.Linq.JObject ?? new();
                 if (e.ExportType == "SceneCaptureComponent2D")
+                {
                     preview["Capture"] = props;
+                    if (e.GetOrDefault<FPackageIndex?>("TextureTarget")?.Load() is { } target)
+                        preview["TargetSize"] = target.GetOrDefault<int>("SizeX");
+                }
                 else if (e.ExportType == "SpotLightComponent")
                     lights.Add(props);
                 else if (e.ExportType == "PostProcessComponent" && e.GetOrDefault<FStructFallback?>("Settings") is { } pp)
@@ -894,7 +900,7 @@ switch (rest[0])
                 }
             }
             preview["SpotLights"] = lights;
-            File.WriteAllText(Path.Combine(outDir, "ui", "counselor_preview.json"), preview.ToString());
+            File.WriteAllText(Path.Combine(outDir, "ui", file), preview.ToString());
         }
         Console.WriteLine($"ui: {n} widgets, {wx.ClassTextures()} class textures, {wx.Fonts(game!)} fonts");
         break;
@@ -1507,6 +1513,15 @@ static class Mvp
         // The lobby rows' counselor pick (CharacterSelectButtonWidget: CounselorSelect opens Counselor_Menu).
         "/Game/UI/Controls/Player/CharacterSelectButtonWidget",
         "/Game/UI/Menu/Character/Counselor/Counselor_Menu",
+        // Its clothing (ClothingButton: the wardrobe, its outfit list, slot buttons and swatch lists).
+        "/Game/UI/Menu/Character/Counselor/Counselor_Wardrobe_Menu",
+        "/Game/UI/Menu/Character/Counselor/Counselor_Outfit_List",
+        "/Game/UI/Menu/Character/Counselor/Counselor_Outfit_Button",
+        "/Game/UI/Menu/Character/Counselor/Counselor_Slot_Button",
+        "/Game/UI/Menu/Character/Counselor/Counselor_Slot_01_Swatch_List",
+        "/Game/UI/Menu/Character/Counselor/Counselor_Slot_02_Swatch_List",
+        "/Game/UI/Menu/Character/Counselor/Counselor_Slot_03_Swatch_List",
+        "/Game/UI/Menu/Character/Counselor/Counselor_Swatch_Button",
         // The audio settings (SettingsMenuWidget's audio page: its volumes and push-to-talk).
         "/Game/UI/Menu/Settings/AudioSettingsMenuWidget",
         "/Game/UI/Menu/Settings/Controls/SettingsOptionSliderWidget",

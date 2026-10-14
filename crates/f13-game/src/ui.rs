@@ -359,6 +359,11 @@ pub struct Hud {
     counselor_menu: Option<Widget>,
     /// The audio settings (AudioSettingsMenuWidget: audio_settings.rs AudioMenu).
     audio_settings: Option<Widget>,
+    /// The wardrobe (Counselor_Wardrobe_Menu: wardrobe.rs WardrobeMenu) and its lists' buttons (Counselor_Outfit_Button,
+    /// Counselor_Swatch_Button).
+    wardrobe: Option<Widget>,
+    outfit_button: Option<Widget>,
+    swatch_button: Option<Widget>,
     /// The map played's definition (ui/map.json: SCMapDefinition's DisplayName and first LobbyThumbnailImages).
     lobby_map: Value,
     /// The match's end (MatchEnd: SCMatchEndLobbyWidget) and its XP lines (MatchEndLine).
@@ -617,6 +622,24 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
             }
             w
         }),
+        wardrobe: Widget::load(dir, "Counselor_Wardrobe_Menu").map(|mut w| {
+            // Its header's title (MenuHeaderWidget: TitleText its Text, "Clothing").
+            if let Some(h) = w.find_mut("MenuHeaderWidget") {
+                let title = h.props["Text"].clone();
+                if let Some(t) = h.find_mut("TitleText").filter(|_| title.is_object()) {
+                    t.props["Text"] = title;
+                }
+            }
+            // Not ported: its action bar and gamepad image (the keys: wardrobe.rs).
+            for name in ["ActionBarWidget", "ControllerImage"] {
+                if let Some(x) = w.find_mut(name) {
+                    x.set_visibility(Vis::Collapsed);
+                }
+            }
+            w
+        }),
+        outfit_button: Widget::load(dir, "Counselor_Outfit_Button"),
+        swatch_button: Widget::load(dir, "Counselor_Swatch_Button"),
         lobby_row: Widget::load(dir, "LobbyPlayerListItem").map(|w| {
             let json = |n: &str| std::fs::read_to_string(dir.join(format!("ui/{n}.json"))).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
             let (v, speaker, ping) = (json("LobbyPlayerListItem"), json("PlayerSpeakIconMuteButton"), json("PlayerPingDisplayWidget"));
@@ -738,6 +761,7 @@ fn build_hud(
         Option<Res<crate::audio_settings::AudioMenu>>,
         Option<Res<crate::counselor_preview::PreviewImage>>,
     ),
+    wardrobe_menu: Option<Res<crate::wardrobe::WardrobeMenu>>,
 ) {
     let size = window.size();
     // The lobby while it's open (LobbyWidget, as the game's lobby map shows it).
@@ -795,6 +819,9 @@ fn build_hud(
         if let Some(c) = &menu_class {
             pocket_key = vec![format!("counselor_menu:{c}")];
         }
+        if let Some(w) = wardrobe_menu.as_ref().filter(|_| hud.wardrobe.is_some()) {
+            pocket_key = vec![format!("wardrobe:{}:{}:{:?}:{}", w.class, w.outfit, w.picks, w.row)];
+        }
         if let Some(m) = audio_menu.as_ref().filter(|_| hud.audio_settings.is_some()) {
             pocket_key = vec![format!("audio_settings:{}:{:?}", m.focus, m.edit)];
         }
@@ -837,6 +864,10 @@ fn build_hud(
     } else if let (Some(m), Some(t), Some(_)) = (&audio_menu, &hud.audio_settings, open_lobby) {
         let mut t = t.clone();
         fill_audio_settings(&mut t, m);
+        t
+    } else if let (Some(w), Some(t), Some(_), Some(c)) = (&wardrobe_menu, &hud.wardrobe, open_lobby, counselors.as_deref()) {
+        let mut t = t.clone();
+        fill_wardrobe(&hud, &mut t, w, c);
         t
     } else if let (Some(class), Some(_)) = (&menu_class, open_lobby) {
         let mut t = hud.counselor_menu.clone().unwrap_or_else(|| hud.hud.clone());
@@ -895,7 +926,7 @@ fn build_hud(
     }
     let root = commands.spawn((Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, Pickable::IGNORE)).id();
     let mut names = HashMap::new();
-    let preview = preview_image.map(|p| p.0.clone());
+    let preview = preview_image.map(|p| (p.counselor.clone(), p.wardrobe.clone()));
     let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names, preview };
     let full = Rect { x: 0.0, y: 0.0, w: virt.x, h: virt.y };
     let laid = tree.layout(full);
@@ -1191,6 +1222,101 @@ fn fill_audio_settings(tree: &mut Widget, menu: &crate::audio_settings::AudioMen
                     }
                 }
             }
+        }
+    }
+}
+
+/// The wardrobe (Counselor_Wardrobe_Menu, SCCounselorWardrobeWidget: decompiled) as wardrobe.rs has it: her names
+/// (PreviewClassFirstName / LastName); the OutfitList's Counselor_Outfit_Buttons (each outfit's OutfitIcon, the worn
+/// one's SelectedImage); the outfit's slot buttons (their SlotIcon; the slots it lacks collapsed), the focused slot's
+/// swatch list (EnableSwatch: its SlotIcon and a Counselor_Swatch_Button per option, its SwatchIcon, the chosen one's
+/// SelectedImage); DescriptionText the focused row's (OnOutfitHighlighted / OnSwatchHighlighted's text: the outfit's
+/// or slot's name). All unlocked (LockImage collapsed). PLACEHOLDER: the focused slot shown by its button's
+/// HighlightBorder (the buttons' focus styles not read).
+fn fill_wardrobe(hud: &Hud, tree: &mut Widget, w: &crate::wardrobe::WardrobeMenu, counselors: &crate::character::CounselorCharacter) {
+    let looks = counselors.looks(&w.class);
+    let text = |t: &str| json!({ "LocalizedString": t });
+    let image = |path: &Option<String>| path.as_ref().map(|p| json!({ "File": format!("{p}.png") }));
+    let name = looks.names.get("CharacterName").cloned().unwrap_or_else(|| w.class.clone());
+    let (first, rest) = name.split_once(' ').unwrap_or((name.as_str(), ""));
+    for (n, t) in [("FirstNameText", first), ("LastNameText", rest)] {
+        if let Some(x) = tree.find_mut(n) {
+            x.props["Text"] = text(t);
+        }
+    }
+    let Some(outfit) = looks.outfits.get(w.outfit) else { return };
+    let description = if w.row == 0 { outfit.name.clone() } else { outfit.slots.get(w.row - 1).and_then(|s| s.name.clone()).unwrap_or_default() };
+    if let Some(x) = tree.find_mut("DescriptionText") {
+        x.props["Text"] = text(&description);
+    }
+    if let (Some(list), Some(button)) = (tree.find_mut("OutfitList").and_then(|l| l.find_mut("ScrollBox_0")), &hud.outfit_button) {
+        list.children = looks
+            .outfits
+            .iter()
+            .enumerate()
+            .map(|(i, o)| {
+                let mut b = button.clone();
+                b.name = format!("Outfit_{i}");
+                b.slot_kind = "ScrollBoxSlot".into();
+                b.slot = json!({});
+                if let (Some(p), Some(r)) = (b.find_mut("PreviewImage"), image(&o.icon)) {
+                    p.props["Brush"]["ResourceObject"] = r;
+                }
+                if let Some(s) = b.find_mut("SelectedImage") {
+                    s.set_visibility(if i == w.outfit { Vis::Visible } else { Vis::Hidden });
+                }
+                if let Some(l) = b.find_mut("LockImage") {
+                    l.set_visibility(Vis::Collapsed);
+                }
+                b
+            })
+            .collect();
+    }
+    for k in 0..3 {
+        let slot = outfit.slots.get(k);
+        if let Some(b) = tree.find_mut(&format!("Slot_Button_0{}", k + 1)) {
+            match slot {
+                Some(s) => {
+                    if let (Some(i), Some(r)) = (b.find_mut("Image_0"), image(&s.icon)) {
+                        i.props["Brush"]["ResourceObject"] = r;
+                    }
+                    if let Some(h) = b.find_mut("HighlightBorder") {
+                        h.set_visibility(if w.row == k + 1 { Vis::Visible } else { Vis::Hidden });
+                    }
+                }
+                None => b.set_visibility(Vis::Collapsed),
+            }
+        }
+        let list_name = if k == 0 { "Counselor_Slot_01_Swatch_List_195".to_string() } else { format!("Counselor_Slot_0{}_Swatch_List", k + 1) };
+        let Some(list) = tree.find_mut(&list_name) else { continue };
+        let Some(s) = slot.filter(|_| w.row == k + 1) else {
+            list.set_visibility(Vis::Collapsed);
+            continue;
+        };
+        list.set_visibility(Vis::Visible);
+        if let (Some(i), Some(r)) = (list.find_mut("SlotIcon"), image(&s.icon)) {
+            i.props["Brush"]["ResourceObject"] = r;
+        }
+        let pick = w.picks.get(k).copied().unwrap_or(0);
+        if let (Some(b), Some(button)) = (list.find_mut("SwatchListBox"), &hud.swatch_button) {
+            b.children = (0..s.options.len())
+                .map(|i| {
+                    let mut sw = button.clone();
+                    sw.name = format!("Swatch_{i}");
+                    sw.slot_kind = "WrapBoxSlot".into();
+                    sw.slot = json!({});
+                    if let (Some(img), Some(r)) = (sw.find_mut("Image_0"), image(&s.option_icons.get(i).cloned().flatten())) {
+                        img.props["Brush"]["ResourceObject"] = r;
+                    }
+                    if let Some(x) = sw.find_mut("SelectedImage") {
+                        x.set_visibility(if i == pick { Vis::Visible } else { Vis::Hidden });
+                    }
+                    if let Some(l) = sw.find_mut("LockImage") {
+                        l.set_visibility(Vis::Collapsed);
+                    }
+                    sw
+                })
+                .collect();
         }
     }
 }
@@ -1778,8 +1904,9 @@ struct Builder<'a, 'w, 's> {
     /// Inside borders: their ContentColorAndOpacity's colour, multiplied (it tints everything in them).
     content: [f32; 4],
     names: &'a mut HashMap<String, Entity>,
-    /// The counselor menu's preview capture (counselor_preview.rs: CustomizationPreviewMaterial's texture).
-    preview: Option<Handle<Image>>,
+    /// The menus' preview captures (counselor_preview.rs: CustomizationPreviewMaterial's and WardrobePreviewMaterial's
+    /// textures).
+    preview: Option<(Handle<Image>, Handle<Image>)>,
 }
 
 fn linear(c: [f32; 4]) -> Color {
@@ -1947,10 +2074,16 @@ impl Builder<'_, '_, '_> {
             self.commands.entity(e).insert(AdditiveBrush::new(self.assets.load(textures[0].to_string()), c, &res["Scalars"]));
             return;
         }
-        // CustomizationPreviewMaterial: the preview's capture (its colour, opacity 1 - its alpha: the image's alpha here).
-        if res["Name"].as_str() == Some("Material'CustomizationPreviewMaterial'") {
-            if let Some(image) = self.preview.clone() {
-                self.commands.entity(e).insert(ImageNode::new(image).with_color(linear(c)));
+        // CustomizationPreviewMaterial, WardrobePreviewMaterial: the preview's capture (its colour, opacity 1 - its alpha:
+        // the image's alpha here).
+        let capture = match res["Name"].as_str() {
+            Some("Material'CustomizationPreviewMaterial'") => Some(0),
+            Some("Material'WardrobePreviewMaterial'") => Some(1),
+            _ => None,
+        };
+        if let Some(i) = capture {
+            if let Some((counselor, wardrobe)) = self.preview.clone() {
+                self.commands.entity(e).insert(ImageNode::new(if i == 0 { counselor } else { wardrobe }).with_color(linear(c)));
             }
             return;
         }

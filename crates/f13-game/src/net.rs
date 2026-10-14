@@ -216,6 +216,9 @@ pub struct NetCounselor {
     /// She's coming as Tommy: his intro plays for her player (tommy.rs HunterIntro).
     #[serde(default)]
     pub hunter_intro: bool,
+    /// Her outfit (her player's wardrobe: character.rs CounselorOutfit; empty, her default).
+    #[serde(default)]
+    pub outfit: String,
 }
 
 /// A client's twin of a counselor in a move the server plays (at a door or window, or onto a special move's spot).
@@ -830,7 +833,7 @@ fn set<T: PartialEq>(mut c: Mut<T>, v: T) {
 #[allow(clippy::type_complexity)]
 fn update_bodies(
     mut bodies: Query<(&mut NetBody, &Transform, &mut NetAction, Option<&PlayAction>, Has<crate::items::Blocking>)>,
-    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>, Has<crate::voice::Spectating>, Option<&crate::character::CounselorClass>), (Option<&crate::hiding::Hiding>, Option<&crate::hiding::Breathing>, Option<&crate::interact::Interaction>), (Option<&crate::vehicle::Driving>, Option<&crate::vehicle::Escaped>, Has<crate::interact::MoveToSpot>, Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>, Option<&crate::blood::Gore>, Has<crate::tommy::HunterIntro>))>,
+    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>, Has<crate::voice::Spectating>, Option<&crate::character::CounselorClass>, Option<&crate::character::CounselorOutfit>), (Option<&crate::hiding::Hiding>, Option<&crate::hiding::Breathing>, Option<&crate::interact::Interaction>), (Option<&crate::vehicle::Driving>, Option<&crate::vehicle::Escaped>, Has<crate::interact::MoveToSpot>, Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>, Option<&crate::blood::Gore>, Has<crate::tommy::HunterIntro>))>,
     struggle: Option<Res<crate::jason::Struggle>>,
     mut jasons: Query<(&mut NetJason, &crate::jason::Jason, Option<&crate::senses::Knowledge>, Option<&crate::kill_camera::KillCam>)>,
     world_ids: Query<&crate::net_world::WorldId>,
@@ -852,7 +855,7 @@ fn update_bodies(
             a.blocking = blocking;
         }
     }
-    for (n, p, name, controls, (held, trapped, spectating, class), (hiding, breathing, interaction), (driving, escaped, to_spot, door_move, window_move, blood, hunter_intro)) in &mut counselors {
+    for (n, p, name, controls, (held, trapped, spectating, class, outfit), (hiding, breathing, interaction), (driving, escaped, to_spot, door_move, window_move, blood, hunter_intro)) in &mut counselors {
         let c = &p.counselor;
         set(n, NetCounselor {
             stance: c.stance as u8,
@@ -881,6 +884,7 @@ fn update_bodies(
             gore: blood.cloned().unwrap_or_default(),
             class: class.map_or(String::new(), |c| c.0.clone()),
             hunter_intro,
+            outfit: outfit.map_or(String::new(), |o| o.0.clone()),
         });
     }
     for (n, j, know, cam) in &mut jasons {
@@ -997,12 +1001,16 @@ fn sync_morph_map(own: Query<&NetJason, (With<Controlled>, Changed<NetJason>)>, 
     }
 }
 
-/// A counselor's class as the server has it (her lobby pick; Tommy's, revived as him: tommy.rs) on her twin (character.rs
-/// restyles her).
-fn sync_classes(mut commands: Commands, bodies: Query<(&Twin, &NetCounselor), Changed<NetCounselor>>, classes: Query<&crate::character::CounselorClass>) {
+/// A counselor's class and outfit as the server has them (her lobby pick and wardrobe; Tommy's, revived as him:
+/// tommy.rs) on her twin (player.rs restyles her).
+fn sync_classes(mut commands: Commands, bodies: Query<(&Twin, &NetCounselor), Changed<NetCounselor>>, classes: Query<(Option<&crate::character::CounselorClass>, Option<&crate::character::CounselorOutfit>)>) {
     for (t, n) in &bodies {
-        if !n.class.is_empty() && classes.get(t.local).map_or(true, |c| c.0 != n.class) {
+        let Ok((class, outfit)) = classes.get(t.local) else { continue };
+        if !n.class.is_empty() && class.map_or(true, |c| c.0 != n.class) {
             commands.entity(t.local).insert(crate::character::CounselorClass(n.class.clone()));
+        }
+        if outfit.map_or(!n.outfit.is_empty(), |o| o.0 != n.outfit) {
+            commands.entity(t.local).insert(crate::character::CounselorOutfit(n.outfit.clone()));
         }
     }
 }

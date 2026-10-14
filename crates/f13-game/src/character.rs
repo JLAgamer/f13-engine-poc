@@ -258,10 +258,35 @@ pub struct LocalClass(pub String);
 #[derive(Component, Clone, Debug, PartialEq, Eq)]
 pub struct CounselorClass(pub String);
 
+/// A counselor's outfit (her player's profile: wardrobe.rs), as CharacterInfo::choose_outfit takes it ("<outfit
+/// class>:<option>,..."); none or empty: her class's default.
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+pub struct CounselorOutfit(pub String);
+
+/// On a counselor's rig: the class and outfit it was dressed in (player.rs restyle).
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+pub struct Styled(pub String, pub String);
+
 impl CounselorCharacter {
     /// A class's looks (unknown: the default's).
     pub fn looks(&self, class: &str) -> std::sync::Arc<CharacterInfo> {
         self.1.get(class).cloned().unwrap_or_else(|| std::sync::Arc::new(self.0.info.clone()))
+    }
+
+    /// A class's looks in an outfit (CounselorOutfit's spec; empty, or one that doesn't fit: her default).
+    pub fn dressed(&self, class: &str, outfit: &str) -> std::sync::Arc<CharacterInfo> {
+        let looks = self.looks(class);
+        if outfit.is_empty() {
+            return looks;
+        }
+        let mut l = (*looks).clone();
+        match l.choose_outfit(outfit) {
+            Ok(_) => std::sync::Arc::new(l),
+            Err(e) => {
+                warn!("counselor {class}: outfit {outfit}: {e}");
+                looks
+            }
+        }
     }
 
     /// The model (the animations) a counselor plays: the male counselors' (Base_Counselor_AnimBP's male assets) or

@@ -138,12 +138,21 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         public List<OutfitSlot> Slots = new();
         /// Its SweaterOutfitMesh (Pamela's sweater on: SCCounselorCharacter's SweaterOutfit), if any.
         public string? Sweater;
+        /// Its MenuAnimation's (a montage: the menus' preview plays it, SCCounselorCharacter::DeferredLoadOutfit with
+        /// bUseMenuPose) first sequence, as the counselors' animations name it.
+        public string? MenuAnimation;
+        /// Its OutfitIcon, SortIndex and OutfitDescription.
+        public string? Icon, Description;
+        public int SortIndex;
     }
 
     public class OutfitSlot
     {
         public string Own = "";
         public List<string> Options = new();
+        /// Its SlotName and SlotIcon, and each option's SwatchIcon (the wardrobe's buttons).
+        public string? Name, Icon;
+        public List<string?> OptionIcons = new();
         /// The sweater mesh's material the slot's option goes on: SCClothingData::GetMaterialIndexFromSlotIndex
         /// (0x140345b80), the first material whose name contains the slot's SlotMaterialName (ignoring case; none
         /// when it's empty).
@@ -329,7 +338,7 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         // there is one, under the female sequences' names.
         var female = ClassValue<bool?>(cls, "bIsFemale") != false;
         (info.Names ??= new())["Gender"] = female ? "Female" : "Male";
-        WriteAnimations(info, skeleton, animations, "anims", keepRoot, female ? null : MaleCounterpart);
+        WriteAnimations(info, skeleton, animations.Concat(MenuPoses()).Distinct(), "anims", keepRoot, female ? null : MaleCounterpart);
         Save(info, "counselors");
     }
 
@@ -970,6 +979,23 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         return result.Count > 0 ? result : null;
     }
 
+    /// A soft texture reference's exported path (queued), or null.
+    string? SoftTexture(FSoftObjectPath p)
+    {
+        var path = p.AssetPathName.Text;
+        return string.IsNullOrEmpty(path) || path == "None" ? null : Texture(provider.LoadPackageObject<UTexture>(path));
+    }
+
+    /// An outfit's MenuAnimation montage ("/Game/..." path), if any.
+    static string? MenuPose(UObject outfitCdo) =>
+        outfitCdo.GetOrDefault<FPackageIndex?>("MenuAnimation")?.Load<UAnimMontage>() is { } m ? m.GetPathName().Split('.')[0] : null;
+
+    /// Every outfit's MenuAnimation (all counselors': each counselor model plays its own and the classes' sharing it).
+    IEnumerable<string> MenuPoses() => provider.Files.Keys.Where(k => k.StartsWith("SummerCamp/Content/Blueprints/ClothingData/") && k.EndsWith("_Outfit.uasset")).Order()
+        .Select(f => f[..^".uasset".Length])
+        .Select(p => provider.LoadPackageObject(p + "." + p.Split('/')[^1] + "_C") is UBlueprintGeneratedClass bp && bp.ClassDefaultObject.Load() is { } cdo ? MenuPose(cdo) : null)
+        .OfType<string>().Distinct();
+
     /// The counselor's outfits (see Info.Outfits).
     List<Outfit>? Outfits(UStruct counselorClass, Action<UObject> queue)
     {
@@ -1000,21 +1026,33 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             {
                 var index = slot.GetOrDefault<int>("SlotIndex");
                 if (index >= mesh.SkeletalMaterials.Length || mesh.SkeletalMaterials[index].MaterialInterface?.Load() is not UMaterialInterface own) continue;
-                var s = new OutfitSlot { Own = own.Name };
+                var s = new OutfitSlot { Own = own.Name, Name = slot.GetOrDefault<CUE4Parse.UE4.Objects.Core.i18N.FText>("SlotName")?.Text, Icon = SoftTexture(slot.GetOrDefault<FSoftObjectPath>("SlotIcon")) };
                 var slotName = slot.GetOrDefault<string>("SlotMaterialName") ?? "";
                 if (sweater != null && slotName.Length > 0)
                     s.SweaterOwn = sweater.SkeletalMaterials.Select(m => m.MaterialInterface?.Load()?.Name).FirstOrDefault(n => n != null && n.Contains(slotName, StringComparison.OrdinalIgnoreCase));
                 foreach (var option in slot.GetOrDefault<FPackageIndex[]>("MaterialOptions", []))
                 {
-                    var mi = option.Load<UBlueprintGeneratedClass>()?.ClassDefaultObject.Load()?.GetOrDefault<FSoftObjectPath>("MaterialInstance").AssetPathName.Text;
+                    var optionCdo = option.Load<UBlueprintGeneratedClass>()?.ClassDefaultObject.Load();
+                    var mi = optionCdo?.GetOrDefault<FSoftObjectPath>("MaterialInstance").AssetPathName.Text;
                     if (string.IsNullOrEmpty(mi) || mi == "None") continue;
                     var material = provider.LoadPackageObject<UMaterialInterface>(mi);
                     queue(material);
                     s.Options.Add(material.Name);
+                    s.OptionIcons.Add(optionCdo == null ? null : SoftTexture(optionCdo.GetOrDefault<FSoftObjectPath>("SwatchIcon")));
                 }
                 o.Slots.Add(s);
             }
-            result.Add((cdo.GetOrDefault<int>("SortIndex"), o));
+            if (MenuPose(cdo) is { } pose) o.MenuAnimation = Sequences(pose).FirstOrDefault()?.Name;
+            var icon = cdo.GetOrDefault<FSoftObjectPath>("OutfitIcon").AssetPathName.Text;
+            if (!string.IsNullOrEmpty(icon) && icon != "None")
+            {
+                var tex = provider.LoadPackageObject<UTexture>(icon);
+                queue(tex);
+                o.Icon = Texture(tex);
+            }
+            o.SortIndex = cdo.GetOrDefault<int>("SortIndex");
+            o.Description = cdo.GetOrDefault<CUE4Parse.UE4.Objects.Core.i18N.FText>("OutfitDescription")?.Text;
+            result.Add((o.SortIndex, o));
         }
         return result.Count > 0 ? result.OrderBy(r => r.Item1).Select(r => r.Item2).ToList() : null;
     }

@@ -246,6 +246,26 @@ impl Widget {
                 }
                 if horizontal { (along, across) } else { (across, along) }
             }
+            "ScrollBox" | "WrapBox" => {
+                // Its children along its orientation (a wrap box's in one row), each at its desired size.
+                let horizontal = self.kind == "WrapBox" || self.horizontal_scroll();
+                let gap = if self.kind == "WrapBox" { f(&p["InnerSlotPadding"]["X"], 0.0) } else { 0.0 };
+                let (mut along, mut across) = (0.0f32, 0.0f32);
+                for (i, c) in self.children.iter().enumerate() {
+                    let pad = margin(&c.slot["Padding"], [0.0; 4]);
+                    let (dw, dh) = c.desired();
+                    let (w, h) = (dw + pad[0] + pad[2], dh + pad[1] + pad[3]);
+                    let g = if i > 0 { gap } else { 0.0 };
+                    if horizontal {
+                        along += w + g;
+                        across = across.max(h);
+                    } else {
+                        along += h;
+                        across = across.max(w);
+                    }
+                }
+                if horizontal { (along, across) } else { (across, along) }
+            }
             "SizeBox" => {
                 let (cw, ch) = self.children.first().map_or((0.0, 0.0), |c| c.desired());
                 (f(&p["WidthOverride"], cw), f(&p["HeightOverride"], ch))
@@ -262,6 +282,11 @@ impl Widget {
                 (w, h)
             }
         }
+    }
+
+    /// A scroll box laid out left to right (Orientation: Orient_Horizontal; vertical by default).
+    fn horizontal_scroll(&self) -> bool {
+        self.props["Orientation"].as_str().is_some_and(|o| o.ends_with("Horizontal"))
     }
 
     fn default_padding(&self) -> [f32; 4] {
@@ -311,6 +336,46 @@ impl Widget {
                     };
                     at += along + if horizontal { pad[0] + pad[2] } else { pad[1] + pad[3] };
                     children.push((0, c.layout(r)));
+                }
+            }
+            "ScrollBox" => {
+                // SScrollBox unscrolled (PLACEHOLDER: no scroll offset): each child at its desired size along its
+                // orientation, aligned across by its slot.
+                let horizontal = self.horizontal_scroll();
+                let mut at = if horizontal { rect.x } else { rect.y };
+                for c in &self.children {
+                    let pad = margin(&c.slot["Padding"], [0.0; 4]);
+                    let (dw, dh) = c.desired();
+                    let r = if horizontal {
+                        let (y, h) = align(c.slot["VerticalAlignment"].as_str(), rect.y + pad[1], rect.h - pad[1] - pad[3], dh, "Fill");
+                        Rect { x: at + pad[0], y, w: dw, h }
+                    } else {
+                        let (x, w) = align(c.slot["HorizontalAlignment"].as_str(), rect.x + pad[0], rect.w - pad[0] - pad[2], dw, "Fill");
+                        Rect { x, y: at + pad[1], w, h: dh }
+                    };
+                    at += if horizontal { dw + pad[0] + pad[2] } else { dh + pad[1] + pad[3] };
+                    children.push((0, c.layout(r)));
+                }
+            }
+            "WrapBox" => {
+                // SWrapBox: left to right at their desired sizes, InnerSlotPadding between, a new line once past its
+                // width (WrapWidth with bExplicitWrapWidth).
+                let p = &self.props;
+                let (gx, gy) = (f(&p["InnerSlotPadding"]["X"], 0.0), f(&p["InnerSlotPadding"]["Y"], 0.0));
+                let width = if p["bExplicitWrapWidth"].as_bool() == Some(true) { f(&p["WrapWidth"], rect.w) } else { rect.w };
+                let (mut x, mut y, mut line) = (0.0f32, 0.0f32, 0.0f32);
+                for c in &self.children {
+                    let pad = margin(&c.slot["Padding"], [0.0; 4]);
+                    let (dw, dh) = c.desired();
+                    let (w, h) = (dw + pad[0] + pad[2], dh + pad[1] + pad[3]);
+                    if x > 0.0 && x + w > width {
+                        x = 0.0;
+                        y += line + gy;
+                        line = 0.0;
+                    }
+                    children.push((0, c.layout(Rect { x: rect.x + x + pad[0], y: rect.y + y + pad[1], w: dw, h: dh })));
+                    x += w + gx;
+                    line = line.max(h);
                 }
             }
             "ScaleBox" if self.children.first().is_some_and(|c| c.desired().0 > 0.0 && c.desired().1 > 0.0) => {

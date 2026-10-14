@@ -77,6 +77,7 @@ mod tommy;
 mod sweater;
 mod jason_death;
 mod voice;
+mod wardrobe;
 mod prop_anim;
 mod props;
 mod ragdoll;
@@ -684,6 +685,7 @@ fn main() {
         if args.open_mic || std::env::var("F13_VOICE_TONE").is_ok() {
             app.insert_resource(audio_settings::AudioSettings { use_push_to_talk: false, ..audio_settings::AudioSettings::load() });
         }
+        wardrobe::plugin(&mut app);
         if args.override_spawning {
             app.insert_resource(props::OverrideSpawning);
         }
