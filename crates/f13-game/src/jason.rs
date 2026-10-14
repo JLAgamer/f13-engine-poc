@@ -1942,7 +1942,10 @@ pub(crate) fn update_jason(
         .map(|(e, _)| e)
         .collect();
     let (grid, lists) = collision.without(&dynamic, |e| open_leaves.contains(&e));
-    let world = (grid, lists.as_slice());
+    let level = (grid, lists.as_slice());
+    // The counselors' capsules (on foot, not hidden, alive) block him while he moves freely (their CapsuleComponents
+    // block the Pawn channel); his grabs, kills and other moves are placed as their animations take him.
+    let counselors: Vec<Vec3> = players.iter().filter(|(_, p, _, car, hiding, _)| p.counselor.alive() && car.is_none() && hiding.is_none()).map(|(_, _, xf, ..)| xf.translation).collect();
     let Some(Ok((pe, mut p, mut pxf, in_car, mut hiding, blocking))) = target.0.map(|t| players.get_mut(t)) else { return };
     let driving = in_car.is_some();
     // Her car's driver door (the game's DriverGrab context kill, where he stands to pull the driver out) and its speed.
@@ -1959,6 +1962,13 @@ pub(crate) fn update_jason(
         (at, v.speed)
     });
     for (je, mut j, mut xf, (hit, kill_by), mut know) in &mut jasons {
+        let free = matches!(j.state, JasonState::Waiting(_) | JasonState::Hunting | JasonState::Swinging { .. } | JasonState::Flinching { .. } | JasonState::Stunned { .. } | JasonState::Throwing { .. } | JasonState::PlacingTrap { .. });
+        let others = f13_core::collision::TriList::new(if free {
+            counselors.iter().filter(|at| at.distance(xf.translation) < 4.0).flat_map(|&at| crate::player::pawn_prism(at, crate::player::CAPSULE_RADIUS_M, crate::player::CAPSULE_HALF_HEIGHT_M)).collect()
+        } else {
+            vec![]
+        });
+        let world = (&level, &others);
         let kill_by = kill_by.map(|k| (k.take, k.by));
         let align = aligns.get(je).ok().copied();
         // Under water (his tick 0x14040d900): in the water with his capsule's top under its surface; there he walks

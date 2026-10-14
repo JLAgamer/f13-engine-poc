@@ -517,8 +517,19 @@ pub(crate) fn move_player(
     dynamic: Res<crate::collision::DynamicColliders>,
     water: Option<Res<crate::water::Water>>,
     mut commands: Commands,
+    (jasons, killer): (Query<(Entity, &Transform, &crate::jason::Jason), Without<Player>>, Option<Res<crate::jason::KillerTuning>>),
 ) {
     let dt = time.delta_secs();
+    // The other characters' capsules block her (their CapsuleComponents block the Pawn channel): the counselors on foot
+    // and not hidden, held or dead, and Jason (PLACEHOLDER: not while he shifts; his Shift's collision isn't read).
+    let mut pawns: Vec<(Entity, Vec3, f32, f32)> = counselors
+        .iter()
+        .filter(|(_, p, _, _, _, _, (held, hiding, ..), ..)| p.counselor.alive() && !*held && !*hiding)
+        .map(|(e, _, xf, ..)| (e, xf.translation, CAPSULE_RADIUS_M, CAPSULE_HALF_HEIGHT_M))
+        .collect();
+    if let Some(k) = killer.as_ref() {
+        pawns.extend(jasons.iter().filter(|(_, _, j)| !j.shifting()).map(|(e, xf, _)| (e, xf.translation, k.capsule.radius, k.capsule.half_height)));
+    }
     for (entity, mut p, mut xf, intent, using, settle, (held, hiding, trapped, (door_move, window_move, barricade_move, sliding, (searching, radio_use, emoting))), staggered, item_action, gun_aim, interaction) in &mut counselors {
         p.hidden = hiding;
         if held || hiding || sliding {
@@ -560,7 +571,12 @@ pub(crate) fn move_player(
         }
 
         // Move the capsule through the world's collision (walls, steps, slopes, falling).
-        let world = collision.with(&dynamic);
+        let others = f13_core::collision::TriList::new(
+            pawns.iter().filter(|(e, at, ..)| *e != entity && at.distance(xf.translation) < 4.0).flat_map(|&(_, at, r, h)| pawn_prism(at, r, h)).collect(),
+        );
+        let (grid, lists) = collision.with(&dynamic);
+        let level = (grid, lists);
+        let world = (&level, &others);
         if settle.is_some() {
             if let Some(at) = f13_core::collision::spawn_floor(&world, xf.translation, SPAWN_PROBE_M, CAPSULE_HALF_HEIGHT_M * 2.0, &WALK) {
                 if at.distance(xf.translation) > 0.01 {
@@ -754,4 +770,50 @@ Jason: {:?}, {:.0} m away", j.state, jxf.translation.distance(pxf.translation)))
     }
     hud.0.push('\n');
     hud.0.push_str(&navmesh.0);
+}
+
+/// A character's capsule as the others' sweeps meet it: an upright octagonal prism (its sides, facing out) from its feet
+/// `at` up its height. No cap: a capsule can't be stood on (CanCharacterStepUpOn ECB_No on characters).
+pub(crate) fn pawn_prism(at: Vec3, radius: f32, half_height: f32) -> Vec<f13_core::collision::Tri> {
+    use f13_core::collision::Tri;
+    const SIDES: usize = 8;
+    let (lo, hi) = (at.y, at.y + 2.0 * half_height);
+    let point = |k: usize, y: f32| {
+        let a = k as f32 / SIDES as f32 * std::f32::consts::TAU;
+        Vec3::new(at.x + radius * a.cos(), y, at.z + radius * a.sin())
+    };
+    let mut tris = Vec::with_capacity(SIDES * 2);
+    for k in 0..SIDES {
+        let (a, b, c, d) = (point(k, lo), point(k + 1, lo), point(k + 1, hi), point(k, hi));
+        let out = ((a + b) * 0.5 - Vec3::new(at.x, lo, at.z)).normalize_or_zero();
+        for (p, q, r) in [(a, b, c), (a, c, d)] {
+            if let Some(t) = Tri::new(p, q, r).map(|t| if t.n.dot(out) < 0.0 { Tri::new(p, r, q).unwrap_or(t) } else { t }) {
+                tris.push(t);
+            }
+        }
+    }
+    tris
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use f13_core::collision::{Capsule, Tri, TriList};
+
+    #[test]
+    fn a_counselor_walking_into_another_stops_at_her_capsule() {
+        // A floor, and another counselor 1 m ahead.
+        let floor = [Tri::new(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(-10.0, 0.0, 10.0), Vec3::new(10.0, 0.0, 10.0)), Tri::new(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 0.0, 10.0), Vec3::new(10.0, 0.0, -10.0))];
+        let mut tris: Vec<Tri> = floor.into_iter().flatten().collect();
+        tris.extend(pawn_prism(Vec3::new(1.0, 0.0, 0.0), CAPSULE_RADIUS_M, CAPSULE_HALF_HEIGHT_M));
+        let world = TriList::new(tris);
+        let cap = Capsule { radius: CAPSULE_RADIUS_M, half_height: CAPSULE_HALF_HEIGHT_M };
+        let (mut pos, mut vy) = (Vec3::ZERO, 0.0);
+        for _ in 0..60 {
+            f13_core::collision::move_capsule(&world, &mut pos, &mut vy, true, Vec2::new(0.05, 0.0), 1.0 / 60.0, &cap, &WALK);
+        }
+        // Stopped with the two capsules touching (her radius each side), not through.
+        assert!(pos.x < 1.0 - 2.0 * CAPSULE_RADIUS_M + 0.05, "at {pos}");
+        assert!(pos.x > 0.2, "at {pos}");
+    }
 }

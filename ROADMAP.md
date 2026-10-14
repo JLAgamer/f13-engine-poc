@@ -16,10 +16,6 @@ Lighting first (the user, 2026-10-14):
       deferred light uniform's fill to close it (MODLOG "The local lights' unit, the shaders")
 - [ ] Post-processing and lighting: compare against the game's own screenshots (the user's cabin porch reference,
       2026-10-12: its wall lamp's spots light sharp bands up and down the logs)
-- [ ] Bugs from the user's test (2026-10-14): players walk through each other (the characters' capsules don't block
-      one another); on a client, Jason's grab-kill UI doesn't highlight when a kill is available; Jason has no
-      interaction prompt for breaking doors and walls; the counselor's door lock prompt shows the repair wheel instead
-      of its own prompt
 - [ ] Jason's HUD: the ability unlock and Morph cursor's shader (M_UI_JasonHud_01, shaders/additive.wgsl) draws a little
       too faint (the user, 2026-10-14)
 - [ ] The lobby's mouse controls (the user, 2026-10-14): its buttons, lists and menus clickable and hoverable, as
