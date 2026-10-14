@@ -36,6 +36,11 @@ pub struct PerkDef {
     pub modifiers: BTreeMap<String, f32>,
     #[serde(default)]
     pub starting_items: Vec<String>,
+    /// The weapon class (SoftClass) its weapon modifiers need, and the character class a hit needs.
+    #[serde(default)]
+    pub required_weapon: Option<String>,
+    #[serde(default)]
+    pub required_character_class_to_hit: Option<String>,
 }
 
 /// Every perk, by class name ("Marathon"), in the library's order.
@@ -49,6 +54,19 @@ impl Perks {
     }
 
     /// Her ActivePerks' modifiers, summed.
+    /// The sum of `field` over her picked perks that her weapon `weapon` (its class) qualifies for: Jason's TakeDamage
+    /// (FUN_14040b600) adds a perk's WeaponStunDurationModifier when its RequiredWeapon is unset or the weapon's class
+    /// (an exact match here; the game takes the loaded class) and its RequiredCharacterClassToHit unset or his
+    /// (Jason_Base_C: always, for him).
+    pub fn weapon_mod(&self, picked: &[String], field: &str, weapon: &str) -> f32 {
+        picked
+            .iter()
+            .filter_map(|n| self.0.get(n))
+            .filter(|d| d.required_weapon.as_deref().is_none_or(|w| w == weapon))
+            .filter_map(|d| d.modifiers.get(field))
+            .sum()
+    }
+
     pub fn mods(&self, picked: &[String]) -> f13_core::counselor::PerkMods {
         let mut m = f13_core::counselor::PerkMods::default();
         for p in picked.iter().filter_map(|p| self.0.get(p)) {

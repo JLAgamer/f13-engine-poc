@@ -514,7 +514,7 @@ fn turn_back_jason(
             }
             None => info!("police: Jason shot (no free spot outside the escape)"),
         }
-        commands.entity(je).insert(crate::jason::HitJason { by: None, stun: Some(crate::jason::Stun::Police), from: center, damage: 0.0 });
+        commands.entity(je).insert(crate::jason::HitJason { by: None, stun: Some(crate::jason::Stun::Police), from: center, damage: 0.0, stun_scale: 1.0 });
     }
 }
 

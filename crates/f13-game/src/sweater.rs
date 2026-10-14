@@ -99,7 +99,7 @@ fn use_sweater(
         };
         s.used = true;
         info!("sweater: {e} used Pamela's sweater on Jason");
-        commands.entity(je).insert(crate::jason::HitJason { by: Some(e), stun: Some(crate::jason::Stun::Sweater), from: xf.translation, damage: 0.0 });
+        commands.entity(je).insert(crate::jason::HitJason { by: Some(e), stun: Some(crate::jason::Stun::Sweater), from: xf.translation, damage: 0.0, stun_scale: 1.0 });
     }
 }
 

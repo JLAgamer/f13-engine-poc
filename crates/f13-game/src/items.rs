@@ -508,6 +508,9 @@ pub(crate) struct Firecracker {
     vel: Vec3,
     age: f32,
     stunned: bool,
+    /// Its BlastComponent's radius (m): BlastRadius x (1 + the thrower's perks' FirecrackerStunRadiusModifier), its
+    /// BeginPlay (FUN_140401010).
+    blast: f32,
 }
 
 #[derive(Component)]
@@ -517,6 +520,8 @@ struct Flare {
     vel: Vec3,
     age: f32,
     hit: bool,
+    /// Its life span (s): ProjectileLifespan + the shooter's perks' FlareLifeSpanIncrease (SCGun::FireProjectile).
+    life: f32,
 }
 
 /// An armed bear trap; `clear` once the counselor isn't standing in it (she was when it was armed); `killer`: Jason's
@@ -791,6 +796,7 @@ fn tick_action(
     mut assets: (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>),
     (globals, killer, character, rigs, killer_model): (Query<&GlobalTransform>, Option<Res<crate::jason::KillerTuning>>, Option<Res<CounselorCharacter>>, Query<(&ChildOf, &Rig)>, Option<Res<crate::character::KillerCharacter>>),
     sounds: Option<Res<crate::audio::Sounds>>,
+    perks: (Option<Res<crate::perks::Perks>>, Query<&crate::perks::CounselorPerks>),
 ) {
     for (pe, mut a, mut inv, xf, mut p, local) in &mut player {
     // Her eye and look: the local counselor's camera; another's control rotation from her eyes.
@@ -859,6 +865,8 @@ fn tick_action(
                         let roll = combat.stun_roll(&p.counselor.stats, rng.0.frand());
                         let stun = f13_core::combat::CombatTuning::stuns(stats.stun_chance, roll);
                         let back = combat.hit_stamina(&p.counselor.stats);
+                        let class = items.get(a.item).map_or("", |i| i.class.as_str());
+                        let stun_scale = 1.0 + perks.0.as_ref().zip(perks.1.get(pe).ok()).map_or(0.0, |(d, c)| d.weapon_mod(&c.0, "WeaponStunDurationModifier", class));
                         p.counselor.stamina = (p.counselor.stamina + back).min(tuning.counselor.stamina_max);
                         // Which of his sides she hit: his right is -X of his facing (+Z).
                         let jfwd = jxf.rotation * Vec3::Z;
@@ -869,7 +877,7 @@ fn tick_action(
                             stats.stun_chance,
                             if stun { "stun" } else { "no stun" }
                         );
-                        commands.entity(je).insert(HitJason { by: Some(pe), stun: stun.then_some(Stun::Weapon { left }), from: xf.translation, damage });
+                        commands.entity(je).insert(HitJason { by: Some(pe), stun: stun.then_some(Stun::Weapon { left }), from: xf.translation, damage, stun_scale });
                         // No impact effect: a melee hit's path to it, SCWeapon::SpawnHitEffect (0x1404558e0), is never
                         // called in this build (MODLOG "Melee hits spawn no impact effects").
                         let name = items.get(a.item).map_or("weapon".to_string(), |i| i.name.clone());
@@ -895,7 +903,7 @@ fn tick_action(
                         MeshMaterial3d(mat),
                         Transform::from_translation(chest + aim * 0.5),
                         PointLight { color: Color::srgb(1.0, 0.2, 0.1), intensity: 400_000.0, range: 25.0, ..default() },
-                        Flare { by: pe, vel: aim * velocity / 100.0, age: 0.0, hit: false },
+                        Flare { by: pe, vel: aim * velocity / 100.0, age: 0.0, hit: false, life: FLARE_LIFESPAN + p.counselor.perks.get("FlareLifeSpanIncrease") },
                         crate::net_world::NetVisual::Flare,
                     ));
                     info!("flare fired");
@@ -964,7 +972,7 @@ fn tick_action(
                     }
                     if let (Some((je, _)), true) = (jason, on_jason > 0) {
                         info!("shotgun hit Jason ({on_jason} of {pellets} pellets)");
-                        commands.entity(je).insert(HitJason { by: Some(pe), stun: Some(Stun::Shotgun), from: xf.translation, damage: 0.0 });
+                        commands.entity(je).insert(HitJason { by: Some(pe), stun: Some(Stun::Shotgun), from: xf.translation, damage: 0.0, stun_scale: 1.0 });
                     } else {
                         info!("shotgun missed");
                     }
@@ -986,7 +994,7 @@ fn tick_action(
                 let (mesh, mat) = (assets.0.add(Cuboid::new(0.06, 0.06, 0.14)), assets.1.add(StandardMaterial { base_color: Color::srgb(0.7, 0.05, 0.05), ..default() }));
                 let vel = look.with_y(0.0).normalize_or(facing.with_y(0.0).normalize_or_zero()) * THROW_SPEED;
                 let from = hand.map_or(chest + facing * 0.4, |h| h.translation);
-                commands.spawn((Mesh3d(mesh), MeshMaterial3d(mat), Transform::from_translation(from), Firecracker { by: pe, vel, age: 0.0, stunned: false }, crate::net_world::NetVisual::Firecracker));
+                commands.spawn((Mesh3d(mesh), MeshMaterial3d(mat), Transform::from_translation(from), Firecracker { by: pe, vel, age: 0.0, stunned: false, blast: FIRECRACKER_BLAST_M * (1.0 + p.counselor.perks.get("FirecrackerStunRadiusModifier")) }, crate::net_world::NetVisual::Firecracker));
             }
             Use::PlaceTrap => {
                 a.done = true;
@@ -1052,10 +1060,10 @@ fn fly(
                 l.intensity = if (f.age * 23.0).sin() > 0.3 { 300_000.0 } else { 20_000.0 };
             }
             if !f.stunned {
-                if let Some((je, _)) = jasons.iter().find(|(_, j)| j.translation.distance(xf.translation) <= FIRECRACKER_BLAST_M) {
+                if let Some((je, _)) = jasons.iter().find(|(_, j)| j.translation.distance(xf.translation) <= f.blast) {
                     f.stunned = true;
                     info!("firecrackers: Jason in the blast");
-                    commands.entity(je).insert(HitJason { by: Some(f.by), stun: Some(Stun::Firecracker), from: xf.translation, damage: 0.0 });
+                    commands.entity(je).insert(HitJason { by: Some(f.by), stun: Some(Stun::Firecracker), from: xf.translation, damage: 0.0, stun_scale: 1.0 });
                 }
             }
         }
@@ -1076,7 +1084,7 @@ fn fly(
                         info!("flare hit Jason");
                         // BP_Flare_Projectile's FlareScoreEventClass.
                         commands.trigger(Score { who: f.by, event: "SpotJasonFlare" });
-                        commands.entity(je).insert(HitJason { by: Some(f.by), stun: Some(Stun::Flare), from, damage: 0.0 });
+                        commands.entity(je).insert(HitJason { by: Some(f.by), stun: Some(Stun::Flare), from, damage: 0.0, stun_scale: 1.0 });
                         f.vel *= 0.1;
                     }
                 }
@@ -1089,7 +1097,7 @@ fn fly(
                 _ => xf.translation = next,
             }
         }
-        if f.age >= FLARE_LIFESPAN {
+        if f.age >= f.life {
             commands.entity(e).despawn();
         }
     }
@@ -1165,7 +1173,7 @@ fn spring_traps(
             }
             if d <= TRAP_RADIUS_M && (jxf.translation.y - txf.translation.y).abs() < 0.6 && matches!(j.state, crate::jason::JasonState::Hunting) {
                 info!("Jason stepped in a bear trap");
-                commands.entity(je).insert(HitJason { by: trap.by, stun: Some(Stun::BearTrap), from: txf.translation, damage: 0.0 });
+                commands.entity(je).insert(HitJason { by: trap.by, stun: Some(Stun::BearTrap), from: txf.translation, damage: 0.0, stun_scale: 1.0 });
                 commands.entity(te).remove::<ArmedTrap>().insert(crate::prop_anim::PropAnim::new(crate::prop_anim::TRAP_SPRUNG));
             }
         }
@@ -1204,7 +1212,10 @@ fn struggle_in_trap(
     if before < enter_len && tr.t >= enter_len {
         commands.entity(pe).insert(PlayAction(TRAP_CYCLE[foot].into()));
     }
-    if tr.wiggle.tick(dt, wiggle, &TRAP_STRUGGLE) {
+    // Her stun's time x its StunTimeModifier: 1 + her perks' TrapStunTimeModifier (TakeDamage FUN_1403d7410, the causer a
+    // trap; the stun's timer FUN_1402ddfd0).
+    let struggle_tuning = f13_core::stun::WiggleTuning { total_time: TRAP_STRUGGLE.total_time * (1.0 + p.counselor.perks.get("TrapStunTimeModifier")), ..TRAP_STRUGGLE };
+    if tr.wiggle.tick(dt, wiggle, &struggle_tuning) {
         info!("Vanessa: free of the trap after {:.1}s", tr.t);
         tr.out = Some(0.0);
         commands.entity(pe).insert(PlayAction(TRAP_EXIT[foot].into()));

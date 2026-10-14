@@ -1034,10 +1034,21 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
                 ["Icon"] = icon,
                 ["Modifiers"] = mods,
                 ["StartingItems"] = items,
+                // The weapon class its weapon modifiers need (SoftClass: Jason's TakeDamage FUN_14040b600), and the
+                // character class a hit needs.
+                ["RequiredWeapon"] = SoftClassName(cdo, "RequiredWeapon"),
+                ["RequiredCharacterClassToHit"] = SoftClassName(cdo, "RequiredCharacterClassToHit"),
             };
         }
         File.WriteAllText(Path.Combine(outDir, "perks.json"), perks.ToString());
         Console.WriteLine($"perks.json: {perks.Count} perks");
+    }
+
+    /// A SoftClass property's class name ("BaseballBat_C"), if set.
+    static string? SoftClassName(UObject o, string prop)
+    {
+        var path = o.GetOrDefault<CUE4Parse.UE4.Objects.UObject.FSoftObjectPath>(prop).AssetPathName.Text;
+        return string.IsNullOrEmpty(path) || path == "None" ? null : path.Split('.')[^1];
     }
 
     /// emotes.json: each emote's EmoteName, EmoteIcon, bLooping and its FemaleMontage's first sequence (the counselors'

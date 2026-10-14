@@ -803,6 +803,9 @@ switch (rest[0])
         new CounselorExporter(provider, outDir, Queue).ExportEmotes();
         new CounselorExporter(provider, outDir, Queue).ExportPerks();
         break;
+    case "perks": // perks: perks.json alone (also part of counselor)
+        new CounselorExporter(provider, outDir, Queue).ExportPerks();
+        break;
     case "ui": // ui [widget...]: widget trees and their textures (default: Mvp.Widgets)
     {
         var wx = new WidgetExporter(provider, outDir, Queue, ToFile);

@@ -657,6 +657,8 @@ pub struct Jason {
     /// The stun minigame, and when he got out of it (s into the stun).
     stun_wiggle: f13_core::stun::Wiggle,
     stun_done: Option<f32>,
+    /// The stun's StunTimeModifier (its time and minigame's x it).
+    stun_scale: f32,
     /// The AI's wiggle axis and when it flips next (s into the stun).
     next_wiggle: (f32, f32),
     /// Under water (bUnderWater: in the water with his capsule's top under its surface), his speed there, and
@@ -1364,6 +1366,9 @@ pub struct HitJason {
     pub from: Vec3,
     /// Its damage (a weapon's; the stuns' own, 0, PLACEHOLDER).
     pub damage: f32,
+    /// The stun's StunTimeModifier: 1 + the attacker's perks' WeaponStunDurationModifier her weapon qualifies for
+    /// (FUN_14040b600; the melee hit's weapon here).
+    pub stun_scale: f32,
 }
 
 /// SCKillerCharacter::PlayDistortionEffect (0x1403ffd50), from OnRep_Teleport (a Morph starting and ending) and
@@ -1613,6 +1618,7 @@ fn spawn_jason(
                 faded: false,
                 stun_wiggle: default(),
                 stun_done: None,
+                stun_scale: 1.0,
                 next_wiggle: (-1.0, 0.0),
                 underwater: false,
                 remote: None,
@@ -2076,7 +2082,7 @@ pub(crate) fn update_jason(
                     commands.entity(je).insert(PlayAction(anim.into()));
                 }
                 Some(stun) if can_stun => {
-                    info!("Jason: stunned ({stun:?}, {:.0}s)", stun.seconds());
+                    info!("Jason: stunned ({stun:?}, {:.1}s)", stun.seconds() * h.stun_scale);
                     if let Some(event) = stun.score_event() {
                         if let Some(who) = h.by {
                             commands.trigger(Score { who, event });
@@ -2089,6 +2095,7 @@ pub(crate) fn update_jason(
                         release(&mut commands, pe, GRAB_BREAK, counselor_model.as_deref());
                     }
                     j.state = JasonState::Stunned { t: 0.0, stun };
+                    j.stun_scale = h.stun_scale;
                     j.velocity = Vec2::ZERO;
                     commands.entity(je).insert(PlayAction(stun.anims().0.into()));
                 }
@@ -3299,6 +3306,9 @@ pub(crate) fn update_jason(
                 let raged = know.as_ref().is_some_and(|k| k.abilities.rage_active);
                 let mut wiggle = grab_struggle(&p.counselor.stats);
                 wiggle.percent_per_wiggle *= combat.wiggle_mod(p.counselor.wounded, raged);
+                // The stun's time x its StunTimeModifier: 1 + her perks' BreakGrabDurationModifier (TakeDamage
+                // FUN_1403d7410, the instigator Jason; the stun's timer FUN_1402ddfd0).
+                wiggle.total_time *= 1.0 + p.counselor.perks.get("BreakGrabDurationModifier");
                 if struggle.wiggle.tick(dt, input, &wiggle) {
                     // FUN_1403a6c10: BreakFreeStaminaBoost back.
                     // (FUN_1403a6c10: x (1 + her perks' BreakGrabStaminaModifier).)
@@ -3418,7 +3428,7 @@ pub(crate) fn update_jason(
                 walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, None, dt, &t, &world);
                 // Shaking it off: a player's GLB_Wiggle (FUN_1402dcfa0: -1 while E is down, here or from his client;
                 // each press a wiggle); the AI wiggles at a steady rate (the axis flips every 1 / rate s).
-                if let (Some(game), None) = (stun.minigame(), j.stun_done) {
+                if let (Some(game), None) = (stun.minigame().map(|g| f13_core::stun::WiggleTuning { total_time: g.total_time * j.stun_scale, ..g }), j.stun_done) {
                     // The axis flips every AI wiggle interval.
                     if at >= j.next_wiggle.1 {
                         j.next_wiggle = (-j.next_wiggle.0, at + AI_WIGGLE_INTERVAL.0 + (AI_WIGGLE_INTERVAL.1 - AI_WIGGLE_INTERVAL.0) * rng.0.frand());
@@ -3437,7 +3447,7 @@ pub(crate) fn update_jason(
                 // The exit plays out the last part of the stun (from when he shook it off).
                 let exit_at = match j.stun_done {
                     Some(d) => d,
-                    None => exit.map_or(stun.seconds(), |e| (stun.seconds() - len(e)).max(len(enter))),
+                    None => exit.map_or(stun.seconds() * j.stun_scale, |e| (stun.seconds() * j.stun_scale - len(e)).max(len(enter))),
                 };
                 let end = exit.map_or(exit_at, |e| exit_at + len(e));
                 let anim = if at < len(enter) {
