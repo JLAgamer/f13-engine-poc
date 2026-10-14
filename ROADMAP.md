@@ -20,6 +20,8 @@ Lighting first (the user, 2026-10-14):
       one another); on a client, Jason's grab-kill UI doesn't highlight when a kill is available; Jason has no
       interaction prompt for breaking doors and walls; the counselor's door lock prompt shows the repair wheel instead
       of its own prompt
+- [ ] Jason's HUD: the ability unlock and Morph cursor's shader (M_UI_JasonHud_01, shaders/additive.wgsl) draws a little
+      too faint (the user, 2026-10-14)
 - [ ] The lobby's mouse controls (the user, 2026-10-14): its buttons, lists and menus clickable and hoverable, as
       the game's widgets are (today only keys drive it)
 - [ ] The lobby's rest: a full 8-player run (needs more machines: at most 2 instances run here)
