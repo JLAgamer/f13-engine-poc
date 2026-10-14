@@ -856,6 +856,20 @@ switch (rest[0])
                 ExportAsset(thumb);
                 characters[role] = new Newtonsoft.Json.Linq.JObject { ["Thumbnail"] = thumb + ".png" };
             }
+            // Each exported counselor class's (counselors/<Name>_Counselor.json): the lobby rows' pick
+            // (CharacterSelectButtonWidget's GetCharacterThumbnailImage of PickedCounselorClass).
+            var picks = new Newtonsoft.Json.Linq.JObject();
+            foreach (var f in Directory.Exists(Path.Combine(outDir, "counselors")) ? Directory.EnumerateFiles(Path.Combine(outDir, "counselors"), "*_Counselor.json") : [])
+            {
+                var name = Path.GetFileNameWithoutExtension(f)[..^"_Counselor".Length];
+                var file = provider.Files.Keys.FirstOrDefault(k => k.EndsWith($"/{name}_Counselor.uasset", StringComparison.OrdinalIgnoreCase));
+                var def = file == null ? null : provider.LoadPackage(file).GetExports().FirstOrDefault(e => e.Name.StartsWith("Default__"));
+                var thumb = def == null ? null : Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(def))["Properties"]?["ThumbnailImage"]?["ObjectPath"]?.ToString().Split('.')[0];
+                if (thumb == null) continue;
+                ExportAsset(thumb);
+                picks[name] = thumb + ".png";
+            }
+            characters["Classes"] = picks;
             File.WriteAllText(Path.Combine(outDir, "ui", "characters.json"), characters.ToString());
         }
         Console.WriteLine($"ui: {n} widgets, {wx.ClassTextures()} class textures, {wx.Fonts(game!)} fonts");
@@ -1466,6 +1480,9 @@ static class Mvp
         "/Game/UI/Menu/MatchEnd/MatchEnd_Badges",
         "/Game/UI/HUD/Scoreboard/ScoreboardWidget",
         "/Game/UI/HUD/Scoreboard/ScoreboardPlayerListItem",
+        // The lobby rows' counselor pick (CharacterSelectButtonWidget: CounselorSelect opens Counselor_Menu).
+        "/Game/UI/Controls/Player/CharacterSelectButtonWidget",
+        "/Game/UI/Menu/Character/Counselor/Counselor_Menu",
         // The lobby rows' ping and speaker.
         "/Game/UI/Controls/Player/PlayerPingDisplayWidget",
         "/Game/UI/Controls/Player/PlayerSpeakIconMuteButton",
@@ -1569,6 +1586,9 @@ static class Mvp
     /// The map's ambient loops (CrystalLake_Sm_Audio's AmbientSounds).
     public static readonly string[] Sounds =
     [
+        // Counselor_Menu's: a counselor changed (CharacterSelectChange), the pick accepted (UITransitionAll).
+        "/Game/UI/Menu/Sounds/CharacterSelectChange.CharacterSelectChange",
+        "/Game/UI/Menu/Sounds/UITransitionAll.UITransitionAll",
         "/Game/Sounds/Environment/Lake_AmbienceCue.Lake_AmbienceCue",
         "/Game/Sounds/Environment/Mood_Tone_Ambience.Mood_Tone_Ambience",
         "/Game/Sounds/Environment/SoundWaves/main_campground_ambience_loop.main_campground_ambience_loop",

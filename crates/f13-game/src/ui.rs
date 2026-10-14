@@ -355,6 +355,8 @@ pub struct Hud {
     /// The lobby (LobbyWidget) and its player list's rows (LobbyPlayerListItem), with the row's textures and colours.
     lobby: Option<Widget>,
     lobby_row: Option<(Widget, HashMap<String, String>, Value)>,
+    /// The counselor menu (Counselor_Menu: lobby.rs CounselorMenu).
+    counselor_menu: Option<Widget>,
     /// The map played's definition (ui/map.json: SCMapDefinition's DisplayName and first LobbyThumbnailImages).
     lobby_map: Value,
     /// The match's end (MatchEnd: SCMatchEndLobbyWidget) and its XP lines (MatchEndLine).
@@ -578,6 +580,25 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
             action_keys(&mut w);
             w
         }),
+        counselor_menu: Widget::load(dir, "Counselor_Menu").map(|mut w| {
+            // Not ported: its 3D preview (CharacterPreviewImage: CounselorCustomizationPreview's render target), perks,
+            // ability, clothing and emote buttons, customization points, the locked banner (all unlocked) and its action
+            // bar (the keys: lobby.rs).
+            // Its header's title (MenuHeaderWidget's construct: TitleText from its Text, "Counselor").
+            if let Some(h) = w.find_mut("MenuHeaderWidget") {
+                let title = h.props["Text"].clone();
+                if let Some(t) = h.find_mut("TitleText").filter(|_| title.is_object()) {
+                    t.props["Text"] = title;
+                }
+            }
+            for name in ["CharacterPreviewImage", "PerkButton_Slot_1", "PerkButton_Slot_2", "PerkButton_Slot_3", "AbilityButton", "ClothingButton", "ClothesBorder", "CounselorEmoteButton", "EmotesBorder", "CPBox", "LockedBorder", "ActionBarWidget", "QuickPlayOverlayWidget"] {
+                if let Some(x) = w.find_mut(name) {
+                    x.set_visibility(Vis::Collapsed);
+                }
+            }
+            action_keys(&mut w);
+            w
+        }),
         lobby_row: Widget::load(dir, "LobbyPlayerListItem").map(|w| {
             let json = |n: &str| std::fs::read_to_string(dir.join(format!("ui/{n}.json"))).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
             let (v, speaker, ping) = (json("LobbyPlayerListItem"), json("PlayerSpeakIconMuteButton"), json("PlayerPingDisplayWidget"));
@@ -691,6 +712,7 @@ fn build_hud(
     spectating: Option<Res<crate::spectate::SpectatorStatus>>,
     (lobby, me, client, mut playing, time): (Query<&crate::lobby::NetLobby>, Option<Res<crate::lobby::Me>>, Option<Res<crate::net::NetClient>>, ResMut<PlayingAnims>, Res<Time>),
     (match_tuning, mutes, page, names): (Option<Res<crate::match_flow::MatchTuning>>, Option<Res<crate::voice::VoiceMutes>>, Res<MatchEndPage>, Query<&Name>),
+    (counselor_menu, counselor_list, counselors, player_tuning): (Option<Res<crate::lobby::CounselorMenu>>, Option<Res<crate::lobby::CounselorList>>, Option<Res<crate::character::CounselorCharacter>>, Res<crate::player::PlayerTuning>),
 ) {
     let size = window.size();
     // The lobby while it's open (LobbyWidget, as the game's lobby map shows it).
@@ -740,9 +762,14 @@ fn build_hud(
             pocket_key.insert(0, format!("board:{rows:?}"));
         }
     }
+    // The counselor menu over the lobby while it's open.
+    let menu_class = open_lobby.and(counselor_menu.as_ref()).and_then(|m| counselor_list.as_ref()?.0.get(m.index).cloned()).filter(|_| hud.counselor_menu.is_some());
     if let Some(l) = open_lobby {
-        pocket_key = l.members.iter().map(|m| format!("lobby:{}:{}:{}:{:?}:{}:{}:{}:{}", m.id, m.name, m.ready, m.preference, m.ping, m.talked, m.talking, mutes.as_ref().is_some_and(|x| x.0.contains(&m.name)))).collect();
+        pocket_key = l.members.iter().map(|m| format!("lobby:{}:{}:{}:{:?}:{}:{}:{}:{}:{}", m.id, m.name, m.ready, m.preference, m.ping, m.talked, m.talking, mutes.as_ref().is_some_and(|x| x.0.contains(&m.name)), m.class)).collect();
         pocket_key.push(format!("countdown:{:?}", l.countdown.map(|t| t.ceil() as i32)));
+        if let Some(c) = &menu_class {
+            pocket_key = vec![format!("counselor_menu:{c}")];
+        }
     }
     // His score lines on his HUD, hers on hers.
     let score_lines = |g: &crate::match_flow::GameMatch| if jason { g.killer_score_lines().to_vec() } else { g.score_lines().to_vec() };
@@ -778,6 +805,10 @@ fn build_hud(
         }
         let mut t = hud.match_end.clone().unwrap_or_else(|| hud.hud.clone());
         fill_match_end(&hud, &mut t, lines, g.state.remaining_time);
+        t
+    } else if let (Some(class), Some(_)) = (&menu_class, open_lobby) {
+        let mut t = hud.counselor_menu.clone().unwrap_or_else(|| hud.hud.clone());
+        fill_counselor_menu(&mut t, class, counselors.as_deref(), &player_tuning);
         t
     } else if let Some(l) = open_lobby {
         // Its contents fade in (AnimIn: LobbyContentsBorder's and LobbyDetailsBorder's content alpha, 0 as built).
@@ -835,7 +866,7 @@ fn build_hud(
     let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names };
     let full = Rect { x: 0.0, y: 0.0, w: virt.x, h: virt.y };
     let laid = tree.layout(full);
-    b.spawn(&laid, root, full, if board.is_some() { "ScoreboardWidget" } else if badge.is_some() { "MatchEnd_Badges" } else if ended.is_some() { "MatchEnd" } else if open_lobby.is_some() { "LobbyWidget" } else if jason { "KillerHUDWidget" } else if spectator { "SpectatorHUDWidget" } else { "CounselorHUDWidget" });
+    b.spawn(&laid, root, full, if board.is_some() { "ScoreboardWidget" } else if badge.is_some() { "MatchEnd_Badges" } else if ended.is_some() { "MatchEnd" } else if menu_class.is_some() && open_lobby.is_some() { "Counselor_Menu" } else if open_lobby.is_some() { "LobbyWidget" } else if jason { "KillerHUDWidget" } else if spectator { "SpectatorHUDWidget" } else { "CounselorHUDWidget" });
     // Her breath meter and interaction dial are hers (Jason's HUD has neither; nor has the lobby).
     if let Some(breath) = hud.breath.as_ref().filter(|_| !jason && open_lobby.is_none() && ended.is_none()) {
         let laid = breath.layout(full);
@@ -1077,6 +1108,41 @@ fn fill_match_end(hud: &Hud, tree: &mut Widget, lines: &[(String, i32)], closing
 /// Img_Lobby_ReadyBox_Checked_01 or _Empty_01) and the host's arrow; and the travel countdown (CountdownHorizontalBox,
 /// CountdownText); each row's ping and speaker. Not ported: the mute button (Shift + its number mutes here), the
 /// connecting spinner, the host's Jason pick.
+/// Counselor_Menu's SetCounselor (decompiled): FirstNameText the counselor's CharacterName's first word, LastNameText the
+/// rest; NameText and DescriptionText cleared (they show the focused stat, perk or ability's, not ported); each
+/// Stat_Widget's UpdateStat: StatAmount her stat (GetCounselorStatAmount), StatBar at it / 10, TitleName its StatName.
+fn fill_counselor_menu(tree: &mut Widget, class: &str, counselors: Option<&crate::character::CounselorCharacter>, tuning: &crate::player::PlayerTuning) {
+    use f13_core::stats::Stat;
+    let name = counselors.map(|c| c.looks(class)).and_then(|l| l.names.get("CharacterName").cloned()).unwrap_or_else(|| class.to_string());
+    let mut words = name.split(' ');
+    let first = words.next().unwrap_or("").to_string();
+    let rest = words.collect::<Vec<_>>().join(" ");
+    let text = |t: &str| json!({ "LocalizedString": t });
+    for (w, t) in [("FirstNameText", first), ("LastNameText", rest), ("NameText", String::new()), ("DescriptionText", String::new())] {
+        if let Some(x) = tree.find_mut(w) {
+            x.props["Text"] = text(&t);
+        }
+    }
+    let stats = tuning.stats_of(class);
+    // (Its RepairStat is Intelligence.)
+    for (w, stat) in [("ComposureStat", Stat::Composure), ("LuckStat", Stat::Luck), ("RepairStat", Stat::Intelligence), ("SpeedStat", Stat::Speed), ("StaminaStat", Stat::Stamina), ("StealthSTat", Stat::Stealth), ("StrengthStat", Stat::Strength)] {
+        let Some(x) = tree.find_mut(w) else { continue };
+        let title = x.props["StatName"].clone();
+        let v = stats[stat as usize];
+        if let Some(t) = x.find_mut("TitleName") {
+            if title.is_object() {
+                t.props["Text"] = title;
+            }
+        }
+        if let Some(t) = x.find_mut("StatAmount") {
+            t.props["Text"] = text(&v.to_string());
+        }
+        if let Some(b) = x.find_mut("StatBar") {
+            b.props["Percent"] = json!(v as f32 / 10.0);
+        }
+    }
+}
+
 fn fill_lobby(hud: &Hud, tree: &mut Widget, lobby: &crate::lobby::NetLobby, me: Option<u64>, mutes: Option<&crate::voice::VoiceMutes>) {
     if let Some(cd) = tree.find_mut("CountdownHorizontalBox") {
         cd.set_visibility(if lobby.countdown.is_some() { Vis::Visible } else { Vis::Hidden });
@@ -1116,6 +1182,20 @@ fn fill_lobby(hud: &Hud, tree: &mut Widget, lobby: &crate::lobby::NetLobby, me: 
         } else {
             tint("RemoteUnreadyPlayerColor")
         };
+        // Their picks (Get_HasPlayerFullyLoaded_Visibility: shown once they're in): the counselor button their
+        // PickedCounselorClass's thumbnail, Jason's the killer's (CharacterSelectButtonWidget Get_CharacterImage_Brush:
+        // GetCharacterThumbnailImage, 58 x 58).
+        for (button, file) in [
+            ("CounselorButton", hud.characters["Classes"][if m.class.is_empty() { crate::character::DEFAULT_CLASS } else { m.class.as_str() }].as_str()),
+            ("JasonButton", hud.characters["Killer"]["Thumbnail"].as_str()),
+        ] {
+            let Some(b) = w.find_mut(button) else { continue };
+            b.set_visibility(Vis::Visible);
+            if let (Some(file), Some(image)) = (file, b.find_mut("CharacterImage")) {
+                image.props["Brush"] = json!({ "ImageSize": { "X": 58.0, "Y": 58.0 }, "ResourceObject": { "File": file } });
+                image.set_visibility(Vis::Visible);
+            }
+        }
         if let Some(name) = w.find_mut("PlayerName") {
             name.props["Text"] = json!({ "LocalizedString": m.name });
             name.props["ColorAndOpacity"] = json!({ "SpecifiedColor": { "R": c[0], "G": c[1], "B": c[2], "A": c[3] } });

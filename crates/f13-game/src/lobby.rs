@@ -237,7 +237,7 @@ pub(crate) fn client(app: &mut App) {
 }
 
 pub(crate) fn ui(app: &mut App) {
-    app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay));
+    app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay, load_counselor_list, counselor_menu));
 }
 
 /// The lobby's voice options (PLACEHOLDER keys: the game's are in its audio settings and scoreboard menus): P turns
@@ -333,11 +333,99 @@ fn lobby_key(keys: &ButtonInput<KeyCode>) -> Option<LobbyMsg> {
         Some(LobbyMsg::Preference(Preference::Killer))
     } else if keys.just_pressed(KeyCode::Enter) {
         Some(LobbyMsg::Ready(true))
-    } else if keys.just_pressed(KeyCode::KeyC) {
-        // The next counselor (its class filled in by the caller).
-        Some(LobbyMsg::Class(String::new()))
     } else {
         None
+    }
+}
+
+/// Counselor_Menu (her row's CounselorSelect: LobbyPlayerListItem pushes it), open: the counselor shown (an index into
+/// its CharacterClassList) and NextCounselorTimer (no change while it's above 0).
+#[derive(Resource)]
+pub struct CounselorMenu {
+    pub index: usize,
+    timer: f32,
+}
+
+/// Counselor_Menu's CharacterClassList (its defaults: the classes in its order), as counselor classes ("Athlete").
+#[derive(Resource, Default)]
+pub struct CounselorList(pub Vec<String>);
+
+fn load_counselor_list(mut commands: Commands, export: Res<crate::ExportRoot>, character: Option<Res<crate::character::CounselorCharacter>>, mut done: Local<bool>) {
+    let Some(character) = character.filter(|_| !*done) else { return };
+    *done = true;
+    let v: serde_json::Value = std::fs::read_to_string(export.0.join("ui").join("Counselor_Menu.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    // "/Game/Characters/Counselors/Athlete/Athlete_Counselor.Athlete_Counselor_C" -> "Athlete" (the exported ones).
+    let list: Vec<String> = v["Defaults"]["CharacterClassList"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.as_object()?.iter().find(|(k, _)| k.starts_with("CharacterClass"))?.1["AssetPathName"].as_str().map(str::to_string))
+        .filter_map(|p| p.rsplit('.').next()?.strip_suffix("_Counselor_C").map(str::to_string))
+        .filter(|c| character.1.contains_key(c))
+        .collect();
+    if list.is_empty() {
+        warn!("lobby: no Counselor_Menu CharacterClassList (re-export: f13-export ui): no counselor menu");
+    }
+    commands.insert_resource(CounselorList(list));
+}
+
+/// The counselor menu (Counselor_Menu, decompiled): C opens it (her row's CounselorSelect), on her pick (SetCounselorIndex:
+/// her PickedCounselorClass); Left / Right (or A / D: its arrow buttons, CSLR_ObjectivePrev / Next) the counselor before or
+/// after, round (with CharacterSelectChange and NextCounselorTimer 0.5 s between); Enter (Accept, OnClick_Accept)
+/// requests it (RequestCounselorClass) with UITransitionAll and closes it; Escape (Back) closes it.
+#[allow(clippy::too_many_arguments)]
+fn counselor_menu(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time<bevy::time::Real>>,
+    menu: Option<ResMut<CounselorMenu>>,
+    list: Option<Res<CounselorList>>,
+    mut lobby: Query<&mut NetLobby>,
+    me: Option<Res<Me>>,
+    mut senders: Query<&mut MessageSender<LobbyMsg>, With<Connected>>,
+) {
+    let (Some(list), Ok(mut lobby)) = (list.filter(|l| !l.0.is_empty()), lobby.single_mut()) else { return };
+    let my_id = me.as_ref().map_or(0, |m| m.id);
+    let Some(menu) = menu else {
+        if lobby.open && keys.just_pressed(KeyCode::KeyC) {
+            let current = lobby.members.iter().find(|m| m.id == my_id).map_or("", |m| m.class.as_str());
+            let current = if current.is_empty() { crate::character::DEFAULT_CLASS } else { current };
+            let index = list.0.iter().position(|c| c == current).unwrap_or(0);
+            commands.insert_resource(CounselorMenu { index, timer: 0.0 });
+        }
+        return;
+    };
+    let mut menu = menu;
+    if !lobby.open || keys.just_pressed(KeyCode::Escape) {
+        commands.remove_resource::<CounselorMenu>();
+        return;
+    }
+    menu.timer -= time.delta_secs();
+    let n = list.0.len();
+    let step = if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) {
+        Some(n - 1)
+    } else if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) {
+        Some(1)
+    } else {
+        None
+    };
+    if let Some(step) = step.filter(|_| menu.timer <= 0.0) {
+        menu.index = (menu.index + step) % n;
+        menu.timer = 0.5;
+        commands.trigger(crate::audio::PlaySound { cue: "CharacterSelectChange".into(), at: None });
+    }
+    if keys.just_pressed(KeyCode::Enter) {
+        let class = list.0[menu.index].clone();
+        info!("lobby: picked {class}");
+        if me.is_some() {
+            for mut s in &mut senders {
+                s.send::<LobbyChannel>(LobbyMsg::Class(class.clone()));
+            }
+        } else if let Some(m) = lobby.members.iter_mut().find(|m| m.id == 0) {
+            m.class = class;
+        }
+        commands.trigger(crate::audio::PlaySound { cue: "UITransitionAll".into(), at: None });
+        commands.remove_resource::<CounselorMenu>();
     }
 }
 
@@ -352,7 +440,11 @@ fn next_class(character: Option<&crate::character::CounselorCharacter>, current:
 }
 
 /// The server's own player's keys.
-fn local_keys(keys: Res<ButtonInput<KeyCode>>, mut lobby: Query<&mut NetLobby>, character: Option<Res<crate::character::CounselorCharacter>>) {
+fn local_keys(keys: Res<ButtonInput<KeyCode>>, mut lobby: Query<&mut NetLobby>, character: Option<Res<crate::character::CounselorCharacter>>, menu: Option<Res<CounselorMenu>>) {
+    // (The counselor menu has the keys while it's open.)
+    if menu.is_some() {
+        return;
+    }
     let (Some(msg), Ok(mut lobby)) = (lobby_key(&keys), lobby.single_mut()) else { return };
     let Some(m) = lobby.members.iter_mut().find(|m| m.id == 0) else { return };
     match msg {
@@ -516,7 +608,10 @@ fn send_name(me: Option<Res<Me>>, local: Option<Res<crate::character::LocalClass
 }
 
 /// The lobby's keys on a client.
-fn client_keys(keys: Res<ButtonInput<KeyCode>>, lobby: Query<&NetLobby>, me: Option<Res<Me>>, character: Option<Res<crate::character::CounselorCharacter>>, mut senders: Query<&mut MessageSender<LobbyMsg>, With<Connected>>) {
+fn client_keys(keys: Res<ButtonInput<KeyCode>>, lobby: Query<&NetLobby>, me: Option<Res<Me>>, character: Option<Res<crate::character::CounselorCharacter>>, mut senders: Query<&mut MessageSender<LobbyMsg>, With<Connected>>, menu: Option<Res<CounselorMenu>>) {
+    if menu.is_some() {
+        return;
+    }
     let (Ok(lobby), Some(me)) = (lobby.single(), me) else { return };
     if !lobby.open {
         return;
@@ -591,9 +686,10 @@ fn show_overlay(
     client: Option<Res<NetClient>>,
     mut overlay: Single<(&mut Text, &mut Visibility), With<Overlay>>,
     (open_mic, mutes): (Option<Res<crate::voice::OpenMic>>, Option<Res<crate::voice::VoiceMutes>>),
+    menu: Option<Res<CounselorMenu>>,
 ) {
     let (ref mut text, ref mut vis) = *overlay;
-    let Some(l) = lobby.iter().next().filter(|l| l.open) else {
+    let Some(l) = lobby.iter().next().filter(|l| l.open && menu.is_none()) else {
         vis.set_if_neq(Visibility::Hidden);
         return;
     };
@@ -601,7 +697,7 @@ fn show_overlay(
     // (The players are on the lobby's own screen: ui.rs LobbyWidget; its keys and the last match here.)
     let mut s = String::new();
     let _ = mine;
-    s.push_str("1 counselor   2 no preference   3 Jason   Enter ready\n");
+    s.push_str("1 counselor   2 no preference   3 Jason   C pick a counselor   Enter ready\n");
     let open = open_mic.is_some();
     s.push_str(&format!("P push-to-talk (T): {}   Shift+n mute player n\n", if open { "off" } else { "on" }));
     let muted: Vec<&str> = mutes.as_ref().map_or_else(Vec::new, |m| m.0.iter().map(String::as_str).collect());
