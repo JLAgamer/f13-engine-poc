@@ -369,6 +369,9 @@ pub struct Hud {
     emote_wheel: Option<Widget>,
     emote_menu: Option<Widget>,
     emote_button: Option<Widget>,
+    /// The perk library (Counselor_Perk_Menu: perks.rs PerkMenu) and its buttons (PerkButtonLarge).
+    perk_menu: Option<Widget>,
+    perk_button: Option<Widget>,
     /// The map played's definition (ui/map.json: SCMapDefinition's DisplayName and first LobbyThumbnailImages).
     lobby_map: Value,
     /// The match's end (MatchEnd: SCMatchEndLobbyWidget) and its XP lines (MatchEndLine).
@@ -603,7 +606,7 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
                     t.props["Text"] = title;
                 }
             }
-            for name in ["PerkButton_Slot_1", "PerkButton_Slot_2", "PerkButton_Slot_3", "AbilityButton", "ClothingButton", "ClothesBorder", "CounselorEmoteButton", "EmotesBorder", "CPBox", "LockedBorder", "ActionBarWidget", "QuickPlayOverlayWidget"] {
+            for name in ["AbilityButton", "ClothingButton", "ClothesBorder", "CounselorEmoteButton", "EmotesBorder", "CPBox", "LockedBorder", "ActionBarWidget", "QuickPlayOverlayWidget"] {
                 if let Some(x) = w.find_mut(name) {
                     x.set_visibility(Vis::Collapsed);
                 }
@@ -662,6 +665,24 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
             w
         }),
         emote_button: Widget::load(dir, "EmoteButtonLarge"),
+        perk_menu: Widget::load(dir, "Counselor_Perk_Menu").map(|mut w| {
+            // Its header's title (MenuHeaderWidget: TitleText its Text, "Perk Select").
+            if let Some(h) = w.find_mut("MenuHeaderWidget") {
+                let title = h.props["Text"].clone();
+                if let Some(t) = h.find_mut("TitleText").filter(|_| title.is_object()) {
+                    t.props["Text"] = title;
+                }
+            }
+            // Not ported: rolling (PerkRollButton), customization points (CPBox), selling back (its hint), rarity and the
+            // legendary modifier, its action bar (the keys: perks.rs).
+            for name in ["ActionBarWidget", "PerkRollButton", "CPBox", "TextBlock_0", "Legendary"] {
+                if let Some(x) = w.find_mut(name) {
+                    x.set_visibility(Vis::Collapsed);
+                }
+            }
+            w
+        }),
+        perk_button: Widget::load(dir, "PerkButtonLarge"),
         swatch_button: Widget::load(dir, "Counselor_Swatch_Button"),
         lobby_row: Widget::load(dir, "LobbyPlayerListItem").map(|w| {
             let json = |n: &str| std::fs::read_to_string(dir.join(format!("ui/{n}.json"))).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
@@ -785,6 +806,7 @@ fn build_hud(
         Option<Res<crate::counselor_preview::PreviewImage>>,
     ),
     (wardrobe_menu, emote_wheel, emotes, emote_menu): (Option<Res<crate::wardrobe::WardrobeMenu>>, Option<Res<crate::emotes::EmoteWheel>>, Option<Res<crate::emotes::Emotes>>, Option<Res<crate::emotes::EmoteMenu>>),
+    (perk_menu, perks, profiles): (Option<Res<crate::perks::PerkMenu>>, Option<Res<crate::perks::Perks>>, Option<Res<crate::wardrobe::CounselorProfiles>>),
 ) {
     let size = window.size();
     // The lobby while it's open (LobbyWidget, as the game's lobby map shows it).
@@ -843,7 +865,11 @@ fn build_hud(
         pocket_key = l.members.iter().map(|m| format!("lobby:{}:{}:{}:{:?}:{}:{}:{}:{}:{}", m.id, m.name, m.ready, m.preference, m.ping, m.talked, m.talking, mutes.as_ref().is_some_and(|x| x.0.contains(&m.name)), m.class)).collect();
         pocket_key.push(format!("countdown:{:?}", l.countdown.map(|t| t.ceil() as i32)));
         if let Some(c) = &menu_class {
-            pocket_key = vec![format!("counselor_menu:{c}")];
+            let slots = profiles.as_ref().map(|p| p.perks.get(c).cloned().unwrap_or_default());
+            pocket_key = vec![format!("counselor_menu:{c}:{slots:?}")];
+        }
+        if let Some(m) = perk_menu.as_ref().filter(|_| hud.perk_menu.is_some()) {
+            pocket_key = vec![format!("perks:{}:{}:{}", m.class, m.slot, m.index)];
         }
         if let Some(m) = emote_menu.as_ref().filter(|_| hud.emote_menu.is_some()) {
             pocket_key = vec![format!("emotes:{}:{:?}:{}:{:?}", m.class, m.slots, m.section, m.list)];
@@ -894,6 +920,10 @@ fn build_hud(
         let mut t = t.clone();
         fill_audio_settings(&mut t, m);
         t
+    } else if let (Some(m), Some(t), Some(_), Some(p), Some(pr)) = (&perk_menu, &hud.perk_menu, open_lobby, &perks, &profiles) {
+        let mut t = t.clone();
+        fill_perk_menu(&hud, &mut t, m, p, pr, counselors.as_deref());
+        t
     } else if let (Some(m), Some(t), Some(_), Some(e)) = (&emote_menu, &hud.emote_menu, open_lobby, &emotes) {
         let mut t = t.clone();
         fill_emote_menu(&hud, &mut t, m, e, counselors.as_deref());
@@ -905,6 +935,7 @@ fn build_hud(
     } else if let (Some(class), Some(_)) = (&menu_class, open_lobby) {
         let mut t = hud.counselor_menu.clone().unwrap_or_else(|| hud.hud.clone());
         fill_counselor_menu(&mut t, class, counselors.as_deref(), &player_tuning);
+        fill_perk_slots(&mut t, class, perks.as_deref(), profiles.as_deref());
         t
     } else if let Some(l) = open_lobby {
         // Its contents fade in (AnimIn: LobbyContentsBorder's and LobbyDetailsBorder's content alpha, 0 as built).
@@ -1270,6 +1301,94 @@ fn fill_audio_settings(tree: &mut Widget, menu: &crate::audio_settings::AudioMen
             }
         }
     }
+}
+
+/// Counselor_Menu's PerkButton_Slot_1..3 (PerkButton: SetPerk / ClearPerk): each slot's perk's LoadoutIcon (PerkImage
+/// shown), else the empty slot (PerkImage hidden); HighlightImg (its focus) hidden.
+fn fill_perk_slots(tree: &mut Widget, class: &str, perks: Option<&crate::perks::Perks>, profiles: Option<&crate::wardrobe::CounselorProfiles>) {
+    let slots = profiles.and_then(|p| p.perks.get(class)).cloned().unwrap_or_default();
+    for i in 0..3 {
+        let Some(b) = tree.find_mut(&format!("PerkButton_Slot_{}", i + 1)) else { continue };
+        let icon = slots.get(i).and_then(|p| perks?.0.get(p)).and_then(|d| d.icon.clone());
+        if let Some(img) = b.find_mut("PerkImage") {
+            match icon {
+                Some(icon) => {
+                    img.props["Brush"]["ResourceObject"] = json!({ "File": format!("{icon}.png") });
+                    img.set_visibility(Vis::Visible);
+                }
+                None => img.set_visibility(Vis::Hidden),
+            }
+        }
+        if let Some(h) = b.find_mut("HighlightImg") {
+            h.set_visibility(Vis::Hidden);
+        }
+    }
+}
+
+/// Counselor_Perk_Menu as perks.rs has it: her names; PerkBox's PerkButtonLarges in rows of ten (SetupPerkList), each
+/// its perk's LoadoutIcon, AlreadySelectedCheck on her picked ones, HighlightImg on the highlighted one; PerkName and
+/// PerkDescription the highlighted perk's, Increases / Decreases its Positive / NegativeDescription. PLACEHOLDER: no
+/// percentages (the rolled modifiers'), no rarity; three rows shown at a time, around the highlighted one (the rows fit
+/// above PerkName: the game's library was the player's own rolls), none new (Image_0).
+fn fill_perk_menu(hud: &Hud, tree: &mut Widget, m: &crate::perks::PerkMenu, perks: &crate::perks::Perks, profiles: &crate::wardrobe::CounselorProfiles, counselors: Option<&crate::character::CounselorCharacter>) {
+    let text = |t: &str| json!({ "LocalizedString": t });
+    let name = counselors.map(|c| c.looks(&m.class)).and_then(|l| l.names.get("CharacterName").cloned()).unwrap_or_else(|| m.class.clone());
+    let (first, rest) = name.split_once(' ').unwrap_or((name.as_str(), ""));
+    let library = perks.library();
+    let picked = profiles.picked_perks(&m.class);
+    let def = library.get(m.index).and_then(|p| perks.0.get(p));
+    let (positive, negative) = (def.and_then(|d| d.positive.clone()).unwrap_or_default(), def.and_then(|d| d.negative.clone()).unwrap_or_default());
+    for (n, t) in [
+        ("FirstNameText", first.to_string()),
+        ("LastNameText", rest.to_string()),
+        ("PerkName", def.map_or(String::new(), |d| d.name.clone())),
+        ("PerkDescription", def.and_then(|d| d.description.clone()).unwrap_or_default()),
+        ("IncreaseDescriptionText", positive.clone()),
+        ("DecreaseDescriptionText", negative.clone()),
+        ("IncreasePercentText", String::new()),
+        ("DecreasePrecentageText", String::new()),
+    ] {
+        if let Some(x) = tree.find_mut(n) {
+            x.props["Text"] = text(&t);
+        }
+    }
+    for (row, shown) in [("Increases", !positive.is_empty()), ("Decreases", !negative.is_empty())] {
+        if let Some(x) = tree.find_mut(row) {
+            x.set_visibility(if shown { Vis::Visible } else { Vis::Hidden });
+        }
+    }
+    let (Some(button), Some(b)) = (&hud.perk_button, tree.find_mut("PerkBox")) else { return };
+    let rows = library.len().div_ceil(crate::perks::ROW);
+    let first = (m.index / crate::perks::ROW).saturating_sub(1).min(rows.saturating_sub(3));
+    b.children = library
+        .chunks(crate::perks::ROW)
+        .enumerate()
+        .skip(first)
+        .take(3)
+        .map(|(r, row)| {
+            let buttons = row
+                .iter()
+                .enumerate()
+                .map(|(k, p)| {
+                    let i = r * crate::perks::ROW + k;
+                    let mut x = button.clone();
+                    x.name = format!("Perk_{i}");
+                    x.slot_kind = "HorizontalBoxSlot".into();
+                    x.slot = json!({});
+                    if let (Some(img), Some(icon)) = (x.find_mut("PerkImage"), perks.0.get(p).and_then(|d| d.icon.clone())) {
+                        img.props["Brush"]["ResourceObject"] = json!({ "File": format!("{icon}.png") });
+                    }
+                    for (n, shown) in [("HighlightImg", i == m.index), ("AlreadySelectedCheck", picked.contains(p)), ("Rarity", false), ("Image_0", false)] {
+                        if let Some(h) = x.find_mut(n) {
+                            h.set_visibility(if shown { Vis::Visible } else { Vis::Hidden });
+                        }
+                    }
+                    x
+                })
+                .collect();
+            Widget::new("HorizontalBox", &format!("PerkRow_{r}"), json!({}), "VerticalBoxSlot", json!({}), buttons)
+        })
+        .collect();
 }
 
 /// Counselor_Emote_Menu as emotes.rs has it: her names; its wheel (CounselorEmoteSelect: her eight, the section

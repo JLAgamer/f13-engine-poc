@@ -120,6 +120,7 @@ fn show_preview(
 ) {
     let Some(character) = character else { return };
     let outfit = |c: &str| profiles.as_ref().map_or("", |p| p.outfit(c)).to_string();
+    // (The perk menu has no preview.)
     let shown = match (&emote_menu, &wardrobe, &menu) {
         (Some(e), _, _) => Some((Which::Emote, e.class.clone(), outfit(&e.class))),
         (None, Some(w), _) => Some((Which::Wardrobe, w.class.clone(), w.spec(&character))),

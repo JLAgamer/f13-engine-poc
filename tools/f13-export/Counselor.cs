@@ -998,6 +998,48 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         .Select(e => e.Cdo.GetOrDefault<FPackageIndex?>("FemaleMontage")?.Load<UAnimMontage>()?.GetPathName().Split('.')[0])
         .OfType<string>().Distinct();
 
+    /// perks.json: each counselor perk (Blueprints/Perks/*: SCPerkData) by class name: its PerkName, Description,
+    /// Positive / Negative / LegendaryDescription, LoadoutIcon, its CDO's modifiers (the SCPerkData fields it sets:
+    /// number values by field name, StatModifiers[i] as "StatModifiers.i") and StartingItems (class names).
+    public void ExportPerks()
+    {
+        var perks = new Newtonsoft.Json.Linq.JObject();
+        foreach (var f in provider.Files.Keys.Where(k => k.StartsWith("SummerCamp/Content/Blueprints/Perks/") && k.EndsWith(".uasset")).Order())
+        {
+            var path = f[..^".uasset".Length];
+            var name = path.Split('/')[^1];
+            if (provider.LoadPackageObject(path + "." + name + "_C") is not UBlueprintGeneratedClass bp || bp.ClassDefaultObject.Load() is not { } cdo) continue;
+            var props = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(cdo))["Properties"] as Newtonsoft.Json.Linq.JObject ?? new();
+            var text = (string k) => cdo.GetOrDefault<CUE4Parse.UE4.Objects.Core.i18N.FText>(k)?.Text;
+            var mods = new Newtonsoft.Json.Linq.JObject();
+            foreach (var p in props.Properties())
+            {
+                if (p.Value.Type is Newtonsoft.Json.Linq.JTokenType.Float or Newtonsoft.Json.Linq.JTokenType.Integer)
+                {
+                    // StatModifiers[i] (a fixed array: ECounselorStats) serializes as "StatModifiers[i]", [0] bare.
+                    var key = p.Name == "StatModifiers" ? "StatModifiers.0" : p.Name.Replace("[", ".").Replace("]", "");
+                    mods[key] = p.Value;
+                }
+            }
+            string? icon = null;
+            if (cdo.GetOrDefault<FPackageIndex?>("LoadoutIcon")?.Load<UTexture>() is { } tex) icon = Texture(tex);
+            var items = new Newtonsoft.Json.Linq.JArray(cdo.GetOrDefault<FPackageIndex[]>("StartingItems", []).Select(i => i.Name).Where(n => n != null).Select(n => n!.EndsWith("_C") ? n[..^2] : n));
+            perks[name] = new Newtonsoft.Json.Linq.JObject
+            {
+                ["Name"] = text("PerkName") ?? name,
+                ["Description"] = text("Description"),
+                ["Positive"] = text("PositiveDescription"),
+                ["Negative"] = text("NegativeDescription"),
+                ["Legendary"] = text("LegendaryDescription"),
+                ["Icon"] = icon,
+                ["Modifiers"] = mods,
+                ["StartingItems"] = items,
+            };
+        }
+        File.WriteAllText(Path.Combine(outDir, "perks.json"), perks.ToString());
+        Console.WriteLine($"perks.json: {perks.Count} perks");
+    }
+
     /// emotes.json: each emote's EmoteName, EmoteIcon, bLooping and its FemaleMontage's first sequence (the counselors'
     /// animations name it so: MaleCounterpart), and Base_Counselor's DefaultEmotes (SCCounselorCharacter +0x1c78).
     public void ExportEmotes()

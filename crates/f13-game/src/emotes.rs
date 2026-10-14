@@ -91,7 +91,11 @@ pub(crate) fn emote_menu(
     emotes: Res<Emotes>,
     mut profiles: ResMut<crate::wardrobe::CounselorProfiles>,
     mut tested: Local<bool>,
+    perk_menu: Option<Res<crate::perks::PerkMenu>>,
 ) {
+    if perk_menu.is_some() {
+        return;
+    }
     let pressed = |a: KeyCode, b: KeyCode| keys.just_pressed(a) || keys.just_pressed(b);
     let Some(mut menu) = menu else {
         let class = counselor_menu.as_ref().and_then(|m| list.as_ref()?.0.get(m.index).cloned());

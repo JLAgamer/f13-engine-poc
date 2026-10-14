@@ -801,6 +801,7 @@ switch (rest[0])
         foreach (var name in rest.Count > 1 ? rest.Skip(1) : [Mvp.Counselor.Split('/')[^1].Replace("_Counselor", "")])
             new CounselorExporter(provider, outDir, Queue).Export($"/Game/Characters/Counselors/{name}/{name}_Counselor", Mvp.CounselorAnims, Mvp.KeepRoot);
         new CounselorExporter(provider, outDir, Queue).ExportEmotes();
+        new CounselorExporter(provider, outDir, Queue).ExportPerks();
         break;
     case "ui": // ui [widget...]: widget trees and their textures (default: Mvp.Widgets)
     {
@@ -1530,6 +1531,10 @@ static class Mvp
         "/Game/UI/Menu/Character/Counselor/Counselor_Emote_Menu",
         "/Game/UI/Menu/Character/Counselor/Counselor_Emote_Panel",
         "/Game/UI/Menu/Character/Counselor/EmoteButtonLarge",
+        // Its perks (PerkButton_Slot_1..3: the perk list, rows of PerkButtonLarge).
+        "/Game/UI/Menu/Character/Counselor/Counselor_Perk_Menu",
+        "/Game/UI/Menu/Character/Counselor/PerkButton",
+        "/Game/UI/Menu/Character/Counselor/PerkButtonLarge",
         // The audio settings (SettingsMenuWidget's audio page: its volumes and push-to-talk).
         "/Game/UI/Menu/Settings/AudioSettingsMenuWidget",
         "/Game/UI/Menu/Settings/Controls/SettingsOptionSliderWidget",

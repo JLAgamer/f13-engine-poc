@@ -21,6 +21,8 @@ use std::collections::BTreeMap;
 pub struct CounselorProfiles {
     pub outfits: BTreeMap<String, String>,
     pub emotes: BTreeMap<String, Vec<String>>,
+    /// Each class's three perk slots (perks.rs: perk classes; empty, none).
+    pub perks: BTreeMap<String, Vec<String>>,
 }
 
 /// (F13_COUNSELOR_PROFILES: another file, for tests.)
@@ -73,13 +75,13 @@ impl WardrobeMenu {
     }
 }
 
-/// This player's outfit for their pick to the lobby (the server's own player's straight in) as it changes.
+/// This player's outfit and perks for their pick to the lobby (the server's own player's straight in) as they change.
 fn send_outfit(
     profiles: Res<CounselorProfiles>,
     mut lobby: Query<&mut crate::lobby::NetLobby>,
     me: Option<Res<crate::lobby::Me>>,
     mut senders: Query<&mut lightyear::prelude::MessageSender<crate::lobby::LobbyMsg>, With<lightyear::prelude::Connected>>,
-    mut sent: Local<Option<(String, String)>>,
+    mut sent: Local<Option<(String, String, Vec<String>)>>,
 ) {
     let Ok(mut lobby) = lobby.single_mut() else { return };
     if !lobby.open {
@@ -89,21 +91,24 @@ fn send_outfit(
     let Some(m) = lobby.members.iter_mut().find(|m| m.id == id) else { return };
     let class = if m.class.is_empty() { crate::character::DEFAULT_CLASS.to_string() } else { m.class.clone() };
     let outfit = profiles.outfit(&class).to_string();
-    if m.outfit == outfit {
+    let perks = profiles.picked_perks(&class);
+    if m.outfit == outfit && m.perks == perks {
         return;
     }
     if me.is_none() {
         m.outfit = outfit;
+        m.perks = perks;
         return;
     }
     // (Once per change: the server's copy comes back with the lobby.)
-    if sent.as_ref() == Some(&(class.clone(), outfit.clone())) {
+    if sent.as_ref() == Some(&(class.clone(), outfit.clone(), perks.clone())) {
         return;
     }
     for mut s in &mut senders {
         s.send::<crate::lobby::LobbyChannel>(crate::lobby::LobbyMsg::Outfit(outfit.clone()));
+        s.send::<crate::lobby::LobbyChannel>(crate::lobby::LobbyMsg::Perks(perks.clone()));
     }
-    *sent = Some((class, outfit));
+    *sent = Some((class, outfit, perks));
 }
 
 /// Without a lobby (and not a client: the server dresses its counselors), the local counselor in her class's outfit.
@@ -139,11 +144,11 @@ pub(crate) fn wardrobe_menu(
     character: Option<Res<crate::character::CounselorCharacter>>,
     mut profiles: ResMut<CounselorProfiles>,
     mut tested: Local<bool>,
-    emote_menu: Option<Res<crate::emotes::EmoteMenu>>,
+    (emote_menu, perk_menu): (Option<Res<crate::emotes::EmoteMenu>>, Option<Res<crate::perks::PerkMenu>>),
 ) {
     let Some(character) = character else { return };
-    // (The emote menu over the counselor menu has the keys.)
-    if emote_menu.is_some() {
+    // (The emote or perk menu over the counselor menu has the keys.)
+    if emote_menu.is_some() || perk_menu.is_some() {
         return;
     }
     let Some(mut menu) = menu else {

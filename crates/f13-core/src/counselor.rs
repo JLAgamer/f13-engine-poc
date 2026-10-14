@@ -141,6 +141,25 @@ pub struct Counselor {
     pub stamina_locked: bool,
     pub wounded: bool,
     pub health: f32,
+    /// Her perks' modifiers, each summed over her active perks (SCPlayerState ActivePerks: SCPerkData fields by name).
+    pub perks: PerkMods,
+}
+
+/// The sums of a counselor's active perks' SCPerkData modifiers, by field name ("SprintSpeedModifier"); absent: 0.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PerkMods(pub std::collections::BTreeMap<String, f32>);
+
+impl PerkMods {
+    pub fn get(&self, field: &str) -> f32 {
+        self.0.get(field).copied().unwrap_or(0.0)
+    }
+
+    /// Adds a perk's modifiers.
+    pub fn add<'a>(&mut self, modifiers: impl IntoIterator<Item = (&'a String, &'a f32)>) {
+        for (k, v) in modifiers {
+            *self.0.entry(k.clone()).or_insert(0.0) += v;
+        }
+    }
 }
 
 impl Counselor {
@@ -158,6 +177,7 @@ impl Counselor {
             stamina_locked: false,
             wounded: false,
             health: START_HEALTH,
+            perks: PerkMods::default(),
         }
     }
 
@@ -189,26 +209,30 @@ impl Counselor {
         self.wounded = alive && health <= t.wounded_threshold;
     }
 
-    /// The stamina drain (positive) or refill (negative while moving / positive while still) multiplier.
+    /// The stamina drain (positive) or refill (negative while moving / positive while still) multiplier
+    /// (FUN_1403b92e0): still, x (1 + her perks' CrouchingStaminaRegenModifier crouched, else StandingStaminaRegenModifier);
+    /// moving, swimming x (1 + SwimmingStaminaDrainModifier), then every moving state x (1 + StaminaDrainModifier).
     pub fn stamina_rate(&self, s: &Situation, t: &CounselorTuning) -> f32 {
         let fear_curve = |f: f32| t.stamina_fear_curve.as_ref().map_or(1.0, |c| c(f));
+        let p = |f: &str| 1.0 + self.perks.get(f);
         let modifier = if s.speed_sq <= 0.0 || s.in_special_move {
             match self.stance {
-                Stance::Crouching => t.stamina_crouching_modifier,
-                _ if s.in_hiding => t.stamina_hiding_modifier,
-                _ => t.stamina_idle_modifier,
+                Stance::Crouching => t.stamina_crouching_modifier * p("CrouchingStaminaRegenModifier"),
+                _ if s.in_hiding => t.stamina_hiding_modifier * p("StandingStaminaRegenModifier"),
+                _ => t.stamina_idle_modifier * p("StandingStaminaRegenModifier"),
             }
         } else {
-            match self.stance {
+            let m = match self.stance {
                 Stance::Standing if self.sprinting => t.stamina_sprinting_modifier,
                 Stance::Standing if self.running => t.stamina_running_modifier,
                 Stance::Standing => fear_curve(s.fear) * t.stamina_walking_modifier,
                 Stance::Crouching => -t.stamina_crouching_modifier,
-                Stance::Swimming if self.sprinting => t.stamina_swimming_modifier + t.stamina_sprinting_modifier,
-                Stance::Swimming => t.stamina_swimming_modifier,
+                Stance::Swimming if self.sprinting => (t.stamina_swimming_modifier + t.stamina_sprinting_modifier) * p("SwimmingStaminaDrainModifier"),
+                Stance::Swimming => t.stamina_swimming_modifier * p("SwimmingStaminaDrainModifier"),
                 Stance::Combat => t.stamina_walking_modifier,
                 _ => 0.0,
-            }
+            };
+            m * p("StaminaDrainModifier")
         };
         t.stamina_stat_mod.value(&self.stats, true) * modifier
     }
@@ -272,6 +296,8 @@ impl Counselor {
         true
     }
 
+    /// Her speed modifier (0x1403b9150): dodging, stumbling, in the water, plus her perks' CrouchMoveSpeedModifier
+    /// crouched, SwimSpeedModifier swimming, else SprintSpeedModifier sprinting; x SpeedStatMod.
     pub fn speed_modifier(&self, s: &Situation, t: &CounselorTuning) -> f32 {
         let mut m = 1.0;
         if s.dodging {
@@ -283,6 +309,12 @@ impl Counselor {
         if self.stance == Stance::Swimming {
             m *= t.water_speed_mod;
         }
+        m += match self.stance {
+            Stance::Crouching => self.perks.get("CrouchMoveSpeedModifier"),
+            Stance::Swimming => self.perks.get("SwimSpeedModifier"),
+            _ if self.sprinting => self.perks.get("SprintSpeedModifier"),
+            _ => 0.0,
+        };
         t.speed_stat_mod.value(&self.stats, false) * m
     }
 
@@ -371,6 +403,24 @@ pub(crate) mod tests {
         let mut ev = vec![];
         c.tick_stamina(1.0, &moving(), &t, &mut ev);
         assert!((c.stamina - 80.0).abs() < 1e-4); // 2.0 * 10 * 1s
+    }
+
+    #[test]
+    fn perks_scale_stamina_and_add_to_speed() {
+        let t = tuning();
+        let mut c = Counselor::new([5; STAT_COUNT]);
+        c.perks.0.insert("StaminaDrainModifier".into(), -0.15);
+        c.perks.0.insert("StandingStaminaRegenModifier".into(), 0.5);
+        c.perks.0.insert("SprintSpeedModifier".into(), -0.05);
+        let base = Counselor::new([5; STAT_COUNT]);
+        // Still: the regen x 1.5; sprinting: the drain x 0.85 and the speed modifier 0.05 less.
+        assert!((c.stamina_rate(&Situation::default(), &t) - 1.5 * base.stamina_rate(&Situation::default(), &t)).abs() < 1e-5);
+        c.set_sprint_input(true);
+        let mut b = base.clone();
+        b.set_sprint_input(true);
+        assert!((c.stamina_rate(&moving(), &t) - 0.85 * b.stamina_rate(&moving(), &t)).abs() < 1e-5);
+        let stat = t.speed_stat_mod.value(&c.stats, false);
+        assert!((c.speed_modifier(&moving(), &t) - (b.speed_modifier(&moving(), &t) - 0.05 * stat)).abs() < 1e-5);
     }
 
     #[test]

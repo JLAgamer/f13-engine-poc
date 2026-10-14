@@ -26,6 +26,7 @@
 mod audio;
 mod audio_settings;
 mod emotes;
+mod perks;
 mod blood;
 mod bloom;
 mod bot;
@@ -687,7 +688,7 @@ fn main() {
             app.insert_resource(audio_settings::AudioSettings { use_push_to_talk: false, ..audio_settings::AudioSettings::load() });
         }
         wardrobe::plugin(&mut app);
-        app.add_plugins(emotes::EmotesPlugin);
+        app.add_plugins((emotes::EmotesPlugin, perks::PerksPlugin));
         if args.override_spawning {
             app.insert_resource(props::OverrideSpawning);
         }
