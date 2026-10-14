@@ -643,6 +643,12 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         info.Names ??= new();
         if (ClassValue<FPackageIndex>(cls, "KillerMaskPickupClass") is { } mask && mask.Name is { } maskName)
             info.Names["KillerMaskPickupClass"] = maskName;
+        // His grab kills (InitFromPlayerState 0x1403fb9f0, no picks): GrabKillClasses by index (each index's nearest
+        // override up the class chain; None empty), the first empty slot taking his weapon's DefaultGrabKill.
+        for (var i = 0; i < 4; i++)
+            info.Names[$"GrabKillClass{i}"] = ClassArrayObject(cls, "GrabKillClasses", i) ?? "";
+        if (weapon.GetOrDefault<FPackageIndex>("DefaultGrabKill") is { } dgk && dgk.Name is { } dgkName)
+            info.Names["DefaultGrabKill"] = dgkName;
         info.Values = values;
         info.Curves = new();
         foreach (var name in new[] { "SenseFearRadiusCurve", "SenseFearHidingRadiusCurve", "RageSenseDistanceCurve", "TeleportJitterCurve" })
@@ -1202,6 +1208,17 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             if (cls is UBlueprintGeneratedClass bp && bp.ClassDefaultObject.Load() is { } cdo)
                 foreach (var p in cdo.Properties)
                     if (p.Name.Text == name && p.ArrayIndex == index && p.Tag?.GetValue(typeof(float)) is float f) return f;
+        return null;
+    }
+
+    /// An object array property's element (a class's name; "" when None), its nearest override up the class chain.
+    static string? ClassArrayObject(UStruct? cls, string name, int index)
+    {
+        for (; cls != null; cls = cls.SuperStruct?.Load<UStruct>())
+            if (cls is UBlueprintGeneratedClass bp && bp.ClassDefaultObject.Load() is { } cdo)
+                foreach (var p in cdo.Properties)
+                    if (p.Name.Text == name && p.ArrayIndex == index && p.Tag?.GetValue(typeof(FPackageIndex)) is FPackageIndex o)
+                        return o.IsNull ? "" : o.Name;
         return null;
     }
 

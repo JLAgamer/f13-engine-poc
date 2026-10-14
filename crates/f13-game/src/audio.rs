@@ -656,6 +656,12 @@ fn action_line(take: &str) -> Option<&'static str> {
         "cinematic_pickaxe_curbstomp" => "VO:CurbStompKill",
         "cinematic_pickaxe_sweeptheleg" => "VO:SweepTheLegKill",
         "cinematic_pickaxe_toppopper" => "VO:TopPopperKill",
+        "cinematic_axe_crotchchop" => "VO:AxeCrochChopKill",
+        "cinematic_pigsplitter_TheJarvis" => "VO:PigSplitterTheJarvis",
+        "cinematic_shears_lastbreath" => "VO:LastBreathKill",
+        "cinematic_spear_head_knockdownstab_01" => "VO:SpearKnockDownKill",
+        "cinematic_machete_eviscerate_stomach" => "VO:MacheteStomachKill",
+        "cinematic_fireaxe_doubletap" => "VO:DoubleSidedAxeKill",
         "cinematic_hidespot_closet_kill_Axe" => "VO:HIdeSpotClosetAxeKill",
         "cinematic_hidespot_bed_kill_Axe" => "VO:AxeBedKill",
         _ => return None,
@@ -691,7 +697,9 @@ fn voices(
             commands.trigger(ActorSound { actor: pe, prop: line });
         }
     };
-    let kill = |a: &Option<String>| a.as_deref().and_then(action_line).is_some_and(|l| l.ends_with("Kill"));
+    let kill = |a: &Option<String>| {
+        a.as_deref().is_some_and(|a| action_line(a).is_some_and(|l| l.ends_with("Kill")) || crate::jason::KILLS.iter().any(|k| k.2 == a))
+    };
     // PlayVoiceOver says Died only outside a context kill (!bInContextKill, FUN_14031bff0): any kill takes her while
     // he holds her (grab, placed, drown kills), or by her own kill take.
     let in_kill = kill(&now.3) || kill(&was_action) || held || was_held || !kills.is_empty();

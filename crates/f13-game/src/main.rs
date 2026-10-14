@@ -375,9 +375,9 @@ fn parse_args() -> Args {
             "--bot-mask" => bot_mask = true,
             "--kill" => {
                 let name = it.next().unwrap_or_default();
-                kill = jason::KILLS.iter().position(|(anim, _, _)| anim.ends_with(name.as_str()));
+                kill = jason::KILLS.iter().position(|(_, anim, _, _, _)| anim.ends_with(name.as_str()));
                 if kill.is_none() {
-                    eprintln!("--kill {name}: none of {:?}", jason::KILLS.map(|k| k.0));
+                    eprintln!("--kill {name}: none of {:?}", jason::KILLS.map(|k| k.1));
                 }
             }
             "--cut-power" => cut_power = true,

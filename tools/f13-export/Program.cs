@@ -693,7 +693,9 @@ switch (rest[0])
     case "cdo": // cdo <class name>...: each Blueprint class's defaults (its CDO's properties), one JSON line each
         foreach (var name in rest.Skip(1))
         {
-            var file = provider.Files.Keys.FirstOrDefault(k => k.EndsWith("/" + name.TrimEnd('C').TrimEnd('_') + ".uasset", StringComparison.OrdinalIgnoreCase));
+            // (A path, SummerCamp/Content/..., when the name alone is ambiguous: PickAxe_C is also a HUD image.)
+            var file = name.Contains('/') ? provider.Files.Keys.FirstOrDefault(k => k.Equals(name.TrimEnd('C').TrimEnd('_') + ".uasset", StringComparison.OrdinalIgnoreCase))
+                : provider.Files.Keys.FirstOrDefault(k => k.EndsWith("/" + name.TrimEnd('C').TrimEnd('_') + ".uasset", StringComparison.OrdinalIgnoreCase));
             var cdo = file == null ? null : provider.LoadPackage(file).GetExports().FirstOrDefault(e => e.Name.StartsWith("Default__"));
             var props = cdo == null ? null : Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(cdo))["Properties"];
             Console.WriteLine($"{name}\t{file}\t{props?.ToString(Newtonsoft.Json.Formatting.None)}");
@@ -1282,7 +1284,9 @@ static void ResolveParameters(UObject mat, MaterialInfo info)
                 }
             }
             info.Landscape = LandscapeLayers(m);
-            BaseLayerTextures(m, info);
+            // (Only for a master without its own diffuse parameter: SkinGoreMaster's base layer samples the outfit's
+            // clothes maps, its skin is the Skin Diffuse / Skin Normal parameters.)
+            if (!info.Textures.Keys.Any(k => k.Contains("Diffuse", StringComparison.OrdinalIgnoreCase))) BaseLayerTextures(m, info);
             break;
         }
         foreach (var s in m.GetOrDefault<FStructFallback[]>("ScalarParameterValues", []))
@@ -1327,9 +1331,10 @@ static Newtonsoft.Json.Linq.JObject SplineMeshSpline(UObject c)
 
 // A layered master's base layer textures (M_JasonV2_PickAxe: MatLayerBlend_Simple's "Base Material" is a material
 // function call, M_JasonV2_PickAxe_Layer, whose TextureSamples hold the pickaxe's own maps; the blood layer goes on
-// top). Cooking strips the function's wiring, so each sample's role is its sampler type (Normal) or its texture's
-// name suffix (_Diffuse, _RMA: R roughness, G metallic, B AO, as the master's own input masks still read). Parameters
-// of the same names win.
+// top). Cooking strips the function's wiring, so each sample's role is its texture's name suffix (_Diffuse or _D,
+// _Normal or _N, _RMA: R roughness, G metallic, B AO, as the master's own input masks still read), else its sampler
+// type (Normal; the other Jasons' weapons' RMA samples are typed Normal too). Parameters of the same names win.
+// (Not parameters, so the mesh export doesn't write the textures: Mvp.Assets lists them.)
 static void BaseLayerTextures(UObject master, MaterialInfo info)
 {
     var calls = master.GetOrDefault<FPackageIndex[]>("Expressions", []).Select(x => x.Load()).OfType<UObject>()
@@ -1346,9 +1351,9 @@ static void BaseLayerTextures(UObject master, MaterialInfo info)
                 var tex = e.GetOrDefault<FPackageIndex?>("Texture")?.ResolvedObject?.GetPathName().Split('.')[0].TrimStart('/');
                 if (tex == null) continue;
                 var sampler = e.GetOrDefault<FName>("SamplerType").Text;
-                var role = sampler.EndsWith("Normal") ? "Normal"
-                    : tex.EndsWith("_Diffuse", StringComparison.OrdinalIgnoreCase) ? "Diffuse"
-                    : tex.EndsWith("_RMA", StringComparison.OrdinalIgnoreCase) ? "RMA" : null;
+                bool Ends(params string[] s) => s.Any(x => tex.EndsWith(x, StringComparison.OrdinalIgnoreCase));
+                var role = Ends("_Diffuse", "_D") ? "Diffuse" : Ends("_Normal", "_N") ? "Normal" : Ends("_RMA") ? "RMA"
+                    : sampler.EndsWith("Normal") ? "Normal" : null;
                 if (role != null) info.Textures.TryAdd(role, tex);
             }
         }
@@ -1445,6 +1450,24 @@ static class Mvp
         "/Game/Characters/Killers/Jason/J2/Textures/Jason_V2_Pick_Axe_Diffuse",
         "/Game/Characters/Killers/Jason/J2/Textures/Jason_V2_Pick_Axe_Normal",
         "/Game/Characters/Killers/Jason/J2/Textures/Jason_V2_Pick_Axe_RMA",
+        // The other Jasons' weapons' base layers likewise (M_JasonV3_Axe_Layer, M_JasonV4_PigSplitter_Layer,
+        // M_JasonV5_Shears_Layer, Weapon_Spear_01b_Layer, M_JasonV8_Axe_Layer). (J7's machete layer samples separate
+        // source / metalness / roughness maps: not yet.)
+        "/Game/Characters/Killers/Jason/J3/Textures/Jason_V3_Axe_Diffuse",
+        "/Game/Characters/Killers/Jason/J3/Textures/Jason_V3_Axe_Normal",
+        "/Game/Characters/Killers/Jason/J3/Textures/Jason_V3_Axe_RMA",
+        "/Game/Characters/Killers/Jason/J4/Textures/T_Jason_V4_PigSplitter_D",
+        "/Game/Characters/Killers/Jason/J4/Textures/T_Jason_V4_PigSplitter_N",
+        "/Game/Characters/Killers/Jason/J4/Textures/T_Jason_V4_PigSplitter_RMA",
+        "/Game/Characters/Killers/Jason/J5/Textures/T_Jason_V5_Shears_D",
+        "/Game/Characters/Killers/Jason/J5/Textures/T_Jason_V5_Shears_N",
+        "/Game/Characters/Killers/Jason/J5/Textures/T_Jason_V5_Shears_RMA",
+        "/Game/Props/Weapons/Spear/T_Weapon_Spear_02_D",
+        "/Game/Props/Weapons/Spear/T_Weapon_Spear_02_N",
+        "/Game/Props/Weapons/Spear/T_Weapon_Spear_02_RMA",
+        "/Game/Characters/Killers/Jason/J8/Textures/T_Jason_V8_FireAxe_D",
+        "/Game/Characters/Killers/Jason/J8/Textures/T_Jason_V8_FireAxe_N",
+        "/Game/Characters/Killers/Jason/J8/Textures/T_Jason_V8_FireAxe_RMA",
         // PhoneJunctionBox_BP's OnPhoneBoxDestroyed mesh, and its light material when repaired (RepairedLightMaterial).
         "/Game/Props/Interactive/S_Interactive_TelephoneBox_01_Broken",
         "/Game/Props/Interactive/M_Interactive_TelephoneBox_01_Emissive_Blue",
@@ -1463,10 +1486,14 @@ static class Mvp
         // The pickaxe's grab kills (SCKillerCharacter's GrabKills: KillerGrabWidget's icons, DoesKillVolumeFit's KillBounds).
         "Pickaxe_ThroatHack_GrabKill_C", "Pickaxe_Canopener_GrabKill_C", "PickAxe_CurbStomp_GrabKill_C",
         "PickAxe_SweepTheLeg_GrabKill_C", "PickAxe_TopPopper_GrabKill_C", "Choke_GrabKill_C",
+        // The other Jasons' weapons' DefaultGrabKill (each Jason's slot 1: Axe, PigSplitter, Shears, Spear, Machete, FireAxe).
+        "Axe_CrotchChop_GrabKill_C", "PigSplitter_TheJarvis_GrabKill_C", "Shears_LastBreath_GrabKill_C",
+        "Spear_KnockDown_GrabKill_C", "Machete_Eviscerate_GrabKill_C", "Fireaxe_Doubletap_GrabKill_C",
         // Jason's death (his JasonKillClass: a context kill) and Pamela's sweater's ability (its SweaterAbilityClass).
         "JasonDeath_C",
         // His mask, knocked off (Jason_SackHead_C's KillerMaskPickupClass: an SCKillerMask).
-        "J2_MaskPickup_C", "J3_MaskPickup_C"];
+        "J2_MaskPickup_C", "J3_MaskPickup_C", "J4_MaskPickup_C", "J5_MaskPickup_C", "J6_MaskPickup_C", "J7_MaskPickup_C",
+        "J8_MaskPickup_C"];
     // Montages whose length or root motion the rules use (anims.json).
     const string Shared = "/Game/Characters/Counselors/Base/Shared";
     public static readonly string[] Montages =
@@ -1891,13 +1918,18 @@ static class Mvp
     static string[] PickaxeKills => ["pickaxe_throathack", "pickaxe_head_canopener", "pickaxe_curbstomp", "pickaxe_sweeptheleg", "pickaxe_toppopper"];
     // Jason_SackHead's own grab kill (GrabKillClasses[0], inherited from Jason_Base): Choke_GrabKill's Jason_Choke_CK /
     // Counselor_Choke_CK.
-    static string[] CounselorKills => [.. PickaxeKills.Select(k => $"{Shared}/Cinematic/AM_cinematic_{k}"), .. PlacedKillsHers.Select(m => $"{Shared}/Cinematic/{m}"), $"{Shared}/Cinematic/AM_cinematic_hand_choke"];
+    // The other Jasons' weapons' DefaultGrabKill (Axe_CrotchChop, PigSplitter_TheJarvis, Shears_LastBreath,
+    // Spear_KnockDown, Machete_Eviscerate, Fireaxe_Doubletap): their special moves' ContextMontage, hers and his (the
+    // spear's differ).
+    static string[] WeaponKillsHers => ["axe_crotchchop", "pigsplitter_TheJarvis", "shears_lastbreath", "spear_head_knockdownstab", "machete_eviscerate_stomach", "fireaxe_doubletap"];
+    static string[] WeaponKillsHis => ["axe_crotchchop", "pigsplitter_TheJarvis", "shears_lastbreath", "m_spear_head_knockdownstab", "machete_eviscerate_stomach", "fireaxe_doubletap"];
+    static string[] CounselorKills => [.. PickaxeKills.Concat(WeaponKillsHers).Select(k => $"{Shared}/Cinematic/AM_cinematic_{k}"), .. PlacedKillsHers.Select(m => $"{Shared}/Cinematic/{m}"), $"{Shared}/Cinematic/AM_cinematic_hand_choke"];
     /// The map's placed (environment) kills' montages: their ContextKillComponents' special moves' ContextMontage, the
     /// victim's (Counselor_*) and Jason's (Jason_*).
     static string[] PlacedKillsHers => ["AM_Counselor_cinematic_swim_grabkill_01", "AM_cinematic_adirondackchair_kill", "AM_cinematic_fireplace", "AM_cinematic_gravestone_headsmash", "AM_cinematic_hand_birdbath", "AM_cinematic_hand_ironfence", "AM_cinematic_hand_table", "AM_cinematic_hand_tree_arm_ripoff", "AM_cinematic_hand_treestump_faceslam", "AM_cinematic_hand_waterpump", "AM_cinematic_stick_campfire", "AM_cinematic_surface_vertical_backbreak", "AM_cinematic_treebranch_chesthole_01", "AM_cinematic_wall_facesmash", "AM_cinematic_wall_headpunch_01"];
     static string[] PlacedKillsHis => ["AM_Jason_cinematic_swim_grabkill_01", "AM_Jason_cinematic_gravestone_headsmash_01", "AM_Jason_cinematic_surface_vertical_backbreak", "AM_cinematic_f_adirondackchair_kill_01", "AM_cinematic_fireplace", "AM_cinematic_hand_birdbath", "AM_cinematic_hand_ironfence", "AM_cinematic_hand_table", "AM_cinematic_hand_tree_arm_ripoff", "AM_cinematic_hand_treestump_faceslam", "AM_cinematic_hand_waterpump", "AM_cinematic_m_wall_facesmash_01", "AM_cinematic_stick_campfire", "AM_cinematic_treebranch_chesthole_01", "AM_cinematic_wall_headpunch_01"];
     const string JasonAnim = "/Game/Characters/Killers/Jason/Base/Animation";
-    static string[] JasonKills => [.. PickaxeKills.Select(k => $"{JasonAnim}/Cinematic/AM_cinematic_{k}"), .. PlacedKillsHis.Select(m => $"{JasonAnim}/Cinematic/{m}"), $"{JasonAnim}/Cinematic/AM_Jason_cinematic_hand_choke"];
+    static string[] JasonKills => [.. PickaxeKills.Concat(WeaponKillsHis).Select(k => $"{JasonAnim}/Cinematic/AM_cinematic_{k}"), .. PlacedKillsHis.Select(m => $"{JasonAnim}/Cinematic/{m}"), $"{JasonAnim}/Cinematic/AM_Jason_cinematic_hand_choke"];
     const string JasonStun = $"{JasonAnim}/Deaths_HitReacts_Stuns";
     public static string[] PairedKills => [.. CounselorKills, .. JasonKills];
     /// Getting in and out of the driver's seat and the passenger's (played from the seat's socket).
@@ -1943,6 +1975,12 @@ static class Mvp
         "/Game/Blueprints/ContextKills/PickAxe_SweepTheLeg_GrabKill",
         "/Game/Blueprints/ContextKills/PickAxe_TopPopper_GrabKill",
         "/Game/Blueprints/ContextKills/Choke_GrabKill",
+        "/Game/Blueprints/ContextKills/Axe_CrotchChop_GrabKill",
+        "/Game/Blueprints/ContextKills/PigSplitter_TheJarvis_GrabKill",
+        "/Game/Blueprints/ContextKills/Shears_LastBreath_GrabKill",
+        "/Game/Blueprints/ContextKills/Spear_KnockDown_GrabKill",
+        "/Game/Blueprints/ContextKills/Machete_Eviscerate_GrabKill",
+        "/Game/Blueprints/ContextKills/Fireaxe_Doubletap_GrabKill",
         // The placed kills' (their SCCameraSpline, under the ContextKillComponent).
         "/Game/Blueprints/ContextKills/Birdbath_PlacedKill",
         "/Game/Blueprints/ContextKills/HeadSmash_PlacedKill",

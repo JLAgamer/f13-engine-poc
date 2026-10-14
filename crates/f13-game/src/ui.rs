@@ -3163,7 +3163,7 @@ fn jason_hud(
     if j.holding() {
         const USABLE: [f32; 4] = [0.854993, 0.030713, 0.017642, 0.498039];
         const LOCKED: [f32; 4] = [0.039546, 0.039546, 0.039546, 1.0];
-        for (slot, &kill) in crate::jason::GRAB_KILL_SLOTS.iter().enumerate() {
+        for (slot, &kill) in crate::jason::grab_kill_slots().iter().enumerate() {
             let icon = hud.names.get(&format!("KillerGrabWidget.Icon{}", slot + 1)).copied();
             // An empty slot: no brush (Get_Icon*_Brush's NoDrawType).
             if let Some(mut v) = icon.and_then(|e| vis.get_mut(e).ok()) {

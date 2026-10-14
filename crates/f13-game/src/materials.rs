@@ -533,9 +533,12 @@ fn prop_params(info: &MaterialInfo, loader: &Loader) -> Option<(Handle<Image>, P
     }
     // Jason's pickaxe (M_JasonV2_PickAxe: its compiled base pass s025, F13-decomp shaders/M_JasonV2_PickAxe): the
     // prop masters' RMA (unscaled), specular 0.5, and its blood layer (MatLayerBlend_Simple of Blood_Layer) by
-    // WeaponBloodMask.r x ShowWeaponBlood (extra.z; extra.w 1: the mask in the lights' slot).
-    if info.master == "M_JasonV2_PickAxe" {
-        info!("material: Jason's pickaxe, with its blood layer");
+    // WeaponBloodMask.r x ShowWeaponBlood (extra.z; extra.w 1: the mask in the lights' slot). The other Jasons' weapons'
+    // masters are the same graph (MatLayerBlend_Simple of their own _Layer function and Blood_Layer, ShowWeaponBlood,
+    // WeaponBloodMask; their compiled passes not compared: PLACEHOLDER).
+    const WEAPONS: [&str; 6] = ["M_JasonV2_PickAxe", "M_JasonV3_Axe", "M_JasonV4_PigSplitter", "M_JasonV5_Shears", "M_JasonV8_Axe", "M_Weapon_Spear_01b_BloodMask"];
+    if WEAPONS.contains(&info.master.as_str()) {
+        info!("material: Jason's weapon ({}), with its blood layer", info.master);
         let rma = loader.load(info.textures.get("RMA")?, Tex::Data)?;
         let mask = loader.load(info.textures.get("WeaponBloodMask")?, Tex::Data)?;
         let extra = Vec4::new(0.0, 0.0, info.scalar("ShowWeaponBlood", 0.0), 1.0);
