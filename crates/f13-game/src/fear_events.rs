@@ -189,7 +189,7 @@ fn setup(
     locked: Res<LockedFear>,
     players: Query<(Entity, &Player), Without<CounselorFear>>,
 ) {
-    let (Some(t), Some(pt)) = (tuning, player_tuning) else { return };
+    let (Some(t), Some(_)) = (tuning, player_tuning) else { return };
     for (e, p) in &players {
         let mut fear = Fear::new(t.update_delay);
         if let Some(v) = locked.0 {
