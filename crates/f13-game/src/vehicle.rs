@@ -144,6 +144,11 @@ fn drive(
     (no_vehicle, not_vehicle): (Query<(), With<crate::collision::NoVehicle>>, Option<Res<crate::collision::NotVehicle>>),
 ) {
     let dt = time.delta_secs();
+    // Who's in each car (GetNumberOfPeopleInVehicle).
+    let mut aboard: std::collections::HashMap<Entity, usize> = std::collections::HashMap::new();
+    for (_, d, _, _, _) in &drivers {
+        *aboard.entry(d.vehicle).or_default() += 1;
+    }
     for (driver, mut player, mut inv, p, escaped) in &mut drivers {
     let (player, inv) = (&mut *player, &mut *inv);
     // A passenger rides; the driver drives.
@@ -160,7 +165,9 @@ fn drive(
         let s = &tuning.vehicle_start;
         let hold = player.starting.get_or_insert_with(|| {
             let base = rng.0.frand() * (s.max_restart_time - s.min_restart_time) + s.min_restart_time;
-            HoldInteraction::new(base * s.restart_time_mod.value(&p.counselor.stats, true), false)
+            // FUN_14041fce0: less her perks' CarStartTimeModifier share (a car: VehicleType 1).
+            let time = base * s.restart_time_mod.value(&p.counselor.stats, true);
+            HoldInteraction::new(time - time * p.counselor.perks.get("CarStartTimeModifier"), false)
         });
         let mut events = Vec::new();
         hold.tick(dt, &p.counselor.stats, &tuning.minigame, &mut rng.0, &mut events);
@@ -204,6 +211,14 @@ fn drive(
         if v.sim.is_none() {
             let setup = v.px.clone().unwrap();
             v.sim = Some(f13_core::vehicle_px::Car::new(setup, to_unreal(xf.translation), ue_quat(xf.rotation)));
+        }
+        // The driver's perks on its engine (FUN_140446ee0: MaxRPM x (1 + CarSpeedModifier, + Speed Demon's
+        // SoloEscapeVehicleSpeedModifier with her alone in it); FUN_14044a340 sets it).
+        let m = &p.counselor.perks;
+        let alone = aboard.get(&me).copied().unwrap_or(1) == 1;
+        let rpm = v.px.as_ref().unwrap().max_rpm * (1.0 + m.get("CarSpeedModifier") + if alone { m.get("SoloEscapeVehicleSpeedModifier") } else { 0.0 });
+        if let Some(car) = v.sim.as_mut().filter(|c| (c.max_rpm() - rpm).abs() > 1e-3) {
+            car.set_max_rpm(rpm);
         }
         // What blocks the Vehicle channel, less the car's own colliders (its body, its parts: anything under it). The
         // suspension rays too: UE's WheelRaycastPreFilter blocks on the hit shape's response to the query's channel,

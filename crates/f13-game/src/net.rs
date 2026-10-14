@@ -287,6 +287,9 @@ pub struct NetJason {
     /// Its victim's body (NetBody id) and whether everyone watches it (kill_camera.rs: whose it is).
     #[serde(default)]
     pub kill_cam_of: (Option<u64>, bool),
+    /// The counselors (NetBody ids) this Sense leaves out (senses.rs roll_sense_avoiders).
+    #[serde(default)]
+    pub sense_avoid: Vec<u64>,
     /// His mask on (bMaskOn) and his health.
     #[serde(default)]
     pub mask_on: bool,
@@ -911,6 +914,7 @@ fn update_bodies(
             minigame: j.stun_minigame().map(|(c, t)| ((c.clamp(0.0, 1.0) * 100.0).round() as u8, t.to_string())),
             // (Tenths of a second: an unchanged component doesn't go out again.)
             sense: know.map_or((0.0, 0.0), |k| (((k.sense_until - fixed.elapsed_secs()).max(0.0) * 10.0).ceil() / 10.0, k.sense_length)),
+            sense_avoid: know.map_or_else(Vec::new, |k| k.sense_avoiders.iter().map(|e| e.to_bits()).collect()),
             state: j.state_name(),
             cooldown: j.cooldown,
             unlocked: a.map_or([false; 4], |a| a.unlocked),
@@ -1352,6 +1356,10 @@ fn mirror(
                     k.sense_until = if n.sense.0 > 0.0 { until } else { 0.0 };
                 }
                 k.sense_length = n.sense.1;
+                let avoiders: Vec<Entity> = n.sense_avoid.iter().filter_map(|&id| bodies_of.of(id)).collect();
+                if k.sense_avoiders != avoiders {
+                    k.sense_avoiders = avoiders;
+                }
                 let a = &mut k.abilities;
                 a.unlocked = n.unlocked;
                 a.recharge_timer = n.recharge;

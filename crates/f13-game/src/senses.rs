@@ -82,6 +82,10 @@ pub struct Knowledge {
     pub highlighted: Vec<Entity>,
     /// The cabins (match actor indices) Sense shows counselors in, but his own (their SetSenseEffects).
     pub sensed_cabins: Vec<usize>,
+    /// The counselors this Sense leaves out (their perks' avoid chances, rolled as it started: [`roll_sense_avoiders`];
+    /// the server's, replicated), and whether this one has rolled.
+    pub sense_avoiders: Vec<Entity>,
+    avoid_rolled: bool,
     next_sight: f32,
 }
 
@@ -96,7 +100,7 @@ pub struct SensesPlugin;
 impl Plugin for SensesPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, setup)
-            .add_systems(FixedUpdate, (perceive, blips).chain().before(crate::jason::update_jason).run_if(crate::net::simulating).run_if(crate::match_flow::in_progress))
+            .add_systems(FixedUpdate, (roll_sense_avoiders, perceive, blips).chain().before(crate::jason::update_jason).run_if(crate::net::simulating).run_if(crate::match_flow::in_progress))
             .add_systems(Update, sense_highlights)
             .add_observer(show_blip);
     }
@@ -158,6 +162,8 @@ fn setup(
             sense_shows: None,
             highlighted: Vec::new(),
             sensed_cabins: Vec::new(),
+            sense_avoiders: Vec::new(),
+            avoid_rolled: false,
             next_sight: 0.0,
         });
     }
@@ -266,6 +272,50 @@ fn blocked(world: &(impl f13_core::collision::TriSource + ?Sized), a: Vec3, b: V
 /// only raged, by the hiding curve; 2D) and outside, not hiding: her (custom depth); indoors: her cabin (its
 /// SetSenseEffects), but not the one he's in; hiding: nothing shows (the spots' stencil stays 0). Worked out on every
 /// machine (the game's tick is local), from the Sense timer (the server's; net.rs replicates it).
+/// As Sense starts (FUN_14040a230, its list of counselors): each one it leaves out, by her perks' chances
+/// (rand() / 32767 < the sum over her ActivePerks of AvoidSenseChance, + AvoidSenseIndoorsChance indoors, +
+/// SwimmingAvoidSenseChance swimming, + AvoidSenseInSleepingBagChance hiding in a tent: ESCHidingSpotType 4).
+#[allow(clippy::type_complexity)]
+pub(crate) fn roll_sense_avoiders(
+    time: Res<Time>,
+    mut rng: ResMut<crate::GameRng>,
+    surroundings: Option<Res<crate::fear_events::Surroundings>>,
+    mut jasons: Query<&mut Knowledge, With<Jason>>,
+    players: Query<(Entity, &Player, &Transform, Option<&Hiding>), Without<Jason>>,
+    spots: Query<&crate::hiding::HidingSpot>,
+) {
+    let now = time.elapsed_secs();
+    for mut k in &mut jasons {
+        if !k.sensing(now) {
+            k.avoid_rolled = false;
+            continue;
+        }
+        if k.avoid_rolled {
+            continue;
+        }
+        k.avoid_rolled = true;
+        let mut avoiders = Vec::new();
+        for (e, p, xf, hiding) in &players {
+            let m = &p.counselor.perks;
+            let mut chance = m.get("AvoidSenseChance");
+            if surroundings.as_ref().is_some_and(|s| s.indoors(xf.translation)) {
+                chance += m.get("AvoidSenseIndoorsChance");
+            }
+            if p.counselor.stance == f13_core::counselor::Stance::Swimming {
+                chance += m.get("SwimmingAvoidSenseChance");
+            }
+            if hiding.and_then(|h| spots.get(h.spot).ok()).is_some_and(|s| s.kind == crate::hiding::SpotKind::Tent) {
+                chance += m.get("AvoidSenseInSleepingBagChance");
+            }
+            if chance > 0.0 && rng.0.frand() < chance {
+                info!("senses: {e} avoids Sense ({chance:.2})");
+                avoiders.push(e);
+            }
+        }
+        k.sense_avoiders = avoiders;
+    }
+}
+
 #[allow(clippy::type_complexity)]
 fn sense_highlights(
     time: Res<Time>,
@@ -284,7 +334,7 @@ fn sense_highlights(
         if k.sensing(now) {
             let his = cabin_at(jxf.translation);
             for (e, p, xf, hiding) in &players {
-                if !p.counselor.alive() {
+                if !p.counselor.alive() || k.sense_avoiders.contains(&e) {
                     continue;
                 }
                 let hidden = hiding.is_some_and(|h| matches!(h.phase, HidePhase::Hidden | HidePhase::Killed));
@@ -334,7 +384,8 @@ pub(crate) fn perceive(
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
     let world = collision.with(&dynamic);
-    let Some(Ok((p, pxf, hiding))) = target.and_then(|t| t.0).map(|t| players.get(t)) else { return };
+    let Some(target) = target.and_then(|t| t.0) else { return };
+    let Ok((p, pxf, hiding)) = players.get(target) else { return };
     for (j, jxf, mut k) in &mut jasons {
         // Abilities run from the start of the match.
         let blockers = Blockers { stunned: matches!(j.state, JasonState::Stunned { .. }), underwater: j.underwater, ..default() };
@@ -409,7 +460,8 @@ pub(crate) fn perceive(
             info!("Jason: Sense ({:.0} s)", v.sense.duration);
         }
         let mut shows = None;
-        if k.sensing(now) {
+        // (Not one this Sense leaves out: roll_sense_avoiders.)
+        if k.sensing(now) && !k.sense_avoiders.contains(&target) {
             let radius = perception::sense_radius(&v.sense, p.fear, hidden, k.abilities.rage_active, k.abilities.rage_timer) / 100.0;
             if flat.length() <= radius {
                 let indoors = surroundings.as_ref().map_or_else(

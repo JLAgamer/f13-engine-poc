@@ -49,14 +49,15 @@ impl Counselor {
         self.health > 0.0
     }
 
-    /// Applies a hit. Returns what happened; `dealt` is 0 when the hit was ignored.
+    /// Applies a hit. Returns what happened; `dealt` is 0 when the hit was ignored. (SCCounselorCharacter's TakeDamage
+    /// FUN_1403d7410: x (1 + her perks' WeaponDamageTakenModifier), every hit.)
     pub fn take_damage(&mut self, hit: Hit, t: &CounselorTuning) -> DamageResult {
         let none = DamageResult { dealt: 0.0, became_wounded: false, died: false };
         if !self.alive() {
             return none;
         }
         let block = if hit.blocked_with_weapon { t.health.blocking_damage_mod.value(&self.stats, true) } else { 1.0 };
-        let damage = hit.amount * block;
+        let damage = hit.amount * block * (1.0 + self.perks.get("WeaponDamageTakenModifier"));
         if damage <= 0.0 {
             return none;
         }

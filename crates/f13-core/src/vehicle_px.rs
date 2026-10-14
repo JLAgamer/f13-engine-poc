@@ -252,6 +252,20 @@ struct WheelsOut {
 pub type RayHit = Option<(f32, Vec3)>;
 
 impl Car {
+    /// Its engine's MaxRPM changed (the game's FUN_14044a340: UpdateEngineSetup with a new MaxRPM, the driver's perks):
+    /// its max omega, and its torque curve normalised against it again.
+    pub fn set_max_rpm(&mut self, max_rpm: f32) {
+        self.setup.max_rpm = max_rpm;
+        self.max_omega = rpm_to_omega(max_rpm);
+        let peak = self.setup.torque_curve.iter().map(|k| k.1).fold(0.0, f32::max);
+        self.torque_curve = self.setup.torque_curve.iter().map(|&(rpm, t)| ((rpm / max_rpm).clamp(0.0, 1.0), t / peak.max(1e-6))).collect();
+        self.engine_omega = self.engine_omega.min(self.max_omega);
+    }
+
+    pub fn max_rpm(&self) -> f32 {
+        self.setup.max_rpm
+    }
+
     pub fn new(setup: CarSetup, position: Vec3, rotation: Quat) -> Self {
         let com = setup.com;
         // computeSprungMasses (4 wheels, gravity along Z): the masses on the wheels that put their centre at the
