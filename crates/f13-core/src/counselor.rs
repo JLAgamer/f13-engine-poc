@@ -116,6 +116,8 @@ pub struct Situation {
     pub dodging: bool,
     /// Holding the drop button for a small or large item.
     pub dropping_item: bool,
+    /// In a playing radio's perk volume (FUN_1403bd6a0: one of her overlapping radios has bIsPlaying).
+    pub near_playing_radio: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -257,7 +259,9 @@ impl Counselor {
         }
         let refill = t.stamina_refill_rate.value(&self.stats, false);
         let fear_mul = t.stamina_fear_curve.as_ref().map_or(1.0, |c| c(s.fear));
-        let regen = |c: &Self| c.stamina_rate(s, t) * refill * fear_mul * dt;
+        // Her regen near a playing radio (FUN_1403a3760): x (1 + her perks' RadioStaminaModifier).
+        let radio = if s.near_playing_radio { 1.0 + self.perks.get("RadioStaminaModifier") } else { 1.0 };
+        let regen = |c: &Self| c.stamina_rate(s, t) * refill * fear_mul * radio * dt;
         let drain = |c: &Self| c.stamina_rate(s, t) * t.stamina_deplete_rate * dt;
 
         if self.stance == Stance::Swimming {
@@ -268,7 +272,7 @@ impl Counselor {
             }
         } else if s.speed_sq <= STILL_SPEED_SQ || s.in_special_move || s.stunned {
             if s.grabbed {
-                self.stamina += t.grabbed_stamina_refill.value(&self.stats, false) * self.stamina_rate(s, t) * dt;
+                self.stamina += t.grabbed_stamina_refill.value(&self.stats, false) * self.stamina_rate(s, t) * radio * dt;
             } else {
                 self.stamina += regen(self);
             }
@@ -434,6 +438,20 @@ pub(crate) mod tests {
         assert!((c.stamina_rate(&moving(), &t) - 0.85 * b.stamina_rate(&moving(), &t)).abs() < 1e-5);
         let stat = t.speed_stat_mod.value(&c.stats, false);
         assert!((c.speed_modifier(&moving(), &t) - (b.speed_modifier(&moving(), &t) - 0.05 * stat)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn easy_listening_scales_regen_near_a_playing_radio() {
+        let t = tuning();
+        let mut c = Counselor::new([5; STAT_COUNT]);
+        c.perks.0.insert("RadioStaminaModifier".into(), 0.5);
+        c.stamina = 50.0;
+        let mut d = c.clone();
+        let mut ev = vec![];
+        c.tick_stamina(0.1, &Situation::default(), &t, &mut ev);
+        d.tick_stamina(0.1, &Situation { near_playing_radio: true, ..Default::default() }, &t, &mut ev);
+        assert!(c.stamina > 50.0);
+        assert!(((d.stamina - 50.0) - 1.5 * (c.stamina - 50.0)).abs() < 1e-4);
     }
 
     #[test]

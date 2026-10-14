@@ -12,7 +12,10 @@
 //! (OnRep_Broken: its Interactable off, BreakSound) and stops the music; the Blueprint's OnRadioDestroyed activates
 //! P_Radio_Destroyed_01. A playing radio puts sound blips on his screen (senses.rs).
 //!
-//! Not ported: the perk volume (PerkModifierVolume: perks aren't in), the AudioComponents' attenuation overrides
+//! Its PerkModifierVolume (a sphere: the constructor's 1500 cm, BP_Radio_C's 32; Pawn overlaps): a counselor in it while
+//! it plays regenerates stamina x (1 + her perks' RadioStaminaModifier) ([`near_radios`]).
+//!
+//! Not ported: the AudioComponents' attenuation overrides
 //! (their NaturalSound falloff and occlusion: the cue's own attenuation plays). PLACEHOLDER: the first track (0: the
 //! constructor's zeroed index, unread).
 
@@ -24,7 +27,8 @@ pub struct RadioPlugin;
 
 impl Plugin for RadioPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, radio_bot.run_if(resource_exists::<RadioBot>)).add_systems(Update, (spawn_radios, next_track.run_if(crate::net::simulating), uses.run_if(crate::net::simulating), effects).chain());
+        app.add_systems(Update, radio_bot.run_if(resource_exists::<RadioBot>)).add_systems(Update, (spawn_radios, next_track.run_if(crate::net::simulating), uses.run_if(crate::net::simulating), effects).chain())
+            .add_systems(FixedUpdate, near_radios.run_if(crate::net::simulating));
     }
 }
 
@@ -48,6 +52,8 @@ pub struct Radio {
     pub hold_limit: f32,
     /// Counselor_UseRadio's spot (CounselorUse_SpecialMoveHandler, world).
     pub use_spot: Transform,
+    /// The PerkModifierVolume's centre (world) and radius (m).
+    pub perk_volume: (Vec3, f32),
     pub broken: bool,
     pub playing: bool,
     pub track: usize,
@@ -168,6 +174,10 @@ fn spawn_radios(
                 reach: props.and_then(|p| p["DistanceLimit"].as_f64()).map_or(100.0, |v| v as f32),
                 hold_limit: props.and_then(|p| p["HoldTimeLimit"].as_f64()).map_or(0.5, |v| v as f32),
                 use_spot: world("CounselorUse_SpecialMoveHandler"),
+                perk_volume: (
+                    world("PerkModifierVolume").translation,
+                    component("PerkModifierVolume").and_then(|c| c.props["SphereRadius"].as_f64()).map_or(1500.0, |v| v as f32) / 100.0,
+                ),
                 broken: false,
                 playing: false,
                 track: 0,
@@ -182,6 +192,30 @@ fn spawn_radios(
             crate::interact::InteractLimits::of(classes, class),
         ));
         info!("radio at ({:.0}, {:.0}, {:.0})", xf.translation.x, xf.translation.y, xf.translation.z);
+    }
+}
+
+/// In a playing radio's perk volume (OnBegin/EndPerkVolumeOverlap: her capsule overlapping its sphere).
+#[derive(Component)]
+pub struct NearPlayingRadio;
+
+/// Marks the counselors in a playing radio's PerkModifierVolume (the stamina tick's FUN_1403bd6a0).
+fn near_radios(mut commands: Commands, radios: Query<&Radio>, counselors: Query<(Entity, &Transform, Has<NearPlayingRadio>), With<crate::player::Player>>) {
+    use crate::player::{CAPSULE_HALF_HEIGHT_M as H, CAPSULE_RADIUS_M as R};
+    for (e, xf, marked) in &counselors {
+        let (a, b) = (xf.translation + Vec3::Y * R, xf.translation + Vec3::Y * (2.0 * H - R));
+        let near = radios.iter().filter(|r| r.playing).any(|r| {
+            let (c, radius) = r.perk_volume;
+            let t = ((c - a).dot(b - a) / (b - a).length_squared().max(1e-6)).clamp(0.0, 1.0);
+            (a + (b - a) * t).distance(c) < radius + R
+        });
+        if near && !marked {
+            info!("in a playing radio's perk volume");
+            commands.entity(e).insert(NearPlayingRadio);
+        } else if !near && marked {
+            info!("out of the radio's perk volume");
+            commands.entity(e).remove::<NearPlayingRadio>();
+        }
     }
 }
 

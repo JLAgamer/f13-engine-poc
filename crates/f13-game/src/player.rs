@@ -409,17 +409,17 @@ fn update_counselor(
     tuning: Res<PlayerTuning>,
     anims: Res<crate::Anims>,
     mut rng: ResMut<crate::GameRng>,
-    mut counselors: Query<(&mut Player, &mut Intent, Has<crate::controls::LocalPlayer>)>,
+    mut counselors: Query<(&mut Player, &mut Intent, Has<crate::controls::LocalPlayer>, Has<crate::radio::NearPlayingRadio>)>,
     mut demo_log: Local<u32>,
 ) {
-    for (mut player, mut intent, local) in &mut counselors {
-        update_one(&mut player, &mut intent, local, &config, &time, &tuning, &anims, &mut rng, &mut demo_log);
+    for (mut player, mut intent, local, radio) in &mut counselors {
+        update_one(&mut player, &mut intent, local, radio, &config, &time, &tuning, &anims, &mut rng, &mut demo_log);
     }
 }
 
 /// One counselor's [`update_counselor`].
 #[allow(clippy::too_many_arguments)]
-fn update_one(p: &mut Player, intent: &mut Intent, local: bool, config: &PlayerConfig, time: &Time, tuning: &PlayerTuning, anims: &crate::Anims, rng: &mut crate::GameRng, demo_log: &mut u32) {
+fn update_one(p: &mut Player, intent: &mut Intent, local: bool, radio: bool, config: &PlayerConfig, time: &Time, tuning: &PlayerTuning, anims: &crate::Anims, rng: &mut crate::GameRng, demo_log: &mut u32) {
     let now = time.elapsed_secs();
     // Consume this frame's one-shot actions (see PlayerPlugin).
     let once = Intent { movement: intent.movement, sprint_held: intent.sprint_held, yaw: intent.yaw, last_tap: intent.last_tap, ..default() };
@@ -467,7 +467,7 @@ fn update_one(p: &mut Player, intent: &mut Intent, local: bool, config: &PlayerC
             p.montage = Some(m.name.clone());
         }
     }
-    let situation = p.situation();
+    let situation = Situation { near_playing_radio: radio, ..p.situation() };
     let mut events = Vec::new();
     p.counselor.tick_stamina(time.delta_secs(), &situation, t, &mut events);
     for e in events {
