@@ -173,8 +173,8 @@ pub(crate) fn bot_kill_jason(
     time: Res<Time>,
     real: Res<Time<bevy::time::Real>>,
     (mut keys, mut mouse): (ResMut<ButtonInput<KeyCode>>, ResMut<ButtonInput<MouseButton>>),
-    items: Query<(&crate::props::Item, &GlobalTransform), Without<crate::interact::Carried>>,
-    mut me: Query<(&mut Transform, Option<&crate::sweater::Sweater>), (With<crate::controls::LocalPlayer>, With<Player>)>,
+    (items, all_items): (Query<(&crate::props::Item, &GlobalTransform), Without<crate::interact::Carried>>, Query<&crate::props::Item>),
+    mut me: Query<(&mut Transform, &crate::interact::Inventory), (With<crate::controls::LocalPlayer>, With<Player>)>,
     jasons: Query<(&crate::jason::Jason, &Transform), Without<Player>>,
     mut camera: Query<&mut crate::player::PlayerCamera>,
     mut exit: MessageWriter<AppExit>,
@@ -183,11 +183,15 @@ pub(crate) fn bot_kill_jason(
     keys.release(KeyCode::KeyE);
     keys.release(KeyCode::KeyQ);
     mouse.release(MouseButton::Left);
-    let Ok((mut xf, sweater)) = me.single_mut() else { return };
+    let Ok((mut xf, inv)) = me.single_mut() else { return };
+    // Wearing it: Pamela's sweater among her special items (replicated: a client's bot reads it too).
+    let sweater = inv.special.iter().any(|&i| all_items.get(i).is_ok_and(|it| crate::sweater::SWEATER_CLASSES.contains(&it.class.as_str()))).then_some(());
     let Some((j, jxf)) = jasons.iter().next() else { return };
     let mut face = |xf: &mut Transform, at: Vec3, from: f32| {
         let fwd = jxf.rotation * Vec3::Z;
         xf.translation = Vec3::new(at.x + fwd.x * from, xf.translation.y.max(at.y), at.z + fwd.z * from);
+        // (On a client the server places her: a bot hook, sent once per place.)
+        crate::bot::setup(crate::bot::BotSetup::Place(xf.translation.to_array()));
         // Facing him (she faces +Z).
         let to = at - xf.translation;
         xf.rotation = Quat::from_rotation_y(to.x.atan2(to.z));
@@ -278,11 +282,12 @@ pub(crate) fn bot_kill_jason(
             }
         }
         6 => {
-            if matches!(j.state, crate::jason::JasonState::Dead) {
+            // (Dead: his take over; a client has the server's state by name.)
+            if matches!(j.state, crate::jason::JasonState::Dead) || j.state_name_remote() == Some("Dead") {
                 info!("bot: kill jason: passed");
                 exit.write(AppExit::Success);
                 next(&mut bot, 9);
-            } else if bot.t > 30.0 {
+            } else if bot.t > 60.0 {
                 fail(&mut exit, "he didn't die");
             }
         }

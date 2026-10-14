@@ -721,20 +721,38 @@ impl Jason {
     /// In a context kill (bInContextKill): a grab, placed or hiding spot kill.
     /// In his kill stance (a counselor can kill him: jason_death.rs).
     pub fn kneeling(&self) -> bool {
+        // (A client has the server's state by name.)
+        if self.remote.is_some() {
+            return self.remote_state == "KillStance";
+        }
         matches!(self.state, JasonState::KillStance { .. })
     }
 
     /// Dead (killed: jason_death.rs).
+    /// A client's view of the server's state, by name (None on the server).
+    pub fn state_name_remote(&self) -> Option<&str> {
+        self.remote.as_ref().map(|_| self.remote_state.as_str())
+    }
+
     pub fn dead(&self) -> bool {
+        if self.remote.is_some() {
+            return self.remote_state == "Dying" || self.remote_state == "Dead";
+        }
         matches!(self.state, JasonState::Dying { .. } | JasonState::Dead)
     }
 
     /// Morphing (bIsMorphActive).
     pub fn morphing(&self) -> bool {
+        if self.remote.is_some() {
+            return self.remote_state == "Morphing";
+        }
         matches!(self.state, JasonState::Morphing { .. })
     }
 
     pub fn in_context_kill(&self) -> bool {
+        if self.remote.is_some() {
+            return self.remote_state == "Killing" || self.remote_state == "HideKill";
+        }
         matches!(self.state, JasonState::Killing { .. } | JasonState::HideKill { .. })
     }
 

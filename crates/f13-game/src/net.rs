@@ -292,6 +292,9 @@ pub struct NetJason {
     /// Sense: how long it's still on (s; 0 off) and its length (every machine works out its highlights: senses.rs).
     #[serde(default)]
     pub sense: (f32, f32),
+    /// Pamela's sweater stunned him (his kill's condition: the bots read it).
+    #[serde(default)]
+    pub sweater_stunned: bool,
     /// His stun's minigame (its completion, in hundredths, and StunText), for his player's wiggle widget.
     #[serde(default)]
     pub minigame: Option<(u8, String)>,
@@ -890,6 +893,7 @@ fn update_bodies(
             mask_on: j.mask_on,
             health: j.health,
             morph_map: morph_map.as_ref().is_some_and(|m| m.morph),
+            sweater_stunned: j.sweater_stunned,
             minigame: j.stun_minigame().map(|(c, t)| ((c.clamp(0.0, 1.0) * 100.0).round() as u8, t.to_string())),
             // (Tenths of a second: an unchanged component doesn't go out again.)
             sense: know.map_or((0.0, 0.0), |k| (((k.sense_until - fixed.elapsed_secs()).max(0.0) * 10.0).ceil() / 10.0, k.sense_length)),
@@ -1279,6 +1283,7 @@ fn mirror(
             j.underwater = n.underwater;
             j.knives = n.knives;
             j.mask_on = n.mask_on;
+            j.sweater_stunned = n.sweater_stunned;
             j.health = n.health;
             j.traps = n.traps;
             j.remote = Some(crate::jason::RemoteView {

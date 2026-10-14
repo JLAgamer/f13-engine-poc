@@ -531,7 +531,8 @@ pub struct GameSpeed(pub f32);
 /// SCAnimNotifyState_SloMo (NotifyBegin 0x140315540: the world settings' SetTimeDilation(SloMoSpeed), clamped to
 /// Min/MaxGlobalTimeDilation (0x1417e52b0); NotifyEnd 0x14031eb30: back to 1): while a character's action is in a
 /// "SloMo <speed>" window, the whole game runs at that speed (WorldSettings.TimeDilation replicates: every player's
-/// game slows; here every machine works it out from the actions it plays).
+/// game slows). Here the server (or a lone game) slows its own clock; a client's follows it: lightyear's tick sync
+/// sets a client's virtual time speed every frame (to the server's slowed ticks).
 pub(crate) fn time_dilation(
     speed: Option<Res<GameSpeed>>,
     counselor: Option<Res<CounselorCharacter>>,
@@ -539,7 +540,11 @@ pub(crate) fn time_dilation(
     rigs: Query<&Rig>,
     mut time: ResMut<Time<Virtual>>,
     mut last: Local<Option<f32>>,
+    client: Option<Res<crate::net::NetClient>>,
 ) {
+    if client.is_some() {
+        return;
+    }
     let mut dilation = 1.0;
     for rig in &rigs {
         let Some((name, t)) = &rig.action else { continue };
