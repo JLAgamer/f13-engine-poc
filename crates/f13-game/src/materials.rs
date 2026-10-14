@@ -762,6 +762,14 @@ fn master_material(root: &Path, info: &MaterialInfo, loader: &Loader) -> Option<
             };
             (params, t)
         }
+        "M_Flirt_EyeLashes" => {
+            // Masked by its own dither in the shader (mode 5); its base colour there.
+            base.base_color_texture = None;
+            base.alpha_mode = AlphaMode::Opaque;
+            let c = info.vectors.get("EyeLash Color").copied().unwrap_or([0.0, 0.0, 0.0, 1.0]);
+            let mask = info.textures.get("HairMask").and_then(|p| loader.load(p, Tex::Data))?;
+            (MasterParams { mode: Vec4::new(5.0, 0.0, 0.0, 0.0), a: Vec4::new(c[0], c[1], c[2], 1.0), b: Vec4::ZERO }, mask)
+        }
         "EyeMaster_LowerLid" => {
             // BaseColor, Roughness, Specular (its Subsurface shading's SubsurfaceColor is black: lit as default).
             let c = info.vectors.get("BaseColor").copied().unwrap_or([0.5, 0.5, 0.5, 1.0]);

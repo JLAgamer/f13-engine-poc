@@ -12,6 +12,9 @@
 // Mode 4, the eyes' lower-lid film (EyeMaster_LowerLid, its masked depth pass s010): clipped where
 //   1 - (0.04 + 0.96 (1 - max(N.V, 0))^FresnelPower (mode.y)) < 0.3333 (it shows only facing the view); drawn blended at
 //   alpha 1 (so neither the depth prepass nor the shadows take its whole mesh).
+// Mode 5, Tiffany's lashes and liner (M_Flirt_EyeLashes, masked, its base pass s188): base colour saturate(EyeLash
+//   Color) (a.rgb); discarded where HairMask.r + its dither (DitherTemporalAA: frac(frac((2 y + x - 1.5) 0.2) x 5 +
+//   frac(dot(pixel, (2.408451, 3.253521)))) / 6, the frame index 0) < 0.8333.
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
@@ -77,6 +80,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         out.color = vec4(max(c, vec3(0.0)) * view.exposure, 1.0);
         out.color = main_pass_post_lighting_processing(pbr_input, out.color);
         return out;
+    }
+#endif
+#ifdef VERTEX_UVS_A
+    if mode == 5u {
+        let p = in.position.xy;
+        let d = (fract((2.0 * p.y + p.x - 1.5) * 0.2) * 5.0 + fract(dot(vec2(2.408451, 3.253521), p))) / 6.0;
+        if textureSample(tex, tex_sampler, in.uv).r + d - 0.8333 < 0.0 {
+            discard;
+        }
+        pbr_input.material.base_color = vec4(saturate(params.a.rgb), 1.0);
     }
 #endif
     if mode == 4u {

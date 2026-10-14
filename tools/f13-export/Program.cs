@@ -673,6 +673,14 @@ switch (rest[0])
             Console.WriteLine(Newtonsoft.Json.JsonConvert.SerializeObject(e, Newtonsoft.Json.Formatting.Indented));
         }
         return 0;
+    case "skelsections": // skelsections <skeletal mesh package>: LOD 0's sections: material index, vertices, bone map (by name)
+        foreach (var m in provider.LoadPackage(ToFile(rest[1])).GetExports().OfType<USkeletalMesh>())
+        {
+            var lod = m.LODModels![0];
+            foreach (var sec in lod.Sections)
+                Console.WriteLine($"mat {sec.MaterialIndex} base {sec.BaseVertexIndex} n {sec.NumVertices} bones [{string.Join(", ", sec.BoneMap.Select(i => m.ReferenceSkeleton.FinalRefBoneInfo[i].Name.Text))}]");
+        }
+        return 0;
     case "bones": // bones <skeletal mesh package>: its reference skeleton (name, parent, local rotator and translation, Unreal space)
         foreach (var m in provider.LoadPackage(ToFile(rest[1])).GetExports().OfType<USkeletalMesh>())
             for (var i = 0; i < m.ReferenceSkeleton.FinalRefBoneInfo.Length; i++)

@@ -358,8 +358,8 @@ fn face(
     time: Res<Time>,
     root: Res<crate::ExportRoot>,
     character: Option<Res<CounselorCharacter>>,
-    rigs: Query<(&ChildOf, &Rig)>,
-    players: Query<(&Player, Option<&f13_bevy::CounselorFear>)>,
+    rigs: Query<(Entity, &ChildOf, &Rig)>,
+    (players, previews): (Query<(&Player, Option<&f13_bevy::CounselorFear>)>, Query<(), With<crate::counselor_preview::PreviewRig>>),
     mut faces: Query<&mut FaceAnim>,
     children: Query<&Children>,
     mut weights: Query<(&mut MorphWeights, &Children)>,
@@ -376,8 +376,14 @@ fn face(
         *rng = 0x9e37_79b9_7f4a_7c15;
     }
     let dt = time.delta_secs();
-    for (parent, rig) in &rigs {
-        let Ok((p, fear)) = players.get(parent.parent()) else { continue };
+    for (rig_entity, parent, rig) in &rigs {
+        // A player's counselor, or a menu's preview of one (SCCounselorCharacter there too: her face anim instance runs,
+        // alive and unafraid; its base pose places the face on the head).
+        let (alive, fear) = match players.get(parent.parent()) {
+            Ok((p, fear)) => (p.counselor.alive(), fear.map_or(0.0, |f| f.0.fear)),
+            Err(_) if previews.contains(rig_entity) => (true, 0.0),
+            Err(_) => continue,
+        };
         // Her own face's (her class's base pose and poses).
         let looks = rig.visual.as_deref().unwrap_or(info);
         let t = &*tuning.entry(looks.name.clone()).or_insert_with(|| FaceTuning::new(looks, &root.0));
@@ -387,7 +393,6 @@ fn face(
             commands.entity(face_entity).try_insert(FaceAnim { blink_timer: timer, blink: false, eyelid: 0.0, eyelid_target: 1.0, fear: 0.0, shock: 0.0, look: Look::default(), pose_time: 0.0, montage: false, montage_last: [0.0; 6], alphas: [0.0; 6], rest: Default::default() });
             continue;
         };
-        let alive = p.counselor.alive();
         let mut set: Vec<(&str, f32)> = vec![];
         if !alive {
             set.push((&t.blink_left, 1.0));
@@ -424,7 +429,7 @@ fn face(
             }
         } else if let Some([cx, cy]) = &t.emotion {
             // The fear faces, outside montages.
-            let fear_alpha = fear.map_or(0.0, |f| f.0.fear) * 0.009999999776482582;
+            let fear_alpha = fear * 0.009999999776482582;
             let length = cx.keys.iter().chain(cy.keys.iter()).map(|k| k.time).fold(0.0, f32::max);
             let now = time.elapsed_secs();
             let at = if length.abs() > 9.99999993922529e-09 { now - (now / length).trunc() * length } else { 0.0 };

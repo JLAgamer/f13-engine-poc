@@ -253,7 +253,10 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         var face = Component(cdo, "FaceLimb");
         var faceMesh = face.GetOrDefault<FPackageIndex>("SkeletalMesh").Load<USkeletalMesh>()!;
         queue(faceMesh);
-        info.Parts.Add(new Part { Name = "Face", File = MeshFile(faceMesh), Attach = "head", Transform = Xf(face.GetOrDefault<FVector>("RelativeLocation"), face.GetOrDefault<FRotator>("RelativeRotation")) });
+        // SCCounselorCharacter::ReattachAllLimbs (0x1403cc5c0, after UnHideBoneByName(FaceLimb.BoneToHide)) attaches FaceLimb to
+        // the body's headSocket with DAT_142dd1708's rules (the other limbs' 0x01020202: SnapToTarget, welded), so its
+        // Blueprint RelativeLocation is dropped (Shelly_Counselor's Face sits at Z -13053 cm there): no offset.
+        info.Parts.Add(new Part { Name = "Face", File = MeshFile(faceMesh), Attach = "head" });
         var hair = Component(cdo, "Hair");
         var hairMesh = hair.GetOrDefault<FPackageIndex>("SkeletalMesh").Load<USkeletalMesh>()!;
         queue(hairMesh);

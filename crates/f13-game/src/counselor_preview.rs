@@ -75,7 +75,7 @@ struct Preview {
 /// Her rig, and the animation it plays: an emote (the emote menu's highlighted one), her outfit's MenuAnimation, or
 /// (none) the stand idle; and the menu pose it falls back to.
 #[derive(Component)]
-struct PreviewRig(Option<String>, Option<String>);
+pub(crate) struct PreviewRig(Option<String>, Option<String>);
 
 /// The previews' setups (ui/counselor_preview.json, ui/wardrobe_preview.json) and Counselor_Menu's CharacterClassList.
 struct Setup {
