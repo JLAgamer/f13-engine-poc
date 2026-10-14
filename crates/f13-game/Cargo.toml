@@ -1,6 +1,6 @@
 [package]
 name = "f13-game"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 license.workspace = true
 description = "The f13-rs game client (currently a level viewer for the MVP map)"

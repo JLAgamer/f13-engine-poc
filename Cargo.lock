@@ -3448,7 +3448,7 @@ dependencies = [
 
 [[package]]
 name = "f13-bevy"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bevy",
  "f13-core",
@@ -3456,14 +3456,14 @@ dependencies = [
 
 [[package]]
 name = "f13-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "glam",
 ]
 
 [[package]]
 name = "f13-data"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "f13-core",
  "glam",
@@ -3474,7 +3474,7 @@ dependencies = [
 
 [[package]]
 name = "f13-game"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bevy",
  "cpal 0.18.2",
@@ -3489,11 +3489,11 @@ dependencies = [
 
 [[package]]
 name = "f13-host"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "f13-installer"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "eframe",
  "rfd",

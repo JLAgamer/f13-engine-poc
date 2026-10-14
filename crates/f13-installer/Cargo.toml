@@ -1,6 +1,6 @@
 [package]
 name = "f13-installer"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 license.workspace = true
 description = "Sets f13-rs up from the player's own unpacked Friday the 13th: The Game (its tuning and export), then plays"

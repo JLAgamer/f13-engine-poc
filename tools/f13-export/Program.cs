@@ -935,6 +935,17 @@ switch (rest[0])
     case "water": // the map's water volumes (water.json)
         WriteWater();
         break;
+    case "counselors": // every counselor (Mvp.Counselors), as counselor does each, with the emotes and perks
+        foreach (var name in Mvp.Counselors)
+            new CounselorExporter(provider, outDir, Queue).Export($"/Game/Characters/Counselors/{name}/{name}_Counselor", CounselorAnims(), Mvp.KeepRoot);
+        new CounselorExporter(provider, outDir, Queue).ExportEmotes();
+        new CounselorExporter(provider, outDir, Queue).ExportPerks();
+        break;
+    case "killers": // every Jason f13-game plays (Mvp.Jasons) and their weapons, as killer does each
+        Weapons.Write(provider, outDir, Mvp.Jasons, Queue);
+        foreach (var bp in Mvp.Jasons)
+            new CounselorExporter(provider, outDir, Queue).ExportKiller(bp, KillerAnims(), Mvp.KeepRoot);
+        break;
     case "weapons": // weapons.json (Weapons: the Jasons' weapons), their meshes and thumbnails
         Weapons.Write(provider, outDir, Mvp.Jasons, Queue);
         break;
@@ -1595,6 +1606,14 @@ static class Mvp
         "/Game/UI/Menu/Settings/AudioSettingsMenuWidget",
         "/Game/UI/Menu/Settings/Controls/SettingsOptionSliderWidget",
         "/Game/UI/Menu/Settings/Controls/SettingsOptionBooleanWidget",
+        // The Jason menu (the lobby rows' JasonButton: Jason_Select_Widget), its strengths' rows, the grab kill picker
+        // and its buttons, the weapon picker and its entries.
+        "/Game/UI/Menu/Character/Killer/Jason_Select_Widget",
+        "/Game/UI/Menu/Character/Killer/Attribute_Display",
+        "/Game/UI/Menu/Character/Killer/Kill_Select_Widget",
+        "/Game/UI/Menu/Character/Killer/GrabKillButtonLarge",
+        "/Game/UI/Menu/Character/Killer/WeaponSelectionMenu",
+        "/Game/UI/Menu/Character/Killer/KillerWeaponListItem",
         // The lobby rows' ping and speaker.
         "/Game/UI/Controls/Player/PlayerPingDisplayWidget",
         "/Game/UI/Controls/Player/PlayerSpeakIconMuteButton",
@@ -2065,6 +2084,8 @@ static class Mvp
         "/Game/Props/SkeletalMeshes/Traps/Animation/A_Trap_Bear_01_Close_Idle_01",
     ];
 
+    /// The counselors f13-game plays (counselors/: Counselor_Menu's, and Tommy).
+    public static readonly string[] Counselors = ["Athlete", "Biker", "Bookworm", "Catty", "Flirt", "Head", "Hero", "Hunter", "Jock", "Nerd", "Prep", "Rocker", "Shelly", "Stoner", "Tough"];
     /// The Jasons f13-game plays (killers/: Jason_Select_Widget's first seven).
     public static readonly string[] Jasons =
     [

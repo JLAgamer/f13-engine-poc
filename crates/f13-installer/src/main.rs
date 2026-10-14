@@ -22,9 +22,14 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{channel, Receiver, Sender};
 
 /// The exporter's commands, in order (particles reads the levels mvp writes), and what each is shown as.
-const STEPS: [(&str, &str); 4] = [
+const STEPS: [(&str, &str); 8] = [
     ("tuning", "Reading the gameplay values"),
     ("mvp", "Exporting the map, characters, sounds and HUD"),
+    ("counselors", "Exporting the counselors"),
+    ("killers", "Exporting the Jasons and their weapons"),
+    // (Again after them: their voices and their animations' sounds.)
+    ("sounds", "Exporting the counselors' and Jasons' sounds"),
+    ("ui", "Exporting the menus"),
     ("sequences", "Exporting the intro and outro"),
     ("particles", "Exporting the particle effects"),
 ];
