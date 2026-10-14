@@ -171,9 +171,12 @@ fn perk_fear(
             }
         }
         let active = p.counselor.perks.get("FearModifier");
-        if s.perk_fear_rate != always || s.perk_fear_active != active {
+        // Her DarkFearEvent's and CorpseSpottedFearEvent's caps (FUN_140330cb0).
+        let caps = vec![("DarknessFearEvent".to_string(), p.counselor.perks.get("DarknessFearModifier")), ("CorpseSpottedFearEvent".to_string(), p.counselor.perks.get("DeadBodyFearModifier"))];
+        if s.perk_fear_rate != always || s.perk_fear_active != active || s.perk_caps != caps {
             s.perk_fear_rate = always;
             s.perk_fear_active = active;
+            s.perk_caps = caps;
         }
     }
 }
@@ -196,7 +199,7 @@ fn setup(
         }
         commands.entity(e).insert((
             CounselorFear(fear),
-            CounselorStats { stats: p.counselor.stats, fear_modifier: t.fear_modifier.clone(), perk_fear_rate: 0.0, perk_fear_active: 0.0 },
+            CounselorStats { stats: p.counselor.stats, fear_modifier: t.fear_modifier.clone(), perk_fear_rate: 0.0, perk_fear_active: 0.0, perk_caps: Vec::new() },
             Pushed::default(),
         ));
     }

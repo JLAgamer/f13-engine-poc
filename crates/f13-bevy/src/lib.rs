@@ -42,6 +42,8 @@ pub struct CounselorStats {
     /// Sum of perk fear-rate modifiers (every event), and those for an active event only.
     pub perk_fear_rate: f32,
     pub perk_fear_active: f32,
+    /// Perk bonuses to some events' caps (FUN_140330cb0: her DarkFearEvent's and CorpseSpottedFearEvent's), by event.
+    pub perk_caps: Vec<(FearEventId, f32)>,
 }
 
 /// Fired by the server when a counselor's fear reaches 100.
@@ -108,9 +110,9 @@ fn tick_fear(
     mut out: MessageWriter<MaxFearReached>,
 ) {
     let dt = time.delta_secs();
-    // Perk cap bonuses for specific events are not modelled yet: cap = max_fear_cap.
-    let cap = |_: &FearEventId, d: &FearEventData| d.max_fear_cap;
     for (e, mut fear, s) in &mut q {
+        // (1 + her perks' bonus for the event) x its MaxFearCap (FUN_140330cb0).
+        let cap = |id: &FearEventId, d: &FearEventData| (1.0 + s.perk_caps.iter().find(|(k, _)| k == id).map_or(0.0, |(_, b)| *b)) * d.max_fear_cap;
         let rate = s.fear_modifier.value(&s.stats, true) + s.perk_fear_rate;
         let ctx = FearContext { rate, rate_active: s.perk_fear_active, cap: &cap, has_authority: auth.0 };
         if fear.0.tick(dt, &ctx) {

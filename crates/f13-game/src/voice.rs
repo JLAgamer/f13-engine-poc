@@ -38,12 +38,13 @@ const INNER_CM: f32 = 400.0;
 const FALLOFF_CM: f32 = 4000.0;
 
 /// VoIPAttenuationCurve (/Game/Characters): the volume over the distance past the inner radius, as a fraction of the
-/// falloff (EAttenuationDistanceModel::Custom).
-fn voip_attenuation(cm: f32) -> f32 {
+/// falloff (EAttenuationDistanceModel::Custom; `falloff` the talker's: FALLOFF_CM x (1 + her perks'
+/// VoIPDistanceModifier), FUN_1403a5880 on her VoiceAudioComponent's AttenuationOverrides.FalloffDistance).
+fn voip_attenuation(cm: f32, falloff: f32) -> f32 {
     use f13_core::curve::{Interp, Key, RichCurve};
     let key = |time, value| Key { time, value, interp: Interp::Cubic, arrive_tangent: 0.0, leave_tangent: 0.0 };
     let curve = RichCurve { keys: vec![key(0.0, 2.0), key(1.0, 0.01)] };
-    curve.eval(((cm - INNER_CM) / FALLOFF_CM).clamp(0.0, 1.0))
+    curve.eval(((cm - INNER_CM) / falloff.max(1.0)).clamp(0.0, 1.0))
 }
 /// SCWalkieTalkie's MinVoIPDistance (WalkieTalkie_C's default, cm): carriers further apart hear each other in 2D.
 const WALKIE_MIN_CM: f32 = 400.0;
@@ -442,12 +443,20 @@ fn receive(mut d: NonSendMut<Devices>, mut receivers: Query<&mut MessageReceiver
 
 /// A talker or listener as the voice routing sees them: Jason, spectating (dead or escaped), carrying a walkie-talkie,
 /// and where they hear or talk from (cm).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 struct Party {
     jason: bool,
     spectating: bool,
     walkie: bool,
     at: Vec3,
+    /// A talker's falloff distance (cm: her perks' VoIPDistanceModifier on it).
+    falloff: f32,
+}
+
+impl Default for Party {
+    fn default() -> Self {
+        Party { jason: false, spectating: false, walkie: false, at: Vec3::ZERO, falloff: FALLOFF_CM }
+    }
 }
 
 /// How a talker's voice plays for a listener.
@@ -473,7 +482,7 @@ fn route(in_progress: bool, talker: Party, listener: Party) -> Route {
     if talker.walkie && listener.walkie && cm > WALKIE_MIN_CM {
         route = Route::Flat;
     }
-    let in_range = cm < FALLOFF_CM;
+    let in_range = cm < talker.falloff;
     if talker.jason || listener.jason {
         route = Route::Spatial;
     }
@@ -513,7 +522,7 @@ fn play_gains(
     listener: Query<&GlobalTransform, With<SpatialListener>>,
     twins: Option<Res<crate::net::Twins>>,
     globals: Query<&GlobalTransform>,
-    characters: Query<(Has<crate::jason::Jason>, Has<Spectating>, Option<&crate::interact::Inventory>, Option<&Name>)>,
+    characters: Query<(Has<crate::jason::Jason>, Has<Spectating>, Option<&crate::interact::Inventory>, Option<&Name>, Option<&crate::player::Player>)>,
     mutes: Option<Res<VoiceMutes>>,
     items: Query<&crate::props::Item>,
     mixes: Option<Res<crate::audio::SoundMixes>>,
@@ -528,10 +537,11 @@ fn play_gains(
     let Some(ear) = listener.iter().next() else { return };
     let to_listener = ear.affine().inverse();
     let party = |e: Entity| {
-        let (jason, spectating, inv, _) = characters.get(e).unwrap_or((false, false, None, None));
+        let (jason, spectating, inv, _, p) = characters.get(e).unwrap_or((false, false, None, None, None));
+        let falloff = FALLOFF_CM * (1.0 + p.map_or(0.0, |p| p.counselor.perks.get("VoIPDistanceModifier")));
         let walkie = inv.is_some_and(|i| i.special.iter().any(|&s| items.get(s).is_ok_and(|it| it.class == WALKIE)));
         let at = globals.get(e).map_or(Vec3::ZERO, |g| g.translation() + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M) * 100.0;
-        Party { jason, spectating, walkie, at }
+        Party { jason, spectating, walkie, at, falloff }
     };
     // The listener: this machine's character (her counselor, or Jason), hearing from its place, or (spectating, or
     // none) from the camera.
@@ -564,7 +574,7 @@ fn play_gains(
             Route::Spatial => {
                 let at = g.translation() + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M;
                 let cm = ear.translation().distance(at) * 100.0;
-                let a = voip_attenuation(cm);
+                let a = voip_attenuation(cm, party(e).falloff);
                 let local = to_listener.transform_point3(at);
                 let (right, front) = (local.x, -local.z);
                 let (l, r) = crate::audio::x3d_stereo(right.atan2(front), right.hypot(front) <= f32::EPSILON);
@@ -581,9 +591,9 @@ mod tests {
     #[test]
     fn a_voice_fades_on_its_curve() {
         // x2 within the sphere, x0.01 at the falloff's end, the cubic's middle between.
-        assert_eq!(voip_attenuation(100.0), 2.0);
-        assert!((voip_attenuation(4400.0) - 0.01).abs() < 1e-5);
-        assert!((voip_attenuation(2400.0) - 1.005).abs() < 1e-3);
+        assert_eq!(voip_attenuation(100.0, FALLOFF_CM), 2.0);
+        assert!((voip_attenuation(4400.0, FALLOFF_CM) - 0.01).abs() < 1e-5);
+        assert!((voip_attenuation(2400.0, FALLOFF_CM) - 1.005).abs() < 1e-3);
     }
 
     #[test]
