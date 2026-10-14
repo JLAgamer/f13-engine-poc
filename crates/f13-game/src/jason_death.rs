@@ -135,7 +135,7 @@ pub(crate) fn start_kill(
         commands.entity(je).insert(crate::jason::KillJason { take: his, by: e });
         // Its camera (bPlayForEveryone: every player watches): her weapon's spline, in its own frame under the root.
         if let Some(s) = actor.and_then(|a| a.splines.get(spline)) {
-            commands.entity(je).insert(crate::kill_camera::KillCam::at(&format!("JasonDeath_{spline}"), root.mul_transform(*s)));
+            commands.entity(je).insert(crate::kill_camera::KillCam::at(&format!("JasonDeath_{spline}"), root.mul_transform(*s)).for_everyone());
         }
     }
 }

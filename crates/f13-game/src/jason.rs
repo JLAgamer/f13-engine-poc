@@ -2172,7 +2172,7 @@ pub(crate) fn update_jason(
                         // Its camera spline, on the kill (at her, turned as his mesh).
                         let camera = Transform::from_translation(her_centre).with_rotation(mesh_rot) * drown.as_ref().map_or(Transform::IDENTITY, |d| d.0);
                         debug!("drowning kill: her {:.2}, him {:.2} facing {:.2}, camera {:.2} facing {:.2}", pxf.translation, xf.translation, xf.rotation * Vec3::Z, camera.translation, camera.rotation * Vec3::X);
-                        commands.entity(je).insert((PlayAction(DROWN_KILL.0.into()), crate::kill_camera::KillCam::at(DROWN_KILL_KEY, camera)));
+                        commands.entity(je).insert((PlayAction(DROWN_KILL.0.into()), crate::kill_camera::KillCam::at(DROWN_KILL_KEY, camera).of(pe)));
                         commands.entity(pe).insert((Held, PlayAction(DROWN_KILL.1.into())));
                         continue;
                     }
@@ -3314,7 +3314,7 @@ pub(crate) fn update_jason(
                     j.kill_score = Some((crate::placed_kills::KINDS[pk.kind].0.to_string(), "ContextKillComponent"));
                     *xf = killer.place(his, pk.spot).0;
                     j.state = JasonState::Killing { t: 0.0 };
-                    commands.entity(je).insert((PlayAction(his.into()), crate::kill_camera::KillCam::at(&pk.camera_key, pk.camera)));
+                    commands.entity(je).insert((PlayAction(his.into()), crate::kill_camera::KillCam::at(&pk.camera_key, pk.camera).of(pe)));
                     commands.entity(pe).insert(PlayAction(hers.into()));
                     snap_rig(&mut rigs, je);
                 } else if player_input.map_or(at >= HOLD_BEFORE_KILL && (carry_to.is_none() || at >= HOLD_BEFORE_KILL * 2.0), |i| {
@@ -3329,7 +3329,7 @@ pub(crate) fn update_jason(
                     j.kill_move = (anim, anim, name);
                     j.kill_score = Some((format!("{class}_C"), "ContextKillComponent"));
                     j.state = JasonState::Killing { t: 0.0 };
-                    commands.entity(je).insert((PlayAction(anim.into()), crate::kill_camera::KillCam::new(class, *xf)));
+                    commands.entity(je).insert((PlayAction(anim.into()), crate::kill_camera::KillCam::new(class, *xf).of(pe)));
                     commands.entity(pe).insert(PlayAction(anim.into()));
                 } else {
                     j.state = JasonState::Holding { t: at };

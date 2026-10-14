@@ -278,6 +278,9 @@ pub struct NetJason {
     pub rage: (bool, f32),
     /// The kill camera running (kill_camera.rs): its kill, origin (translation, rotation) and whether at the root.
     pub kill_cam: Option<(String, [f32; 7], bool)>,
+    /// Its victim's body (NetBody id) and whether everyone watches it (kill_camera.rs: whose it is).
+    #[serde(default)]
+    pub kill_cam_of: (Option<u64>, bool),
     /// His mask on (bMaskOn) and his health.
     #[serde(default)]
     pub mask_on: bool,
@@ -896,6 +899,7 @@ fn update_bodies(
             recharge: a.map_or([0.0; 4], |a| a.recharge_timer),
             unlock_timer: a.map_or(0.0, |a| a.unlock_timer),
             rage: a.map_or((false, 0.0), |a| (a.rage_active, a.rage_timer)),
+            kill_cam_of: cam.map_or((None, false), |c| (c.victim.map(|v| v.to_bits()), c.everyone)),
             kill_cam: cam.map(|c| {
                 let (k, o, root) = c.parts();
                 let (p, r) = (o.translation, o.rotation);
@@ -1146,6 +1150,7 @@ fn mirror(
     actors: Res<crate::net_world::Actors>,
     cams: Query<&crate::kill_camera::KillCam>,
     time: Res<Time>,
+    bodies_of: Res<Twins>,
 ) {
     let shown_at = clock.now(&real) - INTERP_DELAY_S;
     for (b, a, nc, nj, mut twin, snaps) in &mut bodies {
@@ -1292,7 +1297,8 @@ fn mirror(
                 match &n.kill_cam {
                     Some((k, o, root)) => {
                         let origin = Transform::from_xyz(o[0], o[1], o[2]).with_rotation(Quat::from_xyzw(o[3], o[4], o[5], o[6]));
-                        commands.entity(twin.local).insert(crate::kill_camera::KillCam::remote(k, origin, *root));
+                        let victim = n.kill_cam_of.0.and_then(|id| bodies_of.of(id));
+                        commands.entity(twin.local).insert(crate::kill_camera::KillCam::remote(k, origin, *root, victim, n.kill_cam_of.1));
                     }
                     None if cams.contains(twin.local) => {
                         commands.entity(twin.local).remove::<crate::kill_camera::KillCam>();

@@ -74,12 +74,27 @@ pub struct KillCam {
     at_root: bool,
     pub t: f32,
     handicam: Handicam,
+    /// The kill's victim (the killer is the entity it's on), and whether every player watches (bPlayForEveryone).
+    /// SCContextKillComponent::ActivateKillCam (0x140333b40): only a locally controlled killer or victim sees it, else
+    /// with bPlayForEveryone the first local player.
+    pub victim: Option<Entity>,
+    pub everyone: bool,
 }
 
 impl KillCam {
     /// The server's kill camera on a client (net.rs): its kill, origin and whether that's the kill's root.
-    pub fn remote(kill: &str, origin: Transform, at_root: bool) -> Self {
-        KillCam { at_root, ..Self::at(kill, origin) }
+    pub fn remote(kill: &str, origin: Transform, at_root: bool, victim: Option<Entity>, everyone: bool) -> Self {
+        KillCam { at_root, victim, everyone, ..Self::at(kill, origin) }
+    }
+
+    /// Its victim.
+    pub fn of(self, victim: Entity) -> Self {
+        KillCam { victim: Some(victim), ..self }
+    }
+
+    /// Every player watches it (bPlayForEveryone).
+    pub fn for_everyone(self) -> Self {
+        KillCam { everyone: true, ..self }
     }
 
     /// The parts net.rs sends.
@@ -94,7 +109,7 @@ impl KillCam {
 
     /// From its camera spline's own frame (a placed kill's, under its ContextKillComponent).
     pub fn at(kill: &str, origin: Transform) -> Self {
-        KillCam { kill: kill.to_string(), origin, at_root: false, t: 0.0, handicam: Handicam::default() }
+        KillCam { kill: kill.to_string(), origin, at_root: false, t: 0.0, handicam: Handicam::default(), victim: None, everyone: false }
     }
 }
 
@@ -117,16 +132,22 @@ pub(crate) fn kill_camera(
     windows: Query<&Window>,
     her: Query<&Transform, (With<crate::player::Player>, Without<PlayerCamera>)>,
     (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
+    (play, locals, jasons): (Option<Res<crate::jason_player::PlayJason>>, Query<(), With<crate::controls::LocalPlayer>>, Query<(), With<crate::jason::Jason>>),
 ) {
     let (ref mut xf, ref mut proj) = *camera;
     let Projection::Perspective(persp) = &mut **proj else { return };
-    // No kill: her cameras (counselor_camera.rs) have the view and its field of view.
-    let Some((e, mut k)) = kills.iter_mut().next() else { return };
+    // No kill here: her cameras (counselor_camera.rs) have the view and its field of view. A kill is this player's when
+    // they play its killer (Jason, the entity it's on) or its victim, or it's for everyone.
+    let mine = |e: Entity, k: &KillCam| k.everyone || (play.is_some() && jasons.contains(e)) || k.victim.is_some_and(|v| locals.contains(v));
+    let Some((e, mut k)) = kills.iter_mut().find(|(e, k)| mine(*e, k)) else { return };
     let Some(spline) = cameras.0.get(k.kill.as_str()) else {
         commands.entity(e).remove::<KillCam>();
         return;
     };
     let dt = time.delta_secs();
+    if k.t == 0.0 {
+        info!("kill camera: {} ({})", k.kill, if k.everyone { "everyone's" } else { "this player's" });
+    }
     k.t += dt;
     if k.t >= spline.duration() {
         commands.entity(e).remove::<KillCam>();

@@ -7,9 +7,6 @@ Base content (asset paths in the player's install; all gameplay values come from
 `Characters/Killers/Jason/J2`, the Chevettes (`Blueprints/Vehicles/DriveableVehicles/Cars/Chevette`), the police.
 
 ## Todo
-- [ ] Network sync audit: every player action from a client reaching the server, and every result showing on the
-      clients (MODLOG "Network sync audit"); left: who sees a kill camera (the game: killer and victim unless
-      bPlayForEveryone; here everyone)
 - [ ] The lobby's rest: its counselor pick widget (the pick is C for now; the fourteen counselors play), a full
       8-player run
 - [ ] Jason dying, its rest (MODLOG "Jason's death"): a network run
