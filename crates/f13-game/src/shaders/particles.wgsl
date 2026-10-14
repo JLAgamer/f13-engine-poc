@@ -68,6 +68,82 @@ struct VertexOutput {
     @location(3) dynamic: vec4<f32>,
 }
 
+#ifdef RAIN_ANALYTIC
+// The rain grid's GPU emitter (particles.rs RainGpu): `sprites` holds the emitter (header: [0] clock, rate, slots,
+// cells; [1] lifetime min / max, size min; [2] / [3] start location min / max and size max; [4] / [5] start velocity
+// min / max and the pivot; [6] the constant acceleration; [7..71] colour and alpha over relative time), then two
+// vec4s a cell (its place, Unreal cm, and start; whether it draws). Slot k of a cell holds the latest particle spawned
+// at index n = k (mod slots): born at start + n / rate, alive for its lifetime; the rest draw nothing.
+const RAIN_HEADER: u32 = 71u;
+const RAIN_CURVE: u32 = 64u;
+
+struct RainSprite {
+    a: vec4<f32>,
+    b: vec4<f32>,
+    dir: vec4<f32>,
+    color: vec4<f32>,
+}
+
+fn rain_hash(x: u32) -> f32 {
+    var s = x * 747796405u + 2891336453u;
+    let w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+    return f32((w >> 22u) ^ w) / 4294967296.0;
+}
+
+fn rain_rand(n: u32, cell: u32, k: u32) -> f32 {
+    return rain_hash(n * 16u + k + cell * 0x9E3779B9u);
+}
+
+// Unreal space (cm, Z up) to Bevy's (m, Y up).
+fn rain_to_bevy(p: vec3<f32>) -> vec3<f32> {
+    return vec3(p.x, p.z, p.y) * 0.01;
+}
+
+fn rain_sprite(index: u32) -> RainSprite {
+    var out: RainSprite;
+    out.a = vec4(0.0);
+    out.b = vec4(0.0);
+    out.dir = vec4(0.0, 0.0, 0.0, 1.0);
+    out.color = vec4(0.0);
+    let h = sprites[0];
+    let slots = max(u32(h.z), 1u);
+    let c = index / slots;
+    let k = index % slots;
+    let place = sprites[RAIN_HEADER + 2u * c];
+    let draws = sprites[RAIN_HEADER + 2u * c + 1u];
+    let m = floor((h.x - place.w) * h.y);
+    if draws.x < 0.5 || m < f32(k) {
+        return out;
+    }
+    let mi = u32(m);
+    let n = mi - (mi - k) % slots;
+    let age = h.x - (place.w + f32(n) / h.y);
+    let life_r = sprites[1];
+    let life = mix(life_r.x, life_r.y, rain_rand(n, c, 0u));
+    if age < 0.0 || age >= life {
+        return out;
+    }
+    let l0 = sprites[2];
+    let l1 = sprites[3];
+    let v0 = sprites[4];
+    let v1 = sprites[5];
+    let acc = sprites[6].xyz;
+    let loc = mix(l0.xyz, l1.xyz, vec3(rain_rand(n, c, 1u), rain_rand(n, c, 2u), rain_rand(n, c, 3u)));
+    let vel = mix(v0.xyz, v1.xyz, vec3(rain_rand(n, c, 4u), rain_rand(n, c, 5u), rain_rand(n, c, 6u)));
+    let size = mix(vec2(life_r.z, life_r.w), vec2(l0.w, l1.w), vec2(rain_rand(n, c, 7u), rain_rand(n, c, 8u)));
+    let p = place.xyz + loc + vel * age + 0.5 * acc * age * age;
+    let v = vel + acc * age;
+    let t = clamp(age / life, 0.0, 1.0) * f32(RAIN_CURVE - 1u);
+    let j = min(u32(t), RAIN_CURVE - 2u);
+    out.color = mix(sprites[7u + j], sprites[8u + j], t - f32(j));
+    out.a = vec4(rain_to_bevy(p), 0.0);
+    out.b = vec4(size * 0.01, v0.w, v1.w);
+    let d = rain_to_bevy(v);
+    out.dir = vec4(select(vec3(0.0), normalize(d), dot(d, d) > 0.0), 1.0);
+    return out;
+}
+#endif
+
 @vertex
 fn vertex(v: Vertex) -> VertexOutput {
     var out: VertexOutput;
@@ -77,10 +153,18 @@ fn vertex(v: Vertex) -> VertexOutput {
     let base = u32(v.position.x) * 6u;
     let k = u32(v.position.y);
     let corner = vec2(select(0.0, 1.0, k == 1u || k == 2u), select(0.0, 1.0, k >= 2u));
+#ifdef RAIN_ANALYTIC
+    let rs = rain_sprite(u32(v.position.x));
+    let a = rs.a;
+    let b = rs.b;
+    let dir = rs.dir;
+    let cell = vec4(0.0, 0.0, 1.0, 1.0);
+#else
     let a = sprites[base];
     let b = sprites[base + 1u];
     let dir = sprites[base + 4u];
     let cell = sprites[base + 5u];
+#endif
     let center = a.xyz;
     let view_right = view.world_from_view[0].xyz;
     let view_up = view.world_from_view[1].xyz;
@@ -107,8 +191,13 @@ fn vertex(v: Vertex) -> VertexOutput {
     out.clip = position_world_to_clip(world);
     out.world_position = world;
     out.uv = (cell.xy + corner) / cell.zw;
+#ifdef RAIN_ANALYTIC
+    out.color = rs.color;
+    out.dynamic = vec4(0.0);
+#else
     out.color = sprites[base + 2u];
     out.dynamic = sprites[base + 3u];
+#endif
 #else
     let world = (get_world_from_local(v.instance_index) * vec4(v.position, 1.0)).xyz;
     out.clip = position_world_to_clip(world);

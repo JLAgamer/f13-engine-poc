@@ -167,6 +167,8 @@ pub struct ParticleMaterial {
     stored: bool,
     /// The material's bDisableDepthTest: drawn over everything (Jason's sound blips).
     no_depth_test: bool,
+    /// The rain grid's GPU emitter ([`RainGpu`]): its sprites computed in the vertex shader from `sprites`.
+    rain: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -174,11 +176,12 @@ pub struct ParticleKey {
     distort: bool,
     stored: bool,
     no_depth_test: bool,
+    rain: bool,
 }
 
 impl From<&ParticleMaterial> for ParticleKey {
     fn from(m: &ParticleMaterial) -> Self {
-        ParticleKey { distort: m.distort, stored: m.stored, no_depth_test: m.no_depth_test }
+        ParticleKey { distort: m.distort, stored: m.stored, no_depth_test: m.no_depth_test, rain: m.rain }
     }
 }
 
@@ -229,6 +232,9 @@ impl Material for ParticleMaterial {
         }
         let l = if key.bind_group_data.stored {
             descriptor.vertex.shader_defs.push("PARTICLE_SPRITES".into());
+            if key.bind_group_data.rain {
+                descriptor.vertex.shader_defs.push("RAIN_ANALYTIC".into());
+            }
             if let Some(f) = descriptor.fragment.as_mut() {
                 f.shader_defs.push("PARTICLE_SPRITES".into());
             }
@@ -961,6 +967,7 @@ impl Materials {
             distort: false,
             stored: false,
             no_depth_test,
+            rain: false,
         })
     }
 }
@@ -1292,14 +1299,19 @@ const RAIN_PARTICLE_SIZE: f32 = 300.0;
 const RAIN_SYSTEM: &str = "P_Rain_Environmental_01A_GPU";
 
 /// One of the rain grid's systems: its offset from the camera (Unreal cm), its next trace time (game seconds) and
-/// whether the last trace found it occluded.
+/// whether the last trace found it occluded; where it stands (Unreal cm) and when its emitter last started (game
+/// seconds: Activate(true)'s reset clears its particles, bClearExistingParticlesOnInit).
 #[derive(Component)]
 struct RainCell {
+    index: usize,
     offset: Vec3,
     next_trace: f32,
     occluded: bool,
     /// Deactivated by a reset, activated (reset) on the next tick.
     reactivate: bool,
+    location: Vec3,
+    start: f32,
+    active: bool,
 }
 
 /// The camera location the grid was last moved for (0x1afc, zero at first).
@@ -1307,6 +1319,63 @@ struct RainCell {
 struct RainGridState {
     on: bool,
     last: Vec3,
+}
+
+/// The rain grid's draw: every cell's GPU emitter (P_Rain_Environmental_01A_GPU's RainDrops: ParticleModuleTypeDataGpu,
+/// no collision) simulated in the vertex shader (particles.wgsl RAIN_ANALYTIC) from the emitter's modules and each
+/// cell's place and start, one sprite slot per particle a cell can have alive (rate x the longest life). Each particle
+/// is a closed form of its age: spawned at start + n / rate (slot n mod slots), StartLocation, StartVelocity, StartSize
+/// and Lifetime uniform per component, ParticleModuleAccelerationConstant, ColorOverLife and AlphaOverLife over its
+/// relative time, in its cell's space (bUseLocalSpace) and velocity-aligned. PLACEHOLDER: the game's GPU simulation
+/// integrates each frame (its curves from QuantizedColorSamples) and sorts by distance (PSORTMODE_DistanceToView);
+/// here the motion is exact, the random numbers a hash, and a cell's sprites draw in slot order.
+#[derive(Resource)]
+struct RainGpu {
+    buffer: Handle<ShaderBuffer>,
+    entities: Vec<Entity>,
+    header: Vec<[f32; 4]>,
+    slots: usize,
+}
+
+/// [`RainGpu`]'s buffer: RAIN_HEADER vec4s of the emitter (the shader's layout), then two a cell.
+const RAIN_HEADER: usize = 7 + RAIN_CURVE_SAMPLES;
+const RAIN_CURVE_SAMPLES: usize = 64;
+
+/// The emitter's header for [`RainGpu`], or why it can't be drawn so.
+fn rain_header(def: &Emitter, pivot: Vec2) -> Result<(Vec<[f32; 4]>, usize), String> {
+    let (mut life, mut loc, mut vel, mut size, mut accel, mut color) = (None, None, None, None, Vec3::ZERO, None);
+    for m in &def.modules {
+        match m {
+            Module::Lifetime(d) => life = Some((d.eval(0.0, 0.0), d.eval(0.0, 1.0))),
+            Module::Location(d) => loc = Some((d.eval3(0.0, [0.0; 3]), d.eval3(0.0, [1.0; 3]))),
+            Module::Velocity { start, world: false, radial } if !radial.random() && radial.eval(0.0, 0.0) == 0.0 => vel = Some((start.eval3(0.0, [0.0; 3]), start.eval3(0.0, [1.0; 3]))),
+            Module::Size(d) => size = Some((d.eval3(0.0, [0.0; 3]), d.eval3(0.0, [1.0; 3]))),
+            Module::AccelerationConstant { accel: a, .. } => accel += *a,
+            Module::ColorOverLife { color: c, alpha } if !c.random() && !alpha.random() => color = Some((c.clone(), alpha.clone())),
+            other => return Err(format!("module {other:?}")),
+        }
+    }
+    if !def.gpu || def.gpu_collision.is_some() || !def.local_space || def.screen_alignment != "PSA_Velocity" {
+        return Err("not a local-space, velocity-aligned GPU emitter without collision".into());
+    }
+    let (Some(life), Some(loc), Some(vel), Some(size)) = (life, loc, vel, size) else { return Err("missing spawn modules".into()) };
+    let rate = def.rate.eval(0.0, 0.0) * def.rate_scale.eval(0.0, 0.0);
+    let slots = ((rate * life.0.max(life.1)).ceil() as usize + 1).min(def.max_draw_count.unwrap_or(u32::MAX) as usize);
+    let mut h = vec![
+        [0.0, rate, slots as f32, 0.0],
+        [life.0, life.1, size.0.x, size.0.y],
+        [loc.0.x, loc.0.y, loc.0.z, size.1.x],
+        [loc.1.x, loc.1.y, loc.1.z, size.1.y],
+        [vel.0.x, vel.0.y, vel.0.z, pivot.x],
+        [vel.1.x, vel.1.y, vel.1.z, pivot.y],
+        [accel.x, accel.y, accel.z, 0.0],
+    ];
+    for j in 0..RAIN_CURVE_SAMPLES {
+        let t = j as f32 / (RAIN_CURVE_SAMPLES - 1) as f32;
+        let (c, a) = color.as_ref().map_or((Vec3::ONE, 1.0), |(c, a)| (c.eval3(t, [0.0; 3]), a.eval(t, 0.0)));
+        h.push([c.x, c.y, c.z, a]);
+    }
+    Ok((h, slots))
 }
 
 /// OnRainUpdatedInWorldSettings (0x1403fb480) and the tick's grid update (FUN_140410ba0). On: GridSize^2 systems,
@@ -1318,7 +1387,7 @@ struct RainGridState {
 /// delay away; then a trace on the Camera channel from its inner corner (the offset's x and y each moved half a cell
 /// towards the camera) down to 100 cm under the camera: a hit more than RainOcclusionHeight from the camera's height
 /// occludes it, a nearer hit occludes it if a second trace from 1 cm above the hit to the camera hits too. A cell
-/// whose occlusion changes SetVisibility(!occluded).
+/// whose occlusion changes SetVisibility(!occluded). Drawn by [`RainGpu`].
 #[allow(clippy::too_many_arguments)]
 fn rain_grid(
     mut commands: Commands,
@@ -1326,97 +1395,131 @@ fn rain_grid(
     pa: Option<ResMut<ParticleAssets>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ParticleMaterial>>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
     assets: Res<AssetServer>,
     camera: Query<&GlobalTransform, (With<Camera3d>, With<crate::lighting::Lit>)>,
-    mut cells: Query<(Entity, &mut RainCell, &mut ParticleSystemInstance)>,
+    mut cells: Query<(Entity, &mut RainCell)>,
     world: Option<Res<crate::collision::WorldCollision>>,
     dynamic: Option<Res<crate::collision::DynamicColliders>>,
     blockers: Query<(), With<crate::collision::CameraBlocker>>,
     time: Res<Time>,
+    gpu: Option<Res<RainGpu>>,
     mut state: Local<RainGridState>,
 ) {
     let (Some(w), Some(mut pa)) = (weather, pa) else { return };
+    let now = time.elapsed_secs();
     if w.rain != state.on {
         state.on = w.rain;
         if w.rain {
+            let root = pa.root.clone();
+            let Some(system) = pa.systems.get(&root, RAIN_SYSTEM) else { return };
+            let Some(def) = system.emitters.first() else { return };
+            let pivot = def.modules.iter().find_map(|m| if let Module::PivotOffset(p) = m { Some(Vec2::from(*p)) } else { None }).unwrap_or(Vec2::ZERO) + Vec2::splat(-0.5);
+            let (header, slots) = match rain_header(def, pivot) {
+                Ok(h) => h,
+                Err(e) => {
+                    warn!("rain: {RAIN_SYSTEM} can't be drawn on the GPU ({e})");
+                    return;
+                }
+            };
+            let Some((base, _)) = def.material.as_deref().and_then(|m| pa.mats.get(m, &root, &assets, &mut materials)) else { return };
             let n = RAIN_GRID_SIZE.max(1);
+            let count = (n * n) as usize;
+            let buffer = buffers.add(ShaderBuffer::new(&vec![0u8; (RAIN_HEADER + 2 * count) * 16], RenderAssetUsages::default()));
+            let quads = meshes.add(sprite_quads(count * slots));
+            let mut entities = vec![];
+            for m in std::iter::once(Some(base)).chain(std::iter::once(def.material.as_deref().and_then(|m| pa.mats.distortion(m)))).flatten() {
+                let Some(base) = materials.get(&m).cloned() else { continue };
+                let material = materials.add(ParticleMaterial { sprites: buffer.clone(), stored: true, rain: true, ..base });
+                entities.push(commands.spawn((Mesh3d(quads.clone()), MeshMaterial3d(material), Transform::default(), Visibility::Visible, NoFrustumCulling, NotShadowCaster, NotShadowReceiver, Name::new("rain (GPU)"))).id());
+            }
             let first = (0.5 - n as f32 * 0.5) * RAIN_PARTICLE_SIZE;
             for i in 0..n {
                 for j in 0..n {
                     let offset = Vec3::new(first + i as f32 * RAIN_PARTICLE_SIZE, first + j as f32 * RAIN_PARTICLE_SIZE, RAIN_Z_OFFSET);
-                    let xf = (offset, Quat::IDENTITY, Vec3::ONE);
-                    let Some(inst) = pa.instance(&mut commands, &mut meshes, &mut materials, &assets, RAIN_SYSTEM, xf, true, "RainGrid", 0.0, None) else { return };
-                    commands.spawn((inst, RainCell { offset, next_trace: -RAIN_TRACE_DELAY, occluded: false, reactivate: false }, Name::new(format!("rain {i},{j}"))));
+                    let index = (i * n + j) as usize;
+                    commands.spawn((RainCell { index, offset, next_trace: -RAIN_TRACE_DELAY, occluded: false, reactivate: false, location: offset, start: now, active: true }, Name::new(format!("rain {i},{j}"))));
                 }
             }
+            info!("rain: {count} cells on the GPU, {slots} sprites each, {} draws", entities.len());
+            commands.insert_resource(RainGpu { buffer, entities, header, slots });
         } else {
-            for (e, _, s) in &cells {
-                for em in &s.emitters {
-                    commands.entity(em.entity).despawn();
-                    for &slot in em.slots.iter().chain(&em.lights) {
-                        commands.entity(slot).despawn();
-                    }
-                }
+            for (e, _) in &cells {
                 commands.entity(e).despawn();
             }
+            if let Some(g) = gpu {
+                for &e in &g.entities {
+                    commands.entity(e).despawn();
+                }
+            }
+            commands.remove_resource::<RainGpu>();
         }
         return;
     }
     if !state.on {
         return;
     }
-    for (_, mut c, mut s) in &mut cells {
+    for (_, mut c) in &mut cells {
         if std::mem::take(&mut c.reactivate) {
-            reset(&mut s);
-            s.active = true;
+            c.start = now;
+            c.active = true;
         }
     }
-    let Some(cam) = camera.iter().next() else { return };
-    let cam = to_unreal(&cam.compute_transform()).0;
-    let moved = (state.last.truncate() - cam.truncate()).length();
-    let half = RAIN_PARTICLE_SIZE * 0.5;
-    if moved < half {
-        return;
-    }
-    let now = time.elapsed_secs();
-    let lists: Vec<&f13_core::collision::TriList> = dynamic.iter().flat_map(|d| d.iter()).filter(|(e, _)| blockers.contains(*e)).map(|(_, l)| l).collect();
-    let hit = |from: Vec3, to: Vec3| -> Option<Vec3> {
-        let world = world.as_deref()?;
-        let f = f13_core::collision::segment_hit(&(&*world.camera_grid, lists.as_slice()), to_bevy(from), to_bevy(to), 4.0)?;
-        Some(from + (to - from) * f)
-    };
-    for (_, mut c, mut s) in &mut cells {
-        if RAIN_TRACE_DELAY > 1e-4 && c.next_trace > now {
-            continue;
-        }
-        let mut at = cam + c.offset;
-        s.location = at;
-        for em in &s.emitters {
-            commands.entity(em.entity).insert(Transform::from_translation(to_bevy(at)));
-        }
-        if moved > RAIN_RESET_DISTANCE {
-            s.active = false;
-            c.reactivate = true;
-        }
-        let was = c.occluded;
-        if 1e-4 < RAIN_TRACE_DELAY {
-            c.next_trace = (rand(&mut pa.seed) + 1.0) * RAIN_TRACE_DELAY + now;
-        }
-        c.occluded = false;
-        for k in 0..2 {
-            if c.offset[k].abs() > 1e-4 {
-                at[k] += if c.offset[k] >= 0.0 { -half } else { half };
+    let cam = camera.iter().next().map(|c| to_unreal(&c.compute_transform()).0);
+    if let Some(cam) = cam.filter(|cam| (state.last.truncate() - cam.truncate()).length() >= RAIN_PARTICLE_SIZE * 0.5) {
+        let moved = (state.last.truncate() - cam.truncate()).length();
+        let half = RAIN_PARTICLE_SIZE * 0.5;
+        let lists: Vec<&f13_core::collision::TriList> = dynamic.iter().flat_map(|d| d.iter()).filter(|(e, _)| blockers.contains(*e)).map(|(_, l)| l).collect();
+        let hit = |from: Vec3, to: Vec3| -> Option<Vec3> {
+            let world = world.as_deref()?;
+            let f = f13_core::collision::segment_hit(&(&*world.camera_grid, lists.as_slice()), to_bevy(from), to_bevy(to), 4.0)?;
+            Some(from + (to - from) * f)
+        };
+        for (_, mut c) in &mut cells {
+            if RAIN_TRACE_DELAY > 1e-4 && c.next_trace > now {
+                continue;
+            }
+            let mut at = cam + c.offset;
+            c.location = at;
+            if moved > RAIN_RESET_DISTANCE {
+                c.active = false;
+                c.reactivate = true;
+            }
+            if 1e-4 < RAIN_TRACE_DELAY {
+                c.next_trace = (rand(&mut pa.seed) + 1.0) * RAIN_TRACE_DELAY + now;
+            }
+            c.occluded = false;
+            for k in 0..2 {
+                if c.offset[k].abs() > 1e-4 {
+                    at[k] += if c.offset[k] >= 0.0 { -half } else { half };
+                }
+            }
+            let end = at - Vec3::Z * (RAIN_Z_OFFSET + 100.0);
+            if let Some(h) = hit(at, end) {
+                c.occluded = (h.z - cam.z).abs() > RAIN_OCCLUSION_HEIGHT || hit(h + Vec3::Z, cam).is_some();
             }
         }
-        let end = at - Vec3::Z * (RAIN_Z_OFFSET + 100.0);
-        if let Some(h) = hit(at, end) {
-            c.occluded = (h.z - cam.z).abs() > RAIN_OCCLUSION_HEIGHT || hit(h + Vec3::Z, cam).is_some();
-        }
-        if c.occluded != was {
-            s.hidden = c.occluded;
+        state.last = cam;
+    }
+    // The buffer: the emitter, the clock, each cell's place, start and whether it draws.
+    let Some(g) = gpu else { return };
+    let mut data = g.header.clone();
+    data[0][0] = now;
+    data[0][3] = cells.iter().len() as f32;
+    data.resize(RAIN_HEADER + 2 * cells.iter().len(), [0.0; 4]);
+    for (_, c) in &cells {
+        let i = RAIN_HEADER + 2 * c.index;
+        if i + 1 < data.len() {
+            data[i] = [c.location.x, c.location.y, c.location.z, c.start];
+            data[i + 1] = [if c.active && !c.occluded { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0];
         }
     }
-    state.last = cam;
+    if let Some(mut b) = buffers.get_mut(&g.buffer) {
+        let bytes: Vec<u8> = data.iter().flatten().flat_map(|f| f.to_le_bytes()).collect();
+        if b.data.as_ref().is_some_and(|d| d.len() == bytes.len()) {
+            b.data = Some(bytes);
+        }
+    }
 }
 
 /// Rain_MPC's Rain into the rain materials (M_Rain_Master's opacity).

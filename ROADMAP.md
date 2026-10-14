@@ -18,8 +18,6 @@ Base content (asset paths in the player's install; all gameplay values come from
       only the four nearest whose range reaches the camera render: MODLOG "Local lights' shadows")
 - [ ] Lighting: the inverse-squared lights' unit (now 1/100^2 candela from the game's shaders and light proxy): read the
       deferred light uniform's fill to close it (MODLOG "The local lights' unit, the shaders")
-- [ ] The falling rain's simulation on the GPU as the game's (49 systems, about 23k sprites, simulated on the CPU:
-      2.5 ms of the main world a frame; their draw is already on the GPU: MODLOG "The rain's draw")
 - [ ] Post-processing and lighting: compare against the game's own screenshots (the user's cabin porch reference,
       2026-10-12: its wall lamp's spots light sharp bands up and down the logs)
 - [ ] Optimize performance (2026-10-13, a counselor at her start, --perf --features profile: 11.4 ms a frame, the render
