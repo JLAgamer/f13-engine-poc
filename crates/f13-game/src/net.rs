@@ -849,7 +849,7 @@ fn update_bodies(
     mut jasons: Query<(&mut NetJason, &crate::jason::Jason, Option<&crate::senses::Knowledge>, Option<&crate::kill_camera::KillCam>)>,
     world_ids: Query<&crate::net_world::WorldId>,
     fixed: Res<Time<Fixed>>,
-    (morph_map, grab_kills): (Option<Res<crate::jason_player::MorphMap>>, Res<crate::jason::GrabKillsAvailable>),
+    (morph_map, grab_kills): (Option<Res<crate::jason_player::MorphMap>>, Option<Res<crate::jason::GrabKillsAvailable>>),
 ) {
     for (mut b, xf, mut a, action, blocking) in &mut bodies {
         let pos = xf.translation.to_array();
@@ -918,7 +918,7 @@ fn update_bodies(
             mask_on: j.mask_on,
             health: j.health,
             morph_map: morph_map.as_ref().is_some_and(|m| m.morph),
-            grab_kills: grab_kills.0,
+            grab_kills: grab_kills.as_ref().map_or([false; 4], |g| g.0),
             sweater_stunned: j.sweater_stunned,
             minigame: j.stun_minigame().map(|(c, t)| ((c.clamp(0.0, 1.0) * 100.0).round() as u8, t.to_string())),
             // (Tenths of a second: an unchanged component doesn't go out again.)
@@ -1203,7 +1203,7 @@ fn mirror(
     actors: Res<crate::net_world::Actors>,
     cams: Query<&crate::kill_camera::KillCam>,
     time: Res<Time>,
-    (bodies_of, mut grab_kills): (Res<Twins>, ResMut<crate::jason::GrabKillsAvailable>),
+    (bodies_of, mut grab_kills): (Res<Twins>, Option<ResMut<crate::jason::GrabKillsAvailable>>),
 ) {
     let shown_at = clock.now(&real) - INTERP_DELAY_S;
     for (b, a, nc, nj, mut twin, snaps) in &mut bodies {
@@ -1346,7 +1346,9 @@ fn mirror(
             });
             j.remote_state = n.state.clone();
             j.cooldown = n.cooldown;
-            grab_kills.set_if_neq(crate::jason::GrabKillsAvailable(n.grab_kills));
+            if let Some(g) = grab_kills.as_mut() {
+                g.set_if_neq(crate::jason::GrabKillsAvailable(n.grab_kills));
+            }
             let key = n.kill_cam.as_ref().map(|(k, ..)| k.clone());
             if key != twin.kill {
                 match &n.kill_cam {

@@ -246,7 +246,7 @@ pub(crate) fn client(app: &mut App) {
 
 pub(crate) fn ui(app: &mut App) {
     app.add_plugins(crate::counselor_preview::CounselorPreviewPlugin);
-    app.init_resource::<ReadyFocus>().add_systems(PreUpdate, lobby_clicks.after(bevy::input::InputSystems));
+    app.init_resource::<ReadyFocus>().add_systems(Update, lobby_clicks.before(Keys).before(counselor_menu).before(crate::wardrobe::wardrobe_menu).before(crate::emotes::emote_menu).before(crate::perks::perk_menu).before(crate::audio_settings::audio_menu));
     app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay, load_counselor_list, (counselor_menu, crate::wardrobe::wardrobe_menu, crate::emotes::emote_menu, crate::perks::perk_menu).chain(), crate::audio_settings::audio_menu));
 }
 
@@ -807,7 +807,8 @@ impl Default for ReadyFocus {
 /// Enter; a row's CounselorButton: the counselor menu, C; its JasonButton: Jason preferred, 3 (PLACEHOLDER: the game's
 /// opens its killer picker); Counselor_Menu's arrows, its three PerkButton slots (1-3), ClothingButton (X),
 /// CounselorEmoteButton (E)); the right button backs out of an open menu (Escape, PLACEHOLDER for the menus' action
-/// bar Back). The keys go down here, right after the input's own, and up the next frame. Hovering and pressing play
+/// bar Back). The keys go down here, before the menus read them in Update, and up the next frame. (In PreUpdate its
+/// keyboard access reordered the bots' key presses there: netdoor's window step lost its E.) Hovering and pressing play
 /// their style's sounds; their looks (each Blueprint's own OnHovered) aren't ported.
 fn lobby_clicks(
     mut commands: Commands,
