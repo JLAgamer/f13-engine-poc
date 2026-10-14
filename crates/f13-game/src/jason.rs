@@ -49,8 +49,9 @@
 //! steering at her and grabbing her when she's in reach (the wind-up stands him still); Morph when the clue or hiding
 //! spot he's after is more than [`MORPH_MIN_M`] away, not in his first [`MORPH_GRACE_S`] and landing short of her;
 //! Stalk when he's closing on one within [`STALK_RANGE_M`] or as he arrives from a Morph. The
-//! teleport effect's fade hides him below half (the game dissolves his materials); Stalk silences nothing yet (no
-//! audio).
+//! teleport effect's fade hides him below half (the game dissolves his materials). Stalk silences his footsteps and
+//! the counselors' near-Jason music, pushes JasonStalkSoundMix for his player ([`jason_mixes`]) and is a toggle; a
+//! stun ends it ([`cancel_on_stun`]).
 //!
 //! In the water (SCKillerCharacter, decompiled): he's under it when his capsule's top is below its surface (his tick
 //! 0x14040d900); there he walks the bottom at MaxSlowRunSpeed up to UnderwaterSpeed by his feet's depth over
