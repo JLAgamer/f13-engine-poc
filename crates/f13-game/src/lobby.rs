@@ -246,6 +246,7 @@ pub(crate) fn client(app: &mut App) {
 
 pub(crate) fn ui(app: &mut App) {
     app.add_plugins(crate::counselor_preview::CounselorPreviewPlugin);
+    app.add_systems(PreUpdate, lobby_clicks.after(bevy::input::InputSystems));
     app.init_resource::<crate::voice::VoiceMutes>().add_systems(Startup, spawn_overlay).add_systems(Update, (voice_keys, show_overlay, load_counselor_list, (counselor_menu, crate::wardrobe::wardrobe_menu, crate::emotes::emote_menu, crate::perks::perk_menu).chain(), crate::audio_settings::audio_menu));
 }
 
@@ -788,5 +789,55 @@ mod tests {
         let n = 4000;
         let ones = (0..n).filter(|&s| draw(&players, None, s) == Some(1)).count() as f32 / n as f32;
         assert!((ones - 5.0 / 8.0).abs() < 0.05, "{ones}");
+    }
+}
+
+/// The lobby's buttons by the mouse: a click on one presses the key its menu already takes (LobbyWidget's ReadyButton:
+/// Enter; a row's CounselorButton: the counselor menu, C; its JasonButton: Jason preferred, 3 (PLACEHOLDER: the game's
+/// opens its killer picker); Counselor_Menu's arrows, its three PerkButton slots (1-3), ClothingButton (X),
+/// CounselorEmoteButton (E)); the right button backs out of an open menu (Escape, PLACEHOLDER for the menus' action
+/// bar Back). The keys go down here, right after the input's own, and up the next frame.
+fn lobby_clicks(
+    mut commands: Commands,
+    lobby: Query<&NetLobby>,
+    buttons: Query<(Entity, &Name), (Without<Interaction>, With<Node>)>,
+    clicked: Query<(&Interaction, &Name), Changed<Interaction>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+    mut down: Local<Vec<KeyCode>>,
+) {
+    const KEYS: [(&str, KeyCode); 10] = [
+        ("ReadyButton", KeyCode::Enter),
+        ("CounselorButton", KeyCode::KeyC),
+        ("JasonButton", KeyCode::Digit3),
+        ("LeftArrowButton", KeyCode::ArrowLeft),
+        ("RightArrowButton", KeyCode::ArrowRight),
+        ("PerkButton_Slot_1", KeyCode::Digit1),
+        ("PerkButton_Slot_2", KeyCode::Digit2),
+        ("PerkButton_Slot_3", KeyCode::Digit3),
+        ("ClothingButton", KeyCode::KeyX),
+        ("CounselorEmoteButton", KeyCode::KeyE),
+    ];
+    for k in down.drain(..) {
+        keys.release(k);
+    }
+    if !lobby.iter().any(|l| l.open) {
+        return;
+    }
+    for (e, n) in &buttons {
+        if KEYS.iter().any(|(k, _)| *k == n.as_str()) {
+            commands.entity(e).try_insert(Interaction::None);
+            debug!("lobby: {} takes clicks", n.as_str());
+        }
+    }
+    for (i, n) in &clicked {
+        let Some(&(_, key)) = KEYS.iter().find(|(k, _)| *k == n.as_str()).filter(|_| *i == Interaction::Pressed) else { continue };
+        info!("lobby: {} clicked", n.as_str());
+        keys.press(key);
+        down.push(key);
+    }
+    if mouse.just_pressed(MouseButton::Right) {
+        keys.press(KeyCode::Escape);
+        down.push(KeyCode::Escape);
     }
 }
