@@ -9,7 +9,7 @@ Base content (asset paths in the player's install; all gameplay values come from
 ## Todo
 - [ ] The lobby's rest: its counselor pick widget (the pick is C for now; the fourteen counselors play), a full
       8-player run
-- [ ] Tommy Jarvis: his intro at his start (FUN_14040fe60), HunterIntroComplete's pawn setup, a network bot run
+- [ ] Tommy's face in his intro's close-up: a seam line down it (Tommy_Face; the morph-delta seam copy or its normals)
 - [ ] Voice chat: push-to-talk in the game's settings menu (no menus yet: P in the lobby stands in)
 - [ ] Materials: foliage subsurface (its transmission is the deferred light pass's, whose code isn't in the shipped
       global shader cache: MODLOG "Foliage subsurface: blocked")

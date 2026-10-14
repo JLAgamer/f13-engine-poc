@@ -213,6 +213,9 @@ pub struct NetCounselor {
     pub gore: crate::blood::Gore,
     /// Her class ("Athlete", "Hero", ...; character.rs CounselorClass).
     pub class: String,
+    /// She's coming as Tommy: his intro plays for her player (tommy.rs HunterIntro).
+    #[serde(default)]
+    pub hunter_intro: bool,
 }
 
 /// A client's twin of a counselor in a move the server plays (at a door or window, or onto a special move's spot).
@@ -431,7 +434,7 @@ fn bot_hooks(
     (drivers, mut cars): (Query<(&PlayedBy, &crate::vehicle::Driving)>, Query<&mut Transform, (With<crate::props::Vehicle>, Without<PlayedBy>, Without<Player>)>),
     (mut phone_boxes, mut phones, mut game): (Query<&mut crate::police::PhoneBox>, Query<&mut crate::police::Phone>, Option<ResMut<crate::match_flow::GameMatch>>),
     mut jason_xfs: Query<&mut Transform, (With<crate::jason::Jason>, Without<PlayedBy>, Without<Player>, Without<crate::props::Vehicle>)>,
-    (others, vehicles): (Query<(Entity, Has<crate::vehicle::Driving>, Has<crate::vehicle::Escaped>), (With<Player>, Without<PlayedBy>)>, Query<&crate::props::Vehicle>),
+    (others, vehicles, mut unplayed): (Query<(Entity, Has<crate::vehicle::Driving>, Has<crate::vehicle::Escaped>), (With<Player>, Without<PlayedBy>)>, Query<&crate::props::Vehicle>, Query<&mut Player, (Without<PlayedBy>, Without<LocalPlayer>)>),
 ) {
     for (link, mut r) in &mut links {
         for BotSetupMsg(change) in r.receive() {
@@ -529,6 +532,11 @@ fn bot_hooks(
                 }
                 crate::bot::BotSetup::Die => {
                     if let Some((_, mut p)) = players.iter_mut().find(|(by, _)| by.0 == link) {
+                        p.counselor.health = 0.0;
+                    }
+                }
+                crate::bot::BotSetup::KillAnother => {
+                    if let Some(mut p) = unplayed.iter_mut().find(|p| p.counselor.alive()) {
                         p.counselor.health = 0.0;
                     }
                 }
@@ -664,7 +672,7 @@ impl Plugin for NetPlugin {
                     .add_observer(body_gone)
                     .init_resource::<Twins>()
                     .init_resource::<ServerClock>()
-                    .add_systems(Update, (send_input, (make_twins, record_bodies, mirror, hide_jason, sync_classes, sync_morph_map).chain().in_set(Mirrored).before(crate::character::animate)));
+                    .add_systems(Update, (send_input, (make_twins, record_bodies, mirror, hide_jason, sync_classes, sync_morph_map, sync_hunter_intro).chain().in_set(Mirrored).before(crate::character::animate)));
                 app.add_systems(Update, receive_match.after(Mirrored));
                 crate::net_world::client(app);
                 crate::lobby::client(app);
@@ -822,7 +830,7 @@ fn set<T: PartialEq>(mut c: Mut<T>, v: T) {
 #[allow(clippy::type_complexity)]
 fn update_bodies(
     mut bodies: Query<(&mut NetBody, &Transform, &mut NetAction, Option<&PlayAction>, Has<crate::items::Blocking>)>,
-    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>, Has<crate::voice::Spectating>, Option<&crate::character::CounselorClass>), (Option<&crate::hiding::Hiding>, Option<&crate::hiding::Breathing>, Option<&crate::interact::Interaction>), (Option<&crate::vehicle::Driving>, Option<&crate::vehicle::Escaped>, Has<crate::interact::MoveToSpot>, Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>, Option<&crate::blood::Gore>))>,
+    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>, Has<crate::voice::Spectating>, Option<&crate::character::CounselorClass>), (Option<&crate::hiding::Hiding>, Option<&crate::hiding::Breathing>, Option<&crate::interact::Interaction>), (Option<&crate::vehicle::Driving>, Option<&crate::vehicle::Escaped>, Has<crate::interact::MoveToSpot>, Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>, Option<&crate::blood::Gore>, Has<crate::tommy::HunterIntro>))>,
     struggle: Option<Res<crate::jason::Struggle>>,
     mut jasons: Query<(&mut NetJason, &crate::jason::Jason, Option<&crate::senses::Knowledge>, Option<&crate::kill_camera::KillCam>)>,
     world_ids: Query<&crate::net_world::WorldId>,
@@ -844,7 +852,7 @@ fn update_bodies(
             a.blocking = blocking;
         }
     }
-    for (n, p, name, controls, (held, trapped, spectating, class), (hiding, breathing, interaction), (driving, escaped, to_spot, door_move, window_move, blood)) in &mut counselors {
+    for (n, p, name, controls, (held, trapped, spectating, class), (hiding, breathing, interaction), (driving, escaped, to_spot, door_move, window_move, blood, hunter_intro)) in &mut counselors {
         let c = &p.counselor;
         set(n, NetCounselor {
             stance: c.stance as u8,
@@ -872,6 +880,7 @@ fn update_bodies(
             moving: to_spot || door_move || window_move,
             gore: blood.cloned().unwrap_or_default(),
             class: class.map_or(String::new(), |c| c.0.clone()),
+            hunter_intro,
         });
     }
     for (n, j, know, cam) in &mut jasons {
@@ -957,6 +966,21 @@ fn send_input(local: Query<&Controls, With<LocalPlayer>>, mut senders: Query<&mu
     counts.add(pressed, released);
     for mut s in &mut senders {
         s.send::<InputChannel>(InputMsg { held: c.held(), yaw: c.yaw, pitch: c.pitch, presses: counts.presses, releases: counts.releases });
+    }
+}
+
+/// A client: the counselor coming as Tommy (her intro plays where she's the local player: tommy.rs).
+fn sync_hunter_intro(mut commands: Commands, bodies: Query<(&Twin, &NetCounselor), Changed<NetCounselor>>, intros: Query<(), With<crate::tommy::HunterIntro>>) {
+    for (t, n) in &bodies {
+        match (n.hunter_intro, intros.contains(t.local)) {
+            (true, false) => {
+                commands.entity(t.local).insert(crate::tommy::HunterIntro);
+            }
+            (false, true) => {
+                commands.entity(t.local).remove::<crate::tommy::HunterIntro>();
+            }
+            _ => {}
+        }
     }
 }
 

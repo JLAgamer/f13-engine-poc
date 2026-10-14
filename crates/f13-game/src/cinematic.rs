@@ -51,9 +51,12 @@ impl Plugin for CinematicPlugin {
 }
 
 /// The intro: its master sequence and the level it stages, and the event that ends it.
-pub const INTRO: Cinematic = Cinematic { master: "CLSM_Intro_Master_JTS", level: "CLsm_IntroCinematic", end_event: Some("IntroSequenceCompleted") };
+pub const INTRO: Cinematic = Cinematic { master: "CLSM_Intro_Master_JTS", level: "CLsm_IntroCinematic", end_event: Some("IntroSequenceCompleted"), hold_match: true };
 /// The outro (PostMatchOutro, SCWorldSettings FUN_140445ef0: only with the killer alive): it plays to its end.
-pub const OUTRO: Cinematic = Cinematic { master: "CLSM_Outro_JTS", level: "CLsm_OutroCinematic", end_event: None };
+pub const OUTRO: Cinematic = Cinematic { master: "CLSM_Outro_JTS", level: "CLsm_OutroCinematic", end_event: None, hold_match: true };
+/// Tommy's intro (the SCHunterPlayerStarts' SpawnIntroSequence Hunter_CLSmall_44: FUN_14040fe60 plays it for his player
+/// controller; tommy.rs), staged in CLsm_Hunter. The match goes on meanwhile.
+pub const HUNTER: Cinematic = Cinematic { master: "Hunter_CLSmall", level: "CLsm_Hunter", end_event: None, hold_match: false };
 
 #[derive(Clone, Copy)]
 pub struct Cinematic {
@@ -61,6 +64,8 @@ pub struct Cinematic {
     pub level: &'static str,
     /// The event that ends it, else its playback range's end.
     pub end_event: Option<&'static str>,
+    /// The match's clock held while it plays (the intro and outro; their end goes to match_flow: [`CinematicDone`]).
+    pub hold_match: bool,
 }
 
 /// The intro and outro play (not under a bot, nor with --no-intro, nor without their export).
@@ -656,7 +661,9 @@ fn start(
         GlobalZIndex(i32::MAX - 1),
     ));
     info!("cinematic: {} ({} actors, {} sequences)", c.master, actors.len(), sequences.len());
-    virtual_time.pause();
+    if c.hold_match {
+        virtual_time.pause();
+    }
     // No HUD over it.
     let mut hud = vec![];
     for (e, mut v) in &mut ui_roots {
@@ -1114,8 +1121,10 @@ fn play(
         }
         commands.entity(camera.0).remove::<crate::circle_dof::CircleDof>();
         commands.remove_resource::<Playing>();
-        virtual_time.unpause();
-        done.0 = true;
+        if p.cinematic.hold_match {
+            virtual_time.unpause();
+            done.0 = true;
+        }
     }
 }
 

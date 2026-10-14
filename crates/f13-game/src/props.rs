@@ -395,6 +395,17 @@ fn spawn_props(
             kind: Some(SpawnKind::LargeItem),
         });
     }
+    // Tommy's kit (tommy.rs HUNTER_KIT), set aside like his shotgun.
+    let hunter_kit = world.actors.len();
+    for class in crate::tommy::HUNTER_KIT {
+        world.actors.push(f13_data::world::MatchActor {
+            class: class.into(),
+            transform: Xform { t: [0.0, 0.0, -100000.0], r: [0.0, 0.0, 0.0, 1.0], s: [1.0; 3] },
+            from_level: false,
+            spawned_by: None,
+            kind: Some(SpawnKind::SmallItem),
+        });
+    }
     // Jason's mask (his KillerMaskPickupClass), set aside until it's knocked off (jason_death.rs).
     let killer_mask = world.actors.len();
     if classes.get(crate::jason_death::KILLER_MASK_PICKUP).is_some() {
@@ -420,6 +431,9 @@ fn spawn_props(
         let Some(info) = classes.get(&actor.class) else { continue };
         let root = commands.spawn((to_transform(&actor.transform), Visibility::default(), Name::new(actor.class.clone()))).id();
         entities.insert(id, root);
+        if (hunter_kit..hunter_kit + crate::tommy::HUNTER_KIT.len()).contains(&id) {
+            commands.entity(root).insert((crate::tommy::HunterKit, crate::interact::Carried, Visibility::Hidden));
+        }
         if id == hunter_weapon {
             commands.entity(root).insert((crate::tommy::HunterWeapon, crate::interact::Carried, Visibility::Hidden));
         }

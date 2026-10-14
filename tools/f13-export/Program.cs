@@ -880,11 +880,12 @@ switch (rest[0])
     case "sequences": // the level intro and outro sequences (sequences/), and the levels they stage
         ExportLevel(Mvp.IntroLevel);
         ExportLevel(Mvp.OutroLevel);
+        ExportLevel(Mvp.HunterLevel);
         SequenceExporter.Write(provider, outDir, Mvp.Sequences);
         // The takes each staged skeletal actor plays (cinematic/<actor>.json and .anim files), on its own mesh's skeleton.
         {
             var actors = new Dictionary<string, string>();
-            foreach (var lv in new[] { Mvp.IntroLevel, Mvp.OutroLevel })
+            foreach (var lv in new[] { Mvp.IntroLevel, Mvp.OutroLevel, Mvp.HunterLevel })
             {
                 var json = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(Path.Combine(outDir, "levels", lv.Split('/')[^1] + ".json")));
                 foreach (var a in json["Actors"]!)
@@ -913,7 +914,7 @@ switch (rest[0])
         }
         // The staged TextRenderComponents' fonts (fonts/<name>.json: UFont's Characters (StartU, StartV, USize, VSize,
         // TextureIndex, VerticalOffset), Kerning and its atlas pages, queued as textures).
-        foreach (var lv in new[] { Mvp.IntroLevel, Mvp.OutroLevel })
+        foreach (var lv in new[] { Mvp.IntroLevel, Mvp.OutroLevel, Mvp.HunterLevel })
             foreach (var a in Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(Path.Combine(outDir, "levels", lv.Split('/')[^1] + ".json")))["Actors"]!)
                 foreach (var c in a["Components"] ?? new Newtonsoft.Json.Linq.JArray())
                 {
@@ -1356,10 +1357,14 @@ static class Mvp
     // sub-sequences.
     public const string IntroLevel = "/Game/Maps/CrystalLake_Small/CLsm_IntroCinematic";
     public const string OutroLevel = "/Game/Maps/CrystalLake_Small/CLsm_OutroCinematic";
+    /// Tommy's intro's staged level (Hunter_CLSmall's bindings: its cameras, lights and Tommy).
+    public const string HunterLevel = "/Game/Maps/CrystalLake_Small/CLsm_Hunter";
     public static readonly string[] Sequences =
     [
         "SummerCamp/Content/Cinematics/NewCinematics/Intro_New_Masters/Intro/CrystalLakeSmall/CLSM_Intro_Master_JTS",
         "SummerCamp/Content/Cinematics/NewCinematics/Outro_New/CrystalLakeSmall/CLSM_Outro_JTS",
+        // Tommy's intro (the SCHunterPlayerStarts' SpawnIntroSequence: Hunter_CLSmall_44), on the map's own actors.
+        "SummerCamp/Content/Cinematics/NewCinematics/Hunter_Cines/CrystalLakeSmall/Hunter_CLSmall",
     ];
     public static readonly string[] Assets =
     [

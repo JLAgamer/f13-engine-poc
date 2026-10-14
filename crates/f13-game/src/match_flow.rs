@@ -44,6 +44,21 @@ pub struct Score {
     pub event: &'static str,
 }
 
+/// A badge a counselor earns outright (her player state's FUN_1403aca40: Tommy's TommyJarvisBadge).
+#[derive(Event, Clone, Debug)]
+pub struct EarnBadge {
+    pub who: Entity,
+    pub badge: &'static str,
+}
+
+fn on_earn_badge(ev: On<EarnBadge>, mut game: ResMut<GameMatch>) {
+    let tally = game.counselors.entry(ev.who).or_default();
+    if !tally.badges.iter().any(|b| b == ev.badge) {
+        info!("match: {} earned the {} badge", ev.who, ev.badge);
+        tally.badges.push(ev.badge.to_string());
+    }
+}
+
 /// A score event for Jason (e.g. "KillCounselor").
 #[derive(Event, Clone, Debug)]
 pub struct KillerScore(pub &'static str);
@@ -251,6 +266,10 @@ fn hold_pawns(
 fn load_classes(mut commands: Commands, export: Res<crate::ExportRoot>) {
     let classes = ClassDb::load(&export.0.join("classes.json")).map_err(|e| warn!("match: no classes.json ({e}): no XP for items")).ok();
     commands.insert_resource(ScoreClasses(classes));
+}
+
+pub(crate) fn register_badges(app: &mut App) {
+    app.add_observer(on_earn_badge);
 }
 
 fn on_score(score: On<Score>, tuning: Option<Res<MatchTuning>>, mut game: ResMut<GameMatch>, time: Res<Time>) {

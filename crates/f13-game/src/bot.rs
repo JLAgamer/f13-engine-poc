@@ -342,6 +342,8 @@ pub enum BotSetup {
     PlaceJason([f32; 3]),
     /// She dies (her health to 0).
     Die,
+    /// Another counselor (not a player's) dies.
+    KillAnother,
     /// Another counselor gets into her car's first passenger seat.
     SeatPassenger,
 }

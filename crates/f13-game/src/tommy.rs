@@ -10,8 +10,11 @@
 //!
 //! Here the chosen counselor is revived as him (her entity: her player's link stays) at the start, his looks and stats
 //! hers (character.rs restyle), the match's spare shotgun (props.rs: one Shotgun_C set aside) in his hands.
-//! PLACEHOLDERS: the starts' "free" check (all are), his intro at the start (FUN_14040fe60: none, he comes at once),
-//! HunterIntroComplete's pawn setup beyond the class and weapon, his player state's bIsHunter in the tallies.
+//! - a player's hunter first has his start's intro (FUN_14040fe60: its SpawnIntroSequence, Hunter_CLSmall, played for his
+//!   player: cinematic.rs HUNTER), and HunterIntroComplete comes on a timer of its length less 1 s (at least 1 s;
+//!   FUN_14042d340: the sequence player's GetLength); an AI counselor comes at once. The match waits meanwhile.
+//! PLACEHOLDERS: the starts' "free" check (all are), HunterIntroComplete's pawn setup beyond the class and weapon, his
+//! player state's bIsHunter in the tallies.
 
 use bevy::prelude::*;
 
@@ -21,8 +24,10 @@ pub struct TommyPlugin;
 
 impl Plugin for TommyPlugin {
     fn build(&self, app: &mut App) {
+        crate::match_flow::register_badges(app);
         app.init_resource::<HunterTimer>()
-            .add_systems(Startup, hunter_starts)
+            .add_systems(Startup, (hunter_starts, intro_length))
+            .add_observer(play_intro)
             .add_systems(Update, hunter_timer.run_if(crate::net::simulating))
             .add_systems(Update, leave_spectating);
     }
@@ -46,21 +51,64 @@ pub struct HunterStart;
 #[derive(Component)]
 pub struct HunterWeapon;
 
+/// HunterIntroComplete's kit beside his weapon (SCGameMode's WalkieTalkieClass, MapClass, MedSprayClass,
+/// PocketKnifeClass: constructor literals WalkieTalkie_C, Map_C, BP_FirstAid_C, BP_PocketKnife_C), set aside like it.
+pub const HUNTER_KIT: [&str; 4] = ["WalkieTalkie_C", "Map_C", "BP_FirstAid_C", "BP_PocketKnife_C"];
+
+/// One of his kit's items, set aside (props.rs).
+#[derive(Component)]
+pub struct HunterKit;
+
+/// SCGameMode's TommyJarvisBadge (0x888): the first of its constructor's four badge literals (SecondWind, then
+/// Reinforcements, Ninja, ChadFace for EscapeWithPolice, Survive and SurviveWithFear, the fields' order; PLACEHOLDER: the
+/// pairing is by that order).
+const TOMMY_BADGE: &str = "SecondWind";
+
 /// He's Tommy (bIsHunter).
 #[derive(Component)]
 pub struct Hunter;
 
-/// The hunter's timer (seconds left; HunterTimeRemaining shows it) and whether he's in (bIsHunterSpawned).
+/// The hunter's timer (seconds left; HunterTimeRemaining shows it), the one chosen while his intro plays (HunterToSpawn,
+/// his start, the time left to HunterIntroComplete) and whether he's in (bIsHunterSpawned).
 #[derive(Resource, Default)]
 pub struct HunterTimer {
     pub remaining: Option<f32>,
+    pub intro: Option<(Entity, Transform, f32)>,
     pub spawned: bool,
 }
 
 impl HunterTimer {
     /// He's on his way (the Hunt mode doesn't end the match while he is).
     pub fn pending(&self) -> bool {
-        !self.spawned && self.remaining.is_some()
+        !self.spawned && (self.remaining.is_some() || self.intro.is_some())
+    }
+}
+
+/// The counselor who comes as Tommy, while his intro plays (net.rs sends it to his client).
+#[derive(Component)]
+pub struct HunterIntro;
+
+/// The intro's length (its sequence's playback range), when exported.
+#[derive(Resource)]
+struct IntroLength(f32);
+
+fn intro_length(mut commands: Commands, export: Res<crate::ExportRoot>) {
+    let path = export.0.join("sequences").join(format!("{}.json", crate::cinematic::HUNTER.master));
+    let v: Option<serde_json::Value> = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok());
+    match v.and_then(|v| Some(v["End"].as_f64()? - v["Start"].as_f64()?)) {
+        Some(len) => commands.insert_resource(IntroLength(len as f32)),
+        None => warn!("tommy: no {} (f13-export sequences): he comes at once", path.display()),
+    }
+}
+
+/// His intro, on the machine he's played on (FUN_14040fe60 is his player controller's).
+fn play_intro(add: On<Add, HunterIntro>, mut commands: Commands, local: Query<(), With<crate::controls::LocalPlayer>>, enabled: Option<Res<crate::cinematic::IntroEnabled>>, export: Res<crate::ExportRoot>) {
+    if !local.contains(add.entity) {
+        return;
+    }
+    if enabled.is_some() && crate::cinematic::available(&export.0, &crate::cinematic::HUNTER) {
+        info!("tommy: his intro");
+        commands.insert_resource(crate::cinematic::PlayCinematic(crate::cinematic::HUNTER));
     }
 }
 
@@ -103,7 +151,22 @@ fn hunter_timer(
     weapon: Query<Entity, With<HunterWeapon>>,
     tuning: Res<crate::player::PlayerTuning>,
     mut rng: ResMut<crate::GameRng>,
+    intro: Option<Res<IntroLength>>,
+    kit: Query<(Entity, &crate::props::Item), With<HunterKit>>,
 ) {
+    // His intro playing: HunterIntroComplete as its timer runs out.
+    if let Some((chosen, at, left)) = timer.intro {
+        let left = left - time.delta_secs();
+        if left > 0.0 {
+            timer.intro = Some((chosen, at, left));
+            return;
+        }
+        timer.intro = None;
+        commands.entity(chosen).remove::<HunterIntro>();
+        timer.spawned = true;
+        revive(&mut commands, chosen, at, &mut counselors, &weapon, &kit, &tuning);
+        return;
+    }
     let Some(left) = timer.remaining.filter(|_| !timer.spawned) else { return };
     let left = left - time.delta_secs();
     if left > 0.0 {
@@ -140,8 +203,32 @@ fn hunter_timer(
         timer.remaining = None;
         return;
     };
-    timer.spawned = true;
     timer.remaining = None;
+    // A player's hunter: his intro first (SpawnHunter: a PlayerController HunterToSpawn plays his start's intro, the
+    // timer at its length less 1 s, at least 1 s); else HunterIntroComplete at once.
+    let played = counselors.get(chosen).is_ok_and(|(_, _, _, _, local, played, _)| local || played);
+    if let (true, Some(len)) = (played, intro.as_deref()) {
+        let wait = (len.0 - 1.0).max(1.0);
+        info!("tommy: {chosen}'s intro at {:.1}: he comes in {wait:.1} s", at.translation);
+        timer.intro = Some((chosen, at, wait));
+        commands.entity(chosen).insert(HunterIntro);
+        return;
+    }
+    timer.spawned = true;
+    revive(&mut commands, chosen, at, &mut counselors, &weapon, &kit, &tuning);
+}
+
+/// HunterIntroComplete: the chosen counselor revived as him at his start.
+#[allow(clippy::type_complexity)]
+fn revive(
+    commands: &mut Commands,
+    chosen: Entity,
+    at: Transform,
+    counselors: &mut Query<(Entity, &mut Player, &mut Transform, Has<crate::vehicle::Escaped>, Has<crate::controls::LocalPlayer>, Has<crate::net::PlayedBy>, Option<&mut crate::interact::Inventory>), Without<crate::jason::Jason>>,
+    weapon: &Query<Entity, With<HunterWeapon>>,
+    kit: &Query<(Entity, &crate::props::Item), With<HunterKit>>,
+    tuning: &crate::player::PlayerTuning,
+) {
     let Ok((_, mut p, mut xf, ..)) = counselors.get_mut(chosen) else { return };
     // Revived as him: full health, his stats, at the start facing its way (Unreal +X; she faces +Z).
     let mut c = f13_core::counselor::Counselor::new(tuning.stats_of(HUNTER_CLASS));
@@ -166,6 +253,21 @@ fn hunter_timer(
         commands.entity(w).remove::<HunterWeapon>();
         info!("tommy: his shotgun in his hands");
     }
+    // The rest of his kit (FUN_1402e2a10 each onto his new pawn): the walkie-talkie and map his special items, the
+    // first aid spray and pocket knife his pockets.
+    if let Ok((.., Some(mut inv))) = counselors.get_mut(chosen) {
+        for (e, item) in kit {
+            if item.special {
+                inv.special.push(e);
+            } else {
+                inv.pockets.push(e);
+            }
+            commands.entity(e).remove::<HunterKit>();
+        }
+        info!("tommy: his kit: {} special, {} in his pockets", inv.special.len(), inv.pockets.len());
+    }
+    // His player state's TommyJarvisBadge.
+    commands.trigger(crate::match_flow::EarnBadge { who: chosen, badge: TOMMY_BADGE });
 }
 
 /// Tommy's player looks on no more: back in his own view.
@@ -197,7 +299,7 @@ pub(crate) fn bot_tommy(
     (mut mouse, tuning): (ResMut<ButtonInput<MouseButton>>, Res<crate::player::PlayerTuning>),
     timer: Res<HunterTimer>,
     radios: Query<(&CbRadio, &GlobalTransform)>,
-    mut me: Query<(Entity, &mut Transform, &mut Player, Has<Hunter>), With<crate::controls::LocalPlayer>>,
+    mut me: Query<(Entity, &mut Transform, &mut Player, Option<&crate::character::CounselorClass>), With<crate::controls::LocalPlayer>>,
     mut others: Query<&mut Player, Without<crate::controls::LocalPlayer>>,
     mut camera: Query<&mut crate::player::PlayerCamera>,
     interaction: Query<&crate::interact::Interaction, With<crate::controls::LocalPlayer>>,
@@ -208,7 +310,10 @@ pub(crate) fn bot_tommy(
     // Each frame's presses are its own (a key held across frames reads as one press).
     mouse.release(MouseButton::Left);
     mouse.release(MouseButton::Right);
-    let Ok((e, mut xf, mut p, hunter)) = me.single_mut() else { return };
+    let Ok((e, mut xf, mut p, class)) = me.single_mut() else { return };
+    // (A client's bot: the call and her class are what reach it.)
+    let hunter = class.is_some_and(|c| c.0 == HUNTER_CLASS);
+    let called = timer.remaining.is_some() || radios.iter().any(|(r, _)| r.called);
     match bot.step {
         0 if real.elapsed_secs() > 6.0 && bot.t > 3.0 => {
             let Some((r, g)) = radios.iter().next() else {
@@ -243,7 +348,7 @@ pub(crate) fn bot_tommy(
                 bot.step = 9;
             }
         }
-        1 if on_radio || timer.remaining.is_some() => {
+        1 if on_radio || called => {
             keys.press(KeyCode::KeyE);
             // Its minigame's pips: each one's key when the needle is in its middle.
             if (bot.t * 2.0) as u32 != ((bot.t - time.delta_secs()) * 2.0) as u32 {
@@ -257,7 +362,7 @@ pub(crate) fn bot_tommy(
                     }
                 }
             }
-            if timer.remaining.is_some() {
+            if called {
                 keys.release(KeyCode::KeyE);
                 info!("bot: tommy: called after {:.1}s", bot.t);
                 bot.step = 2;
@@ -274,6 +379,7 @@ pub(crate) fn bot_tommy(
                 o.counselor.health = 0.0;
             }
             p.counselor.health = 0.0;
+            crate::bot::setup(crate::bot::BotSetup::KillAnother);
             crate::bot::setup(crate::bot::BotSetup::Die);
             info!("bot: tommy: two counselors dead");
             bot.step = 3;
