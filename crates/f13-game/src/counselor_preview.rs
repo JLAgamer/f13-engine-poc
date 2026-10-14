@@ -52,6 +52,8 @@ pub struct PreviewImage {
     pub counselor: Handle<Image>,
     pub wardrobe: Handle<Image>,
     pub emote: Handle<Image>,
+    /// Jason_Select_Widget's (KillerCustomizationPreviewActor's KillerPreviewRenderTexture).
+    pub killer: Handle<Image>,
 }
 
 /// The capture camera (no game lighting, fog, listener or tonemapping on it).
@@ -63,6 +65,7 @@ enum Which {
     Counselor,
     Wardrobe,
     Emote,
+    Killer,
 }
 
 /// What the preview shows (which menu's, the class and her outfit) and its root.
@@ -77,12 +80,22 @@ struct Preview {
 #[derive(Component)]
 pub(crate) struct PreviewRig(Option<String>, Option<String>);
 
+/// The Jason menu's Jason (SCKillerCharacterWidget::SetActorPreviewClass: the class at its MenuTransform), standing in his
+/// anim Blueprint's stand idle.
+#[derive(Component)]
+struct KillerPreviewRig;
+
+/// Jason's stand idle (Jason_AnimBP's).
+const KILLER_IDLE: &str = "normal_stand_idle_01";
+
 /// The previews' setups (ui/counselor_preview.json, ui/wardrobe_preview.json) and Counselor_Menu's CharacterClassList.
 struct Setup {
     counselor: Value,
     wardrobe: Value,
     emote: Value,
     menu: Value,
+    killer: Value,
+    killer_menu: Value,
 }
 
 fn make_targets(mut commands: Commands, mut images: ResMut<Assets<Image>>, export: Res<crate::ExportRoot>) {
@@ -92,7 +105,8 @@ fn make_targets(mut commands: Commands, mut images: ResMut<Assets<Image>>, expor
     let counselor = target(size("counselor_preview.json", 1080));
     let wardrobe = target(size("wardrobe_preview.json", 2048));
     let emote = target(size("emote_preview.json", 2048));
-    commands.insert_resource(PreviewImage { counselor, wardrobe, emote });
+    let killer = target(size("killer_preview.json", 1080));
+    commands.insert_resource(PreviewImage { counselor, wardrobe, emote, killer });
 }
 
 /// A component's RelativeLocation / RelativeRotation (Unreal) in Bevy's space under its root.
@@ -113,6 +127,7 @@ fn show_preview(
     image: Option<Res<PreviewImage>>,
     (menu, list, wardrobe, profiles): (Option<Res<crate::lobby::CounselorMenu>>, Option<Res<crate::lobby::CounselorList>>, Option<Res<crate::wardrobe::WardrobeMenu>>, Option<Res<crate::wardrobe::CounselorProfiles>>),
     (emote_menu, emotes): (Option<Res<crate::emotes::EmoteMenu>>, Option<Res<crate::emotes::Emotes>>),
+    (jason_menu, jason_list, killer): (Option<Res<crate::lobby::JasonMenu>>, Option<Res<crate::lobby::JasonList>>, Option<Res<crate::character::KillerCharacter>>),
     character: Option<Res<CounselorCharacter>>,
     preview: Option<Res<Preview>>,
     mut rigs: Query<&mut PreviewRig>,
@@ -121,7 +136,9 @@ fn show_preview(
     let Some(character) = character else { return };
     let outfit = |c: &str| profiles.as_ref().map_or("", |p| p.outfit(c)).to_string();
     // (The perk menu has no preview.)
+    let jason = jason_menu.as_ref().and_then(|m| jason_list.as_ref()?.0.get(m.index)).map(|(k, _)| (Which::Killer, k.clone(), String::new()));
     let shown = match (&emote_menu, &wardrobe, &menu) {
+        _ if jason.is_some() => jason,
         (Some(e), _, _) => Some((Which::Emote, e.class.clone(), outfit(&e.class))),
         (None, Some(w), _) => Some((Which::Wardrobe, w.class.clone(), w.spec(&character))),
         (None, None, Some(m)) => list.as_ref().and_then(|l| l.0.get(m.index)).map(|c| (Which::Counselor, c.clone(), outfit(c))),
@@ -148,7 +165,14 @@ fn show_preview(
     let Some(image) = image else { return };
     let setup = data.get_or_insert_with(|| {
         let read = |f: &str| std::fs::read_to_string(export.0.join("ui").join(f)).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
-        let s = Setup { counselor: read("counselor_preview.json"), wardrobe: read("wardrobe_preview.json"), emote: read("emote_preview.json"), menu: read("Counselor_Menu.json") };
+        let s = Setup {
+            counselor: read("counselor_preview.json"),
+            wardrobe: read("wardrobe_preview.json"),
+            emote: read("emote_preview.json"),
+            menu: read("Counselor_Menu.json"),
+            killer: read("killer_preview.json"),
+            killer_menu: read("Jason_Select_Widget.json"),
+        };
         if s.counselor.is_null() || s.wardrobe.is_null() {
             warn!("no ui/counselor_preview.json or ui/wardrobe_preview.json (re-export: f13-export ui): no counselor preview");
         }
@@ -162,6 +186,7 @@ fn show_preview(
         Which::Counselor => (&setup.counselor, image.counselor.clone()),
         Which::Wardrobe => (&setup.wardrobe, image.wardrobe.clone()),
         Which::Emote => (&setup.emote, image.emote.clone()),
+        Which::Killer => (&setup.killer, image.killer.clone()),
     };
     let root = commands.spawn((Transform::from_translation(PLACE), Visibility::default(), Propagate(RenderLayers::layer(PREVIEW_LAYER)), Name::new("CounselorPreview"))).id();
     // The capture: Unreal's FOVAngle is horizontal (the targets are square), looking along its +X.
@@ -214,6 +239,15 @@ fn show_preview(
     // Her actor (Unreal: the capsule's centre, facing +X) at the class's MenuTransform under the root (the wardrobe's:
     // at the root); her model's owner is her feet, facing +Z.
     let menu_transform = match which {
+        Which::Killer => setup.killer_menu["Defaults"]["JasonClassList"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|e| {
+                e.as_object().and_then(|o| o.iter().find(|(k, _)| k.starts_with("CharacterClass"))).and_then(|(_, v)| v["AssetPathName"].as_str()).is_some_and(|p| p.ends_with(&format!("/{class}.{class}_C")))
+            })
+            .and_then(|e| e.as_object()?.iter().find(|(k, _)| k.starts_with("MenuTransform")).map(|(_, v)| v.clone()))
+            .unwrap_or_default(),
         Which::Counselor => setup.menu["Defaults"]["CharacterClassList"]
             .as_array()
             .into_iter()
@@ -232,6 +266,17 @@ fn show_preview(
     let n = |v: &Value, k: &str, d: f32| v[k].as_f64().map_or(d, |x| x as f32);
     let (t, r) = (&menu_transform["Translation"], &menu_transform["Rotation"]);
     let actor = crate::to_transform(&f13_data::level::Xform { t: [n(t, "X", 0.0), n(t, "Y", 0.0), n(t, "Z", 0.0)], r: [n(r, "X", 0.0), n(r, "Y", 0.0), n(r, "Z", 0.0), n(r, "W", 1.0)], s: [1.0; 3] });
+    if *which == Which::Killer {
+        // His looks (the class's killer JSON) on the loaded Jason's skeleton and animations (every Jason's: Jason_Base's).
+        let looks = jason_list.as_ref().and_then(|l| l.0.iter().find(|(k, _)| k == class)).and_then(|(_, v)| serde_json::from_value::<f13_data::character::CharacterInfo>(v.clone()).ok());
+        if let (Some(looks), Some(killer)) = (looks, killer.as_ref()) {
+            let feet = actor * Transform::from_translation(Vec3::NEG_Y * looks.capsule_half_height / 100.0) * Transform::from_rotation(FACING.inverse());
+            let owner = commands.spawn((feet, Visibility::default(), ChildOf(root))).id();
+            crate::character::spawn_model_as(&mut commands, &assets, &killer.0, Some(std::sync::Arc::new(looks)), Model::Killer, owner, KillerPreviewRig);
+        }
+        commands.insert_resource(Preview { shown, root });
+        return;
+    }
     let looks = character.dressed(class, outfit);
     let feet = actor * Transform::from_translation(Vec3::NEG_Y * looks.capsule_half_height / 100.0) * Transform::from_rotation(FACING.inverse());
     let owner = commands.spawn((feet, Visibility::default(), ChildOf(root))).id();
@@ -242,8 +287,21 @@ fn show_preview(
     commands.insert_resource(Preview { shown, root });
 }
 
-/// Her animation: her outfit's MenuAnimation, looping (its section's next is itself), or the stand idle.
-fn pose(time: Res<Time>, character: Option<Res<CounselorCharacter>>, mut rigs: Query<(&mut crate::character::Rig, &mut AnimationPlayer, &PreviewRig)>) {
+/// Her animation: her outfit's MenuAnimation, looping (its section's next is itself), or the stand idle; his, his stand
+/// idle.
+fn pose(
+    time: Res<Time>,
+    character: Option<Res<CounselorCharacter>>,
+    mut rigs: Query<(&mut crate::character::Rig, &mut AnimationPlayer, &PreviewRig)>,
+    killer: Option<Res<crate::character::KillerCharacter>>,
+    mut killers: Query<(&mut crate::character::Rig, &mut AnimationPlayer), (With<KillerPreviewRig>, Without<PreviewRig>)>,
+) {
+    if let Some(killer) = &killer {
+        let targets = std::collections::HashMap::from([(KILLER_IDLE, 1.0)]);
+        for (mut rig, mut anim) in &mut killers {
+            rig.drive(&killer.0, &targets, &|_| false, time.delta_secs(), &mut anim);
+        }
+    }
     let Some(character) = character else { return };
     for (mut rig, mut anim, PreviewRig(pose, _)) in &mut rigs {
         let model = character.model(rig.male);

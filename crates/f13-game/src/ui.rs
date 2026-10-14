@@ -608,7 +608,7 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
             w
         }),
         jason_menu: Widget::load(dir, "Jason_Select_Widget").map(|mut w| {
-            // Not ported: its 3D preview (PreviewImage: KillerCustomizationPreview's render target), the weapon
+            // Not ported: the weapon
             // selection, the grab kill picks (the slots shown are his own: no profile), customization points, the
             // locked banner (all unlocked), the ability order and its action bar (the keys: lobby.rs).
             if let Some(h) = w.find_mut("MenuHeaderWidget") {
@@ -617,7 +617,7 @@ fn load_hud(mut commands: Commands, export: Res<crate::ExportRoot>, assets: Res<
                     t.props["Text"] = title;
                 }
             }
-            for name in ["QuickPlayOverlayWidget", "MenuActionBarWidget_455", "CPBox", "LockedBorder", "WeaponSelectionButton", "AbilityUnlockPanelButton", "AbilityOrderText", "PreviewImage", "Fill", "ActionMapPrev", "ActionMapNext"] {
+            for name in ["QuickPlayOverlayWidget", "MenuActionBarWidget_455", "CPBox", "LockedBorder", "WeaponSelectionButton", "AbilityUnlockPanelButton", "AbilityOrderText", "ActionMapPrev", "ActionMapNext"] {
                 if let Some(x) = w.find_mut(name) {
                     x.set_visibility(Vis::Collapsed);
                 }
@@ -1043,7 +1043,7 @@ fn build_hud(
     }
     let root = commands.spawn((Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, Pickable::IGNORE)).id();
     let mut names = HashMap::new();
-    let preview = preview_image.map(|p| (p.counselor.clone(), p.wardrobe.clone(), p.emote.clone()));
+    let preview = preview_image.map(|p| (p.counselor.clone(), p.wardrobe.clone(), p.emote.clone(), p.killer.clone()));
     let mut b = Builder { commands: &mut commands, assets: &assets, materials: &mut materials, hud: &hud, scale, text_scale: 1.0, content: [1.0; 4], names: &mut names, preview };
     let full = Rect { x: 0.0, y: 0.0, w: virt.x, h: virt.y };
     let laid = tree.layout(full);
@@ -2316,7 +2316,7 @@ struct Builder<'a, 'w, 's> {
     names: &'a mut HashMap<String, Entity>,
     /// The menus' preview captures (counselor_preview.rs: CustomizationPreviewMaterial's and WardrobePreviewMaterial's
     /// textures).
-    preview: Option<(Handle<Image>, Handle<Image>, Handle<Image>)>,
+    preview: Option<(Handle<Image>, Handle<Image>, Handle<Image>, Handle<Image>)>,
 }
 
 fn linear(c: [f32; 4]) -> Color {
@@ -2495,11 +2495,13 @@ impl Builder<'_, '_, '_> {
             Some("Material'CustomizationPreviewMaterial'") => Some(0),
             Some("Material'WardrobePreviewMaterial'") => Some(1),
             Some("Material'EmotePreviewMaterial'") => Some(2),
+            // (Jason_Select_Widget's PreviewImage: taken as the counselor's, its graph not read: PLACEHOLDER.)
+            Some("Material'KillerPreviewMaterial'") => Some(3),
             _ => None,
         };
         if let Some(i) = capture {
-            if let Some((counselor, wardrobe, emote)) = self.preview.clone() {
-                self.commands.entity(e).insert(ImageNode::new([counselor, wardrobe, emote][i].clone()).with_color(linear(c)));
+            if let Some((counselor, wardrobe, emote, killer)) = self.preview.clone() {
+                self.commands.entity(e).insert(ImageNode::new([counselor, wardrobe, emote, killer][i].clone()).with_color(linear(c)));
             }
             return;
         }

@@ -891,11 +891,12 @@ switch (rest[0])
         // CounselorWardrobePreview): the CaptureComponent's place, FOVAngle and target's size, the spot lights (each
         // component's properties, relative to the root) and a PostProcess component's ambient cubemap (mean radiance x
         // AmbientCubemapIntensity) (ui/counselor_preview.json, ui/wardrobe_preview.json).
-        foreach (var (package, file) in new[] { ("CounselorCustomizationPreview", "counselor_preview.json"), ("CounselorWardrobePreview", "wardrobe_preview.json"), ("CounselorEmotePreview", "emote_preview.json") })
+        // And Jason_Select_Widget's (KillerCustomizationPreviewActor: ui/killer_preview.json).
+        foreach (var (package, file) in new[] { ("Counselor/CounselorCustomizationPreview", "counselor_preview.json"), ("Counselor/CounselorWardrobePreview", "wardrobe_preview.json"), ("Counselor/CounselorEmotePreview", "emote_preview.json"), ("Killer/KillerCustomizationPreviewActor", "killer_preview.json") })
         {
             var preview = new Newtonsoft.Json.Linq.JObject();
             var lights = new Newtonsoft.Json.Linq.JArray();
-            foreach (var e in provider.LoadPackage(ToFile("/Game/UI/Menu/Character/Counselor/" + package)).GetExports())
+            foreach (var e in provider.LoadPackage(ToFile("/Game/UI/Menu/Character/" + package)).GetExports())
             {
                 var props = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(e))["Properties"] as Newtonsoft.Json.Linq.JObject ?? new();
                 if (e.ExportType == "SceneCaptureComponent2D")
