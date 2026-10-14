@@ -12,8 +12,6 @@ Lighting first (the user, 2026-10-14):
       runtime data, undocumented; the solver is in the exe)
 - [ ] Lighting: the local lights' shadow caching and fade (which lights qualify is the game's; without the caching
       only the four nearest whose range reaches the camera render: MODLOG "Local lights' shadows")
-- [ ] Lighting: the inverse-squared lights' unit (now 1/100^2 candela from the game's shaders and light proxy): read the
-      deferred light uniform's fill to close it (MODLOG "The local lights' unit, the shaders")
 - [ ] Post-processing and lighting: compare against the game's own screenshots (the user's cabin porch reference,
       2026-10-12: its wall lamp's spots light sharp bands up and down the logs)
 - [ ] Jason's HUD: the ability unlock and Morph cursor's shader (M_UI_JasonHud_01, shaders/additive.wgsl) draws a little
