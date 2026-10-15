@@ -5,3 +5,7 @@ members = ["crates/f13-core", "crates/f13-data", "crates/f13-bevy", "crates/f13-
 [workspace.package]
 edition = "2021"
 license = "MIT OR Apache-2.0"
+
+# bevy_audio 0.19.1, its output reopened when the device fails or changes (vendor/bevy_audio/src/audio_output.rs).
+[patch.crates-io]
+bevy_audio = { path = "vendor/bevy_audio" }

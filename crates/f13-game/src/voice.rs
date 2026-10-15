@@ -25,6 +25,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// The VoIP wave's rate and an Opus frame of it (20 ms).
@@ -100,11 +101,11 @@ pub(crate) fn server(app: &mut App, dedicated: bool) {
     if dedicated {
         app.insert_resource(NoDevices);
     }
-    app.init_resource::<Talkers>().add_systems(Startup, open_devices).add_systems(Update, (mark_spectators, capture, relay, play_gains).chain());
+    app.init_resource::<Talkers>().add_systems(Startup, open_devices).add_systems(Update, (reopen_devices, mark_spectators, capture, relay, play_gains).chain());
 }
 
 pub(crate) fn client(app: &mut App) {
-    app.add_systems(Startup, open_devices).add_systems(Update, (capture, receive, play_gains).chain());
+    app.add_systems(Startup, open_devices).add_systems(Update, (reopen_devices, capture, receive, play_gains).chain());
 }
 
 /// One player's voice being played: its 16 kHz samples, the read position, started (past the jitter buffer), and its
@@ -136,17 +137,30 @@ struct Devices {
     tone: Option<f64>,
     tone_clock: Option<std::time::Instant>,
     heard: HashMap<u64, u32>,
+    /// A stream failed (its error callback); the default devices they're on; when those are next looked up. A failure or
+    /// a changed default device opens them again ([`reopen_devices`]: a headset switching profile, a device unplugged).
+    failed: Arc<AtomicBool>,
+    on: (Option<cpal::DeviceId>, Option<cpal::DeviceId>),
+    next_check: std::time::Instant,
+    none: bool,
 }
 
-fn open_devices(world: &mut World) {
+/// A stream error that ends the stream (not a glitch: an xrun, a refused real-time priority, a route cpal followed).
+fn lost(e: &cpal::Error) -> bool {
+    !matches!(e.kind(), cpal::ErrorKind::Xrun | cpal::ErrorKind::RealtimeDenied | cpal::ErrorKind::DeviceChanged | cpal::ErrorKind::DeviceBusy)
+}
+
+/// How often the default devices are looked up.
+const DEVICE_CHECK: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The microphone and the voice output on the default devices (none: neither; a test tone: no microphone).
+fn open_streams(none: bool, tone: bool, mic: &Arc<Mutex<Vec<f32>>>, voices: &Voices, failed: &Arc<AtomicBool>) -> (Option<cpal::Stream>, u32, Option<cpal::Stream>, (Option<cpal::DeviceId>, Option<cpal::DeviceId>)) {
     let host = cpal::default_host();
-    let mic = Arc::new(Mutex::new(Vec::new()));
-    let voices: Voices = Arc::new(Mutex::new(HashMap::new()));
-    let tone = std::env::var("F13_VOICE_TONE").ok().map(|_| 0.0);
-    // F13_NO_VOICE: no microphone or voice output (to compare the game's other sound without them).
-    let none = world.contains_resource::<NoDevices>() || std::env::var("F13_NO_VOICE").is_ok();
-    let (input, mic_rate) = match host.default_input_device().filter(|_| tone.is_none() && !none) {
-        Some(dev) => match open_input(&dev, mic.clone()) {
+    let in_dev = host.default_input_device().filter(|_| !tone && !none);
+    let out_dev = host.default_output_device().filter(|_| !none);
+    let on = (in_dev.as_ref().and_then(|d| d.id().ok()), out_dev.as_ref().and_then(|d| d.id().ok()));
+    let (input, mic_rate) = match in_dev {
+        Some(dev) => match open_input(&dev, mic.clone(), failed.clone()) {
             Ok(v) => v,
             Err(e) => {
                 warn!("voice: no microphone ({e})");
@@ -155,13 +169,24 @@ fn open_devices(world: &mut World) {
         },
         None => (None, RATE),
     };
-    let output = match host.default_output_device().filter(|_| !none) {
-        Some(dev) => open_output(&dev, voices.clone()).unwrap_or_else(|e| {
+    let output = match out_dev {
+        Some(dev) => open_output(&dev, voices.clone(), failed.clone()).unwrap_or_else(|e| {
             warn!("voice: no output ({e})");
             None
         }),
         None => None,
     };
+    (input, mic_rate, output, on)
+}
+
+fn open_devices(world: &mut World) {
+    let mic = Arc::new(Mutex::new(Vec::new()));
+    let voices: Voices = Arc::new(Mutex::new(HashMap::new()));
+    let tone = std::env::var("F13_VOICE_TONE").ok().map(|_| 0.0);
+    // F13_NO_VOICE: no microphone or voice output (to compare the game's other sound without them).
+    let none = world.contains_resource::<NoDevices>() || std::env::var("F13_NO_VOICE").is_ok();
+    let failed = Arc::new(AtomicBool::new(false));
+    let (input, mic_rate, output, on) = open_streams(none, tone.is_some(), &mic, &voices, &failed);
     info!("voice: microphone {}, output {}", if tone.is_some() { "a test tone".to_string() } else if input.is_some() { format!("{mic_rate} Hz") } else { "none".into() }, if output.is_some() { "on" } else { "none" });
     world.insert_non_send_resource(Devices {
         _input: input,
@@ -176,10 +201,49 @@ fn open_devices(world: &mut World) {
         tone,
         tone_clock: None,
         heard: HashMap::new(),
+        failed,
+        on,
+        next_check: std::time::Instant::now() + DEVICE_CHECK,
+        none,
     });
 }
 
-fn open_input(dev: &cpal::Device, mic: Arc<Mutex<Vec<f32>>>) -> Result<(Option<cpal::Stream>, u32), String> {
+/// A failed stream, or a default device changed: the microphone and the output open again on the default devices.
+fn reopen_devices(mut d: NonSendMut<Devices>) {
+    if d.none {
+        return;
+    }
+    let failed = d.failed.load(Ordering::Relaxed);
+    let now = std::time::Instant::now();
+    let mut changed = false;
+    if now >= d.next_check {
+        d.next_check = now + DEVICE_CHECK;
+        let host = cpal::default_host();
+        let tone = d.tone.is_some();
+        let on = (host.default_input_device().filter(|_| !tone).and_then(|x| x.id().ok()), host.default_output_device().and_then(|x| x.id().ok()));
+        changed = on != d.on;
+    }
+    if !failed && !changed {
+        return;
+    }
+    warn!("voice: {}: opening the devices again", if failed { "a stream failed" } else { "a default device changed" });
+    // (The old streams stop before the new ones start.)
+    d._input = None;
+    d._output = None;
+    let failed = Arc::new(AtomicBool::new(false));
+    let (input, mic_rate, output, on) = open_streams(false, d.tone.is_some(), &d.mic, &d.voices, &failed);
+    d._input = input;
+    d._output = output;
+    if mic_rate != d.mic_rate {
+        d.pending.clear();
+        d.phase = 0.0;
+    }
+    d.mic_rate = mic_rate;
+    d.on = on;
+    d.failed = failed;
+}
+
+fn open_input(dev: &cpal::Device, mic: Arc<Mutex<Vec<f32>>>, failed: Arc<AtomicBool>) -> Result<(Option<cpal::Stream>, u32), String> {
     let cfg = dev.default_input_config().map_err(|e| e.to_string())?;
     let (rate, channels) = (cfg.sample_rate(), cfg.channels() as usize);
     let push = move |mono: &mut dyn Iterator<Item = f32>| {
@@ -187,7 +251,10 @@ fn open_input(dev: &cpal::Device, mic: Arc<Mutex<Vec<f32>>>) -> Result<(Option<c
             m.extend(mono);
         }
     };
-    let err = |e: cpal::Error| warn!("voice: microphone: {e}");
+    let err = move |e: cpal::Error| {
+        warn!("voice: microphone: {e}");
+        failed.fetch_or(lost(&e), Ordering::Relaxed);
+    };
     let stream = match cfg.sample_format() {
         cpal::SampleFormat::F32 => {
             let mut push = push;
@@ -204,7 +271,7 @@ fn open_input(dev: &cpal::Device, mic: Arc<Mutex<Vec<f32>>>) -> Result<(Option<c
     Ok((Some(stream), rate))
 }
 
-fn open_output(dev: &cpal::Device, voices: Voices) -> Result<Option<cpal::Stream>, String> {
+fn open_output(dev: &cpal::Device, voices: Voices, failed: Arc<AtomicBool>) -> Result<Option<cpal::Stream>, String> {
     let cfg = dev.default_output_config().map_err(|e| e.to_string())?;
     let (rate, channels) = (cfg.sample_rate() as f32, cfg.channels() as usize);
     let step = RATE as f32 / rate;
@@ -234,7 +301,10 @@ fn open_output(dev: &cpal::Device, voices: Voices) -> Result<Option<cpal::Stream
         }
         (l, r)
     };
-    let err = |e: cpal::Error| warn!("voice: output: {e}");
+    let err = move |e: cpal::Error| {
+        warn!("voice: output: {e}");
+        failed.fetch_or(lost(&e), Ordering::Relaxed);
+    };
     let stream = match cfg.sample_format() {
         cpal::SampleFormat::F32 => dev.build_output_stream::<f32, _, _>(
             cfg.config(),
