@@ -356,6 +356,16 @@ impl CounselorCharacter {
 #[derive(Resource, Deref)]
 pub struct KillerCharacter(pub CharacterModel);
 
+/// The Jason menu's skeleton and animations while no Jason is loaded (a lobby's game loads the match's Jason only as it
+/// starts: [`WantKiller`]): every Jason's (Jason_Base's), counselor_preview.rs's.
+#[derive(Resource)]
+pub struct MenuKiller(pub CharacterModel);
+
+/// The killer model a Jason rig plays: the loaded Jason's, else the menu's.
+fn killer_model<'a>(killer: Option<&'a KillerCharacter>, menu: Option<&'a MenuKiller>) -> Option<&'a CharacterModel> {
+    killer.map(|k| &k.0).or(menu.map(|m| &m.0))
+}
+
 /// Which loaded model a rig shows.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Model {
@@ -742,7 +752,7 @@ fn assemble(
     mut commands: Commands,
     assets: Res<AssetServer>,
     counselor: Option<Res<CounselorCharacter>>,
-    killer: Option<Res<KillerCharacter>>,
+    (killer, menu_killer): (Option<Res<KillerCharacter>>, Option<Res<MenuKiller>>),
     mut rigs: Query<(Entity, &mut Rig)>,
     ready: Query<(), With<SceneReady>>,
     children: Query<&Children>,
@@ -755,7 +765,7 @@ fn assemble(
         }
         let character = match rig.model {
             Model::Counselor => counselor.as_deref().map(|c| c.model(rig.male)),
-            Model::Killer => killer.as_deref().map(|c| &c.0),
+            Model::Killer => killer_model(killer.as_deref(), menu_killer.as_deref()),
         };
         let Some(model_info) = character.map(|c| &c.info) else { continue };
         let visual = rig.visual.clone();
@@ -1146,7 +1156,7 @@ pub(crate) fn anim_props(
     mut commands: Commands,
     props: Option<Res<AnimProps>>,
     assets: Res<AssetServer>,
-    (counselor, killer): (Option<Res<CounselorCharacter>>, Option<Res<crate::character::KillerCharacter>>),
+    (counselor, killer, menu_killer): (Option<Res<CounselorCharacter>>, Option<Res<crate::character::KillerCharacter>>, Option<Res<MenuKiller>>),
     rigs: Query<(&ChildOf, &Rig)>,
     mut shown: Query<&mut ShownProps>,
     mut visibility: Query<&mut Visibility>,
@@ -1155,7 +1165,7 @@ pub(crate) fn anim_props(
     for (parent, rig) in &rigs {
         let owner = parent.parent();
         let info = match rig.model {
-            Model::Killer => killer.as_ref().map(|k| &k.info),
+            Model::Killer => killer_model(killer.as_deref(), menu_killer.as_deref()).map(|k| &k.info),
             _ => counselor.as_ref().map(|c| &c.info),
         };
         let key = rig.action.as_ref().map(|(take, _)| if matches!(rig.model, Model::Killer) { format!("killer/{take}") } else { format!("counselor/{take}") });
@@ -2038,8 +2048,8 @@ fn gltf_ue(q: Quat) -> Quat {
 /// bone's local rotation against its reference pose (current x ref^-1), FQuat::Euler's X (roll), times the
 /// Multiplier; ReplaceComponent (mode 1) puts it in the target's local Euler X (FQuat::Euler, then MakeFromEuler).
 #[allow(clippy::type_complexity)]
-fn jason_twists(killer: Option<Res<KillerCharacter>>, rigs: Query<&Rig>, mut transforms: Query<&mut Transform>, mut written: ResMut<LayerRestore>) {
-    let Some(model) = killer.as_deref().map(|k| &k.0) else { return };
+fn jason_twists(killer: Option<Res<KillerCharacter>>, menu_killer: Option<Res<MenuKiller>>, rigs: Query<&Rig>, mut transforms: Query<&mut Transform>, mut written: ResMut<LayerRestore>) {
+    let Some(model) = killer_model(killer.as_deref(), menu_killer.as_deref()) else { return };
     for rig in &rigs {
         if !matches!(rig.model, Model::Killer) || rig.action.as_ref().is_some_and(|(a, _)| a.starts_with("cinematic_")) {
             continue;

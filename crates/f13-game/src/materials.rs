@@ -646,6 +646,8 @@ impl MaterialIndex {
     /// With a = AlphaDelta x 4.5, B = 0_BaseContrastLevel, F = 0_ContrastFadeConstant, M = 0_AlphaContrastMultiplier:
     /// - ClothMaster_Jason_m, SkinMaster_jason_m: alpha x saturate(saturate(B F (1 + 2a) - a) x M) >= 0.3333;
     /// - MiscMaster_jason_m, EyeMaster_02_jason_m: saturate(saturate(B F (1 + 2a) - a) x M) >= 0.3333 (no texture);
+    /// - jason_mask_eyehole_Masked (J7's and J8's masks' eye holes): saturate(saturate(B F (1 + 2a) - a) x M) x 0.9
+    ///   >= 0.3333 (no texture);
     /// - HairMaster_jason_m: saturate(saturate(alpha^AlphaContrast B F (1 + 2a) - a) x M) >= 0.3333.
     /// (Their base passes add a temporal dither, DitherTemporalAA, before the clip: without temporal AA here the hard
     /// cutoff of the shadow pass is used for both.)
@@ -659,6 +661,7 @@ impl MaterialIndex {
         match info.master.to_lowercase().as_str() {
             "clothmaster_jason_m" | "skinmaster_jason_m" => Some(if gate > 0.0 { clip / gate } else { never }),
             "miscmaster_jason_m" | "eyemaster_02_jason_m" => Some(if gate >= clip { 0.0 } else { never }),
+            "jason_mask_eyehole_masked" => Some(if gate * 0.9 >= clip { 0.0 } else { never }),
             "hairmaster_jason_m" => {
                 // saturate(y) x M >= clip  <=>  y >= clip / M; y = alpha^C B F (1 + 2a) - a.
                 let need = (clip / m + a) / ((1.0 + 2.0 * a) * b * f);
@@ -1200,6 +1203,14 @@ fn apply_materials(
                     let mut m = standard_material(&index.root, info, &loader);
                     if info.master == "M_Lightsources_Ceiling_Bulbs" {
                         // Its compiled base pass: the textures' colour and normal, roughness 0.5, metallic 0, specular 0.5.
+                        m.perceptual_roughness = 0.5;
+                    }
+                    if info.master == "jason_mask_eyehole_Masked" {
+                        // The J7 and J8 masks' eye holes: their compiled base pass writes base colour 0 and specular 0
+                        // (BaseColor and Specular fed by MaterialExpressionConstant_0; the exported 808080 is the
+                        // unconnected default), roughness and metallic left at their defaults.
+                        m.base_color = Color::BLACK;
+                        m.reflectance = 0.0;
                         m.perceptual_roughness = 0.5;
                     }
                     Built::Standard(standard.add(m))

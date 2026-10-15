@@ -30,7 +30,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use serde_json::Value;
 
-use crate::character::{CounselorCharacter, Model, FACING};
+use crate::character::{CounselorCharacter, MenuKiller, Model, FACING};
 
 /// The preview's render layer (the sense mask's is 7).
 const PREVIEW_LAYER: usize = 6;
@@ -41,7 +41,7 @@ pub struct CounselorPreviewPlugin;
 
 impl Plugin for CounselorPreviewPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate)).add_systems(Startup, make_targets).add_systems(Update, (show_preview, pose).chain());
+        app.add_plugins(HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate)).add_systems(Startup, make_targets).add_systems(Update, (load_preview_killer, show_preview, pose).chain());
     }
 }
 
@@ -84,6 +84,27 @@ pub(crate) struct PreviewRig(Option<String>, Option<String>);
 /// anim Blueprint's stand idle.
 #[derive(Component)]
 struct KillerPreviewRig;
+
+/// Loads the Jason menu's skeleton and animations as it opens with no Jason loaded.
+fn load_preview_killer(
+    mut commands: Commands,
+    export: Res<crate::ExportRoot>,
+    jason_menu: Option<Res<crate::lobby::JasonMenu>>,
+    (killer, preview): (Option<Res<crate::character::KillerCharacter>>, Option<Res<MenuKiller>>),
+    mut clips: ResMut<Assets<AnimationClip>>,
+    mut graphs: ResMut<Assets<AnimationGraph>>,
+    mut tried: Local<bool>,
+) {
+    if jason_menu.is_none() || killer.is_some() || preview.is_some() || *tried {
+        return;
+    }
+    *tried = true;
+    let class = crate::character::killer_class();
+    match crate::character::CharacterModel::load(&export.0.join("killers").join(format!("{class}.json")), &export.0, &mut clips, &mut graphs) {
+        Some(c) => commands.insert_resource(MenuKiller(c)),
+        None => warn!("Jason menu: no killers/{class}.json (re-export: f13-export killers): no preview"),
+    }
+}
 
 /// Jason's stand idle (Jason_AnimBP's).
 const KILLER_IDLE: &str = "normal_stand_idle_01";
@@ -128,6 +149,7 @@ fn show_preview(
     (menu, list, wardrobe, profiles): (Option<Res<crate::lobby::CounselorMenu>>, Option<Res<crate::lobby::CounselorList>>, Option<Res<crate::wardrobe::WardrobeMenu>>, Option<Res<crate::wardrobe::CounselorProfiles>>),
     (emote_menu, emotes): (Option<Res<crate::emotes::EmoteMenu>>, Option<Res<crate::emotes::Emotes>>),
     (jason_menu, jason_list, killer, killer_profiles): (Option<Res<crate::lobby::JasonMenu>>, Option<Res<crate::lobby::JasonList>>, Option<Res<crate::character::KillerCharacter>>, Option<Res<crate::killer_profile::KillerProfiles>>),
+    preview_killer: Option<Res<MenuKiller>>,
     character: Option<Res<CounselorCharacter>>,
     preview: Option<Res<Preview>>,
     mut rigs: Query<&mut PreviewRig>,
@@ -167,6 +189,11 @@ fn show_preview(
         return;
     }
     let Some(image) = image else { return };
+    // (His skeleton: the loaded Jason's, else the menu's own once loaded.)
+    let killer = killer.as_deref().map(|k| &k.0).or(preview_killer.as_deref().map(|k| &k.0));
+    if shown.0 == Which::Killer && killer.is_none() {
+        return;
+    }
     let setup = data.get_or_insert_with(|| {
         let read = |f: &str| std::fs::read_to_string(export.0.join("ui").join(f)).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_default();
         let s = Setup {
@@ -279,10 +306,10 @@ fn show_preview(
                 p.file = w.mesh.clone();
             }
         }
-        if let (Some(looks), Some(killer)) = (looks, killer.as_ref()) {
+        if let (Some(looks), Some(killer)) = (looks, killer) {
             let feet = actor * Transform::from_translation(Vec3::NEG_Y * looks.capsule_half_height / 100.0) * Transform::from_rotation(FACING.inverse());
             let owner = commands.spawn((feet, Visibility::default(), ChildOf(root))).id();
-            crate::character::spawn_model_as(&mut commands, &assets, &killer.0, Some(std::sync::Arc::new(looks)), Model::Killer, owner, KillerPreviewRig);
+            crate::character::spawn_model_as(&mut commands, &assets, killer, Some(std::sync::Arc::new(looks)), Model::Killer, owner, KillerPreviewRig);
         }
         commands.insert_resource(Preview { shown, root });
         return;
@@ -304,12 +331,13 @@ fn pose(
     character: Option<Res<CounselorCharacter>>,
     mut rigs: Query<(&mut crate::character::Rig, &mut AnimationPlayer, &PreviewRig)>,
     killer: Option<Res<crate::character::KillerCharacter>>,
+    preview_killer: Option<Res<MenuKiller>>,
     mut killers: Query<(&mut crate::character::Rig, &mut AnimationPlayer), (With<KillerPreviewRig>, Without<PreviewRig>)>,
 ) {
-    if let Some(killer) = &killer {
+    if let Some(killer) = killer.as_deref().map(|k| &k.0).or(preview_killer.as_deref().map(|k| &k.0)) {
         let targets = std::collections::HashMap::from([(KILLER_IDLE, 1.0)]);
         for (mut rig, mut anim) in &mut killers {
-            rig.drive(&killer.0, &targets, &|_| false, time.delta_secs(), &mut anim);
+            rig.drive(killer, &targets, &|_| false, time.delta_secs(), &mut anim);
         }
     }
     let Some(character) = character else { return };
