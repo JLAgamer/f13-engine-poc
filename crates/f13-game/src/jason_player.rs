@@ -633,6 +633,11 @@ impl JasonRig {
         self.throwing
     }
 
+    /// His kill's camera is the active one (testing).
+    pub(crate) fn kill_camera(&self) -> bool {
+        self.killing
+    }
+
     /// ResetCameras (ReturnCameraToCharacter): his cameras' arms snap to the view.
     pub(crate) fn reset_cameras(&mut self) {
         self.cams.reset();

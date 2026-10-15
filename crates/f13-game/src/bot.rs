@@ -340,6 +340,8 @@ pub enum BotSetup {
     PoliceSoon,
     /// Jason stands here.
     PlaceJason([f32; 3]),
+    /// Jason stunned (a firecracker's), as a hit stuns him.
+    StunJason,
     /// She dies (her health to 0).
     Die,
     /// Another counselor (not a player's) dies.

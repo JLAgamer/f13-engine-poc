@@ -505,6 +505,12 @@ fn bot_hooks(
                         d.locked = true;
                     }
                 }
+                crate::bot::BotSetup::StunJason => {
+                    for (je, (mut j, _)) in jason_entities.iter().zip(jasons.iter_mut()) {
+                        let take = j.stun_for_test();
+                        commands.entity(je).insert(PlayAction(take.into()));
+                    }
+                }
                 crate::bot::BotSetup::Abilities => {
                     for (mut j, k) in &mut jasons {
                         if let Some(mut k) = k {
@@ -1540,6 +1546,14 @@ struct NetBot {
     pickup: Option<(Entity, u32)>,
     /// Its camera took his view here.
     pickup_camera: bool,
+    /// His Shift's and Stalk's ability bars came here (his HUD's, as they run).
+    bars_seen: (bool, bool),
+    /// His grab seen here (the server's hold time), and the grab kill's slot pressed.
+    grabbed: bool,
+    kill_slot: Option<usize>,
+    /// The door he was set at, and the stun asked for.
+    door: Option<Entity>,
+    stun_asked: bool,
 }
 
 /// How long the bot waits for the server (real seconds) before giving up.
@@ -1896,7 +1910,8 @@ fn net_bot_jason(
     pickups: Query<(Entity, &crate::props::KnifePickup, &GlobalTransform, Has<crate::props::PickedUp>)>,
     mut exit: MessageWriter<AppExit>,
     mut cameras: Query<&mut crate::player::PlayerCamera>,
-    (jasons, rig, interaction_view): (Query<&crate::jason::Jason>, Option<Res<crate::jason_player::JasonRig>>, Option<Res<crate::interaction_camera::View>>),
+    (jasons, rig, interaction_view, bodies, grab_kills): (Query<&crate::jason::Jason>, Option<Res<crate::jason_player::JasonRig>>, Option<Res<crate::interaction_camera::View>>, Query<&NetBody, Without<Controlled>>, Option<Res<crate::jason::GrabKillsAvailable>>),
+    (doors, stun_views): (Query<(Entity, &crate::doors::Door, &GlobalTransform)>, Query<(), (With<crate::player::PlayerCamera>, With<crate::screen_effects::StunEffect>)>),
 ) {
     bot.t += time.delta_secs();
     let Ok((body, nj)) = own.single() else { return };
@@ -1943,6 +1958,12 @@ fn net_bot_jason(
             // (4 again while Stalk is on cancels it: KLR_Stalk_PC.)
             const STEPS: [(&str, u32); 5] = [("Shift", 1 << 10), ("Stalk", 1 << 11), ("Unstalk", 1 << 11), ("Sense", 1 << 9), ("Morph", 1 << 8)];
             let i = (bot.step - 10) as usize;
+            for j in &jasons {
+                if let Some(r) = j.remote {
+                    bot.bars_seen.0 |= r.shift_bar.is_some();
+                    bot.bars_seen.1 |= r.stalk_bar.is_some();
+                }
+            }
             // Then a knife pickup (E at it): taken on the server, hidden here.
             if i == STEPS.len() {
                 if bot.t < 2.0 {
@@ -2031,7 +2052,138 @@ fn net_bot_jason(
             if i == STEPS.len() + 2 && bot.t < 3.0 {
                 return;
             }
+            // Last a grab (right mouse) on the host's counselor, set beside her: his hold time comes here (the placed
+            // kill prompts wait on it); then a grab kill (its slot's key let go): his kill's camera here.
+            if i == STEPS.len() + 4 || i == STEPS.len() + 5 {
+                let her = bodies.iter().filter(|b| b.kind == BodyKind::Counselor).map(|b| Vec3::from_array(b.pos)).min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)));
+                let Some(her) = her else {
+                    bot.failed.push("no counselor to grab");
+                    bot.step += 2;
+                    return;
+                };
+                let to = her - at;
+                let (ky, kp) = ((-to.x).atan2(-to.z), 0.0);
+                controls.yaw = ky;
+                controls.pitch = kp;
+                for mut cam in &mut cameras {
+                    cam.yaw = ky;
+                    cam.pitch = kp;
+                }
+                let holding = jasons.iter().any(|j| j.holding_for().is_some());
+                if i == STEPS.len() + 4 {
+                    if holding {
+                        info!("bot: net: his grab here (held {:.1} s)", jasons.iter().find_map(|j| j.holding_for()).unwrap_or(0.0));
+                        bot.grabbed = true;
+                        bot.step += 1;
+                        bot.t = 0.0;
+                        controls.apply_remote(0, 0, ky, kp, view);
+                    } else if bot.t > 20.0 {
+                        warn!("bot: net: no grab here (state {})", nj.state);
+                        bot.failed.push("grab");
+                        bot.step += 2;
+                        bot.t = 0.0;
+                    } else if Vec2::new(to.x, to.z).length() > 1.8 {
+                        // Beside her, 1.5 m off, from her side towards him.
+                        let off = Vec2::new(-to.x, -to.z).normalize_or(Vec2::X) * 1.5;
+                        crate::bot::setup(crate::bot::BotSetup::PlaceJason([her.x + off.x, her.y, her.z + off.y]));
+                        controls.apply_remote(0, 0, ky, kp, view);
+                    } else {
+                        // (Right mouse, a 0.1 s tap every 0.5 s.)
+                        controls.apply_remote(0, if (bot.t * 2.0).fract() < 0.2 { 1 << 1 } else { 0 }, ky, kp, view);
+                    }
+                    return;
+                }
+                // A grab kill: the first slot available here (the server's), its key held then let go.
+                if rig.as_ref().is_some_and(|r| r.kill_camera()) && jasons.iter().any(|j| j.remote_state == "Killing") {
+                    info!("bot: net: his grab kill's camera here (slot {:?})", bot.kill_slot);
+                    bot.step += 1;
+                    bot.t = 0.0;
+                    controls.apply_remote(0, 0, ky, kp, view);
+                    return;
+                }
+                if bot.t > 20.0 {
+                    warn!("bot: net: no grab kill camera here (state {}, slot {:?})", nj.state, bot.kill_slot);
+                    bot.failed.push("grab kill camera");
+                    bot.step += 1;
+                    bot.t = 0.0;
+                    return;
+                }
+                let slot = bot.kill_slot.or_else(|| grab_kills.as_ref().and_then(|g| g.0.iter().position(|a| *a)));
+                bot.kill_slot = slot;
+                let key = slot.map_or(0, |s| 1u32 << (8 + s));
+                controls.apply_remote(if slot.is_some() && (bot.t * 2.0).fract() < 0.3 { key } else { 0 }, 0, ky, kp, view);
+                return;
+            }
+            // Then at the nearest closed door, facing it: the door his E and attack act on (the server's focus) here, his
+            // prompt's best.
+            if i == STEPS.len() + 2 {
+                if bot.t < 2.0 {
+                    if nj.state != "Hunting" {
+                        bot.t = 0.0;
+                    }
+                    return;
+                }
+                let Some((de, at_door, out)) = bot.door.and_then(|d| doors.get(d).ok()).or_else(|| doors.iter().filter(|(_, d, _)| !d.open && !d.broken).min_by(|a, b| a.2.transform_point(a.1.interact).distance(at).total_cmp(&b.2.transform_point(b.1.interact).distance(at)))).map(|(e, d, g)| (e, g.transform_point(d.interact), (g.rotation() * Vec3::X).with_y(0.0).normalize_or(Vec3::X))) else {
+                    bot.failed.push("no door");
+                    bot.step += 1;
+                    return;
+                };
+                if bot.door.is_none() {
+                    bot.door = Some(de);
+                    let stand = at_door + out * 1.0;
+                    crate::bot::setup(crate::bot::BotSetup::PlaceJason([stand.x, at.y, stand.z]));
+                    info!("bot: net: Jason to the door at {at_door}");
+                }
+                let to = at_door - (at + Vec3::Y * 0.88);
+                let (ky, kp) = ((-to.x).atan2(-to.z), to.y.atan2(Vec2::new(to.x, to.z).length()));
+                controls.yaw = ky;
+                controls.pitch = kp;
+                for mut cam in &mut cameras {
+                    cam.yaw = ky;
+                    cam.pitch = kp;
+                }
+                controls.apply_remote(0, 0, ky, kp, view);
+                if jasons.iter().any(|j| j.focus_door() == Some(de)) {
+                    info!("bot: net: his focused door here");
+                    bot.step += 1;
+                    bot.t = 0.0;
+                } else if bot.t > 12.0 {
+                    warn!("bot: net: no focused door here");
+                    bot.failed.push("focused door");
+                    bot.step += 1;
+                    bot.t = 0.0;
+                }
+                return;
+            }
+            // Then stunned (the server's hook): his stun's screen effect here.
+            if i == STEPS.len() + 3 {
+                if !bot.stun_asked {
+                    bot.stun_asked = true;
+                    crate::bot::setup(crate::bot::BotSetup::StunJason);
+                }
+                if jasons.iter().any(|j| j.stunned()) && !stun_views.is_empty() {
+                    info!("bot: net: his stun here (its screen effect)");
+                    bot.step += 1;
+                    bot.t = 0.0;
+                } else if bot.t > 10.0 {
+                    warn!("bot: net: no stun here (state {}, effect {})", nj.state, !stun_views.is_empty());
+                    bot.failed.push("stun effect");
+                    bot.step += 1;
+                    bot.t = 0.0;
+                }
+                return;
+            }
             let Some(&(name, key)) = STEPS.get(i) else {
+                // (His HUD's Shift and Stalk bars, from the server's.)
+                if !bot.bars_seen.0 {
+                    bot.failed.push("Shift bar");
+                }
+                if !bot.bars_seen.1 {
+                    bot.failed.push("Stalk bar");
+                }
+                if bot.bars_seen.0 && bot.bars_seen.1 && bot.failed.is_empty() {
+                    info!("bot: net: his Shift and Stalk bars here");
+                }
                 if bot.failed.is_empty() {
                     info!("bot: net: passed");
                     exit.write(AppExit::Success);

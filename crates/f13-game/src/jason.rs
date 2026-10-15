@@ -1004,6 +1004,15 @@ impl Jason {
         self.remote.map_or(matches!(self.state, JasonState::Shifting { .. }), |r| r.shifting)
     }
 
+    /// Testing (a bot hook): stunned as a firecracker's hit stuns him; the take his stun plays.
+    pub(crate) fn stun_for_test(&mut self) -> &'static str {
+        let stun = Stun::Firecracker;
+        self.state = JasonState::Stunned { t: 0.0, stun };
+        self.stun_scale = 1.0;
+        self.velocity = Vec2::ZERO;
+        stun.anims().0
+    }
+
     pub fn stunned(&self) -> bool {
         // (A client's twin: the server's state.)
         if self.remote.is_some() {
