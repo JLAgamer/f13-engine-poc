@@ -162,7 +162,7 @@ pub struct NetBody {
     pub pos: [f32; 3],
     pub yaw: f32,
     pub kind: BodyKind,
-    /// When the server took it (its fixed-step clock, s): a client spaces the bodies by this, not by when they arrive.
+    /// When the server took it (its real clock, s): a client spaces the bodies by this, not by when they arrive.
     pub t: f32,
 }
 
@@ -854,7 +854,7 @@ fn update_bodies(
     struggle: Option<Res<crate::jason::Struggle>>,
     mut jasons: Query<(&mut NetJason, &crate::jason::Jason, Option<&crate::senses::Knowledge>, Option<&crate::kill_camera::KillCam>)>,
     world_ids: Query<&crate::net_world::WorldId>,
-    fixed: Res<Time<Fixed>>,
+    (fixed, real): (Res<Time<Fixed>>, Res<Time<Real>>),
     (morph_map, grab_kills): (Option<Res<crate::jason_player::MorphMap>>, Option<Res<crate::jason::GrabKillsAvailable>>),
 ) {
     for (mut b, xf, mut a, action, blocking) in &mut bodies {
@@ -863,8 +863,10 @@ fn update_bodies(
         if b.pos != pos || b.yaw != yaw {
             b.pos = pos;
             b.yaw = yaw;
-            // The fixed step the body moved in (the characters move only there).
-            b.t = fixed.elapsed_secs();
+            // When (the server's real clock, as the clients' ServerClock compares theirs with: its virtual and fixed
+            // clocks drop a hitch's time past max_delta, which left the clients sampling past the newest body,
+            // stepping, until their estimate crept back).
+            b.t = real.elapsed_secs();
         }
         let take = action.map(|p| p.0.clone());
         if a.take != take || a.blocking != blocking {
@@ -1177,13 +1179,18 @@ struct Snapshots(std::collections::VecDeque<(f32, Vec3, f32)>);
 
 impl Snapshots {
     /// Adds a body taken at server time `t` (an older one than the newest, arrived late, is dropped). After standing
-    /// still, the body held its place until just before it moved.
+    /// still, the body held its place until just before it moved; a gap it kept moving through (bodies lost or late,
+    /// a server hitch: covering the gap at more than half the speed it had) is blended across instead.
     fn push(&mut self, t: f32, at: Vec3, yaw: f32) {
         if let Some(&(t0, p0, y0)) = self.0.back() {
             if t <= t0 {
                 return;
             }
-            if t - t0 > 2.0 * STILL_GAP_S {
+            let n = self.0.len();
+            // (m/s; none known: still.)
+            let before = (n >= 2).then(|| self.0[n - 2]).map_or(0.0, |(tb, pb, _)| pb.distance(p0) / (t0 - tb).max(1e-4));
+            let across = at.distance(p0) / (t - t0);
+            if t - t0 > 2.0 * STILL_GAP_S && (before < 0.05 || across <= 0.5 * before) {
                 self.0.push_back((t - STILL_GAP_S, p0, y0));
             }
         }
@@ -1991,6 +1998,25 @@ fn net_bot_jason(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_gap_she_moved_through_blends_and_a_stop_holds() {
+        // Walking 3 m/s at 60 Hz, then 0.2 s of bodies lost: no hold, the twin keeps walking across the gap.
+        let mut s = Snapshots::default();
+        for i in 0..10 {
+            let t = i as f32 / 60.0;
+            s.push(t, Vec3::X * 3.0 * t, 0.0);
+        }
+        let t0 = 9.0 / 60.0;
+        s.push(t0 + 0.2, Vec3::X * 3.0 * (t0 + 0.2), 0.0);
+        let (mid, _) = sample(&s, t0 + 0.1).unwrap();
+        assert!((mid.x - 3.0 * (t0 + 0.1)).abs() < 0.01, "{mid}");
+        // She stood 1 s, then moved 5 cm: she held her place until just before.
+        let t1 = t0 + 0.2;
+        s.push(t1 + 1.0, Vec3::X * (3.0 * t1 + 0.05), 0.0);
+        let (held, _) = sample(&s, t1 + 0.5).unwrap();
+        assert!((held.x - 3.0 * t1).abs() < 1e-4, "{held}");
+    }
 
     #[test]
     fn twins_are_shown_between_the_bodies_around_then() {
