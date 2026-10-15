@@ -627,7 +627,8 @@ impl Plugin for JasonPlugin {
             .add_observer(pickup_taken)
             .add_observer(distortion)
             .add_observer(car_slam)
-            .add_systems(Update, (tag_jason_parts, animate_jason, grab_layer, jason_mixes, teleport_mix, jason_door_camera, held_knife.after(animate_jason)));
+            .add_systems(Update, (tag_jason_parts, animate_jason, grab_layer, jason_mixes, teleport_mix, jason_door_camera, held_knife.after(animate_jason)))
+            .add_systems(Update, finish_kills.run_if(crate::net::simulating));
     }
 }
 
@@ -3774,6 +3775,12 @@ pub(crate) fn update_jason(
                     }
                 }
                 if at >= killer.length(kill).unwrap_or(12.0) {
+                    // Her side runs on past his (Head Stomp: his 8.47 s, hers 9.80 s, no shouldRagdoll): her special
+                    // move's bDieOnFinish kills her as it ends.
+                    let dies_at = ragdoll_time(counselor_model.as_deref(), her_kill);
+                    if alive && p.counselor.alive() && dies_at > at {
+                        commands.entity(pe).insert(FinishingKill { left: dies_at - at, kill_name, score: j.kill_score.take() });
+                    }
                     // He stays where the kill took him (its root motion), not back at its start.
                     if let Some((_, last)) = killer.root_motion(kill) {
                         *xf = crate::character::flat(Transform::from_matrix(xf.to_matrix() * last.to_matrix()));
@@ -3934,6 +3941,32 @@ pub(crate) fn update_jason(
 
 /// When a counselor's kill animation hands her to the ragdoll: its "shouldRagdoll" notify (the counselor anim
 /// Blueprint's cue), else its end.
+/// A kill's victim whose side outlasts his (her special move's bDieOnFinish): she dies as it ends, `left` s on.
+#[derive(Component)]
+pub struct FinishingKill {
+    left: f32,
+    kill_name: &'static str,
+    score: Option<(String, &'static str)>,
+}
+
+fn finish_kills(mut commands: Commands, time: Res<Time>, ptuning: Res<PlayerTuning>, mut victims: Query<(Entity, &mut Player, &mut FinishingKill)>) {
+    for (pe, mut p, mut f) in &mut victims {
+        f.left -= time.delta_secs();
+        if f.left > 0.0 {
+            continue;
+        }
+        if p.counselor.alive() {
+            let health = p.counselor.health;
+            p.counselor.take_damage(Hit { amount: health, blocked_with_weapon: false }, &ptuning.counselor);
+            info!("Vanessa: killed by Jason ({}, as her side ended)", f.kill_name);
+            if let Some((class, component)) = f.score.take() {
+                commands.trigger(crate::match_flow::ContextKillScore { class, component });
+            }
+        }
+        commands.entity(pe).remove::<(Held, PlayAction, FinishingKill)>();
+    }
+}
+
 fn ragdoll_time(model: Option<&crate::character::CounselorCharacter>, anim: &str) -> f32 {
     let info = model.and_then(|m| m.info.animations.get(anim));
     info.and_then(|a| a.window("shouldRagdoll")).map(|w| w.0).or(info.map(|a| a.length)).unwrap_or(4.0)

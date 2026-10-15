@@ -178,10 +178,11 @@ fn to_panned(
         gains.set(0.5, 0.5);
         gains.set_filter(crate::audio_volumes::default_voice_filter());
         let handle = panned.add(Panned { clip: clip.clone(), gains: gains.clone() });
+        // (Not if the voice went this frame.)
         commands
             .entity(e)
-            .remove::<AudioPlayer>()
-            .insert((AudioPlayer::<Panned>(handle), PlaybackSettings { spatial: false, ..*settings }, Pan(gains)));
+            .try_remove::<AudioPlayer>()
+            .try_insert((AudioPlayer::<Panned>(handle), PlaybackSettings { spatial: false, ..*settings }, Pan(gains)));
     }
 }
 

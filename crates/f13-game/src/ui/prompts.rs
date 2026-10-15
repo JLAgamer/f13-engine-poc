@@ -69,6 +69,11 @@ impl Prompts {
         self.0.retain(|p| p.source != source);
         self.0.extend(list);
     }
+
+    /// Whether `source` lists a prompt (testing).
+    pub fn has(&self, source: PromptSource) -> bool {
+        self.0.iter().any(|p| p.source == source)
+    }
 }
 
 /// A prompt's widget on screen.

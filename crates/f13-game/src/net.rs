@@ -505,6 +505,11 @@ fn bot_hooks(
                         d.locked = true;
                     }
                 }
+                crate::bot::BotSetup::PlaceHostCounselor(at) => {
+                    for (e, _) in &own {
+                        commands.entity(e).insert((Transform::from_translation(Vec3::from_array(at)), crate::player::Unsettled)).remove::<crate::interact::MoveToSpot>();
+                    }
+                }
                 crate::bot::BotSetup::StunJason => {
                     for (je, (mut j, _)) in jason_entities.iter().zip(jasons.iter_mut()) {
                         let take = j.stun_for_test();
@@ -1554,6 +1559,9 @@ struct NetBot {
     /// The door he was set at, and the stun asked for.
     door: Option<Entity>,
     stun_asked: bool,
+    /// The placed kill she was set at, and its prompt seen here while he held her.
+    placed_at: bool,
+    placed_prompt: bool,
 }
 
 /// How long the bot waits for the server (real seconds) before giving up.
@@ -1912,6 +1920,7 @@ fn net_bot_jason(
     mut cameras: Query<&mut crate::player::PlayerCamera>,
     (jasons, rig, interaction_view, bodies, grab_kills): (Query<&crate::jason::Jason>, Option<Res<crate::jason_player::JasonRig>>, Option<Res<crate::interaction_camera::View>>, Query<&NetBody, Without<Controlled>>, Option<Res<crate::jason::GrabKillsAvailable>>),
     (doors, stun_views): (Query<(Entity, &crate::doors::Door, &GlobalTransform)>, Query<(), (With<crate::player::PlayerCamera>, With<crate::screen_effects::StunEffect>)>),
+    (placed_kills, prompts): (Query<&crate::placed_kills::PlacedKill>, Res<crate::ui::Prompts>),
 ) {
     bot.t += time.delta_secs();
     let Ok((body, nj)) = own.single() else { return };
@@ -2054,6 +2063,28 @@ fn net_bot_jason(
             }
             // Last a grab (right mouse) on the host's counselor, set beside her: his hold time comes here (the placed
             // kill prompts wait on it); then a grab kill (its slot's key let go): his kill's camera here.
+            // (First she's set at the nearest placed kill's spot: its prompt shows him once he holds her.)
+            if i == STEPS.len() + 4 && !bot.placed_at {
+                bot.placed_at = true;
+                if let Some(k) = placed_kills.iter().min_by(|a, b| a.spot.translation.distance(at).total_cmp(&b.spot.translation.distance(at))) {
+                    info!("bot: net: her to the placed kill at {}", k.spot.translation);
+                    crate::bot::setup(crate::bot::BotSetup::PlaceHostCounselor(k.spot.translation.to_array()));
+                    bot.t = 0.0;
+                }
+                return;
+            }
+            if i == STEPS.len() + 5 && !bot.placed_prompt {
+                if prompts.has(crate::ui::PromptSource::PlacedKill) {
+                    info!("bot: net: the placed kill's prompt here, as he holds her");
+                    bot.placed_prompt = true;
+                } else if bot.t > 5.0 {
+                    warn!("bot: net: no placed kill prompt here");
+                    bot.failed.push("placed kill prompt");
+                    bot.placed_prompt = true;
+                } else {
+                    return;
+                }
+            }
             if i == STEPS.len() + 4 || i == STEPS.len() + 5 {
                 let her = bodies.iter().filter(|b| b.kind == BodyKind::Counselor).map(|b| Vec3::from_array(b.pos)).min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)));
                 let Some(her) = her else {
@@ -2095,7 +2126,7 @@ fn net_bot_jason(
                 }
                 // A grab kill: the first slot available here (the server's), its key held then let go.
                 if rig.as_ref().is_some_and(|r| r.kill_camera()) && jasons.iter().any(|j| j.remote_state == "Killing") {
-                    info!("bot: net: his grab kill's camera here (slot {:?})", bot.kill_slot);
+                    info!("bot: net: his kill's camera here ({})", bot.kill_slot.map_or("the placed kill".to_string(), |s| format!("grab kill slot {s}")));
                     bot.step += 1;
                     bot.t = 0.0;
                     controls.apply_remote(0, 0, ky, kp, view);
@@ -2110,6 +2141,23 @@ fn net_bot_jason(
                 }
                 let slot = bot.kill_slot.or_else(|| grab_kills.as_ref().and_then(|g| g.0.iter().position(|a| *a)));
                 bot.kill_slot = slot;
+                if slot.is_none() && bot.t > 2.0 {
+                    // No grab kill fits here: the placed kill (E on its spot, facing it), his kill as well.
+                    let Some(k) = placed_kills.iter().min_by(|a, b| a.spot.translation.distance(at).total_cmp(&b.spot.translation.distance(at))) else { return };
+                    if at.distance(k.spot.translation) > 0.5 {
+                        crate::bot::setup(crate::bot::BotSetup::PlaceJason(k.spot.translation.to_array()));
+                    }
+                    let to = k.interact - (at + Vec3::Y * 0.88);
+                    let (ky, kp) = ((-to.x).atan2(-to.z), to.y.atan2(Vec2::new(to.x, to.z).length()));
+                    controls.yaw = ky;
+                    controls.pitch = kp;
+                    for mut cam in &mut cameras {
+                        cam.yaw = ky;
+                        cam.pitch = kp;
+                    }
+                    controls.apply_remote(if (bot.t * 2.0).fract() < 0.2 { 1 << 7 } else { 0 }, 0, ky, kp, view);
+                    return;
+                }
                 let key = slot.map_or(0, |s| 1u32 << (8 + s));
                 controls.apply_remote(if slot.is_some() && (bot.t * 2.0).fract() < 0.3 { key } else { 0 }, 0, ky, kp, view);
                 return;

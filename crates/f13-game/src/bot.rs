@@ -342,6 +342,8 @@ pub enum BotSetup {
     PlaceJason([f32; 3]),
     /// Jason stunned (a firecracker's), as a hit stuns him.
     StunJason,
+    /// The server's own counselor stands here (a client Jason's test of what's around her).
+    PlaceHostCounselor([f32; 3]),
     /// She dies (her health to 0).
     Die,
     /// Another counselor (not a player's) dies.
