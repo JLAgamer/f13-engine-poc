@@ -3,6 +3,33 @@
 All notable changes to Lakeside. Versions follow [semver](https://semver.org); the supported game build is named in
 each release.
 
+## 0.2.1 (2026-10-15)
+
+Same map, game build and export as 0.2.0: no need to install again; replace the files with this zip's.
+
+### Network play
+- Jason's pick no longer restarts anyone: each player's Jason, grab kills and weapon go with them, and the match's
+  Jason loads as it starts.
+- A player who leaves is gone from the lobby at once.
+- Clients' movement no longer stutters.
+- A client playing Jason gets everything the host's Jason does: the knife's crosshair and zoom, the knife pickup's
+  camera, the kill cameras, the Shift and Stalk bars, his stun's screen effects, and the door and placed kill
+  prompts.
+- A client's counselor gets the door, window and drawer cameras, and no longer takes over the host's view with them;
+  clients hear windows opening and closing, barricades and diving through glass.
+
+### Gameplay
+- Sense lights a counselor's whole cabin, with the red light out of its windows and cracks.
+- Items, doors and the other things a counselor can use show their prompt from a few metres away, as in the game.
+- Jason's swings no longer hit through walls; thrown knives stop spinning where they stick; only his own mask
+  drops.
+- The Head Stomp grab kill kills (it used to leave her alive).
+
+### Fixes
+- Sound comes back after the audio device changes (a headset, tabbing out), voice chat too.
+- Jason's HUD glow (the unlock notice, the Morph cursor) as bright as the game's.
+- A client could crash when a voice line ended as it started.
+
 ## 0.2.0 (2026-10-14)
 
 Same map and supported game build as 0.1.0. Install again: setup now also exports every counselor, every Jason

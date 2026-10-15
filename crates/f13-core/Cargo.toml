@@ -1,6 +1,6 @@
 [package]
 name = "f13-core"
-version = "0.2.0"
+version = "0.2.1"
 edition.workspace = true
 license.workspace = true
 description = "Engine-independent gameplay rules for a Friday the 13th: The Game reimplementation"

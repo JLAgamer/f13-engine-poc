@@ -1,6 +1,6 @@
 [package]
 name = "f13-host"
-version = "0.2.0"
+version = "0.2.1"
 edition.workspace = true
 license.workspace = true
 description = "Sends the host's commands to a running f13-game (started with --host)"
