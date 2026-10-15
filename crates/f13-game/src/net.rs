@@ -1843,6 +1843,7 @@ fn net_bot_jason(
     pickups: Query<(Entity, &crate::props::KnifePickup, &GlobalTransform, Has<crate::props::PickedUp>)>,
     mut exit: MessageWriter<AppExit>,
     mut cameras: Query<&mut crate::player::PlayerCamera>,
+    (jasons, rig): (Query<&crate::jason::Jason>, Option<Res<crate::jason_player::JasonRig>>),
 ) {
     bot.t += time.delta_secs();
     let Ok((body, nj)) = own.single() else { return };
@@ -1936,6 +1937,36 @@ fn net_bot_jason(
                 } else if bot.t > 3.0 {
                     controls.apply_remote(if (bot.t * 2.0) as u32 % 2 == 0 { 1 << 7 } else { 0 }, 0, ky, kp, view);
                 }
+                return;
+            }
+            // Then a knife aimed (middle mouse held): the server's aim seen here, his reticle (ui.rs) and knife camera
+            // follow it; let go, it's thrown.
+            if i == STEPS.len() + 1 {
+                // (Once he's done with the pickup: a press while busy is lost.)
+                if !matches!(nj.state.as_str(), "Hunting" | "Throwing") && bot.t < 6.0 {
+                    bot.t = 0.0;
+                    return;
+                }
+                let aimed = jasons.iter().any(|j| j.remote.as_ref().is_some_and(|r| r.knife_aim));
+                let camera = rig.as_ref().is_some_and(|r| r.knife_camera());
+                if aimed && camera {
+                    info!("bot: net: aiming a knife here (the server's aim, the reticle, the knife camera)");
+                    controls.apply_remote(0, 0, yaw, pitch, view);
+                    bot.step += 1;
+                    bot.t = 0.0;
+                } else if bot.t > 6.0 {
+                    warn!("bot: net: the knife aim: seen {aimed}, knife camera {camera}");
+                    bot.failed.push("knife aim");
+                    controls.apply_remote(0, 0, yaw, pitch, view);
+                    bot.step += 1;
+                    bot.t = 0.0;
+                } else if bot.t > 1.0 {
+                    controls.apply_remote(0, 1 << 2, yaw, pitch, view);
+                }
+                return;
+            }
+            // (The knife let go: a moment for it to land here.)
+            if i == STEPS.len() + 2 && bot.t < 3.0 {
                 return;
             }
             let Some(&(name, key)) = STEPS.get(i) else {

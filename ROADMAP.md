@@ -8,8 +8,7 @@ Base content (asset paths in the player's install; all gameplay values come from
 
 ## Todo
 The user's LAN test (2026-10-14), first:
-- [ ] Counselors get no pickup prompt for items: not reproduced (MODLOG "The item prompt, swept"); needs where it
-      happened (host or client, which item, where it lay)
+- [ ] Counselors' highlight previews for the other interactables (doors, windows, drawers, cars...: items' are listed)
 
 Lighting first (the user, 2026-10-14):
 - [ ] Lighting: Enlighten GI (the map's indirect light: its precomputed systems and probe sets are Geomerics'

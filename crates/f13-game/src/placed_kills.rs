@@ -491,45 +491,75 @@ fn spawn_placed_kills(mut commands: Commands, level: Res<crate::Level>, export: 
     info!("placed kills: {n} ({props} skeletal props)");
 }
 
-/// The local counselor's prompt: her interactable manager's best (her interaction target, interact.rs) shows its
+/// The local counselor's prompts: her interactable manager's best (her interaction target, interact.rs) shows its
 /// InteractionWidgetClass with its InteractionIconWidgetClass (the actor's interactable component, from its class),
 /// at its interaction point. A door's SCInteractionDoorWidget shows a counselor its Use key, not its Attack
 /// (Get_ActionMapWidgetUse / Attack_Visibility_0). Her hold on it without pips fills its hold ring (SCInteractWidget's
 /// tick: the hold's progress into DynamicHoldMaterial's Alpha; ShowHoldRing only for an interactable without pips).
-/// PLACEHOLDER: only the best shows (the others' highlight previews within their HighlightDistance aren't listed for
-/// her), and the ring's progress is her hold's (vt+0xd68 not read further).
+/// And the items she could pick up highlight: the manager's tick (FUN_140279100) puts each interactable it can interact
+/// with that passes the highlight test (FUN_140240fb0: bCanHighlight, within HighlightDistance of her, 500 cm by
+/// default, not occluded) in its highlighted set, whose widgets show their preview (OnShowPreview).
+/// PLACEHOLDER: the ring's progress is her hold's (vt+0xd68 not read further); the other interactables' previews
+/// (doors, windows, drawers...) aren't listed yet.
+#[allow(clippy::type_complexity)]
 fn counselor_prompts(
     export: Res<crate::ExportRoot>,
     mut classes: Local<Option<ClassDb>>,
     play: Option<Res<crate::jason_player::PlayJason>>,
-    local: Query<&crate::interact::Interaction, (With<crate::controls::LocalPlayer>, With<crate::player::Player>)>,
+    local: Query<(Entity, &crate::interact::Interaction, &Transform, Has<crate::character::Male>), (With<crate::controls::LocalPlayer>, With<crate::player::Player>)>,
     actors: Query<(&GlobalTransform, Option<&Name>)>,
+    items: Query<(Entity, &crate::props::Item, &GlobalTransform, Option<&Name>, Option<&Visibility>), (Without<crate::interact::Carried>, Without<crate::props::InCabinet>)>,
     tuning: Res<crate::player::PlayerTuning>,
     mut list: ResMut<crate::ui::Prompts>,
+    occlusion: Occlusion,
+    mut item_prompts: Local<std::collections::HashMap<String, Option<(KillPrompt, Transform)>>>,
 ) {
     use crate::ui::{Prompt, PromptSource};
-    let target = local.iter().next().filter(|_| play.is_none()).and_then(|i| Some((i, i.prompt_target()?)));
-    let Some((interaction, (e, which))) = target else {
+    let Some((_, interaction, xf, male)) = local.iter().next().filter(|_| play.is_none()) else {
         list.set(PromptSource::Counselor, []);
         return;
     };
     let classes = classes.get_or_insert_with(|| ClassDb::load(&export.0.join("classes.json")).unwrap_or_default());
-    let Ok((gxf, name)) = actors.get(e) else {
-        list.set(PromptSource::Counselor, []);
-        return;
-    };
-    let Some(info) = name.and_then(|n| classes.get(n.as_str())) else {
-        list.set(PromptSource::Counselor, []);
-        return;
-    };
-    let interactables: Vec<_> = info.components.iter().filter(|c| classes.is_child_of(&c.kind, "ILLInteractableComponent")).collect();
-    let Some((i, comp)) = interactables.iter().enumerate().find(|(_, c)| which.is_none_or(|w| c.name == w)).or_else(|| interactables.iter().enumerate().next()) else {
-        list.set(PromptSource::Counselor, []);
-        return;
-    };
-    let kp = KillPrompt::of(classes, comp);
-    let at = gxf.transform_point(crate::to_transform(&comp.local.unwrap_or(Xform::IDENTITY)).translation);
-    let hold = interaction.hold.as_ref().filter(|h| h.started && h.pips.is_empty()).map(|h| h.progress(&tuning.minigame).clamp(0.0, 1.0));
-    let shown = if kp.widget == "SCInteractionDoorWidget" { vec![("ActionMapWidgetUse".into(), true), ("ActionMapWidgetAttack".into(), false)] } else { vec![] };
-    list.set(PromptSource::Counselor, [Prompt { source: PromptSource::Counselor, id: (e, i as u8), at, widget: kp.widget, icon: kp.icon, highlighted: true, best: true, shown, hold }]);
+    let mut prompts = Vec::new();
+    // The best.
+    let best = interaction.prompt_target().and_then(|(e, which)| {
+        let (gxf, name) = actors.get(e).ok()?;
+        let info = name.and_then(|n| classes.get(n.as_str()))?;
+        let interactables: Vec<_> = info.components.iter().filter(|c| classes.is_child_of(&c.kind, "ILLInteractableComponent")).collect();
+        let (i, comp) = interactables.iter().enumerate().find(|(_, c)| which.is_none_or(|w| c.name == w)).or_else(|| interactables.iter().enumerate().next())?;
+        let kp = KillPrompt::of(classes, comp);
+        let at = gxf.transform_point(crate::to_transform(&comp.local.unwrap_or(Xform::IDENTITY)).translation);
+        let hold = interaction.hold.as_ref().filter(|h| h.started && h.pips.is_empty()).map(|h| h.progress(&tuning.minigame).clamp(0.0, 1.0));
+        let shown = if kp.widget == "SCInteractionDoorWidget" { vec![("ActionMapWidgetUse".into(), true), ("ActionMapWidgetAttack".into(), false)] } else { vec![] };
+        prompts.push(Prompt { source: PromptSource::Counselor, id: (e, i as u8), at, widget: kp.widget, icon: kp.icon, highlighted: true, best: true, shown, hold });
+        Some(e)
+    });
+    // The items' previews.
+    let center = xf.translation + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M;
+    let eyes = center + Vec3::Y * crate::interact::BASE_EYE_HEIGHT_M;
+    for (e, item, gxf, name, vis) in &items {
+        // (Not one lying hidden (the pool), nor one she can't take: Pamela's sweater for a man.)
+        if Some(e) == best || vis.is_some_and(|v| *v == Visibility::Hidden) || (male && crate::sweater::SWEATER_CLASSES.contains(&item.class.as_str())) {
+            continue;
+        }
+        let Some((kp, local)) = item_prompts
+            .entry(item.class.clone())
+            .or_insert_with(|| {
+                let comp = classes.get(&item.class)?.components.iter().find(|c| c.name == "Interactable")?;
+                Some((KillPrompt::of(classes, comp), crate::to_transform(&comp.local.unwrap_or(Xform::IDENTITY))))
+            })
+            .clone()
+        else {
+            continue;
+        };
+        let at = gxf.transform_point(local.translation);
+        if (at - center).length_squared() > kp.distance_m * kp.distance_m + 1.0 {
+            continue;
+        }
+        if !kp.highlights(at, gxf.rotation() * local.rotation * Vec3::X, center) || occlusion.blocked(&kp, e, name, eyes, at) {
+            continue;
+        }
+        prompts.push(Prompt { source: PromptSource::Counselor, id: (e, 0), at, widget: kp.widget, icon: kp.icon, highlighted: true, best: false, shown: vec![], hold: None });
+    }
+    list.set(PromptSource::Counselor, prompts);
 }

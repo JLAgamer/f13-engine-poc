@@ -628,6 +628,11 @@ pub struct JasonRig {
 }
 
 impl JasonRig {
+    /// His knife's camera is the active one (testing).
+    pub(crate) fn knife_camera(&self) -> bool {
+        self.throwing
+    }
+
     /// ResetCameras (ReturnCameraToCharacter): his cameras' arms snap to the view.
     pub(crate) fn reset_cameras(&mut self) {
         self.cams.reset();
