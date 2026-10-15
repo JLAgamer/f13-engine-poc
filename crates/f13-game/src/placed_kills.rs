@@ -496,11 +496,13 @@ fn spawn_placed_kills(mut commands: Commands, level: Res<crate::Level>, export: 
 /// at its interaction point. A door's SCInteractionDoorWidget shows a counselor its Use key, not its Attack
 /// (Get_ActionMapWidgetUse / Attack_Visibility_0). Her hold on it without pips fills its hold ring (SCInteractWidget's
 /// tick: the hold's progress into DynamicHoldMaterial's Alpha; ShowHoldRing only for an interactable without pips).
-/// And the items she could pick up highlight: the manager's tick (FUN_140279100) puts each interactable it can interact
-/// with that passes the highlight test (FUN_140240fb0: bCanHighlight, within HighlightDistance of her, 500 cm by
-/// default, not occluded) in its highlighted set, whose widgets show their preview (OnShowPreview).
-/// PLACEHOLDER: the ring's progress is her hold's (vt+0xd68 not read further); the other interactables' previews
-/// (doors, windows, drawers...) aren't listed yet.
+/// And what she could use highlights: the manager's tick (FUN_140279100) puts each interactable it can interact with
+/// that passes the highlight test (FUN_140240fb0: bCanHighlight, within HighlightDistance of her, 500 cm by default,
+/// not occluded) in its highlighted set, whose widgets show their preview (OnShowPreview).
+/// PLACEHOLDERS: the ring's progress is her hold's (vt+0xd68 not read further); CanInteractWith, for previews, is
+/// only the killer's own interactables left out (knife pickups, placed kills, walls, components whose ActorIgnoreList
+/// has counselors), items lying (not carried or in a drawer) and Pamela's sweater not for a man; the classes' own
+/// (vt 0x500) aren't read.
 #[allow(clippy::type_complexity)]
 fn counselor_prompts(
     export: Res<crate::ExportRoot>,
@@ -508,11 +510,14 @@ fn counselor_prompts(
     play: Option<Res<crate::jason_player::PlayJason>>,
     local: Query<(Entity, &crate::interact::Interaction, &Transform, Has<crate::character::Male>), (With<crate::controls::LocalPlayer>, With<crate::player::Player>)>,
     actors: Query<(&GlobalTransform, Option<&Name>)>,
-    items: Query<(Entity, &crate::props::Item, &GlobalTransform, Option<&Name>, Option<&Visibility>), (Without<crate::interact::Carried>, Without<crate::props::InCabinet>)>,
+    interactables: Query<
+        (Entity, &GlobalTransform, Option<&Name>, Option<&Visibility>, Option<&crate::props::Item>, (Has<crate::interact::Carried>, Has<crate::props::InCabinet>)),
+        (With<crate::interact::InteractLimits>, Without<crate::props::KnifePickup>, Without<PlacedKill>, Without<crate::doors::Wall>),
+    >,
     tuning: Res<crate::player::PlayerTuning>,
     mut list: ResMut<crate::ui::Prompts>,
     occlusion: Occlusion,
-    mut item_prompts: Local<std::collections::HashMap<String, Option<(KillPrompt, Transform)>>>,
+    mut class_prompts: Local<std::collections::HashMap<String, Vec<(u8, KillPrompt, Transform)>>>,
 ) {
     use crate::ui::{Prompt, PromptSource};
     let Some((_, interaction, xf, male)) = local.iter().next().filter(|_| play.is_none()) else {
@@ -534,32 +539,50 @@ fn counselor_prompts(
         prompts.push(Prompt { source: PromptSource::Counselor, id: (e, i as u8), at, widget: kp.widget, icon: kp.icon, highlighted: true, best: true, shown, hold });
         Some(e)
     });
-    // The items' previews.
+    // The previews.
     let center = xf.translation + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M;
     let eyes = center + Vec3::Y * crate::interact::BASE_EYE_HEIGHT_M;
-    for (e, item, gxf, name, vis) in &items {
-        // (Not one lying hidden (the pool), nor one she can't take: Pamela's sweater for a man.)
-        if Some(e) == best || vis.is_some_and(|v| *v == Visibility::Hidden) || (male && crate::sweater::SWEATER_CLASSES.contains(&item.class.as_str())) {
+    for (e, gxf, name, vis, item, (carried, in_cabinet)) in &interactables {
+        // (Not one hidden (an item in the pool), nor an item carried or in a drawer, nor Pamela's sweater for a man.)
+        if vis.is_some_and(|v| *v == Visibility::Hidden) || (item.is_some() && (carried || in_cabinet)) || (male && item.is_some_and(|i| crate::sweater::SWEATER_CLASSES.contains(&i.class.as_str()))) {
             continue;
         }
-        let Some((kp, local)) = item_prompts
-            .entry(item.class.clone())
-            .or_insert_with(|| {
-                let comp = classes.get(&item.class)?.components.iter().find(|c| c.name == "Interactable")?;
-                Some((KillPrompt::of(classes, comp), crate::to_transform(&comp.local.unwrap_or(Xform::IDENTITY))))
-            })
-            .clone()
-        else {
-            continue;
-        };
-        let at = gxf.transform_point(local.translation);
-        if (at - center).length_squared() > kp.distance_m * kp.distance_m + 1.0 {
-            continue;
+        let Some(class) = item.map(|i| i.class.as_str()).or(name.map(|n| n.as_str())) else { continue };
+        let comps = class_prompts.entry(class.to_string()).or_insert_with(|| {
+            let Some(info) = classes.get(class) else { return Vec::new() };
+            let interactables = info.components.iter().filter(|c| classes.is_child_of(&c.kind, "ILLInteractableComponent"));
+            let door = classes.is_child_of(class, "SCDoor");
+            interactables
+                .enumerate()
+                // (Not one that ignores counselors: ActorIgnoreList, as the hiding spots' KillerInteractable.)
+                .filter(|(_, c)| !c.props["ActorIgnoreList"].as_array().into_iter().flatten().any(|a| a["AssetPathName"].as_str().is_some_and(|p| p.ends_with(".SCCounselorCharacter"))))
+                .map(|(i, c)| {
+                    let mut kp = KillPrompt::of(classes, c);
+                    // SCDoor's constructor on its InteractComponent: bCanHighlight, HighlightDistance 300 (props.rs).
+                    if door && c.name == "InteractComponent" {
+                        kp.can_highlight = c.props["bCanHighlight"].as_bool().unwrap_or(true);
+                        if c.props["HighlightDistance"].is_null() {
+                            kp.distance_m = 3.0;
+                        }
+                    }
+                    (i as u8, kp, crate::to_transform(&c.local.unwrap_or(Xform::IDENTITY)))
+                })
+                .filter(|(_, kp, _)| kp.can_highlight)
+                .collect()
+        });
+        for (i, kp, local) in comps.iter() {
+            if best == Some(e) && prompts.first().is_some_and(|p| p.id == (e, *i)) {
+                continue;
+            }
+            let at = gxf.transform_point(local.translation);
+            if (at - center).length_squared() > kp.distance_m * kp.distance_m + 1.0 {
+                continue;
+            }
+            if !kp.highlights(at, gxf.rotation() * local.rotation * Vec3::X, center) || occlusion.blocked(kp, e, name, eyes, at) {
+                continue;
+            }
+            prompts.push(Prompt { source: PromptSource::Counselor, id: (e, *i), at, widget: kp.widget.clone(), icon: kp.icon.clone(), highlighted: true, best: false, shown: vec![], hold: None });
         }
-        if !kp.highlights(at, gxf.rotation() * local.rotation * Vec3::X, center) || occlusion.blocked(&kp, e, name, eyes, at) {
-            continue;
-        }
-        prompts.push(Prompt { source: PromptSource::Counselor, id: (e, 0), at, widget: kp.widget, icon: kp.icon, highlighted: true, best: false, shown: vec![], hold: None });
     }
     list.set(PromptSource::Counselor, prompts);
 }
