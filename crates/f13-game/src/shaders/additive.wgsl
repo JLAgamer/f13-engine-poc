@@ -5,10 +5,11 @@
 // - grime: Grime's red at the screen UV; opacity x lerp(grime, 1, 1 - Grime);
 // - opacity = saturate(that x the texture's alpha x the tint's alpha);
 // - colour = opacity x max(tint x texture + SelectionColor (0), 0) x tint (Slate multiplies by the vertex colour again).
-// Brightness only scales the smoke in the opacity. Slate draws the UI in gamma space and writes a UI material's output
-// as it is (the engine's "UI materials look darker" behaviour): the value is sRGB-encoded and added to the encoded scene.
-// Here the target blends in linear space, so the add is made against the scene under it (tonemap.rs SceneCopy, the
-// tonemapped scene before the UI): decode(encode(scene) + value) - scene, added. (The UI drawn under it is left out.)
+// Brightness only scales the smoke in the opacity. Slate draws the UI in gamma space: the shader's GammaCorrect ends it
+// (LinearToSrgb(pow(colour, GammaValues.x)) unless GammaValues.y is 1; FSlateElementPS::SetDisplayGamma: (2.2, 1) /
+// DisplayGamma, 2.2 by default: (1, 0.45)), so the colour is sRGB-encoded and added to the encoded scene. Here the
+// target blends in linear space, so the add is made against the scene under it (tonemap.rs SceneCopy, the tonemapped
+// scene before the UI): decode(encode(scene) + encode(colour)) - scene, added. (The UI drawn under it is left out.)
 #import bevy_ui::ui_vertex_output::UiVertexOutput
 #import bevy_render::{view::View, globals::Globals}
 
@@ -57,7 +58,7 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
         * textureSample(smoke_tex, smoke_sampler, q - time * 0.05).r;
     let opacity = clamp(mix(1.0, n * params.x, params.y) * mix(grime, 1.0, 1.0 - params.z) * t.a * color.a, 0.0, 1.0);
     let rgb = opacity * max(color.rgb * t.rgb, vec3<f32>(0.0)) * color.rgb;
-    let value = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+    let value = linear_to_srgb(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)));
     // Without the scene's copy (its 1 x 1 stand-in before the window's size is known): added in linear space.
     if textureDimensions(scene_tex).x <= 1u {
         return vec4<f32>(srgb_to_linear(value), opacity);

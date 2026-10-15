@@ -8,7 +8,6 @@ Base content (asset paths in the player's install; all gameplay values come from
 
 ## Todo
 The user's LAN test (2026-10-14), first:
-- [ ] Jason's ability unlock notice and Morph cursor still too faint
 - [ ] Counselors get no pickup prompt for items (not reproduced: single player and a client both target and prompt
       items in the bots' runs; needs where it happened)
 - [ ] Sense doesn't highlight the whole cabin (Cabin_Base's SetSenseEffects highlights only its doors and windows)
