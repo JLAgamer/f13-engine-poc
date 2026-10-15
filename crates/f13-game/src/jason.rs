@@ -990,6 +990,10 @@ impl Jason {
 
     /// The closed door the played Jason has as his best interactable.
     pub(crate) fn focus_door(&self) -> Option<Entity> {
+        // (A client's twin: the server's.)
+        if let Some(r) = self.remote {
+            return r.focus_door;
+        }
         match self.focus {
             Some(Focus::Door(d)) => Some(d),
             _ => None,
@@ -1001,6 +1005,10 @@ impl Jason {
     }
 
     pub fn stunned(&self) -> bool {
+        // (A client's twin: the server's state.)
+        if self.remote.is_some() {
+            return self.remote_state == "Stunned";
+        }
         matches!(self.state, JasonState::Stunned { .. })
     }
 
@@ -1083,6 +1091,9 @@ impl Jason {
 
     /// How long he's held her (from the grab's enter), while he does.
     pub fn holding_for(&self) -> Option<f32> {
+        if let Some(r) = self.remote {
+            return r.holding_for;
+        }
         match self.state {
             JasonState::Holding { t } => Some(t),
             _ => None,
@@ -1732,6 +1743,14 @@ pub struct RemoteView {
     pub hidden: bool,
     /// The door he's opening or breaking down (its entity here).
     pub door: Option<(Entity, DoorMove)>,
+    /// The throwing knives he's picking up (their pickup's entity here).
+    pub knife_pickup: Option<Entity>,
+    /// His Shift's and Stalk's ability bars while they run (net.rs NetJason).
+    pub shift_bar: Option<f32>,
+    pub stalk_bar: Option<f32>,
+    /// His focused door (its entity here) and how long he's held her.
+    pub focus_door: Option<Entity>,
+    pub holding_for: Option<f32>,
     /// His stun's minigame: its completion and StunText.
     pub minigame: Option<(f32, &'static str)>,
 }
@@ -4068,7 +4087,7 @@ fn teleport_mix(mut commands: Commands, time: Res<Time>, effect: Option<ResMut<T
 fn jason_door_camera(
     mut commands: Commands,
     play: Option<Res<crate::jason_player::PlayJason>>,
-    jasons: Query<(&Jason, &Transform)>,
+    jasons: Query<(Entity, &Jason, &Transform)>,
     doors: Query<&GlobalTransform, With<crate::doors::Door>>,
     mut playing: Local<Option<(Entity, &'static str)>>,
     knives: Query<(), With<crate::props::KnifePickup>>,
@@ -4076,7 +4095,7 @@ fn jason_door_camera(
     if play.is_none() {
         return;
     }
-    let Some((j, xf)) = jasons.iter().next() else { return };
+    let Some((je, j, xf)) = jasons.iter().next() else { return };
     let inside = |d: Entity| doors.get(d).is_ok_and(|g| crate::doors::Door::is_inside(g, xf.translation));
     let now = match (j.remote.and_then(|r| r.door), &j.state) {
         (Some((door, kind)), _) => Some((
@@ -4093,6 +4112,8 @@ fn jason_door_camera(
         }
         (_, &JasonState::BreakingDoor { door, .. }) => Some((door, if inside(door) { "BreakDownFromInside_SpecialMoveHandler" } else { "BreakDownFromOutside_SpecialMoveHandler" })),
         (_, &JasonState::BreakingFuse { fuse, .. }) if knives.contains(fuse) => Some((fuse, "AlignmentSpecialMove")),
+        // (A client's Jason: the pickup the server has him at.)
+        _ if j.remote.and_then(|r| r.knife_pickup).is_some() => j.remote.and_then(|r| r.knife_pickup).map(|k| (k, "AlignmentSpecialMove")),
         _ => None,
     };
     // A move's handler is chosen as it starts (a door found locked mid-open goes on to the break down's).
@@ -4102,8 +4123,8 @@ fn jason_door_camera(
     };
     if now != *playing {
         match now {
-            Some((actor, handler)) => commands.trigger(crate::interaction_camera::PlayInteractionCamera { actor, handler, killer: true }),
-            None => commands.trigger(crate::interaction_camera::StopInteractionCamera { killer: true }),
+            Some((actor, handler)) => commands.trigger(crate::interaction_camera::PlayInteractionCamera { actor, handler, killer: true, player: je }),
+            None => commands.trigger(crate::interaction_camera::StopInteractionCamera { killer: true, player: je }),
         }
         *playing = now;
     }

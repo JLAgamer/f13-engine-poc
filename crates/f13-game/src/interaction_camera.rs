@@ -80,6 +80,8 @@ pub struct PlayInteractionCamera {
     pub handler: &'static str,
     /// Jason's move (else hers): only the played character's moves take the view.
     pub killer: bool,
+    /// Whose move: the camera's only on this machine's played character's screen (a client's: net.rs replays it).
+    pub player: Entity,
 }
 
 /// StopInteractionCamera: the view goes back to her.
@@ -87,11 +89,19 @@ pub struct PlayInteractionCamera {
 pub struct StopInteractionCamera {
     /// Jason's move (else hers).
     pub killer: bool,
+    pub player: Entity,
+}
+
+/// A character's move's interaction camera, while it plays (replicated: a client's player's view takes it there too).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct PlayingCamera {
+    pub actor: Entity,
+    pub handler: &'static str,
 }
 
 /// The view's state: blending to the interaction camera (from a locked view), on it, or blending back.
 #[derive(Resource, Clone, Copy, Debug)]
-enum View {
+pub(crate) enum View {
     In { from: (Transform, f32), to: (Transform, f32), time: f32, t: f32, back: f32 },
     /// Back to her cameras (counselor_camera.rs places the camera and sets its field of view before this runs).
     Back { from: (Transform, f32), time: f32, t: f32 },
@@ -109,8 +119,13 @@ fn play(
     camera: Single<(&Transform, &Projection), With<PlayerCamera>>,
     windows: Query<&Window>,
     play_jason: Option<Res<crate::jason_player::PlayJason>>,
+    local: Query<(), With<crate::controls::LocalPlayer>>,
 ) {
-    if ev.killer != play_jason.is_some() {
+    if let Ok(mut e) = commands.get_entity(ev.player) {
+        e.insert(PlayingCamera { actor: ev.actor, handler: ev.handler });
+    }
+    // (Hers on her player's screen: the played counselor; his on his.)
+    if ev.killer != play_jason.is_some() || (!ev.killer && !local.contains(ev.player)) {
         return;
     }
     let Ok((cams, g)) = actors.get(ev.actor) else { return };
@@ -134,8 +149,12 @@ fn stop(
     rig: Option<ResMut<crate::counselor_camera::Rig>>,
     jason_rig: Option<ResMut<crate::jason_player::JasonRig>>,
     play_jason: Option<Res<crate::jason_player::PlayJason>>,
+    local: Query<(), With<crate::controls::LocalPlayer>>,
 ) {
-    if ev.killer != play_jason.is_some() {
+    if let Ok(mut e) = commands.get_entity(ev.player) {
+        e.try_remove::<PlayingCamera>();
+    }
+    if ev.killer != play_jason.is_some() || (!ev.killer && !local.contains(ev.player)) {
         return;
     }
     let Some(View::In { to, back, t, time, from }) = view.as_deref().copied() else { return };

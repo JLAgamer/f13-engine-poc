@@ -392,7 +392,7 @@ fn run_bot(
     (time, real, config): (Res<Time>, Res<Time<Real>>, Option<Res<crate::player::PlayerConfig>>),
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
-    (interactions, tuning): (Query<&crate::interact::Interaction, With<crate::controls::LocalPlayer>>, Res<crate::player::PlayerTuning>),
+    (interactions, tuning, interaction_view): (Query<&crate::interact::Interaction, With<crate::controls::LocalPlayer>>, Res<crate::player::PlayerTuning>, Option<Res<crate::interaction_camera::View>>),
     mut player: Single<(&mut Transform, &Player, Option<&Inventory>, Has<Driving>, Has<UsingItem>, (Has<crate::jason::Held>, Has<crate::items::ItemAction>, Has<crate::jason::Staggered>, Has<crate::items::Blocking>, Has<crate::items::Trapped>, Option<&crate::hiding::Breathing>), Option<&mut crate::hiding::Hiding>), With<crate::controls::LocalPlayer>>,
     mut camera: Single<&mut PlayerCamera>,
     items: Query<(Entity, &Item, &GlobalTransform, Option<&InCabinet>), Without<Carried>>,
@@ -991,6 +991,11 @@ fn run_bot(
                 bot.step = Step::Done;
                 return;
             };
+            // (Not while the last move's camera has the view: its end turns her view to the camera's, as a player's.)
+            if interaction_view.is_some() && bot.timer < 0.5 {
+                bot.timer = 0.0;
+                return;
+            }
             // Stand 0.8 m from the interact point on the chosen side (outside = the fixture's forward side).
             let at = gxf.transform_point(interact);
             let fwd = (gxf.rotation() * Vec3::X).with_y(0.0).normalize_or_zero();
@@ -1038,6 +1043,11 @@ fn run_bot(
                 return;
             }
             bot.hold_e = false;
+            // (On a client a tap is held 0.1 s, as a player's: a single frame's can fall between the inputs it sends.)
+            if bot.second_tap && ON_CLIENT.load(std::sync::atomic::Ordering::Relaxed) && bot.timer - bot.pressed_at < 0.1 {
+                keys.press(KeyCode::KeyE);
+                bot.hold_e = true;
+            }
             let door = target.filter(|_| step.fx != Fx::Window).and_then(|e| doors.get(e).ok());
             let window = bot.fixtures[2].and_then(|e| windows.get(e).ok());
             let state = [

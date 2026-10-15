@@ -3406,7 +3406,7 @@ fn jason_hud(
     let Some((j, know, jxf)) = jasons.iter().next() else { return };
     let now = time.elapsed_secs();
     // GetCombatVisibility: in combat stance or a kill, these hide.
-    let combat = j.combat || matches!(j.state, crate::jason::JasonState::Killing { .. });
+    let combat = j.combat || matches!(j.state, crate::jason::JasonState::Killing { .. }) || j.remote_state == "Killing";
     for name in ["KillerAbilityWidget_521", "GrabIconWidget_121", "RageWidget_190", "KillerKnifeWidget_77", "KillerTrapWidget_184"] {
         if let Some(mut v) = hud.names.get(&format!("KillerHUDWidget.{name}")).and_then(|&e| vis.get_mut(e).ok()) {
             v.set_if_neq(if combat { Visibility::Hidden } else { Visibility::Inherited });
@@ -3550,11 +3550,12 @@ fn jason_hud(
             Ability::Sense if k.sensing(now) => (k.sense_until - now) / k.sense_length.max(1e-3),
             Ability::Shift => match &j.state {
                 crate::jason::JasonState::Shifting { shift } => 1.0 - shift.elapsed / tuning.as_ref().map_or(4.0, |t| t.shift_time).max(1e-3),
-                _ => a.recharge_fraction(ability),
+                // (A client's Jason: the server's bar.)
+                _ => j.remote.and_then(|r| r.shift_bar).unwrap_or_else(|| a.recharge_fraction(ability)),
             },
             Ability::Stalk => match &j.stalk {
                 Some(s) => s.timer / tuning.as_ref().map_or(20.0, |t| t.stalk_active_time).max(1e-3),
-                None => a.recharge_fraction(ability),
+                None => j.remote.and_then(|r| r.stalk_bar).unwrap_or_else(|| a.recharge_fraction(ability)),
             },
             _ => a.recharge_fraction(ability),
         };
@@ -3605,8 +3606,8 @@ fn jason_hud(
         let active = match ability {
             Ability::Morph => morph_map.as_ref().is_some_and(|m| m.morph),
             Ability::Sense => k.sensing(now),
-            Ability::Shift => matches!(j.state, crate::jason::JasonState::Shifting { .. }),
-            Ability::Stalk => j.stalk.is_some(),
+            Ability::Shift => matches!(j.state, crate::jason::JasonState::Shifting { .. }) || j.remote.is_some_and(|r| r.shift_bar.is_some()),
+            Ability::Stalk => j.stalk.is_some() || j.remote.is_some_and(|r| r.stalk_bar.is_some()),
         };
         let available = a.is_available(ability, &Blockers::default());
         let (was_available, was_active) = ability_state[i];

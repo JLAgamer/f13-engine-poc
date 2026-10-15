@@ -599,8 +599,9 @@ fn actor_sounds(
     for (e, w, g) in &windows {
         if w.destroyed && !broken.insert(e, true).unwrap_or(false) {
             commands.trigger(PlaySound { cue: "WindowBreak".into(), at: Some(g.translation()) });
+            // (Her move is the server's: shouted, so her clients hear it too.)
             for (counselor, _) in working.iter().filter(|(_, m)| m.window == e) {
-                commands.trigger(ActorSound { actor: counselor, prop: "VO:Impact" });
+                crate::net_world::shout(&mut commands, crate::net_world::Shout::ActorSound(ActorSound { actor: counselor, prop: "VO:Impact" }));
             }
         }
     }
@@ -616,16 +617,19 @@ fn actor_sounds(
         }
         last.insert(e, now);
     }
+    // (The window and barricade moves are the server's: shouted, so clients hear them too.)
     for m in &window_moves {
-        match m.kind {
-            crate::interact::WindowMoveKind::Open => play(m.window, "WindowOpenSound"),
-            crate::interact::WindowMoveKind::Close => play(m.window, "WindowCloseSound"),
-            _ => {}
-        }
+        let prop = match m.kind {
+            crate::interact::WindowMoveKind::Open => "WindowOpenSound",
+            crate::interact::WindowMoveKind::Close => "WindowCloseSound",
+            _ => continue,
+        };
+        crate::net_world::shout(&mut commands, crate::net_world::Shout::ActorSound(ActorSound { actor: m.window, prop }));
     }
     for m in &barricade_moves {
         if let Some((e, b)) = barricades.iter().find(|(_, b)| b.door == Some(m.door)) {
-            play(e, if b.enabled { "DisableBarricadeAudio" } else { "EnableBarricadeAudio" });
+            let prop = if b.enabled { "DisableBarricadeAudio" } else { "EnableBarricadeAudio" };
+            crate::net_world::shout(&mut commands, crate::net_world::Shout::ActorSound(ActorSound { actor: e, prop }));
         }
     }
 }

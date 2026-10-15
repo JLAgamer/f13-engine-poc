@@ -688,7 +688,8 @@ pub(crate) fn jason_camera(
         crate::jason::JasonState::Throwing { t, release, .. } => release.is_none_or(|r| t < r + END_THROW_S),
         _ => j.remote.as_ref().is_some_and(|r| r.knife_aim),
     };
-    let killing = matches!(j.state, crate::jason::JasonState::Killing { .. });
+    // (A client's Jason: the server's state.)
+    let killing = matches!(j.state, crate::jason::JasonState::Killing { .. }) || j.remote_state == "Killing";
     if j.combat != rig.combat {
         rig.combat = j.combat;
         rig.change_camera(0.5, now);

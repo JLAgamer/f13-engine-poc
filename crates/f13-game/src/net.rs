@@ -216,6 +216,9 @@ pub struct NetCounselor {
     /// She's coming as Tommy: his intro plays for her player (tommy.rs HunterIntro).
     #[serde(default)]
     pub hunter_intro: bool,
+    /// Her move's interaction camera (its actor's world id, its handler), while it plays: her player's view takes it.
+    #[serde(default)]
+    pub camera: Option<(u32, String)>,
     /// Her outfit (her player's wardrobe: character.rs CounselorOutfit; empty, her default).
     #[serde(default)]
     pub outfit: String,
@@ -275,6 +278,21 @@ pub struct NetJason {
     pub underwater: bool,
     /// The door he's opening or breaking down (its world id) and how.
     pub door: Option<(u32, crate::jason::DoorMove)>,
+    /// The throwing knives he's picking up (their pickup's world id): his player's view takes its camera.
+    #[serde(default)]
+    pub knife_pickup: Option<u32>,
+    /// His ability bars while Shift or Stalk runs (ui.rs: 1 - the Shift's elapsed / ShiftTime, StalkActiveTimer /
+    /// StalkActiveTime): his player's HUD.
+    #[serde(default)]
+    pub shift_bar: Option<f32>,
+    #[serde(default)]
+    pub stalk_bar: Option<f32>,
+    /// The closed door his E and attack act on (its world id; his player's prompt), and how long he's held her (s; the
+    /// placed kill prompts wait for his grab's enter).
+    #[serde(default)]
+    pub focus_door: Option<u32>,
+    #[serde(default)]
+    pub holding_for: Option<f32>,
     pub knives: u32,
     pub traps: u32,
     /// His state's name (a Jason player's HUD), and his attack's recovery left (s; a client's bot steps in then).
@@ -691,7 +709,7 @@ impl Plugin for NetPlugin {
                     .add_observer(body_gone)
                     .init_resource::<Twins>()
                     .init_resource::<ServerClock>()
-                    .add_systems(Update, (send_input, (follow_server_jason, make_twins, record_bodies, mirror, hide_jason, sync_classes, sync_morph_map, sync_hunter_intro).chain().in_set(Mirrored).before(crate::character::animate)));
+                    .add_systems(Update, (send_input, (follow_server_jason, make_twins, record_bodies, mirror, hide_jason, sync_classes, sync_morph_map, sync_hunter_intro, sync_interaction_camera).chain().in_set(Mirrored).before(crate::character::animate)));
                 app.add_systems(Update, receive_match.after(Mirrored));
                 crate::net_world::client(app);
                 crate::lobby::client(app);
@@ -850,12 +868,12 @@ fn set<T: PartialEq>(mut c: Mut<T>, v: T) {
 #[allow(clippy::type_complexity)]
 fn update_bodies(
     mut bodies: Query<(&mut NetBody, &Transform, &mut NetAction, Option<&PlayAction>, Has<crate::items::Blocking>)>,
-    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>, Has<crate::voice::Spectating>, Option<&crate::character::CounselorClass>, Option<&crate::character::CounselorOutfit>, Option<&crate::perks::CounselorPerks>), (Option<&crate::hiding::Hiding>, Option<&crate::hiding::Breathing>, Option<&crate::interact::Interaction>), (Option<&crate::vehicle::Driving>, Option<&crate::vehicle::Escaped>, Has<crate::interact::MoveToSpot>, Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>, Option<&crate::blood::Gore>, Has<crate::tommy::HunterIntro>))>,
+    mut counselors: Query<(&mut NetCounselor, &Player, Option<&Name>, Option<&Controls>, (Has<crate::jason::Held>, Option<&crate::items::Trapped>, Has<crate::voice::Spectating>, Option<&crate::character::CounselorClass>, Option<&crate::character::CounselorOutfit>, Option<&crate::perks::CounselorPerks>), (Option<&crate::hiding::Hiding>, Option<&crate::hiding::Breathing>, Option<&crate::interact::Interaction>), (Option<&crate::vehicle::Driving>, Option<&crate::vehicle::Escaped>, Has<crate::interact::MoveToSpot>, Has<crate::interact::DoorMove>, Has<crate::interact::WindowMove>, Option<&crate::blood::Gore>, Has<crate::tommy::HunterIntro>, Option<&crate::interaction_camera::PlayingCamera>))>,
     struggle: Option<Res<crate::jason::Struggle>>,
     mut jasons: Query<(&mut NetJason, &crate::jason::Jason, Option<&crate::senses::Knowledge>, Option<&crate::kill_camera::KillCam>)>,
     world_ids: Query<&crate::net_world::WorldId>,
     (fixed, real): (Res<Time<Fixed>>, Res<Time<Real>>),
-    (morph_map, grab_kills): (Option<Res<crate::jason_player::MorphMap>>, Option<Res<crate::jason::GrabKillsAvailable>>),
+    (morph_map, grab_kills, knife_pickups, killer_tuning): (Option<Res<crate::jason_player::MorphMap>>, Option<Res<crate::jason::GrabKillsAvailable>>, Query<(), With<crate::props::KnifePickup>>, Option<Res<crate::jason::KillerTuning>>),
 ) {
     for (mut b, xf, mut a, action, blocking) in &mut bodies {
         let pos = xf.translation.to_array();
@@ -874,7 +892,7 @@ fn update_bodies(
             a.blocking = blocking;
         }
     }
-    for (n, p, name, controls, (held, trapped, spectating, class, outfit, perks), (hiding, breathing, interaction), (driving, escaped, to_spot, door_move, window_move, blood, hunter_intro)) in &mut counselors {
+    for (n, p, name, controls, (held, trapped, spectating, class, outfit, perks), (hiding, breathing, interaction), (driving, escaped, to_spot, door_move, window_move, blood, hunter_intro, camera)) in &mut counselors {
         let c = &p.counselor;
         set(n, NetCounselor {
             stance: c.stance as u8,
@@ -903,6 +921,7 @@ fn update_bodies(
             gore: blood.cloned().unwrap_or_default(),
             class: class.map_or(String::new(), |c| c.0.clone()),
             hunter_intro,
+            camera: camera.and_then(|c| Some((world_ids.get(c.actor).ok()?.0, c.handler.to_string()))),
             outfit: outfit.map_or(String::new(), |o| o.0.clone()),
             perks: perks.map_or_else(Vec::new, |p| p.0.clone()),
         });
@@ -921,6 +940,17 @@ fn update_bodies(
             hidden: j.hidden(),
             underwater: j.underwater,
             door: j.door_move().and_then(|(d, m)| Some((world_ids.get(d).ok()?.0, m))),
+            knife_pickup: match j.state {
+                crate::jason::JasonState::BreakingFuse { fuse, .. } if knife_pickups.contains(fuse) => world_ids.get(fuse).ok().map(|w| w.0),
+                _ => None,
+            },
+            shift_bar: match &j.state {
+                crate::jason::JasonState::Shifting { shift } => Some(1.0 - shift.elapsed / killer_tuning.as_ref().map_or(4.0, |t| t.shift_time).max(1e-3)),
+                _ => None,
+            },
+            stalk_bar: j.stalk.as_ref().map(|s| s.timer / killer_tuning.as_ref().map_or(20.0, |t| t.stalk_active_time).max(1e-3)),
+            focus_door: j.focus_door().and_then(|d| Some(world_ids.get(d).ok()?.0)),
+            holding_for: j.holding_for().map(|t| (t * 10.0).round() / 10.0),
             knives: j.knives,
             traps: j.traps,
             mask_on: j.mask_on,
@@ -1037,6 +1067,22 @@ fn send_input(local: Query<&Controls, With<LocalPlayer>>, mut senders: Query<&mu
 }
 
 /// A client: the counselor coming as Tommy (her intro plays where she's the local player: tommy.rs).
+/// Each counselor's move's interaction camera as the server plays it (interaction_camera.rs PlayingCamera): played or
+/// stopped here too, so her player's view takes it.
+fn sync_interaction_camera(mut commands: Commands, bodies: Query<(&Twin, &NetCounselor), Changed<NetCounselor>>, playing: Query<&crate::interaction_camera::PlayingCamera>, actors: Res<crate::net_world::Actors>) {
+    for (t, n) in &bodies {
+        let want = n.camera.as_ref().and_then(|(id, h)| Some((actors.get(*id)?, crate::audio::intern(h))));
+        let have = playing.get(t.local).ok().map(|c| (c.actor, c.handler));
+        if want == have {
+            continue;
+        }
+        match want {
+            Some((actor, handler)) => commands.trigger(crate::interaction_camera::PlayInteractionCamera { actor, handler, killer: false, player: t.local }),
+            None => commands.trigger(crate::interaction_camera::StopInteractionCamera { killer: false, player: t.local }),
+        }
+    }
+}
+
 fn sync_hunter_intro(mut commands: Commands, bodies: Query<(&Twin, &NetCounselor), Changed<NetCounselor>>, intros: Query<(), With<crate::tommy::HunterIntro>>) {
     for (t, n) in &bodies {
         match (n.hunter_intro, intros.contains(t.local)) {
@@ -1396,6 +1442,11 @@ fn mirror(
                 knife_aim: n.knife_aim,
                 hidden: n.hidden,
                 door: n.door.and_then(|(id, m)| Some((actors.get(id)?, m))),
+                knife_pickup: n.knife_pickup.and_then(|id| actors.get(id)),
+                shift_bar: n.shift_bar,
+                stalk_bar: n.stalk_bar,
+                focus_door: n.focus_door.and_then(|id| actors.get(id)),
+                holding_for: n.holding_for,
                 minigame: n.minigame.as_ref().map(|(c, t)| (*c as f32 / 100.0, crate::jason::Stun::TEXTS.iter().find(|x| **x == t.as_str()).copied().unwrap_or("Resist"))),
             });
             j.remote_state = n.state.clone();
@@ -1487,6 +1538,8 @@ struct NetBot {
     recharge: [f32; 4],
     /// The knife pickup it takes as Jason, and his knives before.
     pickup: Option<(Entity, u32)>,
+    /// Its camera took his view here.
+    pickup_camera: bool,
 }
 
 /// How long the bot waits for the server (real seconds) before giving up.
@@ -1843,7 +1896,7 @@ fn net_bot_jason(
     pickups: Query<(Entity, &crate::props::KnifePickup, &GlobalTransform, Has<crate::props::PickedUp>)>,
     mut exit: MessageWriter<AppExit>,
     mut cameras: Query<&mut crate::player::PlayerCamera>,
-    (jasons, rig): (Query<&crate::jason::Jason>, Option<Res<crate::jason_player::JasonRig>>),
+    (jasons, rig, interaction_view): (Query<&crate::jason::Jason>, Option<Res<crate::jason_player::JasonRig>>, Option<Res<crate::interaction_camera::View>>),
 ) {
     bot.t += time.delta_secs();
     let Ok((body, nj)) = own.single() else { return };
@@ -1924,7 +1977,16 @@ fn net_bot_jason(
                     cam.yaw = ky;
                     cam.pitch = kp;
                 }
+                // (The pickup's camera takes his view here as it plays: AlignmentSpecialMove's.)
+                if interaction_view.is_some() && !bot.pickup_camera {
+                    bot.pickup_camera = true;
+                    info!("bot: net: the knife pickup's camera here");
+                }
                 if taken && nj.knives > before {
+                    if !bot.pickup_camera {
+                        warn!("bot: net: the knife pickup's camera never took the view here");
+                        bot.failed.push("knife pickup camera");
+                    }
                     info!("bot: net: the knife pickup taken (hidden here), {} knives", nj.knives);
                     bot.step += 1;
                     bot.t = 0.0;
