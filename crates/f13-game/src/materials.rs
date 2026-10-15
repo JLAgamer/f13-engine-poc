@@ -66,6 +66,7 @@ impl Plugin for MaterialsPlugin {
         embedded_asset!(app, "shaders/skin.wgsl");
         embedded_asset!(app, "shaders/skin_prepass.wgsl");
         embedded_asset!(app, "shaders/masters.wgsl");
+        embedded_asset!(app, "shaders/sense_beams.wgsl");
         let entries = std::fs::read_to_string(self.export.join("materials.json"))
             .ok()
             .and_then(|t| match serde_json::from_str(&t) {
@@ -103,6 +104,7 @@ impl Plugin for MaterialsPlugin {
                 MaterialPlugin::<ClothesMaterial>::default(),
                 MaterialPlugin::<GoreCapMaterial>::default(),
                 MaterialPlugin::<HairMaterial>::default(),
+                MaterialPlugin::<BeamMaterial>::default(),
             ))
             .add_systems(Update, ((apply_materials, strip_vertex_colors).chain(), sky_lightning, clothes_rain, skin_rain));
     }
@@ -180,6 +182,7 @@ enum Built {
     Skin(Handle<SkinMaterial>),
     GoreCap(Handle<GoreCapMaterial>),
     Hair(Handle<HairMaterial>),
+    Beam(Handle<BeamMaterial>),
     /// Not drawn: translucent planes with no textures (rain fixes, bed and exit blockers, light planes), which the
     /// game draws invisible (M_rainFix_invisible's compiled shader outputs zero) or as faint effects.
     Hidden,
@@ -785,6 +788,68 @@ fn master_material(root: &Path, info: &MaterialInfo, loader: &Loader) -> Option<
     Some(ExtendedMaterial { base, extension: MasterExt { params, tex, tex2, tex3 } })
 }
 
+/// The cabins' Sense light (SM_Sense_*: sense_view.rs shows them): shaders/sense_beams.wgsl.
+const BEAM_MASTER: &str = "Master_Sense_Lightbeam_01";
+
+pub(crate) type BeamMaterial = ExtendedMaterial<StandardMaterial, BeamExt>;
+
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
+pub(crate) struct BeamExt {
+    #[uniform(100)]
+    params: BeamParams,
+    #[texture(101)]
+    #[sampler(102)]
+    air_mask: Handle<Image>,
+}
+
+#[derive(ShaderType, Reflect, Debug, Clone)]
+struct BeamParams {
+    color: Vec4,
+    air: Vec4,
+    pan: Vec4,
+    fade: Vec4,
+}
+
+impl MaterialExtension for BeamExt {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://f13_game/shaders/sense_beams.wgsl".into()
+    }
+    fn enable_prepass() -> bool {
+        false
+    }
+    fn enable_shadows() -> bool {
+        false
+    }
+    fn specialize(
+        _: &bevy::pbr::MaterialExtensionPipeline,
+        descriptor: &mut bevy::render::render_resource::RenderPipelineDescriptor,
+        _: &bevy::mesh::MeshVertexBufferLayoutRef,
+        _: bevy::pbr::MaterialExtensionKey<Self>,
+    ) -> Result<(), bevy::render::render_resource::SpecializedMeshPipelineError> {
+        // bDisableDepthTest (its depth fade hides it behind what's in front).
+        if let Some(ds) = descriptor.depth_stencil.as_mut() {
+            ds.depth_compare = Some(bevy::render::render_resource::CompareFunction::Always);
+            ds.depth_write_enabled = Some(false);
+        }
+        descriptor.primitive.cull_mode = None;
+        Ok(())
+    }
+}
+
+/// Master_Sense_Lightbeam_01's instance (its parameters resolved by the exporter; colours linear).
+fn beam_material(info: &MaterialInfo, loader: &Loader, fb: &Fallback) -> BeamMaterial {
+    let c = info.vector("Color");
+    let air_mask = info.textures.get("Air Mask").and_then(|p| loader.load(p, Tex::Color)).unwrap_or_else(|| fb.white.clone());
+    let params = BeamParams {
+        color: (c.truncate() * info.scalar("Emissive_Level", 1.0)).extend(1.0),
+        air: Vec4::new(info.scalar("Air Speed", 1.0), info.scalar("Air UV`s Rotator X", 1.0), info.scalar("Air UV`s RotatorY", 1.0), info.scalar("Ray Length", 0.04)),
+        pan: Vec4::new(info.scalar("Air UV`s Panning X", 1.0), info.scalar("Air UV`s Panning Y", 1.0), info.scalar("Depth Fade Distance", 10.0), info.scalar("Cuttoff", 1000.0)),
+        fade: Vec4::new(info.scalar("Cutoff Fade", 50.0), info.scalar("Lerp_A", 0.0), info.scalar("Fresnel", 0.0), 0.0),
+    };
+    let base = StandardMaterial { unlit: true, alpha_mode: AlphaMode::Blend, double_sided: true, cull_mode: None, ..default() };
+    ExtendedMaterial { base, extension: BeamExt { params, air_mask } }
+}
+
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
 pub(crate) struct ClothesExt {
     #[uniform(100)]
@@ -1077,7 +1142,7 @@ fn apply_materials(
         ResMut<Assets<WaterMaterial>>,
         ResMut<Assets<Image>>,
     ),
-    (mut props, mut masters, mut clothes, mut gore_caps, mut hairs): (ResMut<Assets<PropMaterial>>, ResMut<Assets<MasterMaterial>>, ResMut<Assets<ClothesMaterial>>, ResMut<Assets<GoreCapMaterial>>, ResMut<Assets<HairMaterial>>),
+    (mut props, mut masters, mut clothes, mut gore_caps, mut hairs, mut beams): (ResMut<Assets<PropMaterial>>, ResMut<Assets<MasterMaterial>>, ResMut<Assets<ClothesMaterial>>, ResMut<Assets<GoreCapMaterial>>, ResMut<Assets<HairMaterial>>, ResMut<Assets<BeamMaterial>>),
     assets: Res<AssetServer>,
 ) {
     let index = &mut *index;
@@ -1103,6 +1168,8 @@ fn apply_materials(
             None => {
                 let b = if let (Some(land), Some(file)) = (&info.landscape, &landscape_file) {
                     Built::Terrain(terrains.add(terrain_material(info, land, &index.root.join(file).with_extension(""), &loader, &fallback, &mut images)))
+                } else if info.master == BEAM_MASTER {
+                    Built::Beam(beams.add(beam_material(info, &loader, &fallback)))
                 } else if info.master.contains("Glass") {
                     Built::Standard(standard.add(glass_material(info)))
                 } else if info.blend != "BLEND_Opaque" && info.blend != "BLEND_Masked" && info.textures.is_empty() && !info.master.starts_with(WATER_MASTER) {
@@ -1189,6 +1256,9 @@ fn apply_materials(
                 e.remove::<MeshMaterial3d<StandardMaterial>>().insert((MeshMaterial3d(h), KeepVertexColors));
             }
             Built::Hair(h) => {
+                e.remove::<MeshMaterial3d<StandardMaterial>>().insert((MeshMaterial3d(h), KeepVertexColors));
+            }
+            Built::Beam(h) => {
                 e.remove::<MeshMaterial3d<StandardMaterial>>().insert((MeshMaterial3d(h), KeepVertexColors));
             }
             Built::Hidden => {

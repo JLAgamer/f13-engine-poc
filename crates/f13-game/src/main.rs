@@ -844,6 +844,13 @@ fn is_grass(mesh: &str) -> bool {
     ["/Foliage/Grass/", "/Foliage/Flowers/"].iter().any(|s| mesh.contains(s))
 }
 
+/// A cabin's Sense mesh (its match actor index): the window and crack light, or the stencil box.
+#[derive(Clone, Copy)]
+enum SenseMesh {
+    Beams(usize),
+    Stencil(usize),
+}
+
 fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResMut<Level>, export: Res<ExportRoot>) {
     let mut scenes: HashMap<&str, Handle<WorldAsset>> = HashMap::new();
     let mut spawned = 0usize;
@@ -857,11 +864,26 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
         .map(|a| (a.level.as_str(), a.name.as_str()))
         .collect();
     let actor_of = |component: &str| component.split("PersistentLevel.").nth(1).and_then(|s| s.split('.').next()).map(str::to_string);
+    // The cabins, by level and actor name: their match actor index (counted as lighting::placed_components counts the
+    // level's actors) and the component their Sense meshes (SM_Sense_*) hang off, which their SetSenseEffects lights
+    // (sense_view.rs).
+    let mut cabins: HashMap<(&str, &str), (usize, Option<&str>)> = HashMap::new();
+    for (i, a) in level.layouts.iter().flat_map(|l| &l.actors).filter(|a| a.transform.is_some()).enumerate() {
+        if classes.is_child_of(&a.class, "Cabin_Base_C") {
+            let lit = classes.get(&a.class).and_then(|c| c.components.iter().find(|c| c.name.starts_with("SM_Sense_"))?.parent.as_deref());
+            cabins.insert((a.level.as_str(), a.name.as_str()), (i, lit));
+        }
+    }
     for layout in &level.layouts {
         for p in &layout.placements {
-            if p.hidden || (!level.grass && is_grass(&p.mesh)) || (!level.foliage && p.instances.is_some()) {
+            let component = p.component.rsplit('.').next().unwrap_or_default();
+            let cabin = actor_of(&p.component).and_then(|a| cabins.get(&(p.level.as_str(), a.as_str())).copied());
+            // A cabin's Sense meshes: hidden until Sense shows the cabin.
+            let sense = cabin.filter(|_| component.starts_with("SM_Sense_")).map(|(i, _)| if component.ends_with("_Stencil") { SenseMesh::Stencil(i) } else { SenseMesh::Beams(i) });
+            if (p.hidden && sense.is_none()) || (!level.grass && is_grass(&p.mesh)) || (!level.foliage && p.instances.is_some()) {
                 continue;
             }
+            let lit = cabin.filter(|(_, lit)| *lit == Some(component)).map(|(i, _)| i);
             if actor_of(&p.component).is_some_and(|a| runtime.contains(&(p.level.as_str(), a.as_str()))) {
                 continue;
             }
@@ -891,6 +913,18 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
                 }
                 if let Some(a) = &box_mesh {
                     e.insert(police::BoxMesh { actor: a.clone(), file: p.file.clone(), materials: p.material_map.clone() });
+                }
+                match sense {
+                    Some(SenseMesh::Beams(i)) => {
+                        e.insert((sense_view::SenseBeams(i), Visibility::Hidden));
+                    }
+                    Some(SenseMesh::Stencil(i)) => {
+                        e.insert((sense_view::SenseStencil(i), Visibility::Hidden));
+                    }
+                    None => {}
+                }
+                if let Some(i) = lit {
+                    e.insert(sense_view::CabinPart(i));
                 }
                 spawned += 1;
             }

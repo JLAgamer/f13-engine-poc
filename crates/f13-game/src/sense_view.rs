@@ -9,7 +9,9 @@
 //! spot's): senses.rs's `highlight`. Custom depth draws her meshes alone, so the stencil the material reads has her
 //! through walls (stencil 2). Indoors, her cabin's SetSenseEffects (Cabin_Base) calls SetSenseSettings on each of its
 //! child actors that is a door (BP_DoorBase) or window (Cabin_Window_BP): custom depth on all their primitives,
-//! stencil 1 (senses.rs's `sensed_cabins`; not while he's in that cabin too).
+//! stencil 1 (senses.rs's `sensed_cabins`; not while he's in that cabin too). Each cabin class's own SetSenseEffects
+//! adds its main mesh (stencil 1: the whole cabin glows) and shows its SM_Sense meshes: the light out of its windows and
+//! cracks ([`SenseBeams`]) and a stencil-5 box inside it ([`SenseStencil`]).
 //!
 //! Here the custom stencil is a mask: a second camera at his camera's view, drawing copies of those meshes (same mesh
 //! and skin, unlit: red for hers, green for the cabin's) on their own render layer, before his camera. The passes read
@@ -113,9 +115,21 @@ pub struct SenseMaskCamera;
 #[derive(Component)]
 struct SenseMirror;
 
-/// A door or window spawned by a cabin (Cabin_Base): the cabin's match actor index.
+/// A door or window spawned by a cabin (Cabin_Base), or the cabin's own mesh (its SetSenseEffects lights the one its
+/// SM_Sense meshes hang off): the cabin's match actor index.
 #[derive(Component)]
 pub struct CabinPart(pub usize);
+
+/// A cabin's Sense light (SM_Sense_*_a: its window and crack rays and holes, Master_Sense_Lightbeam_01; materials.rs
+/// BeamMaterial), hidden but while Sense shows the cabin (its SetSenseEffects' SetVisibility).
+#[derive(Component)]
+pub struct SenseBeams(pub usize);
+
+/// A cabin's Sense stencil (SM_Sense_*_Stencil: custom depth only, stencil 5; a box inside the cabin): shown with its
+/// light, it takes the custom depth where it's nearest, so the cabin's walls (stencil 1) don't glow through their
+/// openings. Here a blue mirror on the mask (the cabin pass lights green alone).
+#[derive(Component)]
+pub struct SenseStencil(pub usize);
 
 /// The highlights on a camera (hers, the cabin's): the mask, the smoke texture, the view's forward axis (Unreal's)
 /// and time, its near plane.
@@ -210,7 +224,12 @@ fn sensed(play: &Option<Res<crate::jason_player::PlayJason>>, knowledge: &Query<
     if play.is_none() {
         return (Vec::new(), Vec::new());
     }
-    (knowledge.iter().flat_map(|k| k.highlighted.iter().copied()).collect(), knowledge.iter().flat_map(|k| k.sensed_cabins.iter().copied()).collect())
+    let mut cabins: Vec<usize> = knowledge.iter().flat_map(|k| k.sensed_cabins.iter().copied()).collect();
+    // (Testing: F13_SENSE_CABINS=<actor index>,...: those cabins shown as sensed.)
+    if let Ok(v) = std::env::var("F13_SENSE_CABINS") {
+        cabins.extend(v.split(',').filter_map(|s| s.trim().parse::<usize>().ok()));
+    }
+    (knowledge.iter().flat_map(|k| k.highlighted.iter().copied()).collect(), cabins)
 }
 
 /// Copies of the highlighted meshes on the mask's layer.
@@ -222,11 +241,12 @@ fn mirrors(
     knowledge: Query<&crate::senses::Knowledge>,
     rigs: Query<(Entity, &crate::character::Rig, &ChildOf)>,
     parts: Query<(Entity, &CabinPart)>,
+    (mut lights, stencils, globals): (Query<(&SenseBeams, &mut Visibility)>, Query<(Entity, &SenseStencil)>, Query<&GlobalTransform>),
     children: Query<&Children>,
     meshes: Query<(&Mesh3d, Option<&SkinnedMesh>, Option<&MeshMorphWeights>), Without<SenseMirror>>,
     mut mask_cameras: Query<&mut Camera, With<SenseMaskCamera>>,
     mut mirrored: Local<HashMap<Entity, Entity>>,
-    mut colours: Local<Option<(Handle<StandardMaterial>, Handle<StandardMaterial>)>>,
+    mut colours: Local<Option<(Handle<StandardMaterial>, Handle<StandardMaterial>, Handle<StandardMaterial>)>>,
 ) {
     let (lit, cabins) = sensed(&play, &knowledge);
     let on = !lit.is_empty() || !cabins.is_empty();
@@ -236,14 +256,20 @@ fn mirrors(
             c.is_active = on;
         }
     }
-    let (red, green) = colours
+    let (red, green, blue) = colours
         .get_or_insert_with(|| {
             let unlit = |c: Color| StandardMaterial { base_color: c, unlit: true, ..default() };
-            (materials.add(unlit(Color::linear_rgb(1.0, 0.0, 0.0))), materials.add(unlit(Color::linear_rgb(0.0, 1.0, 0.0))))
+            (materials.add(unlit(Color::linear_rgb(1.0, 0.0, 0.0))), materials.add(unlit(Color::linear_rgb(0.0, 1.0, 0.0))), materials.add(unlit(Color::linear_rgb(0.0, 0.0, 1.0))))
         })
         .clone();
-    // The meshes to mirror, and their mask colour.
+    // The sensed cabins' lights show.
+    for (l, mut v) in &mut lights {
+        let want = if cabins.contains(&l.0) { Visibility::Inherited } else { Visibility::Hidden };
+        v.set_if_neq(want);
+    }
+    // The meshes to mirror, their mask colour, and the stencil's (its mesh not drawn: the mirror can't hang off it).
     let mut wanted: HashMap<Entity, Handle<StandardMaterial>> = HashMap::new();
+    let mut apart: std::collections::HashSet<Entity> = std::collections::HashSet::new();
     for (rig_entity, rig, owner) in &rigs {
         if matches!(rig.model, crate::character::Model::Counselor) && lit.contains(&owner.parent()) {
             wanted.extend(children.iter_descendants(rig_entity).filter(|e| meshes.contains(*e)).map(|e| (e, red.clone())));
@@ -253,6 +279,14 @@ fn mirrors(
         for (root, part) in &parts {
             if cabins.contains(&part.0) {
                 wanted.extend(children.iter_descendants(root).filter(|e| meshes.contains(*e)).map(|e| (e, green.clone())));
+            }
+        }
+        for (root, stencil) in &stencils {
+            if cabins.contains(&stencil.0) {
+                for e in children.iter_descendants(root).filter(|e| meshes.contains(*e)) {
+                    wanted.insert(e, blue.clone());
+                    apart.insert(e);
+                }
             }
         }
     }
@@ -271,15 +305,12 @@ fn mirrors(
         }
         let Ok((mesh, skin, morphs)) = meshes.get(e) else { continue };
         {
-            let mut m = commands.spawn((
-                Mesh3d(mesh.0.clone()),
-                MeshMaterial3d(material),
-                Transform::IDENTITY,
-                RenderLayers::layer(SENSE_LAYER),
-                NotShadowCaster,
-                SenseMirror,
-                ChildOf(e),
-            ));
+            let mut m = commands.spawn((Mesh3d(mesh.0.clone()), MeshMaterial3d(material), RenderLayers::layer(SENSE_LAYER), NotShadowCaster, SenseMirror));
+            // (A stencil's own mesh is hidden: its mirror stands where it is, on its own; static, as the cabins are.)
+            match globals.get(e).ok().filter(|_| apart.contains(&e)) {
+                Some(g) => m.insert(g.compute_transform()),
+                None => m.insert((Transform::IDENTITY, ChildOf(e))),
+            };
             if let Some(s) = skin {
                 m.insert(s.clone());
             }
