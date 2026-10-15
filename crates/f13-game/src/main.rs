@@ -359,7 +359,7 @@ fn parse_args() -> Args {
             "--play-jason" => play_jason = true,
             "--jason" => {
                 if let Some(name) = it.next() {
-                    let _ = character::KILLER_CLASS.set(name);
+                    character::set_killer_class(&name);
                 }
             }
             "--override-spawning" => override_spawning = true,
@@ -620,7 +620,7 @@ fn main() {
             .add_plugins(fear_events::FearEventsPlugin { locked: args.fear })
             // Playing Jason, the bot playing her doesn't decide when the run ends.
             .add_plugins(match_flow::MatchPlugin { leave: !bot || args.play_jason })
-            .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone(), outfit: args.outfit.clone() }, collision::CollisionPlugin, audio::AudioPlugin, water::WaterPlugin, power::PowerPlugin { cut: args.cut_power }, kill_camera::KillCameraPlugin, prop_anim::PropAnimPlugin, doors::DebrisPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin, navigation::NavigationPlugin { debug: args.nav_debug }))
+            .add_plugins((interact::InteractPlugin, vehicle::VehiclePlugin, character::CharacterPlugin { export: args.export.clone(), pose: args.pose.clone(), outfit: args.outfit.clone(), defer_killer: args.lobby || matches!(args.net, Some(net::Role::Client(_))) }, collision::CollisionPlugin, audio::AudioPlugin, water::WaterPlugin, power::PowerPlugin { cut: args.cut_power }, kill_camera::KillCameraPlugin, prop_anim::PropAnimPlugin, doors::DebrisPlugin, ragdoll::RagdollPlugin, items::ItemsPlugin, hiding::HidingPlugin, senses::SensesPlugin, navigation::NavigationPlugin { debug: args.nav_debug }))
             .add_plugins(radio::RadioPlugin)
             .add_plugins((spectate::SpectatePlugin { bot: args.bot_spectate }, police::PolicePlugin, tommy::TommyPlugin, sweater::SweaterPlugin, jason_death::JasonDeathPlugin, placed_kills::PlacedKillsPlugin, interaction_camera::InteractionCameraPlugin, counselor_camera::CounselorCameraPlugin, cabinets::CabinetsPlugin, weather::WeatherPlugin, car_lights::CarLightsPlugin, cinematic::CinematicPlugin, hair::HairPlugin, audio_volumes::AudioVolumesPlugin));
         if args.bot_mask {

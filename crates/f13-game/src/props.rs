@@ -406,17 +406,29 @@ fn spawn_props(
             kind: Some(SpawnKind::SmallItem),
         });
     }
-    // Jason's mask (his KillerMaskPickupClass), set aside until it's knocked off (jason_death.rs).
+    // Jason's mask (his KillerMaskPickupClass), set aside until it's knocked off (jason_death.rs): every exported
+    // Jason's (a lobby's match picks him later).
     let killer_mask = world.actors.len();
-    if classes.get(crate::jason_death::killer_mask_pickup(&export.0)).is_some() {
+    let mut masks: Vec<&str> = std::fs::read_dir(export.0.join("killers"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.path().file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .filter(|k| k.starts_with("Jason_"))
+        .map(|k| crate::jason_death::mask_pickup_of(&export.0, &k))
+        .collect();
+    masks.sort();
+    masks.dedup();
+    for m in masks.into_iter().filter(|m| classes.get(m).is_some()) {
         world.actors.push(f13_data::world::MatchActor {
-            class: crate::jason_death::killer_mask_pickup(&export.0).into(),
+            class: m.into(),
             transform: Xform { t: [0.0, 0.0, -100000.0], r: [0.0, 0.0, 0.0, 1.0], s: [1.0; 3] },
             from_level: false,
             spawned_by: None,
             kind: Some(SpawnKind::SmallItem),
         });
     }
+    let killer_mask = killer_mask..world.actors.len();
 
     // The perks' starting items (perks.rs give_starting_items), set aside like his kit: MAX_COUNSELORS of each class.
     let perk_items = world.actors.len();
@@ -456,7 +468,7 @@ fn spawn_props(
         if perk_items.contains(&id) {
             commands.entity(root).insert((crate::perks::PerkItemReserve, crate::interact::Carried, Visibility::Hidden));
         }
-        if id == killer_mask {
+        if killer_mask.contains(&id) {
             commands.entity(root).insert((crate::jason_death::KillerMask, crate::interact::Carried, Visibility::Hidden));
         }
         // The CB radio (SCCBRadio): its Interactable's hold calls Tommy (tommy.rs).

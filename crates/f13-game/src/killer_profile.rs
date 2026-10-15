@@ -22,6 +22,8 @@ pub struct KillerProfiles {
     pub grab_kills: BTreeMap<String, Vec<String>>,
     /// His weapon (SelectedWeapon: a weapon class; none: his WeaponClass).
     pub weapons: BTreeMap<String, String>,
+    /// The Jason picked (the Jason menu: RequestKillerClass; "" the default).
+    pub jason: String,
 }
 
 /// (F13_KILLER_PROFILES: another file, for tests.)
@@ -44,7 +46,16 @@ impl KillerProfiles {
 
     /// A Jason's loadout as the lobby carries it.
     pub fn loadout(&self, killer: &str) -> JasonLoadout {
-        JasonLoadout { grab_kills: self.grab_kills.get(killer).cloned().unwrap_or_default(), weapon: self.weapons.get(killer).cloned().unwrap_or_default() }
+        JasonLoadout { jason: killer.to_string(), grab_kills: self.grab_kills.get(killer).cloned().unwrap_or_default(), weapon: self.weapons.get(killer).cloned().unwrap_or_default() }
+    }
+
+    /// The Jason picked, else the default (--jason or Part 2).
+    pub fn picked_jason(&self) -> String {
+        if self.jason.is_empty() {
+            crate::character::killer_class().to_string()
+        } else {
+            self.jason.clone()
+        }
     }
 
     /// A Jason's weapon as picked (his own when there's no pick or it's not one he may carry).
@@ -58,6 +69,8 @@ impl KillerProfiles {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct JasonLoadout {
+    /// The Jason (his killer Blueprint; "" the server's default).
+    pub jason: String,
     pub grab_kills: Vec<String>,
     /// The PlayerState's picked weapon ("" his own).
     pub weapon: String,
@@ -71,6 +84,7 @@ impl JasonLoadout {
             k.truncate(64);
         }
         self.weapon.truncate(64);
+        self.jason.truncate(64);
         self
     }
 
@@ -133,10 +147,10 @@ impl Plugin for KillerProfilePlugin {
     }
 }
 
-/// Playing Jason without a lobby (--play-jason): his own picks.
-fn apply_local(play: Option<Res<crate::jason_player::PlayJason>>, lobby: Query<(), With<crate::lobby::NetLobby>>, profiles: Res<KillerProfiles>) {
+/// Playing Jason without a lobby (--play-jason): his own picks (as he's set up: jason.rs PendingLoadout).
+fn apply_local(mut commands: Commands, play: Option<Res<crate::jason_player::PlayJason>>, lobby: Query<(), With<crate::lobby::NetLobby>>, profiles: Res<KillerProfiles>) {
     if play.is_some_and(|p| p.is_added()) && lobby.is_empty() {
-        profiles.loadout(crate::character::killer_class()).apply();
+        commands.insert_resource(crate::jason::PendingLoadout(profiles.loadout(crate::character::killer_class())));
     }
 }
 

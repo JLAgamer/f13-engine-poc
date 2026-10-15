@@ -3518,7 +3518,8 @@ fn jason_hud(
     }
     // The knife's reticle while he aims (PressKnifeThrow -> OnShowKnifeReticle: ReticleFade; let go or put away,
     // reversed).
-    let aiming = matches!(j.state, crate::jason::JasonState::Throwing { release: None, .. });
+    // (A client's Jason: the server's aim, replicated: net.rs NetJason knife_aim.)
+    let aiming = j.remote.as_ref().map_or(matches!(j.state, crate::jason::JasonState::Throwing { release: None, .. }), |r| r.knife_aim);
     if aiming != *reticle {
         *reticle = aiming;
         playing.play("KillerHUDWidget", "ReticleFade", now, !aiming);

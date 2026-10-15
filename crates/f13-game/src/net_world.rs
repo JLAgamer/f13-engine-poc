@@ -875,7 +875,10 @@ fn show_visuals(
         }
         if let (NetVisual::Knife { stuck: true }, Some(Shown(Some(dart)))) = (v, shown) {
             if let Ok(mut vis) = visibility.get_mut(*dart) {
-                vis.set_if_neq(Visibility::Inherited);
+                if *vis != Visibility::Inherited {
+                    *vis = Visibility::Inherited;
+                    crate::jason::stop_knife_flight(&mut commands, e);
+                }
             }
         }
         if let Some(name) = a.0.as_deref().and_then(prop_anim) {

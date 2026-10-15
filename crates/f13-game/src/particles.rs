@@ -42,10 +42,11 @@ impl Plugin for ParticlesPlugin {
         embedded_asset!(app, "shaders/mesh_particles_prepass.wgsl");
         app.add_plugins((MaterialPlugin::<ParticleMaterial>::default(), MaterialPlugin::<MeshParticleMaterial>::default()))
             .add_message::<ParticleActivation>()
+            .add_message::<StopMeshParticles>()
             .add_message::<SpawnParticles>()
             .add_systems(Startup, (no_sprites, spawn_level_particles))
             .add_systems(Update, test_particles)
-            .add_systems(PostUpdate, (rain_drips, rain_grid, rain_mpc_materials, spawn_requested, activate, follow_and_finish, simulate, draw).chain().after(bevy::transform::TransformSystems::Propagate));
+            .add_systems(PostUpdate, (rain_drips, rain_grid, rain_mpc_materials, spawn_requested, activate, stop_mesh_particles, follow_and_finish, simulate, draw).chain().after(bevy::transform::TransformSystems::Propagate));
     }
 }
 
@@ -1530,6 +1531,26 @@ fn rain_mpc_materials(mpc: Option<Res<crate::weather::RainMpc>>, mut materials: 
     for id in rain {
         if let Some(mut m) = materials.get_mut(id) {
             m.params.p[15].x = mpc.rain;
+        }
+    }
+}
+
+/// A runtime actor's systems stop (Deactivate) and lose their mesh particles at once (a thrown knife stuck: its
+/// spinning dart).
+#[derive(Message, Clone)]
+pub struct StopMeshParticles {
+    pub actor: String,
+}
+
+fn stop_mesh_particles(mut messages: MessageReader<StopMeshParticles>, mut systems: Query<&mut ParticleSystemInstance>) {
+    for m in messages.read() {
+        for mut s in systems.iter_mut().filter(|s| s.actor == m.actor) {
+            s.active = false;
+            for e in &mut s.emitters {
+                if e.mesh_scene.is_some() || e.chunked.is_some() {
+                    e.particles.clear();
+                }
+            }
         }
     }
 }

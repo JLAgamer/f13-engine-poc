@@ -77,25 +77,56 @@ pub struct CharacterPlugin {
     /// The counselor's outfit (`--outfit <class or name>[:option,...]`, CharacterInfo::choose_outfit); None: her
     /// default outfit.
     pub outfit: Option<String>,
+    /// A lobby's game (its server and clients): no Jason until its match picks one ([`WantKiller`]).
+    pub defer_killer: bool,
 }
+
+/// The Jason to load (a killer Blueprint's name): set as the match picks him (lobby.rs: its Jason player's pick); loaded
+/// by [`load_killer`] into [`KillerCharacter`].
+#[derive(Resource, Clone, Debug, PartialEq)]
+pub struct WantKiller(pub String);
 
 #[derive(Resource)]
 pub(crate) struct ForcedPose(String, f32);
 
 /// Vanessa's and Jason's Blueprints, as the exporter names their files.
 const COUNSELOR: &str = "Athlete_Counselor";
-/// The Jason played: his killer Blueprint's name (the export's killers/<name>.json; `--jason <name>`, default Part 2's
-/// Jason_SackHead; Part 3's Jason_BigNeck exported too).
-pub static KILLER_CLASS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+/// The Jason played: his killer Blueprint's name (the export's killers/<name>.json; `--jason <name>`, else a lobby's
+/// match's pick; default Part 2's Jason_SackHead).
+static KILLER_CLASS: std::sync::RwLock<&'static str> = std::sync::RwLock::new("Jason_SackHead");
 
 pub fn killer_class() -> &'static str {
-    KILLER_CLASS.get().map_or("Jason_SackHead", |s| s.as_str())
+    *KILLER_CLASS.read().unwrap_or_else(|e| e.into_inner())
+}
+
+pub fn set_killer_class(name: &str) {
+    *KILLER_CLASS.write().unwrap_or_else(|e| e.into_inner()) = Box::leak(name.to_string().into_boxed_str());
+}
+
+/// A wanted Jason not yet loaded: his model and animations ([`KillerCharacter`]; jason.rs spawns him as it's added).
+fn load_killer(mut commands: Commands, want: Option<Res<WantKiller>>, have: Option<Res<KillerCharacter>>, export: Res<crate::ExportRoot>, mut clips: ResMut<Assets<AnimationClip>>, mut graphs: ResMut<Assets<AnimationGraph>>) {
+    let Some(want) = want else { return };
+    if have.is_some_and(|k| k.0.info.name == want.0 || k.0.info.name.trim_end_matches("_C") == want.0) {
+        commands.remove_resource::<WantKiller>();
+        return;
+    }
+    set_killer_class(&want.0);
+    match CharacterModel::load(&export.0.join("killers").join(format!("{}.json", want.0)), &export.0, &mut clips, &mut graphs) {
+        Some(c) => {
+            info!("Jason: {} loaded", want.0);
+            commands.insert_resource(KillerCharacter(c));
+        }
+        None => warn!("Jason: no killers/{}.json (re-export: f13-export killers)", want.0),
+    }
+    commands.remove_resource::<WantKiller>();
 }
 
 impl Plugin for CharacterPlugin {
     fn build(&self, app: &mut App) {
         let export = self.export.clone();
         let outfit = self.outfit.clone();
+        let defer_killer = self.defer_killer;
+        app.add_systems(Update, load_killer);
         if let Some((name, at)) = self.pose.clone() {
             app.insert_resource(ForcedPose(name, at));
         }
@@ -132,8 +163,10 @@ impl Plugin for CharacterPlugin {
                 info!("counselors: {:?}", { let mut k: Vec<_> = classes.keys().collect(); k.sort(); k });
                 commands.insert_resource(CounselorCharacter(c, classes, male));
             }
-            if let Some(c) = CharacterModel::load(&export.join("killers").join(format!("{}.json", killer_class())), &export, &mut clips, &mut graphs) {
-                commands.insert_resource(KillerCharacter(c));
+            if !defer_killer {
+                if let Some(c) = CharacterModel::load(&export.join("killers").join(format!("{}.json", killer_class())), &export, &mut clips, &mut graphs) {
+                    commands.insert_resource(KillerCharacter(c));
+                }
             }
         })
         .add_systems(Update, (assemble, animate).chain())

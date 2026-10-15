@@ -28,17 +28,27 @@ impl Plugin for JasonDeathPlugin {
     }
 }
 
-/// The played Jason's KillerMaskPickupClass (his killers/<name>.json Names; Part 2's J2_MaskPickup_C, Part 3's
-/// J3_MaskPickup_C), read once from the export.
+/// A Jason's KillerMaskPickupClass (his killers/<name>.json Names; Part 2's J2_MaskPickup_C, Part 3's
+/// J3_MaskPickup_C), read once per Jason from the export.
+pub fn mask_pickup_of(export: &std::path::Path, killer: &str) -> &'static str {
+    static CLASSES: std::sync::Mutex<Vec<(String, &'static str)>> = std::sync::Mutex::new(Vec::new());
+    let mut c = CLASSES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, v)) = c.iter().find(|(k, _)| k == killer) {
+        return v;
+    }
+    let v = std::fs::read_to_string(export.join("killers").join(format!("{killer}.json")))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v["Names"]["KillerMaskPickupClass"].as_str().map(str::to_string))
+        .unwrap_or_else(|| "J2_MaskPickup_C".into());
+    let v: &'static str = Box::leak(v.into_boxed_str());
+    c.push((killer.to_string(), v));
+    v
+}
+
+/// The played Jason's (see [`mask_pickup_of`]).
 pub fn killer_mask_pickup(export: &std::path::Path) -> &'static str {
-    static CLASS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    CLASS.get_or_init(|| {
-        std::fs::read_to_string(export.join("killers").join(format!("{}.json", crate::character::killer_class())))
-            .ok()
-            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-            .and_then(|v| v["Names"]["KillerMaskPickupClass"].as_str().map(str::to_string))
-            .unwrap_or_else(|| "J2_MaskPickup_C".into())
-    })
+    mask_pickup_of(export, crate::character::killer_class())
 }
 
 /// The match's mask pickup, set aside (props.rs) until his mask is knocked off.
@@ -46,12 +56,19 @@ pub fn killer_mask_pickup(export: &std::path::Path) -> &'static str {
 pub struct KillerMask;
 
 /// His mask off: it drops where he stands, a pickup.
-fn drop_mask(mut commands: Commands, jasons: Query<(&crate::jason::Jason, &Transform), Changed<crate::jason::Jason>>, masks: Query<Entity, With<KillerMask>>, mut visibility: Query<&mut Visibility>) {
+fn drop_mask(
+    mut commands: Commands,
+    export: Res<crate::ExportRoot>,
+    jasons: Query<(&crate::jason::Jason, &Transform), Changed<crate::jason::Jason>>,
+    masks: Query<(Entity, &crate::props::Item), With<KillerMask>>,
+    mut visibility: Query<&mut Visibility>,
+) {
     for (j, jxf) in &jasons {
         if j.mask_on {
             continue;
         }
-        for m in &masks {
+        // (Every Jason's is set aside: props.rs; his own drops.)
+        for (m, _) in masks.iter().filter(|(_, i)| i.class == killer_mask_pickup(&export.0)) {
             info!("jason death: his mask dropped at {:.1}", jxf.translation);
             commands.entity(m).remove::<KillerMask>();
             crate::interact::drop_at(&mut commands, &mut visibility, m, jxf);

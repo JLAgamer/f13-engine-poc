@@ -314,6 +314,11 @@ pub struct NetJason {
     /// His stun's minigame (its completion, in hundredths, and StunText), for his player's wiggle widget.
     #[serde(default)]
     pub minigame: Option<(u8, String)>,
+    /// Which Jason he is (his killer Blueprint) and his weapon class: each client loads and arms the same.
+    #[serde(default)]
+    pub killer: String,
+    #[serde(default)]
+    pub weapon: String,
 }
 
 /// A character's full-body action ([`PlayAction`]), how often it restarted ([`RestartAction`]), its last seek
@@ -682,10 +687,11 @@ impl Plugin for NetPlugin {
                         }
                     })
                     .add_systems(Update, connect)
+                    .add_systems(PostUpdate, say_goodbye.before(ReplicationSystems::Send))
                     .add_observer(body_gone)
                     .init_resource::<Twins>()
                     .init_resource::<ServerClock>()
-                    .add_systems(Update, (send_input, (make_twins, record_bodies, mirror, hide_jason, sync_classes, sync_morph_map, sync_hunter_intro).chain().in_set(Mirrored).before(crate::character::animate)));
+                    .add_systems(Update, (send_input, (follow_server_jason, make_twins, record_bodies, mirror, hide_jason, sync_classes, sync_morph_map, sync_hunter_intro).chain().in_set(Mirrored).before(crate::character::animate)));
                 app.add_systems(Update, receive_match.after(Mirrored));
                 crate::net_world::client(app);
                 crate::lobby::client(app);
@@ -936,7 +942,48 @@ fn update_bodies(
                 let (p, r) = (o.translation, o.rotation);
                 (k.to_string(), [p.x, p.y, p.z, r.x, r.y, r.z, r.w], root)
             }),
+            killer: crate::character::killer_class().to_string(),
+            weapon: crate::jason::current_weapon().map(|w| w.class.clone()).unwrap_or_default(),
         });
+    }
+}
+
+/// On a client, as it quits (its window closed or the game ends): the netcode disconnect, so the server drops it now
+/// (its lobby row) instead of after TIMEOUT_SECS of silence.
+fn say_goodbye(
+    mut commands: Commands,
+    mut exits: MessageReader<AppExit>,
+    mut closes: MessageReader<bevy::window::WindowCloseRequested>,
+    clients: Query<Entity, (With<lightyear::prelude::client::Client>, With<Connected>)>,
+) {
+    let quitting = exits.read().count() > 0;
+    let closing = closes.read().count() > 0;
+    if !(quitting || closing) {
+        return;
+    }
+    for c in &clients {
+        info!("net: disconnecting");
+        commands.trigger(lightyear::prelude::Disconnect { entity: c });
+    }
+}
+
+/// On a client: the server's Jason, loaded here too (character.rs WantKiller), and his weapon once he's set up.
+fn follow_server_jason(
+    mut commands: Commands,
+    jasons: Query<&NetJason>,
+    killer: Option<Res<crate::character::KillerCharacter>>,
+    want: Option<Res<crate::character::WantKiller>>,
+) {
+    let Some(n) = jasons.iter().find(|n| !n.killer.is_empty()) else { return };
+    let loaded = killer.is_some() && crate::character::killer_class() == n.killer;
+    if !loaded {
+        if want.as_ref().is_none_or(|w| w.0 != n.killer) {
+            commands.insert_resource(crate::character::WantKiller(n.killer.clone()));
+        }
+        return;
+    }
+    if !n.weapon.is_empty() && crate::jason::own_ready() && crate::jason::current_weapon().is_none_or(|w| w.class != n.weapon) {
+        crate::jason::set_weapon(&n.weapon);
     }
 }
 

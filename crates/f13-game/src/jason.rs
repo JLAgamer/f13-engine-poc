@@ -403,6 +403,21 @@ pub fn set_weapon(pick: &str) {
     }
 }
 
+/// Whether his own weapon and grab kill defaults are known (his killer JSON read: [`load_knife_look`]).
+pub fn own_ready() -> bool {
+    OWN.read().unwrap_or_else(|e| e.into_inner()).is_some()
+}
+
+/// A loadout to apply once his own defaults are known (killer_profile.rs JasonLoadout: the match's Jason player's).
+#[derive(Resource, Clone, Debug)]
+pub struct PendingLoadout(pub crate::killer_profile::JasonLoadout);
+
+fn apply_pending_loadout(mut commands: Commands, pending: Option<Res<PendingLoadout>>) {
+    let Some(p) = pending.filter(|_| own_ready()) else { return };
+    p.0.apply();
+    commands.remove_resource::<PendingLoadout>();
+}
+
 /// A rig's weapon as shown ([`WEAPON_CHANGES`] when its mesh was last set).
 #[derive(Component)]
 struct WeaponShown(u32);
@@ -602,7 +617,9 @@ impl Plugin for JasonPlugin {
             .init_resource::<GrabKillsAvailable>()
             .add_systems(Update, (show_mask, apply_weapon))
             .init_resource::<JasonTarget>()
-            .add_systems(Startup, (spawn_jason, load_knife_look))
+            // (As his model loads: at startup, or in a lobby's game as its match picks him.)
+            .add_systems(Update, (spawn_jason, load_knife_look).run_if(resource_added::<KillerCharacter>))
+            .add_systems(Update, apply_pending_loadout)
             .add_systems(FixedUpdate, choose_target.before(crate::senses::perceive).before(grab_kills_available).before(update_jason).run_if(crate::net::simulating))
             .add_systems(FixedUpdate, (grab_kills_available.before(update_jason), update_jason, recover_counselor, fly_knives, pick_up_knives).run_if(crate::net::simulating).run_if(crate::match_flow::in_progress))
             .add_systems(FixedUpdate, cancel_on_stun.after(update_jason).run_if(crate::net::simulating).run_if(crate::match_flow::in_progress))
@@ -1475,6 +1492,18 @@ fn spawn_knife(ev: On<ThrowKnife>, mut commands: Commands, look: Option<Res<Knif
     commands.entity(knife).insert((Knife { vel: ev.vel, age: 0.0, damage: ev.damage, stuck: false, dart }, crate::net_world::NetVisual::Knife { stuck: false }));
 }
 
+/// A thrown knife's particle system's actor name ([`stop_knife_flight`]).
+fn knife_actor(knife: Entity) -> String {
+    format!("thrown knife {}", knife.to_bits())
+}
+
+/// A thrown knife stuck: its flight's system stops and its spinning dart goes (PLACEHOLDER: the game's OnStop
+/// (0x1403fe870) attaches it to what it hit; what ends P_Jason_ThrowingKnife_01's 1 s dart there isn't read: the user's
+/// LAN test, 2026-10-14, saw it float and spin), the trail left to fade.
+pub(crate) fn stop_knife_flight(commands: &mut Commands, knife: Entity) {
+    commands.write_message(crate::particles::StopMeshParticles { actor: knife_actor(knife) });
+}
+
 /// A thrown knife's looks on `knife`: its dart (hidden while it flies) and its particles. Returns the dart.
 pub(crate) fn knife_look(commands: &mut Commands, look: Option<&KnifeLook>, knife: Entity) -> Option<Entity> {
     let dart = look.map(|l| commands.spawn((WorldAssetRoot(l.0.clone()), l.1, Visibility::Hidden, ChildOf(knife))).id());
@@ -1484,7 +1513,7 @@ pub(crate) fn knife_look(commands: &mut Commands, look: Option<&KnifeLook>, knif
         system: "P_Jason_ThrowingKnife_01".into(),
         transform: Transform::IDENTITY,
         follow: Some(knife),
-        actor: String::new(),
+        actor: knife_actor(knife),
         active: true,
         time_dilation: 1.0,
     });
@@ -1592,6 +1621,7 @@ fn fly_knives(
             if let Some(d) = k.dart {
                 commands.entity(d).insert(Visibility::Inherited);
             }
+            stop_knife_flight(&mut commands, ke);
             commands.entity(ke).insert(crate::net_world::NetVisual::Knife { stuck: true });
             continue;
         }
@@ -3268,7 +3298,10 @@ pub(crate) fn update_jason(
                 walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(face_dir), dt, &t, &world);
                 let mut hit = hit;
                 let (window, length) = if heavy { (t.heavy_window, t.heavy_length) } else { (t.attack_window, t.attack_length) };
-                if !hit && at >= window.0 && at <= window.1 && alive && dist <= t.attack_range_m && angle_to(xf.rotation, flat) <= t.attack_angle_deg {
+                // (Not through the world: the AttackTraceNotify's weapon sweep stops at what it meets first; PLACEHOLDER: a
+                // chest-high line from him to her, the map and its doors and walls in the way.)
+                let clear = || f13_core::collision::segment_hit(&level, xf.translation + Vec3::Y * 1.3, pxf.translation + Vec3::Y * 1.0, 1.0).is_none();
+                if !hit && at >= window.0 && at <= window.1 && alive && dist <= t.attack_range_m && angle_to(xf.rotation, flat) <= t.attack_angle_deg && clear() {
                     hit = true;
                     let r = p.counselor.take_damage(Hit { amount: t.damage, blocked_with_weapon: blocking }, &ptuning.counselor);
                     // No impact effect: a melee hit's path to it, SCWeapon::SpawnHitEffect (0x1404558e0), is never called

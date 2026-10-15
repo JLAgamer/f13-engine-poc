@@ -678,9 +678,10 @@ pub(crate) fn jason_camera(
     let centre = to_unreal(jxf.translation) + Vec3::Z * hh;
     let indoors = surroundings.as_ref().is_some_and(|s| s.indoors(jxf.translation));
     let shifting = j.shifting();
+    // (A client's Jason: while the server has him aiming: net.rs NetJason knife_aim.)
     let throwing = match j.state {
         crate::jason::JasonState::Throwing { t, release, .. } => release.is_none_or(|r| t < r + END_THROW_S),
-        _ => false,
+        _ => j.remote.as_ref().is_some_and(|r| r.knife_aim),
     };
     let killing = matches!(j.state, crate::jason::JasonState::Killing { .. });
     if j.combat != rig.combat {
