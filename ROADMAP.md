@@ -7,8 +7,6 @@ Base content (asset paths in the player's install; all gameplay values come from
 `Characters/Killers/Jason/J2`, the Chevettes (`Blueprints/Vehicles/DriveableVehicles/Cars/Chevette`), the police.
 
 ## Todo
-The user's LAN test (2026-10-14), first:
-
 Lighting first (the user, 2026-10-14):
 - [ ] Lighting: Enlighten GI (the map's indirect light: its precomputed systems and probe sets are Geomerics'
       runtime data, undocumented; the solver is in the exe)
