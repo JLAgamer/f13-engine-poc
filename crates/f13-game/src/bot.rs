@@ -874,13 +874,20 @@ fn run_bot(
             let Ok((_, v, _, mut vxf)) = vehicles.get_mut(bot.vehicle.unwrap()) else { return };
             if !bot.placed_car {
                 bot.placed_car = true;
-                // 8 m from him, the driver's side toward him.
+                // 8 m from him, the driver's side toward him: the first of eight sides on his navmesh that he has a
+                // whole path to (8 m east of him was at times up a slope he couldn't get to, and he never came).
                 let jat = jxf.translation;
                 let seat_dir = (Quat::from_rotation_y(0.0) * v.driver_seat).with_y(0.0).normalize_or_zero();
-                let at = jat + Vec3::new(8.0, 0.0, 0.0);
+                let side = |k: usize| Quat::from_rotation_y(k as f32 * std::f32::consts::FRAC_PI_4) * Vec3::X;
+                let reachable = |to: Vec3| {
+                    let m = &navmesh.as_ref()?.0;
+                    let (_, on) = m.snap(to, 1.0)?;
+                    m.find_path(jat, on, 20000).filter(|(_, reached)| *reached).map(|_| on)
+                };
+                let (dir, at) = (0..8).find_map(|k| reachable(jat + side(k) * 8.0).map(|on| (side(k), on))).unwrap_or((Vec3::X, jat + Vec3::new(8.0, 0.0, 0.0)));
                 vxf.translation = at + Vec3::Y * 0.5;
-                // Turn the car so its driver side (seat_dir, local) faces him (-X from the car).
-                let want = Vec3::NEG_X;
+                // Turn the car so its driver side (seat_dir, local) faces him (-dir from the car).
+                let want = -dir;
                 let yaw = want.z.atan2(want.x) - seat_dir.z.atan2(seat_dir.x);
                 vxf.rotation = Quat::from_rotation_y(-yaw);
                 setup(BotSetup::PlaceCar { at: vxf.translation.to_array(), yaw: -yaw });
@@ -2139,7 +2146,10 @@ fn go_fetch(
         if bot.timer > 0.3 {
             info!("bot: picking up {} ({e:?}) at ({:.1}, {:.1}, {:.1}), standing {:.2} m away", item.name, at.x, at.y, at.z, pxf.translation.distance(at));
             keys.press(KeyCode::KeyE);
-            bot.timer = 0.0;
+            // (On a client, the next press only once the server's answer could be here, 1.5 s on: the item still looked
+            // loose there 0.3 s on, and the next press took the nearest other item instead, the gas can dropped for a
+            // bat.)
+            bot.timer = if ON_CLIENT.load(std::sync::atomic::Ordering::Relaxed) { -1.2 } else { 0.0 };
         }
     }
     true

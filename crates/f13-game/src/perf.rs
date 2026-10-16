@@ -176,6 +176,19 @@ pub mod systems {
 
     /// System name -> (total seconds, runs) since the last log.
     static TOTALS: Mutex<Option<HashMap<String, (f64, u32)>>> = Mutex::new(None);
+    /// The systems running now (span id -> name, since), for the watchdog: a system stuck for seconds (a hang) is
+    /// named in the log while it's stuck.
+    static RUNNING: Mutex<Option<HashMap<u64, (String, Instant)>>> = Mutex::new(None);
+
+    fn watchdog() {
+        std::thread::spawn(|| loop {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            let Ok(running) = RUNNING.lock() else { continue };
+            for (name, at) in running.iter().flatten().map(|(_, v)| v).filter(|(_, at)| at.elapsed().as_secs_f32() > 5.0) {
+                eprintln!("perf: watchdog: {name} running for {:.0} s", at.elapsed().as_secs_f32());
+            }
+        });
+    }
 
     struct Name(String);
     struct Entered(Instant);
@@ -210,12 +223,20 @@ pub mod systems {
         fn on_enter(&self, id: &span::Id, ctx: Context<'_, S>) {
             if let Some(span) = ctx.span(id) {
                 let mut ext = span.extensions_mut();
-                if ext.get_mut::<Name>().is_some() {
+                if let Some(name) = ext.get_mut::<Name>().map(|n| n.0.clone()) {
                     ext.replace(Entered(Instant::now()));
+                    if let Ok(mut running) = RUNNING.lock() {
+                        running.get_or_insert_with(HashMap::new).insert(id.into_u64(), (name, Instant::now()));
+                    }
                 }
             }
         }
         fn on_exit(&self, id: &span::Id, ctx: Context<'_, S>) {
+            if let Ok(mut running) = RUNNING.lock() {
+                if let Some(r) = running.as_mut() {
+                    r.remove(&id.into_u64());
+                }
+            }
             let Some(span) = ctx.span(id) else { return };
             let ext = span.extensions();
             let (Some(name), Some(at)) = (ext.get::<Name>(), ext.get::<Entered>()) else { return };
@@ -229,7 +250,10 @@ pub mod systems {
 
     /// LogPlugin's custom layer: timing systems only with --perf.
     pub fn layer(_app: &mut App) -> Option<BoxedLayer> {
-        std::env::args().any(|a| a == "--perf").then(|| Box::new(SystemTimes) as BoxedLayer)
+        std::env::args().any(|a| a == "--perf").then(|| {
+            watchdog();
+            Box::new(SystemTimes) as BoxedLayer
+        })
     }
 
     /// Logs the costliest systems (ms per frame) every few seconds.
