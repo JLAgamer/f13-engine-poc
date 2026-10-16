@@ -189,6 +189,10 @@ impl From<&ParticleMaterial> for ParticleKey {
 /// The placeholder sprite buffer the materials drawn from their meshes bind.
 const NO_SPRITES: Handle<ShaderBuffer> = bevy::asset::uuid_handle!("6b1f6a4e-2f0c-4d52-9a35-6f1f0d6f2a11");
 
+
+/// The most particles one emitter spawns in a tick (PLACEHOLDER: a guard, not the engine's; see the spawn).
+const MAX_SPAWN_PER_TICK: u32 = 10_000;
+
 fn no_sprites(mut buffers: ResMut<Assets<ShaderBuffer>>) {
     let _ = buffers.insert(&NO_SPRITES, ShaderBuffer::new(&[0u8; GPU_SPRITE_BYTES], RenderAssetUsages::RENDER_WORLD));
 }
@@ -1803,10 +1807,15 @@ fn tick_emitter(
         let mut start = 0.0;
         if rate > 0.0 {
             let leftover = e.spawn_fraction + dt * rate;
-            count = leftover.floor() as u32;
+            count = if leftover.is_finite() { leftover.floor().max(0.0) as u32 } else { 0 };
             increment = 1.0 / rate;
             start = dt + e.spawn_fraction * increment - increment;
-            e.spawn_fraction = leftover - count as f32;
+            e.spawn_fraction = if leftover.is_finite() { leftover - leftover.floor() } else { 0.0 };
+            // (PLACEHOLDER: the same guard on the rate's spawns.)
+            if count > MAX_SPAWN_PER_TICK || !leftover.is_finite() {
+                warn!("particles: {} wanted {leftover} spawned this tick (rate {rate}, dt {dt}): capped", def.name);
+                count = count.min(MAX_SPAWN_PER_TICK);
+            }
         }
         // ParticleModuleSpawnPerUnit along the source's move this tick: (distance / UnitScalar) x SpawnPerUnit, the
         // fraction carried over, spaced along the move (a ribbon's points: FUN_1416098c0 spawns each at its share of
@@ -1817,8 +1826,15 @@ fn tick_emitter(
         if let Some((unit, per_unit)) = &def.spawn_per_unit {
             let from = e.last_source.unwrap_or(location);
             let units = from.distance(location) / unit.max(1e-3) * per_unit.eval(emitter_time, rand(rng)) + e.unit_fraction;
-            let n = units.floor().max(0.0) as u32;
-            e.unit_fraction = units - n as f32;
+            // PLACEHOLDER: at most MAX_SPAWN_PER_TICK a tick, none for a non-finite amount (its source teleported or
+            // broke; UE's MaxFrameDistance, in the export, isn't read): an unbounded amount once allocated GBs and hung
+            // the network tests' servers.
+            let n = if units.is_finite() { units.floor().max(0.0) as u32 } else { 0 };
+            if n > MAX_SPAWN_PER_TICK || !units.is_finite() {
+                warn!("particles: {} wanted {units} spawned per unit (moved {:.0} from {from} to {location}): capped", def.name, from.distance(location));
+            }
+            let n = n.min(MAX_SPAWN_PER_TICK);
+            e.unit_fraction = if units.is_finite() { units - units.floor() } else { 0.0 };
             along = (1..=n).map(|i| from.lerp(location, i as f32 / n as f32)).collect();
         }
         e.last_source = Some(location);

@@ -529,7 +529,9 @@ fn run_bot(
                 return;
             }
             if let Goal::LockedIn { barred, .. } = bot.goal {
-                // The door nearest Jason that locks (that has a barricade), with room to stand inside it.
+                // The door nearest Jason that locks (that has a barricade), with room to stand inside it: a closed one he
+                // isn't at (6 m from him, her spot inside too). The nearest outright was at times the cabin he'd just
+                // opened, and she was shut in with him.
                 let Some((_, jxf)) = jasons.iter().next() else {
                     error!("bot: no Jason");
                     bot.step = Step::Done;
@@ -540,9 +542,10 @@ fn run_bot(
                 let mut candidates: Vec<(Entity, Vec3, Vec3)> = doors
                     .iter()
                     .filter(|(e, d, _)| if barred { has_bar(*e) } else { d.lockable && !has_bar(*e) })
+                    .filter(|(_, d, g)| !d.open && !d.broken && g.translation().distance(jat) > 6.0)
                     .filter_map(|(e, _, g)| {
                         let inside = g.translation() - g.rotation() * Vec3::X * 1.5 + Vec3::Y;
-                        stand_spot(&world, inside, 0.8).map(|at| (e, at, g.translation()))
+                        stand_spot(&world, inside, 0.8).filter(|at| at.distance(jat) > 6.0).map(|at| (e, at, g.translation()))
                     })
                     .collect();
                 candidates.sort_by(|a, b| a.2.distance(jat).total_cmp(&b.2.distance(jat)));
