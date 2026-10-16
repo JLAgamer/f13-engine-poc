@@ -935,6 +935,11 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
                 if let Some(i) = lit {
                     e.insert(sense_view::CabinPart(i));
                 }
+                // (A single placement's component, for its Enlighten lightmap: enlighten.rs.)
+                if p.instances.is_none() {
+                    let component = p.component.rsplit_once(':').map_or(p.component.as_str(), |(_, c)| c).to_string();
+                    e.insert(enlighten::EnlightenPrimitive { level: p.level.clone(), component });
+                }
                 spawned += 1;
             }
         }
