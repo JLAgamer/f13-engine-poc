@@ -1965,9 +1965,10 @@ fn run_bot(
                 info!("bot: screenshot {}", path.display());
                 commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
             }
-            // The escape run goes on to the match's results.
+            // The escape run goes on to the match's results (once she's out: a failed run reports at once, not after the
+            // whole match, or the window closed early had it pass).
             let results = game.as_ref().is_none_or(|g| matches!(g.state.state, MatchState::WaitingPostMatch | MatchState::LeavingMap));
-            if bot.goal == Goal::Escape {
+            if bot.goal == Goal::Escape && escaped.is_some() {
                 if !results {
                     return;
                 }
