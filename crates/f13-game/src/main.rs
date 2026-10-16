@@ -28,6 +28,7 @@ mod audio_settings;
 mod emotes;
 mod perks;
 mod blood;
+mod enlighten;
 mod bloom;
 mod bot;
 mod cabinets;
@@ -790,6 +791,10 @@ fn main() {
     }
     if args.perf {
         app.add_plugins(perf::PerfPlugin);
+    }
+    // (F13_ENLIGHTEN: Enlighten's indirect light, solved into its atlases: work in progress, the meshes don't sample them yet.)
+    if std::env::var_os("F13_ENLIGHTEN").is_some() {
+        app.add_plugins(enlighten::EnlightenPlugin);
     }
     let exit = app.run();
     // Bots report success or failure through the exit code.
