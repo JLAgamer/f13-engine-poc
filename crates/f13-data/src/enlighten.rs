@@ -215,6 +215,26 @@ impl InputWorkspace {
     }
 }
 
+impl InputWorkspace {
+    /// Each cluster's light from a directional light shining along `dir` (Unreal space, normalised) with `color`, as
+    /// DoDirectInputLighting's type 2 kernel (0x141dd3f10): per packet the mean of max(0, N . -dir) over its four
+    /// points, the cluster the mean over its packets (rcp of their count). PLACEHOLDER: every point seen (the light's
+    /// visibility bits, PrecomputedVisibilityData GEVS, aren't read yet).
+    pub fn directional(&self, dir: Vec3, color: Vec4) -> Vec<Vec4> {
+        let to_light = -dir;
+        self.clusters
+            .iter()
+            .map(|packets| {
+                if packets.is_empty() {
+                    return Vec4::ZERO;
+                }
+                let sum: f32 = packets.iter().map(|p| p.normal.dot(to_light).max(0.0)).sum();
+                color * (sum / packets.len() as f32)
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,6 +272,14 @@ mod tests {
             }
         }
         assert!(transports > 200 && workspaces > 500, "{transports} transports, {workspaces} workspaces");
+
+        // A light straight down on the terrain's (mostly upward) clusters lights them nearly fully; straight up, not at all.
+        let t = std::fs::read(root.join("enlighten/CrystalLake_Small_Terrain.EnlightenSystem_Medium_Dynamic_12.geiw.bin")).unwrap();
+        let w = InputWorkspace::read(&t).unwrap();
+        let down = w.directional(Vec3::NEG_Z, Vec4::ONE);
+        let up = w.directional(Vec3::Z, Vec4::ONE);
+        let mean = |v: &[Vec4]| v.iter().map(|c| c.x).sum::<f32>() / v.len() as f32;
+        assert!(mean(&down) > 0.8 && mean(&up) < 0.05, "down {} up {}", mean(&down), mean(&up));
         shares.sort_by(f32::total_cmp);
         let at = |f: f64| shares[((shares.len() - 1) as f64 * f) as usize];
         eprintln!("{transports} transports, {workspaces} workspaces; the sky's share: median {}, p99 {}, p99.9 {}, max {max}", at(0.5), at(0.99), at(0.999));
