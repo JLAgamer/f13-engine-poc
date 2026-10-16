@@ -22,9 +22,10 @@ Lighting first (the user, 2026-10-14):
       global shader cache: MODLOG "Foliage subsurface: blocked")
 - [ ] Counselor model: the eye look against a capture of the game (it rolls the eyes 90 degrees from their bind:
       MODLOG "The eyes' look", "The counselor's face")
-- [ ] Optimize performance (2026-10-13, a counselor at her start, --perf --features profile: 11.4 ms a frame, the render
-      world's CPU the critical path: encoding 4.4 ms, submit 1.6, preprocess bind groups 1.3, the shadow phases'
-      instance buffers 1.3; main world 3.9, PostUpdate 2.5; particles 0.9)
+- [ ] Optimize performance further (2026-10-15, a counselor at her start, --perf --features profile: 8.0 ms a frame,
+      from 13.4 that day; render world 7.3 ms, mostly encoding 4.7; main world 4.5, PostUpdate 2.9; particles 0.9.
+      Left: the remaining non-bindless materials (masters, terrain, water, characters), the moon's cascades ~3 ms,
+      the game's cached whole-scene shadows: MODLOG "Performance: bindless materials")
 - [ ] Music: Jason's own music (JasonsMusic, for one spectating him: MODLOG "Jason's music, read further"; Jason is
       spectated only in private matches, so it waits for those)
 - [ ] More content, one at a time: maps (with their boat and other escapes), Jasons (J2-J8 play with every grab kill
