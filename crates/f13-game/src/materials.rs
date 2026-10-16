@@ -227,9 +227,11 @@ impl Fallback {
     }
 }
 
+/// Bindless, as [`PropExt`] (the vertex-painted blends: walls, floors, paths).
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
+#[data(100, BlendParams, binding_array(112))]
+#[bindless(index_table(range(100..112), binding(113)))]
 pub(crate) struct BlendExt {
-    #[uniform(100)]
     params: BlendParams,
     #[texture(101)]
     #[sampler(102)]
@@ -255,7 +257,7 @@ pub(crate) struct BlendExt {
     height: Handle<Image>,
 }
 
-#[derive(ShaderType, Reflect, Debug, Clone)]
+#[derive(ShaderType, Reflect, Debug, Clone, Default)]
 struct BlendParams {
     tiling: Vec4,
     blend: Vec4,
@@ -273,6 +275,12 @@ struct BlendParams {
     /// Its Tiling (x), and Channel.
     pom_tiling: Vec4,
     channel: Vec4,
+}
+
+impl From<&BlendExt> for BlendParams {
+    fn from(b: &BlendExt) -> Self {
+        b.params.clone()
+    }
 }
 
 impl MaterialExtension for BlendExt {
@@ -456,9 +464,12 @@ fn black_cube() -> Image {
     image
 }
 
+/// Bindless (its parameters in a shared array, its textures in Bevy's bindless arrays): the props are most of the map's
+/// materials, and a bind group of each was a draw of each in every view.
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
+#[data(100, PropParams, binding_array(105))]
+#[bindless(index_table(range(100..105), binding(106)))]
 pub(crate) struct PropExt {
-    #[uniform(100)]
     params: PropParams,
     #[texture(101)]
     #[sampler(102)]
@@ -469,12 +480,18 @@ pub(crate) struct PropExt {
     lights: Handle<Image>,
 }
 
-#[derive(ShaderType, Reflect, Debug, Clone)]
+#[derive(ShaderType, Reflect, Debug, Clone, Default)]
 struct PropParams {
     mults: Vec4,
     extra: Vec4,
     /// The Chevette's Headlights, Tailights, Backup Lights; w: 1 with its lights mask.
     lights: Vec4,
+}
+
+impl From<&PropExt> for PropParams {
+    fn from(p: &PropExt) -> Self {
+        p.params.clone()
+    }
 }
 
 /// Jason's weapon bloodied (his AnimNotify_BloodyWeapon: SCKillerCharacter::ApplyBloodToWeapon(0, 'ShowWeaponBlood',
