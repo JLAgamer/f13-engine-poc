@@ -251,6 +251,10 @@ mod tests {
         for f in dir.flatten() {
             let path = f.path();
             let name = path.file_name().unwrap().to_string_lossy().to_string();
+            // (Only the blocks: the folder also holds meshes/ and the primitives' UVs.)
+            if !name.ends_with(".gesg.bin") && !name.ends_with(".geiw.bin") {
+                continue;
+            }
             let bytes = std::fs::read(&path).unwrap();
             if name.ends_with(".gesg.bin") {
                 let t = Transport::read(&bytes).unwrap_or_else(|| panic!("{name}: transport doesn't read"));
