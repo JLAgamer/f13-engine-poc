@@ -27,8 +27,7 @@ impl Plugin for EnlightenPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LandscapeWeightUv>()
             .add_systems(Startup, load)
-            .add_systems(Update, (solve, light_meshes, landscape_weight_uv).run_if(resource_exists::<Enlighten>))
-            .add_systems(PostUpdate, probe_volume.run_if(resource_exists::<Enlighten>));
+            .add_systems(Update, (solve, light_meshes, landscape_weight_uv).run_if(resource_exists::<Enlighten>));
     }
 }
 
@@ -54,13 +53,20 @@ struct System {
     moon_seen: Option<(Vec3, Vec<f32>)>,
 }
 
+/// The solver: its state here between solves, moved into a task on the async compute pool for each (the main thread
+/// only gathers the lights before and copies the atlases and the probe volume in after).
 #[derive(Resource)]
 pub struct Enlighten {
+    state: Option<Box<Solver>>,
+    task: Option<bevy::tasks::Task<(Box<Solver>, Solved)>>,
+    since: f32,
+    dumped: bool,
+}
+
+struct Solver {
     systems: Vec<System>,
     /// A system by its Geo GUID's second u32 (UE SystemGuid's first).
     by_id: HashMap<u32, usize>,
-    since: f32,
-    dumped: bool,
     /// Per (lamp, system): each cluster's packets' points seen from the lamp.
     visibility: HashMap<(Entity, usize), Vec<Vec<[bool; 4]>>>,
     /// The environment's radiance, every texel of its cube alike (see `environment`).
@@ -68,8 +74,24 @@ pub struct Enlighten {
     /// The loaded levels' probe sets, and per 64 m cell (Unreal space) the sets over it.
     probe_sets: Vec<ProbeSet>,
     probe_cells: HashMap<IVec3, Vec<usize>>,
-    /// Set by each solve: the probe volume's voxels to refill.
-    probes_solved: bool,
+}
+
+/// What a solve takes from the world: the moon (Unreal direction, colour x lux), the lamps, the static collision (for
+/// the lamps' visibility), the probe volume's centre, the debug scale.
+struct Frame {
+    moon: Option<(Vec3, Vec4)>,
+    lamps: Vec<(Entity, Lamp)>,
+    world: Option<std::sync::Arc<f13_core::collision::TriGrid>>,
+    volume_at: Option<Vec3>,
+    debug_scale: f32,
+}
+
+/// A solve's results: per system with output its package, atlas base, size and output (times the debug scale), and
+/// the probe volume's voxels (its centre, its texels as Rgba16Float).
+struct Solved {
+    outputs: Vec<(String, (u32, u32), (usize, usize), Vec<Vec4>)>,
+    volume: Option<(Vec3, Vec<u8>)>,
+    ms: f32,
 }
 
 /// A probe set (EnlightenProbeSet: the light for what has no lightmap, moving or not; f13-data ProbeTransport,
@@ -139,7 +161,8 @@ pub struct EnlightenPrimitive {
 /// bias (M_Leaves_Master's s061: mad o5.xy, v13.xy, v14.xy, v14.zw). The instances' biases fall in the systems whose
 /// boxes hold them (instances.py: all 48,528 Terrain instances checked): the light where the instance stands.
 /// PLACEHOLDER: the mesh's stream taken as zero (the foliage meshes have no Enlighten UVs in their package's UV buffer
-/// collection): one atlas point per instance.
+/// collection): one atlas point per instance. (Every instance's scale is (1, 1) and its bias inside the atlas: a
+/// non-zero stream would spread an instance over the whole atlas, so the stream bound must be zero.)
 #[derive(Component, Clone, Debug)]
 pub struct EnlightenInstance {
     pub level: String,
@@ -151,8 +174,9 @@ pub struct EnlightenInstance {
 /// primitives: its system's output covers it flat, one Terrain system per one to four components (one 63-quad
 /// component per 18 x 18-ish chart). Each component's map from world XY to the atlas is fitted from the data
 /// (F13-decomp/enlighten/landfit.py: its clusters' places, GEIW, against the output pixels each resamples, GERD;
-/// residuals mostly under a pixel) into `<level>.land.json`. PLACEHOLDER for the game's own (generated at run time;
-/// not read).
+/// residuals mostly under a pixel) into `<level>.land.json`. The game's has the same form: its terrain
+/// shaders' Enlighten UV (M_Terrain_CrystalLake s008: mad o3.xy, v5.xy, cb0[6].xy, cb0[6].zw) is a UV stream times a
+/// per-draw scale and bias, set per component at run time; PLACEHOLDER: those constants fitted rather than read.
 #[derive(Component, Clone, Debug)]
 pub struct EnlightenLandscape {
     pub level: String,
@@ -325,7 +349,12 @@ fn load(mut commands: Commands, export: Res<crate::ExportRoot>, level: Res<crate
     info!("enlighten: {} probe sets ({} probes)", probe_sets.len(), probe_sets.iter().map(|p| p.real).sum::<usize>());
     let environment = environment(&level);
     info!("enlighten: environment {:.3} {:.3} {:.3}", environment.x, environment.y, environment.z);
-    commands.insert_resource(Enlighten { systems, by_id, since: SOLVE_EVERY_S, dumped: false, visibility: HashMap::new(), environment, probe_sets, probe_cells, probes_solved: false });
+    commands.insert_resource(Enlighten {
+        state: Some(Box::new(Solver { systems, by_id, visibility: HashMap::new(), environment, probe_sets, probe_cells })),
+        task: None,
+        since: SOLVE_EVERY_S,
+        dumped: false,
+    });
     commands.insert_resource(atlases);
 }
 
@@ -350,19 +379,35 @@ fn to_unreal_dir(v: Vec3) -> Vec3 {
     Vec3::new(v.x, v.z, v.y)
 }
 
+/// Each solve's lights gathered and handed to a task; its results, when ready, copied into the atlases and the probe
+/// volume (spawned with the first).
+#[allow(clippy::too_many_arguments)]
 fn solve(
+    mut commands: Commands,
     time: Res<Time>,
     mut gi: ResMut<Enlighten>,
     atlases: Res<EnlightenAtlases>,
     mut images: ResMut<Assets<Image>>,
     moons: Query<(&DirectionalLight, &GlobalTransform), With<crate::weather::Moon>>,
     (points, spots): (Query<(Entity, &PointLight, &GlobalTransform, &IndirectIntensity)>, Query<(Entity, &SpotLight, &GlobalTransform, &IndirectIntensity)>),
-    collision: Option<crate::collision::Collision>,
+    world: Option<Res<crate::collision::WorldCollision>>,
+    cameras: Query<(&GlobalTransform, &Camera), With<Camera3d>>,
+    mut volumes: Query<(&ProbeVolume, &mut Transform)>,
 ) {
+    if let Some(task) = gi.task.as_mut() {
+        let Some((state, solved)) = bevy::tasks::futures::check_ready(task) else { return };
+        gi.task = None;
+        gi.state = Some(state);
+        let dump = (!gi.dumped).then(|| std::env::var_os("F13_ENLIGHTEN_DUMP")).flatten();
+        gi.dumped = true;
+        apply(&mut commands, &atlases, &mut images, &mut volumes, solved, dump);
+        return;
+    }
     gi.since += time.delta_secs();
     if gi.since < SOLVE_EVERY_S {
         return;
     }
+    let Some(mut state) = gi.state.take() else { return };
     gi.since = 0.0;
     // The clusters' light: the moon's (its illuminance, as lux on a surface facing it).
     let moon = moons.iter().next().map(|(l, g)| {
@@ -387,111 +432,42 @@ fn solve(
             lamps.push((e, Lamp { at: ue(g.translation()), intensity: rgb(l.color, l.intensity / (4.0 * std::f32::consts::PI) * k.0), falloff: (l.radius < 0.0).then_some(-l.radius), range: l.range * 100.0, cone: Some((axis, l.outer_angle.cos(), l.inner_angle.cos())) }));
         }
     }
-    let world = collision.as_ref().map(|c| c.all());
-    let gi_ref = &mut *gi;
-    for (si, s) in gi_ref.systems.iter_mut().enumerate() {
-        s.input = match moon {
-            Some((dir, color)) => {
-                // (Its visibility, SetDirectionalVisibility's: towards the light.)
-                if let Some(v) = &s.visibility {
-                    if s.moon_seen.as_ref().is_none_or(|(d, _)| d.distance_squared(dir) > 1e-8) {
-                        s.moon_seen = Some((dir, v.directional(-dir, s.workspace.clusters.len())));
-                    }
-                }
-                s.workspace.directional(dir, color, s.moon_seen.as_ref().map(|(_, v)| &v[..]))
-            }
-            None => vec![Vec4::ZERO; s.workspace.clusters.len()],
-        };
-        for (le, lamp) in &lamps {
-            // (Only the lamps whose reach meets the system's box.)
-            if lamp.at.clamp(s.bounds.0, s.bounds.1).distance(lamp.at) >= lamp.range {
-                continue;
-            }
-            // (Each input point's visibility from the lamp, a bit per point as the game's (CalcLightVisibilitySize 0x141d86350:
-            // (points + 7) / 8 bytes, set by the engine through the system's light visibility 0x141ddb2f0, from its
-            // Enlighten shadow pass, FEnlightenShadowPixelShader): here one ray each from the point (5 cm off its
-            // surface) to the lamp, cached, the lamps not moving. PLACEHOLDER: a ray for the shadow map's test.)
-            let vis = gi_ref.visibility.entry((*le, si)).or_insert_with(|| {
-                let b = |v: Vec3| Vec3::new(v.x, v.z, v.y) / 100.0;
-                s.workspace
-                    .clusters
-                    .iter()
-                    .map(|packets| {
-                        packets
-                            .iter()
-                            .map(|pk| {
-                                pk.points.map(|q| {
-                                    let c = q + pk.normal * 5.0;
-                                    c.distance(lamp.at) < lamp.range && world.as_ref().is_none_or(|w| f13_core::collision::segment_hit(w, b(c), b(lamp.at), 0.1).is_none_or(|t| t > 0.98))
-                                })
-                            })
-                            .collect()
-                    })
-                    .collect()
-            });
-            for ((packets, seen), light) in s.workspace.clusters.iter().zip(vis.iter()).zip(s.input.iter_mut()) {
-                if packets.is_empty() {
-                    continue;
-                }
-                let mut sum = Vec4::ZERO;
-                for (pk, v) in packets.iter().zip(seen) {
-                    sum += pk.points.iter().zip(v).filter(|(_, v)| **v).map(|(p, _)| lamp.at_point(*p, pk.normal)).sum::<Vec4>() / 4.0;
-                }
-                *light += sum / packets.len() as f32;
-            }
-        }
-        // (The input in the environment's units, radiance: lit by a sky of radiance 1 an open pixel gathers 1
-        // (the transport's test). A cluster's light is irradiance E: its radiance albedo x E / pi.)
-        for (v, a) in s.input.iter_mut().zip(&s.albedo) {
-            *v *= *a * std::f32::consts::FRAC_1_PI;
-        }
-        // The bounce (DoIndirectInputLighting): the last solve's output resampled onto the clusters (GERD), already a
-        // radiance gathered, times the albedo; each solve feeds the next, as the game's every frame.
-        if let (Some(r), Some(t)) = (&s.resampling, &s.transport) {
-            if !s.output.is_empty() {
-                for ((v, b), a) in s.input.iter_mut().zip(r.bounce(&s.output, t.width as usize)).zip(&s.albedo) {
-                    *v += b * *a;
-                }
-            }
-        }
-    }
-    // The environment: uniform (`environment`).
-    let env = vec![gi.environment; 2046];
-    let dump = (!gi.dumped).then(|| std::env::var_os("F13_ENLIGHTEN_DUMP")).flatten();
-    let mut outputs_kept: Vec<(usize, Vec<Vec4>)> = Vec::new();
-    gi.dumped = true;
-    // (F13_ENLIGHTEN_SCALE=<k>: the output times k, to see which surfaces take the lightmap: debugging.)
+    // (The view's camera: the first active 3D one, the player's or --fly's; the volume on its voxel grid.)
+    let volume_at = cameras.iter().find(|(_, c)| c.is_active).map(|(g, _)| (g.translation() / PROBE_VOXEL_M).round() * PROBE_VOXEL_M);
+    // (F13_ENLIGHTEN_SCALE=<k>: what's drawn times k, to see which surfaces take the lightmap and the probes: debugging.)
     let debug_scale = std::env::var("F13_ENLIGHTEN_SCALE").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0);
-    let gr = &*gi;
-    let mut per_atlas: HashMap<&str, Vec<(usize, Vec<Vec4>)>> = HashMap::new();
-    for (i, s) in gr.systems.iter().enumerate() {
-        let Some(t) = &s.transport else { continue };
-        let inputs: Vec<Option<&[Vec4]>> = t
-            .inputs
-            .iter()
-            .map(|id| if id[2] == 0xffff_fffe { Some(&env[..]) } else { gr.by_id.get(&id[1]).map(|&k| &gr.systems[k].input[..]) })
-            .collect();
-        per_atlas.entry(&s.package).or_default().push((i, t.solve(&inputs, 1.0)));
+    // (The lamps' visibility traces the static world: the lamps' rays are cached, so moving colliders would only be
+    // seen at their first solve.)
+    let frame = Frame { moon, lamps, world: world.map(|w| w.grid.clone()), volume_at, debug_scale };
+    gi.task = Some(bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
+        let solved = state.step(frame);
+        (state, solved)
+    }));
+}
+
+/// A solve's results into the atlases and the probe volume.
+fn apply(
+    commands: &mut Commands,
+    atlases: &EnlightenAtlases,
+    images: &mut Assets<Image>,
+    volumes: &mut Query<(&ProbeVolume, &mut Transform)>,
+    solved: Solved,
+    dump: Option<std::ffi::OsString>,
+) {
+    let mut by_atlas: HashMap<&str, Vec<&((u32, u32), (usize, usize), Vec<Vec4>)>> = HashMap::new();
+    let outs: Vec<(String, ((u32, u32), (usize, usize), Vec<Vec4>))> = solved.outputs.into_iter().map(|(p, b, s, o)| (p, (b, s, o))).collect();
+    for (package, o) in &outs {
+        by_atlas.entry(package).or_default().push(o);
     }
-    let mut per_atlas = per_atlas;
-    for outputs in per_atlas.values() {
-        for (i, out) in outputs {
-            outputs_kept.push((*i, out.clone()));
-        }
-    }
-    for (package, outputs) in per_atlas.drain() {
+    for (package, outputs) in by_atlas {
         let Some(mut image) = atlases.0.get(package).and_then(|h| images.get_mut(h)) else { continue };
         let (w, h) = (image.width() as usize, image.height() as usize);
         let Some(data) = image.data.as_mut() else { continue };
-        for (i, out) in outputs {
-            let s = &gr.systems[i];
-            let t = s.transport.as_ref().unwrap();
-            let (bx, by) = (s.atlas_base.0 as usize, s.atlas_base.1 as usize);
-            for y in 0..t.height as usize {
-                for x in 0..t.width as usize {
-                    // (The debug scale on the atlas only: the output itself feeds the bounce.)
-                    let v = out[y * t.width as usize + x] * debug_scale;
-                    let o = ((by + y) * w + bx + x) * 16;
+        for ((bx, by), (tw, th), out) in outputs {
+            for y in 0..*th {
+                for x in 0..*tw {
+                    let v = out[y * tw + x];
+                    let o = ((*by as usize + y) * w + *bx as usize + x) * 16;
                     if let Some(px) = data.get_mut(o..o + 16) {
                         for (k, c) in v.to_array().iter().enumerate() {
                             px[4 * k..4 * k + 4].copy_from_slice(&c.to_le_bytes());
@@ -506,10 +482,7 @@ fn solve(
             let max = px.iter().copied().fold(1e-9f32, f32::max);
             let rgb: Vec<u8> = px.chunks_exact(4).flat_map(|c| [c[0], c[1], c[2]].map(|v| ((v / max).clamp(0.0, 1.0).sqrt() * 255.0) as u8)).collect();
             let path = std::path::Path::new(dir).join(format!("{package}.ppm"));
-            let mut file = format!("P6
-{w} {h}
-255
-").into_bytes();
+            let mut file = format!("P6\n{w} {h}\n255\n").into_bytes();
             file.extend(rgb);
             match std::fs::write(&path, file) {
                 Ok(()) => info!("enlighten: {} (brightest {max})", path.display()),
@@ -517,37 +490,208 @@ fn solve(
             }
         }
     }
-    for (i, out) in outputs_kept {
-        gi.systems[i].output = out;
+    if let Some((at, bytes)) = solved.volume {
+        let extent = PROBE_VOXELS.as_vec3() * PROBE_VOXEL_M;
+        match volumes.single_mut() {
+            Ok((v, mut t)) => {
+                if let Some(mut img) = images.get_mut(&v.image) {
+                    img.data = Some(bytes);
+                }
+                t.translation = at;
+            }
+            Err(_) => {
+                let r = PROBE_VOXELS;
+                let size = Extent3d { width: r.x, height: r.y * 2, depth_or_array_layers: r.z * 3 };
+                let mut image = Image::new_fill(size, TextureDimension::D3, &[0; 8], TextureFormat::Rgba16Float, RenderAssetUsages::default());
+                image.data = Some(bytes);
+                let image = images.add(image);
+                commands.spawn((
+                    ProbeVolume { image: image.clone() },
+                    bevy::light::IrradianceVolume { voxels: image, intensity: 1.0, affects_lightmapped_meshes: false },
+                    Transform::from_translation(at).with_scale(extent),
+                ));
+                info!("enlighten: probe volume {} x {} x {} voxels of {PROBE_VOXEL_M} m round the camera", r.x, r.y, r.z);
+            }
+        }
     }
-    // The probe sets, from the same inputs (SolveEntireProbeSetTask), then their virtual probes.
-    let gi = &mut *gi;
-    for ps in &mut gi.probe_sets {
-        let inputs: Vec<Option<&[Vec4]>> = ps
-            .transport
-            .inputs
-            .iter()
-            .map(|id| if id[2] == 0xffff_fffe { Some(&env[..]) } else { gi.by_id.get(&id[1]).map(|&k| &gi.systems[k].input[..]) })
-            .collect();
-        let real = ps.transport.solve(&inputs, ps.real);
-        ps.values = ps.octree.with_virtuals(&real);
+    if !SOLVE_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        info!("enlighten: a solve takes {:.1} ms (on the async compute pool)", solved.ms);
     }
-    gi.probes_solved = true;
+}
+
+impl Solver {
+    /// One solve: the clusters' light, the transports, the probe sets, the probe volume's voxels.
+    fn step(&mut self, f: Frame) -> Solved {
+        let started = std::time::Instant::now();
+        let world = f.world.as_deref();
+        for (si, s) in self.systems.iter_mut().enumerate() {
+            s.input = match f.moon {
+                Some((dir, color)) => {
+                    // (Its visibility, SetDirectionalVisibility's: towards the light.)
+                    if let Some(v) = &s.visibility {
+                        if s.moon_seen.as_ref().is_none_or(|(d, _)| d.distance_squared(dir) > 1e-8) {
+                            s.moon_seen = Some((dir, v.directional(-dir, s.workspace.clusters.len())));
+                        }
+                    }
+                    s.workspace.directional(dir, color, s.moon_seen.as_ref().map(|(_, v)| &v[..]))
+                }
+                None => vec![Vec4::ZERO; s.workspace.clusters.len()],
+            };
+            for (le, lamp) in &f.lamps {
+                // (Only the lamps whose reach meets the system's box.)
+                if lamp.at.clamp(s.bounds.0, s.bounds.1).distance(lamp.at) >= lamp.range {
+                    continue;
+                }
+                // (Each input point's visibility from the lamp, a bit per point as the game's (CalcLightVisibilitySize
+                // 0x141d86350: (points + 7) / 8 bytes, set by the engine through the system's light visibility
+                // 0x141ddb2f0, from its Enlighten shadow pass, FEnlightenShadowPixelShader): here one ray each from the
+                // point (5 cm off its surface) to the lamp, cached, the lamps not moving. PLACEHOLDER: a ray for the
+                // shadow map's test.)
+                let vis = self.visibility.entry((*le, si)).or_insert_with(|| {
+                    let b = |v: Vec3| Vec3::new(v.x, v.z, v.y) / 100.0;
+                    s.workspace
+                        .clusters
+                        .iter()
+                        .map(|packets| {
+                            packets
+                                .iter()
+                                .map(|pk| {
+                                    pk.points.map(|q| {
+                                        let c = q + pk.normal * 5.0;
+                                        c.distance(lamp.at) < lamp.range && world.is_none_or(|w| f13_core::collision::segment_hit(w, b(c), b(lamp.at), 0.1).is_none_or(|t| t > 0.98))
+                                    })
+                                })
+                                .collect()
+                        })
+                        .collect()
+                });
+                for ((packets, seen), light) in s.workspace.clusters.iter().zip(vis.iter()).zip(s.input.iter_mut()) {
+                    if packets.is_empty() {
+                        continue;
+                    }
+                    let mut sum = Vec4::ZERO;
+                    for (pk, v) in packets.iter().zip(seen) {
+                        sum += pk.points.iter().zip(v).filter(|(_, v)| **v).map(|(p, _)| lamp.at_point(*p, pk.normal)).sum::<Vec4>() / 4.0;
+                    }
+                    *light += sum / packets.len() as f32;
+                }
+            }
+            // (The input in the environment's units, radiance: lit by a sky of radiance 1 an open pixel gathers 1
+            // (the transport's test). A cluster's light is irradiance E: its radiance albedo x E / pi.)
+            for (v, a) in s.input.iter_mut().zip(&s.albedo) {
+                *v *= *a * std::f32::consts::FRAC_1_PI;
+            }
+            // The bounce (DoIndirectInputLighting): the last solve's output resampled onto the clusters (GERD), already
+            // a radiance gathered, times the albedo; each solve feeds the next, as the game's every frame.
+            if let (Some(r), Some(t)) = (&s.resampling, &s.transport) {
+                if !s.output.is_empty() {
+                    for ((v, b), a) in s.input.iter_mut().zip(r.bounce(&s.output, t.width as usize)).zip(&s.albedo) {
+                        *v += b * *a;
+                    }
+                }
+            }
+        }
+        // The environment: uniform (`environment`).
+        let env = vec![self.environment; 2046];
+        let mut outputs = Vec::new();
+        let mut new_outputs = Vec::new();
+        for (i, s) in self.systems.iter().enumerate() {
+            let Some(t) = &s.transport else { continue };
+            let inputs: Vec<Option<&[Vec4]>> = t
+                .inputs
+                .iter()
+                .map(|id| if id[2] == 0xffff_fffe { Some(&env[..]) } else { self.by_id.get(&id[1]).map(|&k| &self.systems[k].input[..]) })
+                .collect();
+            let out = t.solve(&inputs, 1.0);
+            // (The debug scale on what's drawn only: the output itself feeds the bounce.)
+            outputs.push((s.package.clone(), s.atlas_base, (t.width as usize, t.height as usize), out.iter().map(|v| *v * f.debug_scale).collect()));
+            new_outputs.push((i, out));
+        }
+        for (i, out) in new_outputs {
+            self.systems[i].output = out;
+        }
+        // The probe sets, from the same inputs (SolveEntireProbeSetTask), then their virtual probes.
+        for ps in &mut self.probe_sets {
+            let inputs: Vec<Option<&[Vec4]>> = ps
+                .transport
+                .inputs
+                .iter()
+                .map(|id| if id[2] == 0xffff_fffe { Some(&env[..]) } else { self.by_id.get(&id[1]).map(|&k| &self.systems[k].input[..]) })
+                .collect();
+            let real = ps.transport.solve(&inputs, ps.real);
+            ps.values = ps.octree.with_virtuals(&real);
+        }
+        let volume = f.volume_at.filter(|_| !self.probe_sets.is_empty()).map(|at| (at, self.volume(at, f.debug_scale)));
+        Solved { outputs, volume, ms: started.elapsed().as_secs_f32() * 1000.0 }
+    }
+
+    /// The probe volume's texels round `at` (Bevy space, on the voxel grid): per voxel its ambient cube (see
+    /// [`ProbeVolume`]), the axes' + faces in the texture's upper halves, their - faces below, axis k in its k-th
+    /// third of the depth.
+    fn volume(&self, at: Vec3, debug_scale: f32) -> Vec<u8> {
+        let r = PROBE_VOXELS;
+        let extent = r.as_vec3() * PROBE_VOXEL_M;
+        let lo = at - extent * 0.5;
+        let (nx, ny, nz) = (r.x as usize, r.y as usize, r.z as usize);
+        let cube = |x: usize, y: usize, z: usize| -> [Vec3; 6] {
+            // (Bevy (x, y, z) = Unreal (x, z, y) / 100.)
+            let b = lo + (Vec3::new(x as f32, y as f32, z as f32) + 0.5) * PROBE_VOXEL_M;
+            let ue = Vec3::new(b.x, b.z, b.y) * 100.0;
+            let best = self
+                .probe_cells
+                .get(&probe_cell(ue))
+                .into_iter()
+                .flatten()
+                .filter_map(|&i| self.probe_sets[i].octree.sample(&self.probe_sets[i].values, ue))
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+            let Some((sh, _)) = best else { return [Vec3::ZERO; 6] };
+            let sh = sh.map(|c| c * debug_scale);
+            // Bevy's axes: +X = Unreal's x, +Y = its z (up), +Z = its y; per axis its + and - faces.
+            let (c0, m) = (sh[0], [sh[1], sh[3], sh[2]]);
+            std::array::from_fn(|k| (c0 + m[k / 2] * if k % 2 == 0 { 2.0 } else { -2.0 }).max(Vec3::ZERO))
+        };
+        // (A slice of z per thread.)
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(nz);
+        let cubes: Vec<[Vec3; 6]> = std::thread::scope(|sc| {
+            let handles: Vec<_> = (0..threads)
+                .map(|t| {
+                    let cube = &cube;
+                    sc.spawn(move || (t * nz / threads..(t + 1) * nz / threads).flat_map(|z| (0..ny).flat_map(move |y| (0..nx).map(move |x| cube(x, y, z)))).collect::<Vec<_>>())
+                })
+                .collect();
+            handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
+        });
+        let (w, h) = (nx, ny * 2);
+        let mut data = vec![0u8; w * h * nz * 3 * 8];
+        let mut put = |x: usize, y: usize, z: usize, c: Vec3| {
+            let o = ((z * h + y) * w + x) * 8;
+            for (k, v) in c.extend(1.0).to_array().iter().enumerate() {
+                data[o + 2 * k..o + 2 * k + 2].copy_from_slice(&f16_bits(*v).to_le_bytes());
+            }
+        };
+        for (k, c) in cubes.iter().enumerate() {
+            let (x, y, z) = (k % nx, k / nx % ny, k / (nx * ny));
+            for axis in 0..3 {
+                put(x, y, z + axis * nz, c[2 * axis]);
+                put(x, y + ny, z + axis * nz, c[2 * axis + 1]);
+            }
+        }
+        data
+    }
 }
 
 /// The probe volume: a box of voxels round the camera (`PROBE_VOXELS` of `PROBE_VOXEL_M`), each the probes' light
 /// there as an ambient cube (Bevy's IrradianceVolume, for the meshes without a lightmap: characters, props, the
-/// Blueprint parts), refilled after each solve and as the camera moves on a voxel. A voxel takes the probe set whose
-/// cell under it is the smallest (sets of several levels overlap). An L1 probe (mean c0, moment c) gives
-/// E(n) / pi = c0 + 2 c . n (its radiance c0 + 3 c . w, cosine-weighted over n's hemisphere), so each face of the cube
-/// holds c0 +- 2 c along its axis. PLACEHOLDER for the game's per-pixel probe interpolation (PPPI and its clipmap).
+/// Blueprint parts), refilled by each solve where the camera then was. A voxel takes the probe set whose cell under it
+/// is the smallest (sets of several levels overlap). An L1 probe (mean c0, moment c) gives E(n) / pi = c0 + 2 c . n
+/// (its radiance c0 + 3 c . w, cosine-weighted over n's hemisphere), so each face of the cube holds c0 +- 2 c along its
+/// axis. PLACEHOLDER for the game's per-pixel probe interpolation (PPPI and its clipmap).
 #[derive(Component)]
 struct ProbeVolume {
     image: Handle<Image>,
-    centre: Vec3,
 }
 
-static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static SOLVE_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 const PROBE_VOXELS: UVec3 = UVec3::new(48, 24, 48);
 const PROBE_VOXEL_M: f32 = 2.0;
@@ -566,100 +710,6 @@ fn f16_bits(v: f32) -> u16 {
         if exp < -10 { sign } else { sign | (((man | 0x80_0000) >> (14 - exp)) as u16) }
     } else {
         sign | ((exp as u16) << 10) | ((man >> 13) as u16)
-    }
-}
-
-fn probe_volume(
-    mut commands: Commands,
-    mut gi: ResMut<Enlighten>,
-    mut images: ResMut<Assets<Image>>,
-    cameras: Query<(&GlobalTransform, &Camera), With<Camera3d>>,
-    mut volumes: Query<(&mut ProbeVolume, &mut Transform)>,
-) {
-    // (The view's camera: the first active 3D one, the player's or --fly's.)
-    let Some(cam) = cameras.iter().find(|(_, c)| c.is_active).map(|(g, _)| g.translation()) else { return };
-    let snap = (cam / PROBE_VOXEL_M).round() * PROBE_VOXEL_M;
-    let extent = PROBE_VOXELS.as_vec3() * PROBE_VOXEL_M;
-    let r = PROBE_VOXELS;
-    let size = Extent3d { width: r.x, height: r.y * 2, depth_or_array_layers: r.z * 3 };
-    let image = match volumes.single_mut() {
-        Ok((v, _)) if v.centre == snap && !gi.probes_solved => return,
-        Ok((v, _)) => v.image.clone(),
-        Err(_) => {
-            let image = images.add(Image::new_fill(size, TextureDimension::D3, &[0; 8], TextureFormat::Rgba16Float, RenderAssetUsages::default()));
-            commands.spawn((
-                ProbeVolume { image: image.clone(), centre: Vec3::NAN },
-                bevy::light::IrradianceVolume { voxels: image.clone(), intensity: 1.0, affects_lightmapped_meshes: false },
-                Transform::from_translation(snap).with_scale(extent),
-            ));
-            info!("enlighten: probe volume {} x {} x {} voxels of {PROBE_VOXEL_M} m round the camera", PROBE_VOXELS.x, PROBE_VOXELS.y, PROBE_VOXELS.z);
-            image
-        }
-    };
-    if gi.probe_sets.is_empty() {
-        return;
-    }
-    gi.probes_solved = false;
-    // (F13_ENLIGHTEN_SCALE: as the atlases', for debugging.)
-    let debug_scale = std::env::var("F13_ENLIGHTEN_SCALE").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0);
-    let Some(mut img) = images.get_mut(&image) else { return };
-    let Some(data) = img.data.as_mut() else { return };
-    let lo = snap - extent * 0.5;
-    let (w, h) = (r.x as usize, (r.y * 2) as usize);
-    let mut stats = (0usize, 0usize, 0.0f32);
-    let started = std::time::Instant::now();
-    let mut put = |x: usize, y: usize, z: usize, c: Vec3| {
-        let o = ((z * h + y) * w + x) * 8;
-        for (k, v) in c.extend(1.0).to_array().iter().enumerate() {
-            data[o + 2 * k..o + 2 * k + 2].copy_from_slice(&f16_bits(*v).to_le_bytes());
-        }
-    };
-    // (Each voxel's cube, a slice of z per thread, then written.)
-    let gi = &*gi;
-    let cube = |x: usize, y: usize, z: usize| -> Option<[Vec3; 6]> {
-        // (Bevy (x, y, z) = Unreal (x, z, y) / 100.)
-        let b = lo + (Vec3::new(x as f32, y as f32, z as f32) + 0.5) * PROBE_VOXEL_M;
-        let ue = Vec3::new(b.x, b.z, b.y) * 100.0;
-        let (sh, _) = gi
-            .probe_cells
-            .get(&probe_cell(ue))
-            .into_iter()
-            .flatten()
-            .filter_map(|&i| gi.probe_sets[i].octree.sample(&gi.probe_sets[i].values, ue))
-            .min_by(|a, b| a.1.total_cmp(&b.1))?;
-        let sh = sh.map(|c| c * debug_scale);
-        // Bevy's axes: +X = Unreal's x, +Y = its z (up), +Z = its y; per axis its + and - faces.
-        let (c0, m) = (sh[0], [sh[1], sh[3], sh[2]]);
-        Some(std::array::from_fn(|k| (c0 + m[k / 2] * if k % 2 == 0 { 2.0 } else { -2.0 }).max(Vec3::ZERO)))
-    };
-    let (nx, ny, nz) = (r.x as usize, r.y as usize, r.z as usize);
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(nz);
-    let slices: Vec<Vec<Option<[Vec3; 6]>>> = std::thread::scope(|sc| {
-        let handles: Vec<_> = (0..threads)
-            .map(|t| {
-                let cube = &cube;
-                sc.spawn(move || (t * nz / threads..(t + 1) * nz / threads).flat_map(|z| (0..ny).flat_map(move |y| (0..nx).map(move |x| cube(x, y, z)))).collect::<Vec<_>>())
-            })
-            .collect();
-        handles.into_iter().map(|h| h.join().unwrap_or_default()).collect()
-    });
-    for (k, c) in slices.into_iter().flatten().enumerate() {
-        let (x, y, z) = (k % nx, k / nx % ny, k / (nx * ny));
-        stats.0 += c.is_some() as usize;
-        stats.1 += c.is_some_and(|c| !c[0].is_finite()) as usize;
-        stats.2 = stats.2.max(c.map_or(0.0, |c| c[0].x));
-        let c = c.unwrap_or([Vec3::ZERO; 6]);
-        for axis in 0..3 {
-            put(x, y, z + axis * nz, c[2 * axis]);
-            put(x, y + ny, z + axis * nz, c[2 * axis + 1]);
-        }
-    }
-    if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) || stats.1 > 0 {
-        info!("enlighten: probe volume at {snap}: {} of {} voxels in a probe set, {} not finite, brightest {} ({:.1} ms)", stats.0, r.x * r.y * r.z, stats.1, stats.2, started.elapsed().as_secs_f32() * 1000.0);
-    }
-    if let Ok((mut v, mut t)) = volumes.single_mut() {
-        v.centre = snap;
-        t.translation = snap;
     }
 }
 
