@@ -26,7 +26,7 @@ pub(super) fn bot_hooks(
     mut doors: Query<(Entity, &mut crate::doors::Door, &GlobalTransform)>,
     mut barricades: Query<&mut crate::windows::Barricade>,
     mut jasons: Query<(&mut crate::jason::Jason, Option<&mut crate::senses::Knowledge>)>,
-    time: Res<Time>,
+    (time, navmesh): (Res<Time>, Option<Res<crate::navigation::Navmesh>>),
     (own, mut starts, mut dropped, remote_jason): (Query<(Entity, &Transform), (With<LocalPlayer>, With<Player>, Without<PlayedBy>)>, ResMut<FreeStarts>, Local<bool>, Option<Res<crate::lobby::JasonPlayer>>),
     mut players: Query<(&PlayedBy, &mut Player)>,
     jason_entities: Query<Entity, With<crate::jason::Jason>>,
@@ -115,8 +115,11 @@ pub(super) fn bot_hooks(
                     }
                 }
                 crate::bot::BotSetup::PlaceJason(at) => {
+                    // Onto his navmesh (where his capsule fits): a spot in a wall would have him pushed back out.
+                    let at = Vec3::from_array(at);
+                    let at = navmesh.as_ref().and_then(|n| n.0.snap(at, 3.0)).map_or(at, |(_, p)| p);
                     for mut xf in &mut jason_xfs {
-                        xf.translation = Vec3::from_array(at);
+                        xf.translation = at;
                     }
                 }
                 crate::bot::BotSetup::BreakPhoneBox => {
@@ -203,6 +206,9 @@ pub(super) struct NetBot {
     /// The placed kill she was set at, and its prompt seen here while he held her.
     placed_at: bool,
     placed_prompt: bool,
+    /// When (its step's `t`) it last placed Jason by her or at the placed kill: once a second at most, for his twin
+    /// here to show where the server put him (placed every frame, he jumped in place for seconds).
+    placed_jason: Option<f32>,
 }
 
 impl NetBot {
@@ -227,7 +233,14 @@ pub(super) fn net_bot(
     game: Res<GameMatch>,
     mut exit: MessageWriter<AppExit>,
     knives: Query<(Entity, &crate::net_world::NetVisual, &Transform)>,
+    (lobby, local_id): (Query<&crate::lobby::NetLobby>, Query<&LocalId>),
 ) {
+    // The lobby made this client Jason: his bot's (net_bot_jason), once the server's Jason reaches it (he spawns as
+    // his model loads, the match already under way); until then the lobby's counselor here is not hers to play.
+    let me = local_id.iter().next().map(|id| crate::lobby::peer_id(&RemoteId(id.0)));
+    if me.is_some() && lobby.iter().next().and_then(|l| l.jason) == me {
+        return;
+    }
     bot.t += time.delta_secs();
     // A thrown knife the server sent: how far it goes here.
     for (e, v, xf) in &knives {
@@ -629,9 +642,12 @@ pub(super) fn net_bot_jason(
                         bot.step += 2;
                         bot.t = 0.0;
                     } else if Vec2::new(to.x, to.z).length() > 1.8 {
-                        // Beside her, 1.5 m off, from her side towards him.
-                        let off = Vec2::new(-to.x, -to.z).normalize_or(Vec2::X) * 1.5;
-                        crate::bot::setup(crate::bot::BotSetup::PlaceJason([her.x + off.x, her.y, her.z + off.y]));
+                        // Beside her, 1.5 m off, from her side towards him (the server puts him on the navmesh).
+                        if bot.placed_jason.is_none_or(|p| bot.t - p > 1.0 || p > bot.t) {
+                            let off = Vec2::new(-to.x, -to.z).normalize_or(Vec2::X) * 1.5;
+                            crate::bot::setup(crate::bot::BotSetup::PlaceJason([her.x + off.x, her.y, her.z + off.y]));
+                            bot.placed_jason = Some(bot.t);
+                        }
                         controls.apply_remote(0, 0, ky, kp, view);
                     } else {
                         // (Right mouse, a 0.1 s tap every 0.5 s.)
@@ -659,8 +675,9 @@ pub(super) fn net_bot_jason(
                 if slot.is_none() && bot.t > 2.0 {
                     // No grab kill fits here: the placed kill (E on its spot, facing it), his kill as well.
                     let Some(k) = placed_kills.iter().min_by(|a, b| a.spot.translation.distance(at).total_cmp(&b.spot.translation.distance(at))) else { return };
-                    if at.distance(k.spot.translation) > 0.5 {
+                    if at.distance(k.spot.translation) > 0.5 && bot.placed_jason.is_none_or(|p| bot.t - p > 1.0 || p > bot.t) {
                         crate::bot::setup(crate::bot::BotSetup::PlaceJason(k.spot.translation.to_array()));
+                        bot.placed_jason = Some(bot.t);
                     }
                     let to = k.interact - (at + Vec3::Y * 0.88);
                     let (ky, kp) = ((-to.x).atan2(-to.z), to.y.atan2(Vec2::new(to.x, to.z).length()));
