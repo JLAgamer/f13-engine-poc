@@ -5,7 +5,7 @@ use super::*;
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn update_jason(
     mut commands: Commands,
-    (time, anims, water, drown, swing_impacts): (Res<Time>, Res<crate::Anims>, Option<Res<crate::water::Water>>, Option<Res<DrownKillCamera>>, Option<Res<SwingImpacts>>),
+    (time, anims, water, drown, (swing_impacts, sounds)): (Res<Time>, Res<crate::Anims>, Option<Res<crate::water::Water>>, Option<Res<DrownKillCamera>>, (Option<Res<SwingImpacts>>, Option<Res<crate::audio::Sounds>>)),
     (tuning, target): (Option<Res<KillerTuning>>, Res<JasonTarget>),
     ptuning: Res<PlayerTuning>,
     nav: Option<ResMut<Nav>>,
@@ -1099,31 +1099,16 @@ pub(crate) fn update_jason(
                 if !hit && at >= window.0 && at <= window.1 && alive && dist <= t.attack_range_m && angle_to(xf.rotation, flat) <= t.attack_angle_deg && clear() {
                     hit = true;
                     let r = p.counselor.take_damage(Hit { amount: t.damage, blocked_with_weapon: blocking }, &ptuning.counselor);
-                    // His weapon's impact effect (SwingImpacts): its sound where it struck her (heard by everyone), its
-                    // CounselorFX and CounselorDecal on her and the blood on her clothes. PLACEHOLDER: where it struck, her
-                    // chest 0.15 m from her axis toward him (no weapon sweep against her mesh).
+                    // His weapon's impact effect (SwingImpacts; his OnHit 0x140401820 -> SpawnHitEffect): its sound where it
+                    // struck her (heard by everyone), its CounselorFX and CounselorDecal on her and the blood on her
+                    // clothes. PLACEHOLDER: where it struck, her chest 0.15 m from her axis toward him (no weapon sweep
+                    // against her mesh).
                     if let Some(imp) = current_weapon().and_then(|w| swing_impacts.as_ref()?.0.get(&w.class)) {
                         let toward = (xf.translation - pxf.translation).with_y(0.0).normalize_or(Vec3::Z);
                         let at = pxf.translation + Vec3::Y * 1.2 + toward * 0.15;
-                        if let Some(cue) = imp.sound(blocking, heavy) {
-                            crate::net_world::shout(&mut commands, crate::net_world::Shout::Sound(crate::audio::PlaySound { cue, at: Some(at) }));
-                        }
-                        if let Some(fx) = &imp.fx {
-                            commands.write_message(crate::particles::SpawnParticles::impact(fx, at, toward));
-                        }
-                        if let Some(d) = &imp.decal {
-                            let mut seed = (at.x.to_bits() as u64 ^ (at.z.to_bits() as u64) << 21 ^ 0x9e37_79b9) | 1;
-                            let mut r = || {
-                                seed ^= seed << 13;
-                                seed ^= seed >> 7;
-                                seed ^= seed << 17;
-                                (seed % 32768) as f32 / 32767.0
-                            };
-                            commands.trigger(crate::blood::ApplyBlood { counselor: pe, at });
-                            crate::decals::spawn_impact(&mut commands, d, at, toward, -toward, Some(pe), &mut r, |a, b| {
-                                f13_core::collision::segment_hit_tri(&level, a, b, 2.0).map(|(t, n, _)| (a + (b - a) * t, n))
-                            });
-                        }
+                        imp.play(&mut commands, crate::props::ImpactOn::Counselor, heavy, blocking, at, toward, -toward, Some(pe), |a, b| {
+                            f13_core::collision::segment_hit_tri(&level, a, b, 2.0).map(|(t, n, _)| (a + (b - a) * t, n))
+                        });
                     }
                     info!("Jason: hit Vanessa for {:.0}{} (health {:.0})", r.dealt, if blocking { ", blocked" } else { "" }, p.counselor.health);
                     if blocking {
@@ -1146,6 +1131,29 @@ pub(crate) fn update_jason(
                         let len = counselor_model.as_ref().and_then(|c| c.length(reaction)).unwrap_or(0.67);
                         commands.entity(pe).insert((PlayAction(reaction.into()), Staggered(len))).remove::<crate::items::ItemAction>();
                         p.velocity = Vec2::ZERO;
+                    }
+                }
+                // His swing meeting the world (his OnHit for a hit that isn't a counselor: a door or a window take his
+                // damage, and any other mesh within his weapon's MaximumRecoilAngle of his facing recoils him; each
+                // spawns his weapon's impact, by its surface). PLACEHOLDER: his weapon's sweep, a line from his chest
+                // along his facing to his attack range through the level (doors' closed leaves in it) in the swing's
+                // window, the swing over at the first hit (the recoil, the door's or window's damage and the weapon
+                // getting stuck not ported).
+                if !hit && at >= window.0 && at <= window.1 {
+                    let fwd = (xf.rotation * Vec3::Z).with_y(0.0).normalize_or(Vec3::Z);
+                    let chest = xf.translation + Vec3::Y * 1.3;
+                    let reach = chest + fwd * t.attack_range_m;
+                    if let Some((f, n, surface)) = f13_core::collision::segment_hit_tri(&level, chest, reach, 1.0) {
+                        let point = chest + (reach - chest) * f;
+                        let surface = if surface == f13_core::collision::Tri::TERRAIN { sounds.as_ref().map_or(0, |s| s.terrain_surface(point.x, point.z)) } else { surface };
+                        let n = if n.dot(fwd) > 0.0 { -n } else { n };
+                        hit = true;
+                        info!("Jason: his swing hit the world (surface {surface}) at {point}");
+                        if let Some(imp) = current_weapon().and_then(|w| swing_impacts.as_ref()?.0.get(&w.class)) {
+                            imp.play(&mut commands, crate::props::ImpactOn::Surface(surface), heavy, false, point, n, fwd, None, |a, b| {
+                                f13_core::collision::segment_hit_tri(&level, a, b, 2.0).map(|(t, n, _)| (a + (b - a) * t, n))
+                            });
+                        }
                     }
                 }
                 if at >= length {

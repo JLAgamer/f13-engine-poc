@@ -41,6 +41,109 @@ pub fn impact_sounds(classes: &f13_data::classes::ClassDb, template: &str) -> Ve
         .collect()
 }
 
+/// What an impact struck (GetImpactFX FUN_140345dc0 / GetImpactSound FUN_140347cb0 / GetImpactDecal FUN_1403413b0
+/// tell a killer, a counselor and the rest by its surface type).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ImpactOn {
+    Counselor,
+    Jason,
+    /// The hit's surface type (0: none, 1..22 the map's).
+    Surface(u8),
+}
+
+/// An SCImpactEffect class (a weapon's ImpactEffectClass, a gun's PelletImpactTemplate, a throwable's ImpactTemplate):
+/// its FX, sounds and decals. Spawned at a hit and played (FUN_14035e130): its FX, its sound after an async load, its
+/// decals.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ImpactClass {
+    pub name: String,
+    /// [`IMPACT_FX`]'s order: DefaultFX, CounselorFX, JasonFX, then surface types 1..22.
+    pub fx: Vec<Option<String>>,
+    /// DefaultSound, then surface types 1..22.
+    pub sounds: Vec<Option<String>>,
+    pub heavy: Option<String>,
+    pub blocking: Option<String>,
+    /// DefaultDecal, CounselorDecal, JasonDecal, then surface types 1..22.
+    pub decals: Vec<Option<crate::decals::ImpactDecal>>,
+}
+
+impl ImpactClass {
+    pub fn load(classes: &ClassDb, template: &str) -> Self {
+        let asset = |f: &str| classes.prop(template, f)["AssetPathName"].as_str().and_then(|a| a.rsplit('.').next()).map(String::from);
+        ImpactClass {
+            name: template.to_string(),
+            fx: IMPACT_FX.iter().map(|f| asset(f)).collect(),
+            sounds: impact_sounds(classes, template),
+            heavy: asset("DefaultSoundHeavy"),
+            blocking: asset("BlockingSound"),
+            decals: IMPACT_FX.iter().map(|f| crate::decals::ImpactDecal::from_json(classes.prop(template, &f.replace("FX", "Decal")))).collect(),
+        }
+    }
+
+    /// GetImpactFX: a killer its JasonFX, a counselor its CounselorFX, surface types 1..22 their own, the rest DefaultFX;
+    /// an unset one spawns nothing.
+    pub fn fx(&self, on: ImpactOn) -> Option<&str> {
+        let i = match on {
+            ImpactOn::Counselor => 1,
+            ImpactOn::Jason => 2,
+            ImpactOn::Surface(s @ 1..=22) => 2 + s as usize,
+            ImpactOn::Surface(_) => 0,
+        };
+        self.fx.get(i).and_then(|f| f.as_deref())
+    }
+
+    /// GetImpactSound: a blocking hit actor its BlockingSound; surface types 1..22 their own (unset: "No Sound Cue to
+    /// Play!"); else DefaultSoundHeavy for a heavy hit, DefaultSound (a character's hit: its surface none).
+    pub fn sound(&self, on: ImpactOn, heavy: bool, blocking: bool) -> Option<&str> {
+        if blocking {
+            return self.blocking.as_deref();
+        }
+        match on {
+            ImpactOn::Surface(s @ 1..=22) => self.sounds.get(s as usize).and_then(|f| f.as_deref()),
+            _ if heavy => self.heavy.as_deref().or(self.sounds.first().and_then(|f| f.as_deref())),
+            _ => self.sounds.first().and_then(|f| f.as_deref()),
+        }
+    }
+
+    /// GetImpactDecal: a killer its JasonDecal, a counselor its CounselorDecal, surface types 1..22 their own, DefaultDecal
+    /// for the rest and where the surface's has no material.
+    pub fn decal(&self, on: ImpactOn) -> Option<&crate::decals::ImpactDecal> {
+        let get = |i: usize| self.decals.get(i).and_then(|d| d.as_ref());
+        match on {
+            ImpactOn::Counselor => get(1),
+            ImpactOn::Jason => get(2),
+            ImpactOn::Surface(s @ 1..=22) => get(2 + s as usize).filter(|d| !d.material.is_empty()).or_else(|| get(0)),
+            ImpactOn::Surface(_) => get(0),
+        }
+    }
+
+    /// Plays it at a hit (FUN_14035e130): its FX at `at` facing `normal`, its sound there (heard by everyone), its decal
+    /// (on `onto`: the struck character, following it; else the world, its splashes traced by `trace`), and on a
+    /// counselor the blood on her clothes. `forward`: the instigator's (the decals' splashes).
+    #[allow(clippy::too_many_arguments)]
+    pub fn play(&self, commands: &mut Commands, on: ImpactOn, heavy: bool, blocking: bool, at: Vec3, normal: Vec3, forward: Vec3, onto: Option<Entity>, trace: impl Fn(Vec3, Vec3) -> Option<(Vec3, Vec3)>) {
+        if let Some(cue) = self.sound(on, heavy, blocking) {
+            crate::net_world::shout(commands, crate::net_world::Shout::Sound(crate::audio::PlaySound { cue: cue.to_string(), at: Some(at) }));
+        }
+        if let Some(fx) = self.fx(on) {
+            commands.write_message(crate::particles::SpawnParticles::impact(fx, at, normal));
+        }
+        if let (ImpactOn::Counselor, Some(c)) = (on, onto) {
+            commands.trigger(crate::blood::ApplyBlood { counselor: c, at });
+        }
+        if let Some(d) = self.decal(on) {
+            let mut seed = (at.x.to_bits() as u64 ^ (at.z.to_bits() as u64) << 21 ^ (at.y.to_bits() as u64) << 7 ^ 0x9e37_79b9) | 1;
+            let mut r = || {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                (seed % 32768) as f32 / 32767.0
+            };
+            crate::decals::spawn_impact(commands, d, at, normal, forward, onto, &mut r, trace);
+        }
+    }
+}
+
 /// SCImpactEffect's FX fields in order (class_layouts.json: DefaultFX 0x48, CounselorFX 0x70, JasonFX 0x98, then
 /// WoodHeavyFX 0xc0 .. WoodDoorFX 0x408 every 0x28: surface types 1..22).
 pub const IMPACT_FX: [&str; 25] = [
@@ -106,6 +209,11 @@ pub struct WeaponStats {
     /// Its KillVolume (the "DamageVolume" capsule): actor-space transform (its axis is the local Y), radius and half
     /// height in metres.
     pub volume: Option<(Transform, f32, f32)>,
+    /// Its ImpactEffectClass (SCWeapon +0x648): what its melee hits spawn.
+    pub impact: Option<std::sync::Arc<ImpactClass>>,
+    /// WeaponStats.MaximumRecoilAngle (degrees; SCWeapon's constructor 35): a hit on the world within it of her facing
+    /// recoils her.
+    pub max_recoil_deg: f32,
 }
 
 impl ItemKind {
@@ -126,6 +234,8 @@ impl ItemKind {
                     let r = |n: &str| c.props[n].as_f64().unwrap_or(0.0) as f32 / 100.0;
                     (c.local.as_ref().map(crate::to_transform).unwrap_or_default(), r("CapsuleRadius"), r("CapsuleHalfHeight"))
                 }),
+                impact: p("ImpactEffectClass").as_str().map(|t| std::sync::Arc::new(ImpactClass::load(classes, t))),
+                max_recoil_deg: f("MaximumRecoilAngle", 35.0),
             }
         };
         let is = |n: &str| classes.is_child_of(class, n);
@@ -1048,4 +1158,32 @@ fn tag_vehicle_parts(
 /// An object reference's asset name ("AnimSequence'BatGrip'" -> "BatGrip").
 fn asset_name(v: &str) -> String {
     v.split('\'').nth(1).unwrap_or(v).rsplit('.').next().unwrap_or(v).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bat's impact class (from the export, when `F13_EXPORT` has it): GetImpactSound by what it struck.
+    #[test]
+    fn an_impact_class_sounds_by_what_it_struck() {
+        let Some(root) = std::env::var_os("F13_EXPORT").map(std::path::PathBuf::from) else { return };
+        let Ok(classes) = ClassDb::load(&root.join("classes.json")) else { return };
+        if classes.get("Counselor_ImpactEffect_Bat_C").is_none() {
+            return;
+        }
+        let bat = ImpactClass::load(&classes, "Counselor_ImpactEffect_Bat_C");
+        assert_eq!(bat.sound(ImpactOn::Jason, false, false), Some("BatImpact"));
+        assert_eq!(bat.sound(ImpactOn::Jason, true, false), Some("BatImpactHeavy"));
+        assert_eq!(bat.sound(ImpactOn::Counselor, false, true), Some("AxeImpactBodyBlock"));
+        // Surface type 1 (WoodHeavy), 14 (MetalThick), 18 (Rock); 0 the default.
+        assert_eq!(bat.sound(ImpactOn::Surface(1), false, false), Some("BatImpactWood"));
+        assert_eq!(bat.sound(ImpactOn::Surface(14), false, false), Some("BatImpactMetal"));
+        assert_eq!(bat.sound(ImpactOn::Surface(18), false, false), Some("BatImpactRock"));
+        assert_eq!(bat.sound(ImpactOn::Surface(0), false, false), Some("BatImpact"));
+        // Jason's pickaxe.
+        let pick = ImpactClass::load(&classes, "Killer_ImpactEffect_PickAxe_C");
+        assert_eq!(pick.sound(ImpactOn::Counselor, false, false), Some("PickAxeImpactSFXCue"));
+        assert!(pick.fx(ImpactOn::Counselor).is_some_and(|f| f.starts_with("P_Hit_Blood")), "{:?}", pick.fx(ImpactOn::Counselor));
+    }
 }

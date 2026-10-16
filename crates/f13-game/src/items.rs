@@ -255,6 +255,15 @@ pub struct ItemAction {
     hold: Option<f32>,
     /// Its montage's root motion moving her while it plays (a swing's: local cm/s, x right, y forward).
     pub(crate) root: Option<Vec2>,
+    /// A swing that has met the world (once a swing: HitActors).
+    world_hit: bool,
+}
+
+/// What a swing's sweep met first.
+enum SwingHit {
+    Jason,
+    /// The world: where, its normal toward her, its surface type.
+    World(Vec3, Vec3, u8),
 }
 
 /// SCCharacter's tick: the attack held this long in combat stance is the heavy attack (DAT_14207a200).
@@ -339,7 +348,11 @@ fn jason_bodies(info: &f13_data::character::CharacterInfo, rig: &Rig, globals: &
         .collect()
 }
 
-fn swing_hits(prev: Transform, now: Transform, radius: f32, half: f32, owner: Vec3, bodies: &[BodyShape], world: &(impl f13_core::collision::TriSource + ?Sized)) -> bool {
+/// The sweep's first hit (see the module notes): Jason's bodies, or (`world_too`) the world, either by the sweep from a
+/// step's point to the volume's current place or by the line from her to that point (each blocking hit is a candidate;
+/// PLACEHOLDER: the world's hit by the sweep's axis, its capsule's middle, only).
+#[allow(clippy::too_many_arguments)]
+fn swing_hits(prev: Transform, now: Transform, radius: f32, half: f32, owner: Vec3, bodies: &[BodyShape], world: &(impl f13_core::collision::TriSource + ?Sized), world_too: bool) -> Option<SwingHit> {
     use f13_core::camera_spline::rotator;
     // Unreal's yaw (rotator Y) wraps into -180..180; only a positive change from the last trace counts (as in the game).
     let yaw = |t: &Transform| rotator(t.rotation).y;
@@ -362,15 +375,28 @@ fn swing_hits(prev: Transform, now: Transform, radius: f32, half: f32, owner: Ve
         // The sweep from this step's point to the volume's current place (with this step's rotation).
         let n = ((from.distance(now.translation) / radius.max(1e-3)).ceil() as usize).max(1);
         if (0..=n).any(|k| touches(axis(from.lerp(now.translation, k as f32 / n as f32), rot))) {
-            return true;
+            return Some(SwingHit::Jason);
+        }
+        let world_hit = |a: Vec3, b: Vec3| {
+            f13_core::collision::segment_hit_tri(world, a, b, 1.0).map(|(t, n, s)| {
+                let d = (b - a).normalize_or(Vec3::Z);
+                (a + (b - a) * t, if n.dot(d) > 0.0 { -n } else { n }, s)
+            })
+        };
+        if world_too {
+            if let Some((p, n, s)) = (from.distance_squared(now.translation) > 1e-8).then(|| world_hit(from, now.translation)).flatten() {
+                return Some(SwingHit::World(p, n, s));
+            }
         }
         // The line from her to this step's point, unless a wall comes first.
         let line = bodies.iter().any(|b| b.near_segment(owner, from, 0.0));
-        if line && f13_core::collision::segment_hit(world, owner, from, 1.0).is_none() {
-            return true;
+        match world_hit(owner, from) {
+            None if line => return Some(SwingHit::Jason),
+            Some((p, n, s)) if world_too => return Some(SwingHit::World(p, n, s)),
+            _ => {}
         }
     }
-    false
+    None
 }
 
 /// Wear left on a weapon (starts at its Durability).
@@ -731,7 +757,7 @@ fn start_action(
             // A swing in combat stance: the button's hold counts toward the heavy attack.
             let hold = (combat && matches!(what, Use::Swing { .. })).then_some(0.0);
             let root = matches!(what, Use::Swing { .. }).then(|| swing_root(&anims, anim)).flatten();
-            commands.entity(pe).insert((ItemAction { what, item, t: 0.0, len: len(anim), at, done: false, trace: None, hold, root }, PlayAction(anim.into())));
+            commands.entity(pe).insert((ItemAction { what, item, t: 0.0, len: len(anim), at, done: false, trace: None, hold, root, world_hit: false }, PlayAction(anim.into())));
         };
         // Face where the camera looks.
         let (sin, cos) = pads.look(pe).0.sin_cos();
@@ -839,22 +865,43 @@ fn tick_action(
                     let prev = a.trace.or(now);
                     a.trace = now;
                     let world = collision.all();
-                    let hit = jason.filter(|(je, jxf)| {
-                        let (Some(now), Some(prev), Some((_, radius, half)), Some(cap), Some(c)) = (now, prev, stats.volume, killer.as_ref().map(|k| k.capsule), character.as_ref()) else {
-                            return false;
-                        };
+                    let heavy = matches!(a.what, Use::Swing { heavy: true, .. });
+                    let found = (|| {
+                        let (now, prev, (_, radius, half), c) = (now?, prev?, stats.volume?, character.as_ref()?);
                         // Her actor's location: her capsule's centre.
                         let owner = xf.translation + Vec3::Y * c.info.capsule_half_height / 100.0;
                         // His physics bodies (his capsule only for an export without them).
-                        let mut bodies = match (killer_model.as_ref(), rigs.iter().find(|(c, _)| c.parent() == *je)) {
-                            (Some(k), Some((_, rig))) => jason_bodies(&k.info, rig, &globals),
-                            _ => vec![],
-                        };
-                        if bodies.is_empty() {
-                            bodies.push(BodyShape::Capsule(jxf.translation + Vec3::Y * cap.radius, jxf.translation + Vec3::Y * (2.0 * cap.half_height - cap.radius).max(cap.radius), cap.radius));
+                        let bodies = jason.map_or_else(Vec::new, |(je, jxf)| {
+                            let mut bodies = match (killer_model.as_ref(), rigs.iter().find(|(c, _)| c.parent() == je)) {
+                                (Some(k), Some((_, rig))) => jason_bodies(&k.info, rig, &globals),
+                                _ => vec![],
+                            };
+                            if let (true, Some(cap)) = (bodies.is_empty(), killer.as_ref().map(|k| k.capsule)) {
+                                bodies.push(BodyShape::Capsule(jxf.translation + Vec3::Y * cap.radius, jxf.translation + Vec3::Y * (2.0 * cap.half_height - cap.radius).max(cap.radius), cap.radius));
+                            }
+                            bodies
+                        });
+                        swing_hits(prev, now, radius, half, owner, &bodies, &world, !a.world_hit)
+                    })();
+                    // The world first (SCCharacter's OnHit 0x1402e81a0, her own 0x1403cbef0 passing it a hit that isn't a
+                    // character's): its static or skeletal mesh spawns her weapon's impact by its surface, and within
+                    // her weapon's MaximumRecoilAngle of her facing it recoils her, her swing over (PLACEHOLDER: the
+                    // recoil's animation (vt +0xd40), the weapon getting stuck (FUN_14044d4b0, vt +0xd48) not ported).
+                    if let Some(SwingHit::World(point, n, surface)) = found {
+                        a.world_hit = true;
+                        let surface = if surface == f13_core::collision::Tri::TERRAIN { sounds.as_ref().map_or(0, |s| s.terrain_surface(point.x, point.z)) } else { surface };
+                        let angle = facing.dot((point - xf.translation).normalize_or(facing)).clamp(-1.0, 1.0).acos().to_degrees();
+                        info!("swing hit the world (surface {surface}, {angle:.0} deg off her facing)");
+                        if let Some(imp) = &stats.impact {
+                            imp.play(&mut commands, crate::props::ImpactOn::Surface(surface), heavy, false, point, n, facing, None, |p, q| {
+                                f13_core::collision::segment_hit_tri(&world, p, q, 2.0).map(|(t, n, _)| (p + (q - p) * t, n))
+                            });
                         }
-                        swing_hits(prev, now, radius, half, owner, &bodies, &world)
-                    });
+                        if angle <= stats.max_recoil_deg {
+                            a.done = true;
+                        }
+                    }
+                    let hit = matches!(found, Some(SwingHit::Jason)).then_some(jason).flatten();
                     if let Some((je, jxf)) = hit {
                         let to = jxf.translation - xf.translation;
                         a.done = true;
@@ -887,8 +934,16 @@ fn tick_action(
                             if stun { "stun" } else { "no stun" }
                         );
                         commands.entity(je).insert(HitJason { by: Some(pe), stun: stun.then_some(Stun::Weapon { left }), from: xf.translation, damage, stun_scale });
-                        // No impact effect: a melee hit's path to it, SCWeapon::SpawnHitEffect (0x1404558e0), is never
-                        // called in this build (MODLOG "Melee hits spawn no impact effects").
+                        // Her weapon's impact on him (SCCharacter's OnHit 0x1402e81a0: a character's mesh hit; GetImpactFX
+                        // his JasonFX, his JasonDecal on him, the sound DefaultSound / DefaultSoundHeavy). PLACEHOLDER:
+                        // where it struck, his chest 0.3 m from his axis toward her.
+                        if let Some(imp) = &stats.impact {
+                            let toward = (xf.translation - jxf.translation).with_y(0.0).normalize_or(Vec3::Z);
+                            let point = jxf.translation + Vec3::Y * 1.3 + toward * 0.3;
+                            imp.play(&mut commands, crate::props::ImpactOn::Jason, heavy, false, point, toward, facing, Some(je), |p, q| {
+                                f13_core::collision::segment_hit_tri(&world, p, q, 2.0).map(|(t, n, _)| (p + (q - p) * t, n))
+                            });
+                        }
                         let name = items.get(a.item).map_or("weapon".to_string(), |i| i.name.clone());
                         let held = tuning.counselor.combat.weapon_durability_mod.value(&p.counselor.stats, false) + p.counselor.perks.get("WeaponDurabilityModifier");
                         wear_weapon(&mut commands, &mut wear, &mut inv, a.item, stats.durability, stats.attacking_wear, &name, held);
@@ -1257,5 +1312,32 @@ mod tests {
         assert!(segment_hits_capsule(Vec3::new(-1.0, 1.0, 0.0), Vec3::new(1.0, 1.0, 0.0), feet));
         assert!(!segment_hits_capsule(Vec3::new(-1.0, 1.0, 1.0), Vec3::new(1.0, 1.0, 1.0), feet));
         assert!(!segment_hits_capsule(Vec3::new(-1.0, 2.5, 0.0), Vec3::new(1.0, 2.5, 0.0), feet));
+    }
+    /// A swing through a wall (its surface type 5) meets it; one clear of it doesn't; Jason's body before the wall is
+    /// hit first.
+    #[test]
+    fn a_swing_meets_a_wall_or_jason_first() {
+        use f13_core::collision::{Tri, TriList};
+        // A wall at z = 1.0 facing her (she's at the origin, facing +Z).
+        let (a, b, c, d) = (Vec3::new(-2.0, 0.0, 1.0), Vec3::new(2.0, 0.0, 1.0), Vec3::new(2.0, 3.0, 1.0), Vec3::new(-2.0, 3.0, 1.0));
+        let wall = TriList::new(vec![Tri::new(a, b, c).unwrap().with_surface(5), Tri::new(a, c, d).unwrap().with_surface(5)]);
+        let owner = Vec3::new(0.0, 0.9, 0.0);
+        // The weapon's volume sweeping right to left across her front, into the wall (z 0.6 -> 1.2), and clear of it.
+        let (prev, now) = (Transform::from_xyz(0.6, 1.2, 0.6), Transform::from_xyz(-0.6, 1.2, 1.2));
+        match swing_hits(prev, now, 0.05, 0.3, owner, &[], &wall, true) {
+            Some(SwingHit::World(p, n, 5)) => {
+                assert!((p.z - 1.0).abs() < 0.05, "at {p}");
+                assert!(n.z < -0.9, "its normal toward her: {n}");
+            }
+            _ => panic!("the wall wasn't met"),
+        }
+        let (prev, now) = (Transform::from_xyz(0.6, 1.2, 0.5), Transform::from_xyz(-0.6, 1.2, 0.6));
+        assert!(swing_hits(prev, now, 0.05, 0.3, owner, &[], &wall, true).is_none());
+        // Met once a swing: not looked for again.
+        let (prev, now) = (Transform::from_xyz(0.6, 1.2, 0.6), Transform::from_xyz(-0.6, 1.2, 1.2));
+        assert!(swing_hits(prev, now, 0.05, 0.3, owner, &[], &wall, false).is_none());
+        // Jason's body in the way before the wall.
+        let jason = [BodyShape::Capsule(Vec3::new(0.3, 0.2, 0.7), Vec3::new(0.3, 1.8, 0.7), 0.3)];
+        assert!(matches!(swing_hits(prev, now, 0.05, 0.3, owner, &jason, &wall, true), Some(SwingHit::Jason)));
     }
 }

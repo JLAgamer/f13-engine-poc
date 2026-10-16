@@ -115,30 +115,7 @@ impl KnifeImpact {
 /// (FUN_14035e130, as a gun's pellets: GetImpactFX, GetImpactSound, the decals), its heavy flag his anim instance's
 /// bIsHeavyAttack), by weapon class.
 #[derive(Resource, Default)]
-pub(crate) struct SwingImpacts(pub HashMap<String, SwingImpact>);
-
-/// An impact class's sounds for a hit on a counselor (GetImpactSound FUN_140347cb0: a blocking hit actor its
-/// BlockingSound, then her surface's (none: a character's is the default), DefaultSoundHeavy for a heavy hit, else
-/// DefaultSound), its CounselorFX and its CounselorDecal.
-pub(crate) struct SwingImpact {
-    pub default: Option<String>,
-    pub heavy: Option<String>,
-    pub blocking: Option<String>,
-    pub fx: Option<String>,
-    pub decal: Option<crate::decals::ImpactDecal>,
-}
-
-impl SwingImpact {
-    pub fn sound(&self, blocking: bool, heavy: bool) -> Option<String> {
-        if blocking {
-            self.blocking.clone()
-        } else if heavy {
-            self.heavy.clone()
-        } else {
-            self.default.clone()
-        }
-    }
-}
+pub(crate) struct SwingImpacts(pub HashMap<String, crate::props::ImpactClass>);
 
 /// The knife in his hand while he aims (SERVER_SpawnKnife 0x1404051d0: a ThrowingKnifeClass actor, CurrentThrowable,
 /// attached to his Mesh at KnifeAttachSocket, SnapToTargetNotIncludingScale; the constructor's KnifeAttachSocket is
@@ -163,20 +140,10 @@ pub(super) fn load_knife_look(mut commands: Commands, export: Res<crate::ExportR
         commands.insert_resource(KnifeImpact(crate::props::impact_sounds(&classes, t), fx, decal));
     }
     // His weapons' impact classes.
-    let asset = |t: &str, f: &str| classes.prop(t, f)["AssetPathName"].as_str().and_then(|a| a.rsplit('.').next()).map(String::from);
     let mut swings = SwingImpacts::default();
     for w in weapons() {
         let Some(t) = classes.prop(&w.class, "ImpactEffectClass").as_str().map(String::from) else { continue };
-        swings.0.insert(
-            w.class.clone(),
-            SwingImpact {
-                default: asset(&t, "DefaultSound"),
-                heavy: asset(&t, "DefaultSoundHeavy"),
-                blocking: asset(&t, "BlockingSound"),
-                fx: asset(&t, "CounselorFX"),
-                decal: crate::decals::ImpactDecal::from_json(classes.prop(&t, "CounselorDecal")),
-            },
-        );
+        swings.0.insert(w.class.clone(), crate::props::ImpactClass::load(&classes, &t));
     }
     if swings.0.is_empty() {
         warn!("no Jason weapon's ImpactEffectClass in classes.json (re-export: f13-export levels): his swings' hits are silent");
