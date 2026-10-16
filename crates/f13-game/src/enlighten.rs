@@ -13,7 +13,7 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use f13_data::enlighten::{InputWorkspace, Resampling, Transport, Visibility};
+use f13_data::enlighten::{InputWorkspace, ProbeOctree, ProbeSh, ProbeTransport, Resampling, Transport, Visibility};
 use std::collections::HashMap;
 
 /// How often the systems are re-solved (s).
@@ -27,7 +27,8 @@ impl Plugin for EnlightenPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LandscapeWeightUv>()
             .add_systems(Startup, load)
-            .add_systems(Update, (solve, light_meshes, landscape_weight_uv).run_if(resource_exists::<Enlighten>));
+            .add_systems(Update, (solve, light_meshes, landscape_weight_uv).run_if(resource_exists::<Enlighten>))
+            .add_systems(PostUpdate, probe_volume.run_if(resource_exists::<Enlighten>));
     }
 }
 
@@ -64,6 +65,27 @@ pub struct Enlighten {
     visibility: HashMap<(Entity, usize), Vec<Vec<bool>>>,
     /// The environment's radiance, every texel of its cube alike (see `environment`).
     environment: Vec4,
+    /// The loaded levels' probe sets, and per 64 m cell (Unreal space) the sets over it.
+    probe_sets: Vec<ProbeSet>,
+    probe_cells: HashMap<IVec3, Vec<usize>>,
+    /// Set by each solve: the probe volume's voxels to refill.
+    probes_solved: bool,
+}
+
+/// A probe set (EnlightenProbeSet: the light for what has no lightmap, moving or not; f13-data ProbeTransport,
+/// ProbeOctree), its probes' last light (the real ones, then the virtual).
+struct ProbeSet {
+    transport: ProbeTransport,
+    octree: ProbeOctree,
+    real: usize,
+    values: Vec<ProbeSh>,
+}
+
+/// A probe set's cell: its octree's 64 m cube (every set's origin on a 6400 cm grid).
+const PROBE_CELL: f32 = 6400.0;
+
+fn probe_cell(p: Vec3) -> IVec3 {
+    (p / PROBE_CELL).floor().as_ivec3()
 }
 
 /// A local light's IndirectLightingIntensity (lighting.rs): its share of the indirect light.
@@ -280,9 +302,30 @@ fn load(mut commands: Commands, export: Res<crate::ExportRoot>, level: Res<crate
     commands.insert_resource(prims);
     let solved = systems.iter().filter(|s| s.transport.is_some()).count();
     info!("enlighten: {} systems ({solved} with output) in {} levels' atlases", systems.len(), atlases.0.len());
+    let mut probe_sets = Vec::new();
+    let mut probe_cells: HashMap<IVec3, Vec<usize>> = HashMap::new();
+    for p in index["probe_sets"].as_array().into_iter().flatten() {
+        let package = p["package"].as_str().unwrap_or("");
+        if !packages.iter().any(|k| k == package) {
+            continue;
+        }
+        let name = format!("{package}.{}", p["name"].as_str().unwrap_or(""));
+        let f = |v: &serde_json::Value| v.as_f64().unwrap_or(0.0) as f32;
+        let origin = Vec3::new(f(&p["origin"][0]), f(&p["origin"][1]), f(&p["origin"][2]));
+        let real = p["probes"].as_u64().unwrap_or(0) as usize;
+        let (Some(transport), Some(octree)) = (
+            std::fs::read(dir.join(format!("{name}.gesh.bin"))).ok().and_then(|b| ProbeTransport::read(&b)),
+            std::fs::read(dir.join(format!("{name}.gepo.bin"))).ok().and_then(|b| ProbeOctree::read(&b, origin, f(&p["size"]), real)),
+        ) else {
+            continue;
+        };
+        probe_cells.entry(probe_cell(origin + Vec3::splat(octree.size * 0.5))).or_default().push(probe_sets.len());
+        probe_sets.push(ProbeSet { transport, octree, real, values: Vec::new() });
+    }
+    info!("enlighten: {} probe sets ({} probes)", probe_sets.len(), probe_sets.iter().map(|p| p.real).sum::<usize>());
     let environment = environment(&level);
     info!("enlighten: environment {:.3} {:.3} {:.3}", environment.x, environment.y, environment.z);
-    commands.insert_resource(Enlighten { systems, by_id, since: SOLVE_EVERY_S, dumped: false, visibility: HashMap::new(), environment });
+    commands.insert_resource(Enlighten { systems, by_id, since: SOLVE_EVERY_S, dumped: false, visibility: HashMap::new(), environment, probe_sets, probe_cells, probes_solved: false });
     commands.insert_resource(atlases);
 }
 
@@ -430,7 +473,7 @@ fn solve(
             .iter()
             .map(|id| if id[2] == 0xffff_fffe { Some(&env[..]) } else { gr.by_id.get(&id[1]).map(|&k| &gr.systems[k].input[..]) })
             .collect();
-        per_atlas.entry(&s.package).or_default().push((i, t.solve(&inputs, debug_scale)));
+        per_atlas.entry(&s.package).or_default().push((i, t.solve(&inputs, 1.0)));
     }
     let mut per_atlas = per_atlas;
     for outputs in per_atlas.values() {
@@ -448,7 +491,8 @@ fn solve(
             let (bx, by) = (s.atlas_base.0 as usize, s.atlas_base.1 as usize);
             for y in 0..t.height as usize {
                 for x in 0..t.width as usize {
-                    let v = out[y * t.width as usize + x];
+                    // (The debug scale on the atlas only: the output itself feeds the bounce.)
+                    let v = out[y * t.width as usize + x] * debug_scale;
                     let o = ((by + y) * w + bx + x) * 16;
                     if let Some(px) = data.get_mut(o..o + 16) {
                         for (k, c) in v.to_array().iter().enumerate() {
@@ -477,6 +521,147 @@ fn solve(
     }
     for (i, out) in outputs_kept {
         gi.systems[i].output = out;
+    }
+    // The probe sets, from the same inputs (SolveEntireProbeSetTask), then their virtual probes.
+    let gi = &mut *gi;
+    for ps in &mut gi.probe_sets {
+        let inputs: Vec<Option<&[Vec4]>> = ps
+            .transport
+            .inputs
+            .iter()
+            .map(|id| if id[2] == 0xffff_fffe { Some(&env[..]) } else { gi.by_id.get(&id[1]).map(|&k| &gi.systems[k].input[..]) })
+            .collect();
+        let real = ps.transport.solve(&inputs, ps.real);
+        ps.values = ps.octree.with_virtuals(&real);
+    }
+    gi.probes_solved = true;
+}
+
+/// The probe volume: a box of voxels round the camera (`PROBE_VOXELS` of `PROBE_VOXEL_M`), each the probes' light
+/// there as an ambient cube (Bevy's IrradianceVolume, for the meshes without a lightmap: characters, props, the
+/// Blueprint parts), refilled after each solve and as the camera moves on a voxel. A voxel takes the probe set whose
+/// cell under it is the smallest (sets of several levels overlap). An L1 probe (mean c0, moment c) gives
+/// E(n) / pi = c0 + 2 c . n (its radiance c0 + 3 c . w, cosine-weighted over n's hemisphere), so each face of the cube
+/// holds c0 +- 2 c along its axis. PLACEHOLDER for the game's per-pixel probe interpolation (PPPI and its clipmap).
+#[derive(Component)]
+struct ProbeVolume {
+    image: Handle<Image>,
+    centre: Vec3,
+}
+
+static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+const PROBE_VOXELS: UVec3 = UVec3::new(48, 24, 48);
+const PROBE_VOXEL_M: f32 = 2.0;
+
+fn f16_bits(v: f32) -> u16 {
+    let x = v.to_bits();
+    let sign = ((x >> 16) & 0x8000) as u16;
+    let exp = ((x >> 23) & 0xff) as i32 - 127 + 15;
+    let man = x & 0x7f_ffff;
+    if v.is_nan() {
+        return 0x7e00;
+    }
+    if exp >= 31 {
+        sign | 0x7c00
+    } else if exp <= 0 {
+        if exp < -10 { sign } else { sign | (((man | 0x80_0000) >> (14 - exp)) as u16) }
+    } else {
+        sign | ((exp as u16) << 10) | ((man >> 13) as u16)
+    }
+}
+
+fn probe_volume(
+    mut commands: Commands,
+    mut gi: ResMut<Enlighten>,
+    mut images: ResMut<Assets<Image>>,
+    cameras: Query<(&GlobalTransform, &Camera), With<Camera3d>>,
+    mut volumes: Query<(&mut ProbeVolume, &mut Transform)>,
+) {
+    // (The view's camera: the first active 3D one, the player's or --fly's.)
+    let Some(cam) = cameras.iter().find(|(_, c)| c.is_active).map(|(g, _)| g.translation()) else { return };
+    let snap = (cam / PROBE_VOXEL_M).round() * PROBE_VOXEL_M;
+    let extent = PROBE_VOXELS.as_vec3() * PROBE_VOXEL_M;
+    let r = PROBE_VOXELS;
+    let size = Extent3d { width: r.x, height: r.y * 2, depth_or_array_layers: r.z * 3 };
+    let image = match volumes.single_mut() {
+        Ok((v, _)) if v.centre == snap && !gi.probes_solved => return,
+        Ok((v, _)) => v.image.clone(),
+        Err(_) => {
+            let image = images.add(Image::new_fill(size, TextureDimension::D3, &[0; 8], TextureFormat::Rgba16Float, RenderAssetUsages::default()));
+            commands.spawn((
+                ProbeVolume { image: image.clone(), centre: Vec3::NAN },
+                bevy::light::IrradianceVolume { voxels: image.clone(), intensity: 1.0, affects_lightmapped_meshes: false },
+                Transform::from_translation(snap).with_scale(extent),
+            ));
+            info!("enlighten: probe volume {} x {} x {} voxels of {PROBE_VOXEL_M} m round the camera", PROBE_VOXELS.x, PROBE_VOXELS.y, PROBE_VOXELS.z);
+            image
+        }
+    };
+    if gi.probe_sets.is_empty() {
+        return;
+    }
+    gi.probes_solved = false;
+    // (F13_ENLIGHTEN_SCALE: as the atlases', for debugging.)
+    let debug_scale = std::env::var("F13_ENLIGHTEN_SCALE").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0);
+    let Some(mut img) = images.get_mut(&image) else { return };
+    let Some(data) = img.data.as_mut() else { return };
+    let lo = snap - extent * 0.5;
+    let (w, h) = (r.x as usize, (r.y * 2) as usize);
+    let mut stats = (0usize, 0usize, 0.0f32);
+    let started = std::time::Instant::now();
+    let mut put = |x: usize, y: usize, z: usize, c: Vec3| {
+        let o = ((z * h + y) * w + x) * 8;
+        for (k, v) in c.extend(1.0).to_array().iter().enumerate() {
+            data[o + 2 * k..o + 2 * k + 2].copy_from_slice(&f16_bits(*v).to_le_bytes());
+        }
+    };
+    // (Each voxel's cube, a slice of z per thread, then written.)
+    let gi = &*gi;
+    let cube = |x: usize, y: usize, z: usize| -> Option<[Vec3; 6]> {
+        // (Bevy (x, y, z) = Unreal (x, z, y) / 100.)
+        let b = lo + (Vec3::new(x as f32, y as f32, z as f32) + 0.5) * PROBE_VOXEL_M;
+        let ue = Vec3::new(b.x, b.z, b.y) * 100.0;
+        let (sh, _) = gi
+            .probe_cells
+            .get(&probe_cell(ue))
+            .into_iter()
+            .flatten()
+            .filter_map(|&i| gi.probe_sets[i].octree.sample(&gi.probe_sets[i].values, ue))
+            .min_by(|a, b| a.1.total_cmp(&b.1))?;
+        let sh = sh.map(|c| c * debug_scale);
+        // Bevy's axes: +X = Unreal's x, +Y = its z (up), +Z = its y; per axis its + and - faces.
+        let (c0, m) = (sh[0], [sh[1], sh[3], sh[2]]);
+        Some(std::array::from_fn(|k| (c0 + m[k / 2] * if k % 2 == 0 { 2.0 } else { -2.0 }).max(Vec3::ZERO)))
+    };
+    let (nx, ny, nz) = (r.x as usize, r.y as usize, r.z as usize);
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(nz);
+    let slices: Vec<Vec<Option<[Vec3; 6]>>> = std::thread::scope(|sc| {
+        let handles: Vec<_> = (0..threads)
+            .map(|t| {
+                let cube = &cube;
+                sc.spawn(move || (t * nz / threads..(t + 1) * nz / threads).flat_map(|z| (0..ny).flat_map(move |y| (0..nx).map(move |x| cube(x, y, z)))).collect::<Vec<_>>())
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap_or_default()).collect()
+    });
+    for (k, c) in slices.into_iter().flatten().enumerate() {
+        let (x, y, z) = (k % nx, k / nx % ny, k / (nx * ny));
+        stats.0 += c.is_some() as usize;
+        stats.1 += c.is_some_and(|c| !c[0].is_finite()) as usize;
+        stats.2 = stats.2.max(c.map_or(0.0, |c| c[0].x));
+        let c = c.unwrap_or([Vec3::ZERO; 6]);
+        for axis in 0..3 {
+            put(x, y, z + axis * nz, c[2 * axis]);
+            put(x, y + ny, z + axis * nz, c[2 * axis + 1]);
+        }
+    }
+    if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) || stats.1 > 0 {
+        info!("enlighten: probe volume at {snap}: {} of {} voxels in a probe set, {} not finite, brightest {} ({:.1} ms)", stats.0, r.x * r.y * r.z, stats.1, stats.2, started.elapsed().as_secs_f32() * 1000.0);
+    }
+    if let Ok((mut v, mut t)) = volumes.single_mut() {
+        v.centre = snap;
+        t.translation = snap;
     }
 }
 

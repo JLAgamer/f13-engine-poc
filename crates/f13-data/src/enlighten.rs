@@ -383,6 +383,206 @@ impl InputWorkspace {
     }
 }
 
+/// A probe set's transport (GESH v40, RadProbeSetCore's m_EntireProbeSetPrecomp; SolveEntireProbeSetTask's plain
+/// solver 0x141d8bde0): blocks of probes gathering clusters of the input list (laid out as [`Transport`]'s), per probe
+/// and cluster a squared nibble (its coefficient, with [`PACKED_GATHER_SCALE`] in the cluster's weight) and a
+/// direction byte (into [`PROBE_DIRECTIONS`]); per probe its output index. A block's header (16 bytes from +0x10): u16
+/// probes P, u16 clusters C, u16 the list's length L, two u8 LODs, i32 its data's offset from H + 2. Its data: u16
+/// weights from H + off, u32 indices from (H + 2 + off + 1 + 2C) & !3, u16 per-input counts, then from that + 4(L + C)
+/// + 0xe the nibbles ((C + 1) / 2 bytes a probe, cluster c in byte c / 2's low (even c) or high nibble), the direction
+/// bytes (C a probe) and, 4-aligned, the i32 output indices.
+#[derive(Clone, Debug, Default)]
+pub struct ProbeTransport {
+    pub inputs: Vec<[u32; 4]>,
+    pub blocks: Vec<ProbeBlock>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ProbeBlock {
+    pub clusters: Vec<Gathered>,
+    /// Per probe: its output index, then per cluster (coefficient n^2, direction index).
+    pub probes: Vec<(u32, Vec<(u8, u8)>)>,
+}
+
+/// A probe's L1 light (rgb): its mean radiance and its directional moment (x, y, z in Unreal space), each over the
+/// probe's whole sphere (the palette entry (1, x, y, z)): lit by a sky of radiance 1 an open probe gathers (1, 0, 0, 0).
+pub type ProbeSh = [Vec3; 4];
+
+impl ProbeTransport {
+    pub fn read(g: &[u8]) -> Option<Self> {
+        if g.get(0..4)? != b"GESH" || u32_at(g, 4)? != 0x28 {
+            return None;
+        }
+        let blocks = i32_at(g, 8)? as usize;
+        let list = i32_at(g, 0x0c)? as usize;
+        let at = 16 * (blocks + 1);
+        let inputs: Option<Vec<_>> = (0..list).map(|i| Some([u32_at(g, at + 16 * i)?, u32_at(g, at + 16 * i + 4)?, u32_at(g, at + 16 * i + 8)?, u32_at(g, at + 16 * i + 12)?])).collect();
+        let mut out = Vec::with_capacity(blocks);
+        for b in 0..blocks {
+            let h = 0x10 + 16 * b;
+            let (p, c, l) = (u16_at(g, h)? as usize, u16_at(g, h + 2)? as usize, u16_at(g, h + 4)? as usize);
+            let off = i32_at(g, h + 8)? as usize;
+            let weights = h + off;
+            let indices = (h + 2 + off + 1 + 2 * c) & !3;
+            let counts = indices + 4 * c;
+            let nib = indices + 4 * (l + c) + 0xe;
+            let dirs = nib + c.div_ceil(2) * p;
+            let outs = (dirs + 3 + p * c) & !3;
+            let mut clusters = Vec::with_capacity(c);
+            let mut k = 0;
+            for e in 0..l {
+                for _ in 0..u16_at(g, counts + 2 * e)? {
+                    clusters.push(Gathered { input: e as u16, index: u32_at(g, indices + 4 * k)?, weight: u16_at(g, weights + 2 * k)? as f32 * PACKED_GATHER_SCALE });
+                    k += 1;
+                }
+            }
+            if k != c {
+                return None;
+            }
+            let mut probes = Vec::with_capacity(p);
+            for q in 0..p {
+                let row: Option<Vec<_>> = (0..c)
+                    .map(|j| {
+                        let byte = *g.get(nib + q * c.div_ceil(2) + j / 2)?;
+                        let n = if j % 2 == 0 { byte & 15 } else { byte >> 4 };
+                        Some((n * n, *g.get(dirs + q * c + j)?))
+                    })
+                    .collect();
+                probes.push((u32_at(g, outs + 4 * q)?, row?));
+            }
+            out.push(ProbeBlock { clusters, probes });
+        }
+        Some(ProbeTransport { inputs: inputs?, blocks: out })
+    }
+
+    /// Each probe's light (`count` outputs) from the input entries' cluster lighting (as [`Transport::solve`]'s).
+    pub fn solve(&self, inputs: &[Option<&[Vec4]>], count: usize) -> Vec<ProbeSh> {
+        let mut out = vec![[Vec3::ZERO; 4]; count];
+        let mut g = Vec::new();
+        for b in &self.blocks {
+            g.clear();
+            g.extend(b.clusters.iter().map(|c| inputs.get(c.input as usize).copied().flatten().and_then(|l| l.get(c.index as usize)).map_or(Vec3::ZERO, |v| v.truncate() * c.weight)));
+            for (o, row) in &b.probes {
+                let mut sh = [Vec3::ZERO; 4];
+                for ((k, d), l) in row.iter().zip(&g) {
+                    let dir = PROBE_DIRECTIONS.get(*d as usize).copied().unwrap_or([0.0; 3]);
+                    let v = *l * *k as f32;
+                    sh[0] += v;
+                    sh[1] += v * dir[0];
+                    sh[2] += v * dir[1];
+                    sh[3] += v * dir[2];
+                }
+                if let Some(slot) = out.get_mut(*o as usize) {
+                    *slot = sh;
+                }
+            }
+        }
+        out
+    }
+}
+
+/// A probe set's octree (GEPO v40, RadProbeSetCore's m_InterpolationData; ExtractOctreeProbePositions 0x141d879a0,
+/// its walk 0x141d876c0): nodes of 0x80 bytes from the root (+0x4c + 4 x ((u16 +10) x (i32 +0x2c + i32 +0xc) + 3 & !3)),
+/// each 27 u32 probe indices on its 3 x 3 x 3 grid (x + (z x 3 + y) x 3) and at +0x70 8 u16 children (an offset in
+/// nodes from this one; 0xffff none); u16 +8 the node count (0: the root alone, its corners only). Past the nodes a
+/// pair of i32 per virtual probe (i32 +0x30: LOD 0's count; 0x141d822c0): its value the pair's mean, made in order
+/// after the real probes'. The octree's origin and size are the core's (+0x50, +0x60).
+#[derive(Clone, Debug, Default)]
+pub struct ProbeOctree {
+    pub origin: Vec3,
+    pub size: f32,
+    pub probes: usize,
+    nodes: Vec<([u32; 27], [u16; 8])>,
+    flat: bool,
+    virtuals: Vec<(u32, u32)>,
+}
+
+impl ProbeOctree {
+    pub fn read(g: &[u8], origin: Vec3, size: f32, probes: usize) -> Option<Self> {
+        if g.get(0..4)? != b"GEPO" || u32_at(g, 4)? != 0x28 {
+            return None;
+        }
+        let count = u16_at(g, 8)? as usize;
+        let k = (u16_at(g, 10)? as usize * (i32_at(g, 0x2c)? as usize + i32_at(g, 0x0c)? as usize) + 3) & !3;
+        let root = 0x4c + 4 * k;
+        let nodes: Option<Vec<_>> = (0..count.max(1))
+            .map(|i| {
+                let n = root + 0x80 * i;
+                let mut grid = [0u32; 27];
+                for (j, v) in grid.iter_mut().enumerate() {
+                    *v = u32_at(g, n + 4 * j)?;
+                }
+                // (A lone root has no children stored: its grid only.)
+                let mut ch = [0xffffu16; 8];
+                for (j, v) in ch.iter_mut().enumerate().filter(|_| count > 0) {
+                    *v = u16_at(g, n + 0x70 + 2 * j)?;
+                }
+                Some((grid, ch))
+            })
+            .collect();
+        let pairs = root + 0x80 * count;
+        let virtuals: Option<Vec<_>> = (0..i32_at(g, 0x30)?.max(0) as usize).map(|i| Some((u32_at(g, pairs + 8 * i)?, u32_at(g, pairs + 8 * i + 4)?))).collect();
+        Some(ProbeOctree { origin, size, probes, nodes: nodes?, flat: count == 0, virtuals: virtuals? })
+    }
+
+    /// The real probes' values with the virtual ones after them.
+    pub fn with_virtuals(&self, real: &[ProbeSh]) -> Vec<ProbeSh> {
+        let mut v = real.to_vec();
+        v.resize(self.probes, [Vec3::ZERO; 4]);
+        for &(a, b) in &self.virtuals {
+            let (pa, pb) = (v.get(a as usize).copied().unwrap_or_default(), v.get(b as usize).copied().unwrap_or_default());
+            v.push(std::array::from_fn(|k| (pa[k] + pb[k]) * 0.5));
+        }
+        v
+    }
+
+    /// The light at `p` (Unreal space, cm) and the size of the cell it came from: in the smallest node holding it,
+    /// trilinear between the corners of its octant. None outside the octree. PLACEHOLDER: the game's interpolation
+    /// (DoProbeInterpolationTask) isn't read.
+    pub fn sample(&self, values: &[ProbeSh], p: Vec3) -> Option<(ProbeSh, f32)> {
+        let rel = p - self.origin;
+        if rel.min_element() < 0.0 || rel.max_element() >= self.size {
+            return None;
+        }
+        let get = |i: u32| values.get(i as usize).copied().unwrap_or_default();
+        let mix = |corners: [ProbeSh; 8], t: Vec3| -> ProbeSh {
+            std::array::from_fn(|k| {
+                let c = |i: usize| corners[i][k];
+                let y0 = c(0).lerp(c(1), t.x).lerp(c(2).lerp(c(3), t.x), t.y);
+                let y1 = c(4).lerp(c(5), t.x).lerp(c(6).lerp(c(7), t.x), t.y);
+                y0.lerp(y1, t.z)
+            })
+        };
+        let cell = |x: usize, y: usize, z: usize| x + (z * 3 + y) * 3;
+        if self.flat {
+            let (grid, _) = &self.nodes[0];
+            let corners = std::array::from_fn(|i| get(grid[cell((i & 1) * 2, (i >> 1 & 1) * 2, (i >> 2 & 1) * 2)]));
+            return Some((mix(corners, rel / self.size), self.size));
+        }
+        let (mut node, mut o, mut s) = (0usize, self.origin, self.size);
+        loop {
+            let h = s * 0.5;
+            let c = ((p - o) / h).floor().clamp(Vec3::ZERO, Vec3::ONE);
+            let oct = c.x as usize + 2 * c.y as usize + 4 * c.z as usize;
+            let (grid, children) = self.nodes.get(node)?;
+            let co = o + c * h;
+            if children[oct] != 0xffff {
+                node += children[oct] as usize;
+                o = co;
+                s = h;
+                continue;
+            }
+            let (cx, cy, cz) = (c.x as usize, c.y as usize, c.z as usize);
+            let corners = std::array::from_fn(|i| get(grid[cell(cx + (i & 1), cy + (i >> 1 & 1), cz + (i >> 2 & 1))]));
+            return Some((mix(corners, ((p - co) / h).clamp(Vec3::ZERO, Vec3::ONE)), h));
+        }
+    }
+}
+
+/// The probe solver's 256 directions (the default palette's, 0x141d884d0, from the table at 0x1429bdbc0; the basis
+/// axes the identity, so a palette entry is (1, x, y, z)); entry 0 is zero.
+pub static PROBE_DIRECTIONS: std::sync::LazyLock<Vec<[f32; 3]>> = std::sync::LazyLock::new(|| serde_json::from_str(include_str!("probe_directions.json")).unwrap_or_default());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,5 +644,48 @@ mod tests {
         shares.sort_by(f32::total_cmp);
         let at = |f: f64| shares[((shares.len() - 1) as f64 * f) as usize];
         eprintln!("{transports} transports, {workspaces} workspaces; the sky's share: median {}, p99 {}, p99.9 {}, max {max}", at(0.5), at(0.99), at(0.999));
+    }
+
+    /// Every exported probe set reads (its transport and octree); lit by the sky alone (1 on every environment
+    /// cluster) its probes gather their share of the sky, about 1 in the open; the octree's samples stay within its
+    /// probes' range.
+    #[test]
+    fn exported_probe_sets_read() {
+        let Some(root) = std::env::var_os("F13_EXPORT").map(std::path::PathBuf::from) else { return };
+        let Ok(text) = std::fs::read_to_string(root.join("enlighten/index.json")) else { return };
+        let index: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let ones = vec![Vec4::ONE; 4096];
+        let (mut sets, mut shares, mut terrain_probe) = (0, Vec::new(), None);
+        for p in index["probe_sets"].as_array().into_iter().flatten() {
+            let name = format!("{}.{}", p["package"].as_str().unwrap(), p["name"].as_str().unwrap());
+            let t = ProbeTransport::read(&std::fs::read(root.join(format!("enlighten/{name}.gesh.bin"))).unwrap()).unwrap_or_else(|| panic!("{name}: transport"));
+            let n = p["probes"].as_u64().unwrap() as usize;
+            let f = |v: &serde_json::Value| v.as_f64().unwrap() as f32;
+            let origin = Vec3::new(f(&p["origin"][0]), f(&p["origin"][1]), f(&p["origin"][2]));
+            let o = ProbeOctree::read(&std::fs::read(root.join(format!("enlighten/{name}.gepo.bin"))).unwrap(), origin, f(&p["size"]), n).unwrap_or_else(|| panic!("{name}: octree"));
+            let inputs: Vec<Option<&[Vec4]>> = t.inputs.iter().map(|id| (id[2] == 0xffff_fffe).then_some(&ones[..])).collect();
+            let sh = t.solve(&inputs, n);
+            shares.extend(sh.iter().map(|s| s[0].x));
+            if name == "CrystalLake_Small_Terrain.EnlightenProbeSet_High_Dynamic_1" {
+                terrain_probe = Some((sh[0][0].x, sh[0][3].x));
+            }
+            let all = o.with_virtuals(&sh);
+            let max = all.iter().map(|s| s[0].x).fold(0.0f32, f32::max);
+            for k in 0..64 {
+                let q = origin + Vec3::new((k % 4) as f32 + 0.5, (k / 4 % 4) as f32 + 0.5, (k / 16) as f32 + 0.5) * (o.size / 4.0);
+                let (v, _) = o.sample(&all, q).unwrap_or_else(|| panic!("{name}: no sample at {q}"));
+                assert!(v[0].x >= -1e-4 && v[0].x <= max + 1e-4, "{name}: {} outside 0..{max}", v[0].x);
+            }
+            sets += 1;
+        }
+        assert!(sets > 100, "{sets} probe sets");
+        shares.sort_by(f32::total_cmp);
+        let at = |q: f64| shares[((shares.len() - 1) as f64 * q) as usize];
+        eprintln!("{sets} probe sets, {} probes; the sky's share: median {}, p90 {}, p99 {}, max {}", shares.len(), at(0.5), at(0.9), at(0.99), at(1.0));
+        assert!(at(0.99) > 0.8 && at(1.0) < 1.6, "the sky's share p99 {} max {}", at(0.99), at(1.0));
+        // A probe over open terrain (CrystalLake_Small_Terrain's set 1, its first): about half the sky, from above
+        // (its moment (0, 0, 1/4): z is Unreal's up).
+        let (m0, mz) = terrain_probe.expect("the terrain's probe set");
+        assert!((0.4..0.6).contains(&m0) && (0.2..0.3).contains(&mz), "the terrain probe: mean {m0}, up moment {mz}");
     }
 }
