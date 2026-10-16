@@ -8,8 +8,10 @@ Base content (asset paths in the player's install; all gameplay values come from
 
 ## Todo
 Lighting first (the user, 2026-10-14):
-- [ ] Lighting: Enlighten GI (the map's indirect light: its precomputed systems and probe sets are Geomerics'
-      runtime data, undocumented; the solver is in the exe)
+- [ ] Lighting: Enlighten GI, on behind F13_ENLIGHTEN (MODLOG "Enlighten"): left are the probe sets (moving
+      objects: counselors, Jason, props), the Blueprint actors' meshes (doors, shutters: not in the atlas data), the
+      local lights' visibility (one ray per packet now), the landscape's and foliage's UV mappings (fitted / one point
+      per instance), and turning it on by default once its cost and look are checked
 - [ ] Lighting: the local lights' shadow caching and fade: whole-map caching gains nothing (the shadowed lights are near
       her, so always dirty: tried, MODLOG "Shadow caching: tried and reverted"); it needs UE's static / movable split, two
       shadow views a face in a reworked bevy_pbr
