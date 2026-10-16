@@ -592,6 +592,50 @@ static Xform Xf(FTransform t) => new()
 
 switch (rest[0])
 {
+    case "enlighten-meshes": // the static meshes the levels and classes place, each LOD's vertices in Unreal's order
+    {
+        // (export/enlighten/meshes/<mesh>.uvb: u32 LOD count, per LOD u32 vertex count and per vertex its position (3 f32,
+        // cm) and first UV (2 f32). The glbs' vertices are SharpGLTF's, merged and reordered; Enlighten's per-vertex UVs
+        // (the atlas's records, UEnlightenUVBufferCollection's buffers) are Unreal's: f13-rs maps one to the other.)
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string? GamePath(string? p)
+        {
+            if (string.IsNullOrEmpty(p) || !p.StartsWith("SummerCamp/Content/")) return null;
+            var q = "/Game/" + p["SummerCamp/Content/".Length..];
+            if (q.EndsWith(".glb")) { q = q[..^4]; q += "." + q.Split('/')[^1]; }
+            return q;
+        }
+        foreach (var f in Directory.GetFiles(Path.Combine(outDir!, "levels"), "*.json"))
+            foreach (var pl in Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(f))["Placements"] ?? new Newtonsoft.Json.Linq.JArray())
+                if (GamePath(pl["Mesh"]?.ToString()) is { } g) paths.Add(g);
+        foreach (var c in Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(Path.Combine(outDir!, "classes.json"))).Properties())
+            foreach (var comp in c.Value["Components"] ?? new Newtonsoft.Json.Linq.JArray())
+                if (GamePath(comp["Mesh"]?.ToString()) is { } g) paths.Add(g);
+        var written = 0;
+        foreach (var path in paths.Order())
+        {
+            if (!provider.TryLoadPackageObject<UStaticMesh>(path, out var mesh) || mesh.RenderData?.LODs is not { } lods) continue;
+            var file = Path.Combine(outDir!, "enlighten", "meshes", new StaticMeshExporter(mesh).SavePath + ".uvb");
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            using var w = new BinaryWriter(File.Create(file));
+            w.Write(lods.Length);
+            foreach (var lod in lods)
+            {
+                var verts = lod.PositionVertexBuffer?.Verts ?? [];
+                var uv = lod.VertexBuffer?.UV ?? [];
+                w.Write(verts.Length);
+                for (var i = 0; i < verts.Length; i++)
+                {
+                    w.Write(verts[i].X); w.Write(verts[i].Y); w.Write(verts[i].Z);
+                    var t = i < uv.Length && uv[i].UV.Length > 0 ? uv[i].UV[0] : default;
+                    w.Write(t.U); w.Write(t.V);
+                }
+            }
+            written++;
+        }
+        Console.WriteLine($"enlighten meshes: {written} of {paths.Count}");
+        break;
+    }
     case "grep": // grep <text> [path substring]: packages whose bytes contain <text> (ASCII: the name map)
     {
         var needle = System.Text.Encoding.ASCII.GetBytes(rest[1]);
