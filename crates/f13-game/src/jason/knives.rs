@@ -110,6 +110,36 @@ impl KnifeImpact {
     }
 }
 
+/// His weapons' melee impacts (each weapon's ImpactEffectClass, a Killer_ImpactEffect_*: SCWeapon's SpawnHitEffect
+/// 0x140456f20, from his OnHit 0x140401820 at every melee hit, spawns it ("<weapon>_Impact", 0x140452930) and plays it
+/// (FUN_14035e130, as a gun's pellets: GetImpactFX, GetImpactSound, the decals), its heavy flag his anim instance's
+/// bIsHeavyAttack), by weapon class.
+#[derive(Resource, Default)]
+pub(crate) struct SwingImpacts(pub HashMap<String, SwingImpact>);
+
+/// An impact class's sounds for a hit on a counselor (GetImpactSound FUN_140347cb0: a blocking hit actor its
+/// BlockingSound, then her surface's (none: a character's is the default), DefaultSoundHeavy for a heavy hit, else
+/// DefaultSound), its CounselorFX and its CounselorDecal.
+pub(crate) struct SwingImpact {
+    pub default: Option<String>,
+    pub heavy: Option<String>,
+    pub blocking: Option<String>,
+    pub fx: Option<String>,
+    pub decal: Option<crate::decals::ImpactDecal>,
+}
+
+impl SwingImpact {
+    pub fn sound(&self, blocking: bool, heavy: bool) -> Option<String> {
+        if blocking {
+            self.blocking.clone()
+        } else if heavy {
+            self.heavy.clone()
+        } else {
+            self.default.clone()
+        }
+    }
+}
+
 /// The knife in his hand while he aims (SERVER_SpawnKnife 0x1404051d0: a ThrowingKnifeClass actor, CurrentThrowable,
 /// attached to his Mesh at KnifeAttachSocket, SnapToTargetNotIncludingScale; the constructor's KnifeAttachSocket is
 /// handGrabSocket), until it leaves his hand at the throw or he puts it away.
@@ -132,6 +162,26 @@ pub(super) fn load_knife_look(mut commands: Commands, export: Res<crate::ExportR
         let decal = crate::decals::ImpactDecal::from_json(classes.prop(t, "CounselorDecal"));
         commands.insert_resource(KnifeImpact(crate::props::impact_sounds(&classes, t), fx, decal));
     }
+    // His weapons' impact classes.
+    let asset = |t: &str, f: &str| classes.prop(t, f)["AssetPathName"].as_str().and_then(|a| a.rsplit('.').next()).map(String::from);
+    let mut swings = SwingImpacts::default();
+    for w in weapons() {
+        let Some(t) = classes.prop(&w.class, "ImpactEffectClass").as_str().map(String::from) else { continue };
+        swings.0.insert(
+            w.class.clone(),
+            SwingImpact {
+                default: asset(&t, "DefaultSound"),
+                heavy: asset(&t, "DefaultSoundHeavy"),
+                blocking: asset(&t, "BlockingSound"),
+                fx: asset(&t, "CounselorFX"),
+                decal: crate::decals::ImpactDecal::from_json(classes.prop(&t, "CounselorDecal")),
+            },
+        );
+    }
+    if swings.0.is_empty() {
+        warn!("no Jason weapon's ImpactEffectClass in classes.json (re-export: f13-export levels): his swings' hits are silent");
+    }
+    commands.insert_resource(swings);
     if let Some(c) = classes.get("Underwater_GrabKill_C").and_then(|c| c.components.iter().find(|c| c.kind == "SCCameraSplineComponent")) {
         commands.insert_resource(DrownKillCamera(crate::to_transform(&c.local.unwrap_or(f13_data::level::Xform::IDENTITY))));
     }
@@ -265,7 +315,9 @@ pub(super) fn fly_knives(
     let world = collision.all();
     for (ke, mut k, mut xf) in &mut knives {
         k.age += dt;
+        // (Its life from when it stuck; a flight never ends on its own in the game, here after as long.)
         if k.age >= KNIFE_LIFE {
+            stop_knife_flight(&mut commands, ke);
             commands.entity(ke).despawn();
             continue;
         }
@@ -322,6 +374,9 @@ pub(super) fn fly_knives(
                     let len = counselor_model.as_ref().and_then(|c| c.length(reaction)).unwrap_or(0.67);
                     commands.entity(pe).insert((PlayAction(reaction.into()), Staggered(len))).remove::<crate::items::ItemAction>();
                 }
+                // OnStop in a character: destroyed at once (its flight's particles stopped first: the spinning dart's
+                // mesh particles would stay where it was).
+                stop_knife_flight(&mut commands, ke);
                 commands.entity(ke).despawn();
                 struck = true;
                 break;
@@ -339,6 +394,7 @@ pub(super) fn fly_knives(
             let n = f13_core::collision::segment_hit_normal(&world, from, to, 1.0).map_or(Vec3::ZERO, |h| h.1);
             let fixed = f13_core::collision::segment_hit(world.0, from, to, 1.0).is_some();
             info!("Jason's knife stuck at {} after {:.2} s (from {from}, normal {n}, {})", xf.translation, k.age, if fixed { "the level" } else { "a prop" });
+            k.age = 0.0;
             // OnProjectileStop: the dart shows.
             if let Some(d) = k.dart {
                 commands.entity(d).insert(Visibility::Inherited);

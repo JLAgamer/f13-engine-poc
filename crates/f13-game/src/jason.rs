@@ -248,6 +248,7 @@ const HEAVY_HOLD_S: f32 = 0.1;
 const TRAP_SPACING_M: f32 = 10.0;
 /// ThrowingKnife_C's ProjectileGravityScale; SCThrowable's TimeToDestroy (s).
 pub(crate) const KNIFE_GRAVITY: f32 = 9.8 * 8.0;
+/// A stuck knife's life from its impact (OnStop's SetLifeSpan: SCThrowable's TimeToDestroy, its constructor's 5).
 const KNIFE_LIFE: f32 = 5.0;
 /// AM_normal_stand_knife_throw's sections; when the knife leaves (s into the throw section: its ThrowKnife notify).
 const KNIFE_SELECT: &str = "normal_stand_knife_select_01";

@@ -359,10 +359,21 @@ void AddClassByName(string name)
 {
     if (!name.EndsWith("_C")) { classes.AddNative(name); return; }
     var pkgName = name[..^2];
-    var file = provider.Files.Keys.FirstOrDefault(k => k.EndsWith("/" + pkgName + ".uasset", StringComparison.OrdinalIgnoreCase));
-    if (file == null) { Console.WriteLine($"  no package for class {name}"); return; }
-    try { classes.Add(provider.LoadPackage(file).GetExports().FirstOrDefault(e => e.Name == name)); }
-    catch (Exception ex) { Console.WriteLine($"  class {name}: {ex.Message}"); }
+    // (The package holding the class: several can share its name, e.g. Machete: J7's static mesh and the weapon Blueprint.)
+    var files = provider.Files.Keys.Where(k => k.EndsWith("/" + pkgName + ".uasset", StringComparison.OrdinalIgnoreCase)).ToList();
+    if (files.Count == 0) { Console.WriteLine($"  no package for class {name}"); return; }
+    foreach (var file in files)
+    {
+        try
+        {
+            var export = provider.LoadPackage(file).GetExports().FirstOrDefault(e => e.Name == name);
+            if (export == null) continue;
+            classes.Add(export);
+            return;
+        }
+        catch (Exception ex) { Console.WriteLine($"  class {name}: {ex.Message}"); }
+    }
+    Console.WriteLine($"  no class {name} in {string.Join(", ", files)}");
 }
 
 // collision.json (see Collision.cs).
@@ -1559,6 +1570,9 @@ static class Mvp
         "Police_C",
         // Jason's throwing knife (his ThrowingKnifeClass) and his trap (his TrapClass: its TrapScoreEvent).
         "ThrowingKnife_C", "KillerTrap_C",
+        // The Jasons' weapons (their ImpactEffectClass: the Killer_ImpactEffect_* his melee hits spawn, SCWeapon's
+        // SpawnHitEffect 0x140456f20 from his OnHit 0x140401820).
+        "PickAxe_C", "Machete_C", "Axe_C", "FireAxe_C", "Battleaxe_C", "Spear_C", "PigSplitter_C", "Shears_C",
         // The storm (CLsm_RainOn's).
         "SCZeus_BP_C",
         // Jason under water: his drowning kill and the shape he shows on the surface.
