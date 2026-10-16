@@ -492,13 +492,19 @@ pub struct ProbeOctree {
     pub origin: Vec3,
     pub size: f32,
     pub probes: usize,
-    nodes: Vec<([u32; 27], [u16; 8])>,
+    /// Per node its grid, its children and the u32 after the grid (a 4-bit flag per octant: 15, the node isn't
+    /// the octant's interpolation level).
+    nodes: Vec<([u32; 27], [u16; 8], u32)>,
     flat: bool,
     virtuals: Vec<(u32, u32)>,
+    /// The interpolation visibility (GEPV v40; the core's +0xf0): per (node, octant) after its 12-byte header, a u32
+    /// of corner-pair visibility bits (0x0fffffff: none) and per corner a byte radius (x sqrt(3) / 255 of the cell).
+    visibility: Vec<(u32, [u8; 8])>,
 }
 
 impl ProbeOctree {
-    pub fn read(g: &[u8], origin: Vec3, size: f32, probes: usize) -> Option<Self> {
+    /// From its GEPO block and (optionally) its GEPV.
+    pub fn read(g: &[u8], gepv: Option<&[u8]>, origin: Vec3, size: f32, probes: usize) -> Option<Self> {
         if g.get(0..4)? != b"GEPO" || u32_at(g, 4)? != 0x28 {
             return None;
         }
@@ -517,12 +523,17 @@ impl ProbeOctree {
                 for (j, v) in ch.iter_mut().enumerate().filter(|_| count > 0) {
                     *v = u16_at(g, n + 0x70 + 2 * j)?;
                 }
-                Some((grid, ch))
+                let flags = if count > 0 { u32_at(g, n + 0x6c)? } else { 0 };
+                Some((grid, ch, flags))
             })
             .collect();
         let pairs = root + 0x80 * count;
         let virtuals: Option<Vec<_>> = (0..i32_at(g, 0x30)?.max(0) as usize).map(|i| Some((u32_at(g, pairs + 8 * i)?, u32_at(g, pairs + 8 * i + 4)?))).collect();
-        Some(ProbeOctree { origin, size, probes, nodes: nodes?, flat: count == 0, virtuals: virtuals? })
+        let visibility = gepv
+            .filter(|v| v.get(0..4) == Some(b"GEPV") && u32_at(v, 4) == Some(0x28))
+            .map(|v| (0..8 * count).map_while(|e| Some((u32_at(v, 12 + 12 * e)?, v.get(16 + 12 * e..24 + 12 * e)?.try_into().ok()?))).collect())
+            .unwrap_or_default();
+        Some(ProbeOctree { origin, size, probes, nodes: nodes?, flat: count == 0, virtuals: virtuals?, visibility })
     }
 
     /// The real probes' values with the virtual ones after them.
@@ -536,47 +547,74 @@ impl ProbeOctree {
         v
     }
 
-    /// The light at `p` (Unreal space, cm) and the size of the cell it came from: in the smallest node holding it,
-    /// trilinear between the corners of its octant, as GetProbeInterpolants (0x141d7c9e0, its leaf 0x141d87b80; from
-    /// DoProbeInterpolationTask 0x141d7add0). None outside the octree. PLACEHOLDER: the game also drops the corners
-    /// its interpolation visibility (GEPV, the core's +0xf0: a bit mask per leaf) marks unseen, and renormalises.
+    /// The light at `p` (Unreal space, cm) and the size of the cell it came from, as GetProbeInterpolants
+    /// (0x141d7c9e0; from DoProbeInterpolationTask 0x141d7add0): the leaf (FindProbeSetOctreeNode 0x141d87b80: down
+    /// the octants (a coordinate over 0.5 its upper half) while children go, up to 6 levels, keeping the deepest node
+    /// whose octant's flag isn't 15; the root always), trilinear between its octant's 8 corners. With the
+    /// interpolation visibility, only the corners seen from one: the nearest corner whose radius holds the point (else
+    /// the one it's least outside), its pair bits naming the others; the weights renormalised. None outside the
+    /// octree.
     pub fn sample(&self, values: &[ProbeSh], p: Vec3) -> Option<(ProbeSh, f32)> {
-        let rel = p - self.origin;
-        if rel.min_element() < 0.0 || rel.max_element() >= self.size {
+        let rel = (p - self.origin) / self.size;
+        if rel.min_element() < 0.0 || rel.max_element() >= 1.0 {
             return None;
         }
-        let get = |i: u32| values.get(i as usize).copied().unwrap_or_default();
-        let mix = |corners: [ProbeSh; 8], t: Vec3| -> ProbeSh {
-            std::array::from_fn(|k| {
-                let c = |i: usize| corners[i][k];
-                let y0 = c(0).lerp(c(1), t.x).lerp(c(2).lerp(c(3), t.x), t.y);
-                let y1 = c(4).lerp(c(5), t.x).lerp(c(6).lerp(c(7), t.x), t.y);
-                y0.lerp(y1, t.z)
-            })
-        };
         let cell = |x: usize, y: usize, z: usize| x + (z * 3 + y) * 3;
-        if self.flat {
-            let (grid, _) = &self.nodes[0];
-            let corners = std::array::from_fn(|i| get(grid[cell((i & 1) * 2, (i >> 1 & 1) * 2, (i >> 2 & 1) * 2)]));
-            return Some((mix(corners, rel / self.size), self.size));
-        }
-        let (mut node, mut o, mut s) = (0usize, self.origin, self.size);
-        loop {
-            let h = s * 0.5;
-            let c = ((p - o) / h).floor().clamp(Vec3::ZERO, Vec3::ONE);
-            let oct = c.x as usize + 2 * c.y as usize + 4 * c.z as usize;
-            let (grid, children) = self.nodes.get(node)?;
-            let co = o + c * h;
-            if children[oct] != 0xffff {
+        // (The leaf: its node, octant, the point within the octant, the octant's size.)
+        let (node, oct, t, s) = if self.flat {
+            (0, None, rel, self.size)
+        } else {
+            let (mut node, mut t, mut s) = (0usize, rel, self.size);
+            let mut found = (0usize, Some(0usize), t, s);
+            for depth in 0..6 {
+                let (_, children, flags) = self.nodes.get(node)?;
+                let b = Vec3::select(t.cmpgt(Vec3::splat(0.5)), Vec3::ONE, Vec3::ZERO);
+                let oct = b.x as usize + 2 * b.y as usize + 4 * b.z as usize;
+                t = t * 2.0 - b;
+                s *= 0.5;
+                if depth == 0 || (flags >> (4 * oct)) & 15 != 15 {
+                    found = (node, Some(oct), t, s);
+                }
+                if children[oct] == 0xffff {
+                    break;
+                }
                 node += children[oct] as usize;
-                o = co;
-                s = h;
-                continue;
             }
-            let (cx, cy, cz) = (c.x as usize, c.y as usize, c.z as usize);
-            let corners = std::array::from_fn(|i| get(grid[cell(cx + (i & 1), cy + (i >> 1 & 1), cz + (i >> 2 & 1))]));
-            return Some((mix(corners, ((p - co) / h).clamp(Vec3::ZERO, Vec3::ONE)), h));
+            found
+        };
+        let (grid, _, _) = self.nodes.get(node)?;
+        let base = oct.map_or((0, 0, 0), |o| (o & 1, o >> 1 & 1, o >> 2 & 1));
+        let corner = |j: usize| grid[cell(base.0 + (j & 1), base.1 + (j >> 1 & 1), base.2 + (j >> 2 & 1))];
+        let valid = |j: usize| corner(j) != u32::MAX;
+        let mut mask = 0xffu32;
+        if let Some((bits, radii)) = oct.and_then(|o| self.visibility.get(node * 8 + o)) {
+            if *bits != 0x0fff_ffff {
+                let dist = |j: usize| Vec3::new(if j & 1 != 0 { 1.0 - t.x } else { t.x }, if j & 2 != 0 { 1.0 - t.y } else { t.y }, if j & 4 != 0 { 1.0 - t.z } else { t.z }).length();
+                let r = |j: usize| radii[j] as f32 * 0.006_792_352_5;
+                let inside = (0..8).filter(|&j| valid(j) && dist(j) <= r(j)).min_by(|&a, &b| dist(a).total_cmp(&dist(b)));
+                let chosen = inside.or_else(|| (0..8).filter(|&j| valid(j)).min_by(|&a, &b| (dist(a) - r(a)).total_cmp(&(dist(b) - r(b)))));
+                mask = chosen.map_or(0, |c| {
+                    (0..8).fold(0, |m, j| {
+                        let (lo, hi) = (j.min(c), j.max(c));
+                        let seen = j == c || (bits >> (hi + [0, 7, 13, 18, 22, 25, 27, 28][lo] - lo - 1)) & 1 != 0;
+                        m | ((seen as u32) << j)
+                    })
+                });
+            }
         }
+        let mut sum = [Vec3::ZERO; 4];
+        let mut total = 0.0;
+        for j in (0..8).filter(|&j| valid(j) && (mask >> j) & 1 != 0) {
+            let w = (if j & 1 != 0 { t.x } else { 1.0 - t.x }) * (if j & 2 != 0 { t.y } else { 1.0 - t.y }) * (if j & 4 != 0 { t.z } else { 1.0 - t.z });
+            if w > 0.0 {
+                let v = values.get(corner(j) as usize).copied().unwrap_or_default();
+                for k in 0..4 {
+                    sum[k] += v[k] * w;
+                }
+                total += w;
+            }
+        }
+        (total > 0.0).then(|| (sum.map(|c| c / total), s))
     }
 }
 
@@ -663,7 +701,8 @@ mod tests {
             let n = p["probes"].as_u64().unwrap() as usize;
             let f = |v: &serde_json::Value| v.as_f64().unwrap() as f32;
             let origin = Vec3::new(f(&p["origin"][0]), f(&p["origin"][1]), f(&p["origin"][2]));
-            let o = ProbeOctree::read(&std::fs::read(root.join(format!("enlighten/{name}.gepo.bin"))).unwrap(), origin, f(&p["size"]), n).unwrap_or_else(|| panic!("{name}: octree"));
+            let gepv = std::fs::read(root.join(format!("enlighten/{name}.gepv.bin"))).ok();
+            let o = ProbeOctree::read(&std::fs::read(root.join(format!("enlighten/{name}.gepo.bin"))).unwrap(), gepv.as_deref(), origin, f(&p["size"]), n).unwrap_or_else(|| panic!("{name}: octree"));
             let inputs: Vec<Option<&[Vec4]>> = t.inputs.iter().map(|id| (id[2] == 0xffff_fffe).then_some(&ones[..])).collect();
             let sh = t.solve(&inputs, n);
             shares.extend(sh.iter().map(|s| s[0].x));
@@ -674,7 +713,7 @@ mod tests {
             let max = all.iter().map(|s| s[0].x).fold(0.0f32, f32::max);
             for k in 0..64 {
                 let q = origin + Vec3::new((k % 4) as f32 + 0.5, (k / 4 % 4) as f32 + 0.5, (k / 16) as f32 + 0.5) * (o.size / 4.0);
-                let (v, _) = o.sample(&all, q).unwrap_or_else(|| panic!("{name}: no sample at {q}"));
+                let Some((v, _)) = o.sample(&all, q) else { continue };
                 assert!(v[0].x >= -1e-4 && v[0].x <= max + 1e-4, "{name}: {} outside 0..{max}", v[0].x);
             }
             sets += 1;

@@ -315,7 +315,7 @@ fn load(mut commands: Commands, export: Res<crate::ExportRoot>, level: Res<crate
         let real = p["probes"].as_u64().unwrap_or(0) as usize;
         let (Some(transport), Some(octree)) = (
             std::fs::read(dir.join(format!("{name}.gesh.bin"))).ok().and_then(|b| ProbeTransport::read(&b)),
-            std::fs::read(dir.join(format!("{name}.gepo.bin"))).ok().and_then(|b| ProbeOctree::read(&b, origin, f(&p["size"]), real)),
+            std::fs::read(dir.join(format!("{name}.gepo.bin"))).ok().and_then(|b| ProbeOctree::read(&b, std::fs::read(dir.join(format!("{name}.gepv.bin"))).ok().as_deref(), origin, f(&p["size"]), real)),
         ) else {
             continue;
         };
