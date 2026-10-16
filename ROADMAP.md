@@ -25,6 +25,11 @@ Lighting first (the user, 2026-10-14):
       global shader cache: MODLOG "Foliage subsurface: blocked")
 - [ ] Counselor model: the eye look against a capture of the game (it rolls the eyes 90 degrees from their bind:
       MODLOG "The eyes' look", "The counselor's face")
+- [ ] Network tests hang the GPU (2026-10-16): after about an hour of two-instance runs a test server stalls in the
+      render world (--perf watchdog: render_system or prepare_assets<GpuShaderBuffer>), grows GBs, ends in DeviceLost
+      and lingers at exit; later network runs then fail (49/54 on 7da29ab). Clean on 0.2.1 that morning; cause not
+      found (the particle spawn guard never fired). Next: a fresh driver per run and cdb to dump the stuck server's
+      stack; then a clean full regression and a 30-minute leak trace (MODLOG "Memory audit and the network tests' hangs")
 - [ ] Optimize performance further (2026-10-15, a counselor at her start, --perf --features profile: 8.0 ms a frame,
       from 13.4 that day; render world 7.3 ms, mostly encoding 4.7; main world 4.5, PostUpdate 2.9; particles 0.9.
       Left: the remaining non-bindless materials (masters, terrain, water, characters), the moon's cascades ~3 ms,
