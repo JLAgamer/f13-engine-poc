@@ -1321,6 +1321,23 @@ fn standard_material(root: &Path, info: &MaterialInfo, loader: &Loader) -> Stand
 /// Glass (windows, car windows, lamp glass): see-through, dark and glossy. The glass masters' reflections
 /// (cubemaps, raindrops) are not ported.
 fn glass_material(info: &MaterialInfo) -> StandardMaterial {
+    if info.master == "M_PropGlass_Master" {
+        // Its compiled translucent base pass (shaders/M_PropGlass_Master s004: volumetric translucency lighting, so
+        // diffuse only): base colour its Tint, emissive its Glow, opacity a constant 0.5 (the porch lamps' frosted
+        // glass, lit by the bulb's point light).
+        let tint = info.vectors.get("Tint").copied().unwrap_or([1.0; 4]);
+        let glow = info.scalar("Glow", 0.0);
+        return StandardMaterial {
+            base_color: Color::linear_rgba(tint[0], tint[1], tint[2], 0.5),
+            emissive: LinearRgba::rgb(glow, glow, glow),
+            perceptual_roughness: 1.0,
+            reflectance: 0.0,
+            alpha_mode: AlphaMode::Blend,
+            double_sided: info.two_sided,
+            cull_mode: (!info.two_sided).then_some(bevy::render::render_resource::Face::Back),
+            ..default()
+        };
+    }
     StandardMaterial {
         base_color: Color::srgba(0.05, 0.06, 0.06, 0.25),
         perceptual_roughness: 0.05,
