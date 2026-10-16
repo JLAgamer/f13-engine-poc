@@ -7,8 +7,8 @@
 //! f13-rs: the systems of the loaded levels, re-solved a few times a second off the main thread's hot path; their
 //! output in one atlas image per level (`EnlightenAtlases`). The clusters' albedo is each system's saved albedo
 //! buffer; the moon's visibility its precomputed visibility (GEVS); the environment is the weather level's (uniform).
-//! The lamps' visibility is one ray per packet from its centre (the game's comes from its own run-time visibility: the
-//! precomputed data serves directional lights only).
+//! The lamps' visibility is a ray per input point (the game's a shadow-map test per point: the precomputed data serves
+//! directional lights only).
 
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
@@ -61,8 +61,8 @@ pub struct Enlighten {
     by_id: HashMap<u32, usize>,
     since: f32,
     dumped: bool,
-    /// Per (lamp, system): each cluster's packets seen from the lamp.
-    visibility: HashMap<(Entity, usize), Vec<Vec<bool>>>,
+    /// Per (lamp, system): each cluster's packets' points seen from the lamp.
+    visibility: HashMap<(Entity, usize), Vec<Vec<[bool; 4]>>>,
     /// The environment's radiance, every texel of its cube alike (see `environment`).
     environment: Vec4,
     /// The loaded levels' probe sets, and per 64 m cell (Unreal space) the sets over it.
@@ -407,10 +407,12 @@ fn solve(
             if lamp.at.clamp(s.bounds.0, s.bounds.1).distance(lamp.at) >= lamp.range {
                 continue;
             }
-            // (Its packets' visibility from the lamp, one ray each from the packet's centre, cached: the lamps don't
-            // move. PLACEHOLDER: the game's local lights' visibility is made at run time (GEVS serves directional
-            // lights only); how, not read.)
+            // (Each input point's visibility from the lamp, a bit per point as the game's (CalcLightVisibilitySize 0x141d86350:
+            // (points + 7) / 8 bytes, set by the engine through the system's light visibility 0x141ddb2f0, from its
+            // Enlighten shadow pass, FEnlightenShadowPixelShader): here one ray each from the point (5 cm off its
+            // surface) to the lamp, cached, the lamps not moving. PLACEHOLDER: a ray for the shadow map's test.)
             let vis = gi_ref.visibility.entry((*le, si)).or_insert_with(|| {
+                let b = |v: Vec3| Vec3::new(v.x, v.z, v.y) / 100.0;
                 s.workspace
                     .clusters
                     .iter()
@@ -418,12 +420,10 @@ fn solve(
                         packets
                             .iter()
                             .map(|pk| {
-                                let c = pk.points.iter().copied().sum::<Vec3>() / 4.0 + pk.normal * 5.0;
-                                if c.distance(lamp.at) >= lamp.range {
-                                    return false;
-                                }
-                                let b = |v: Vec3| Vec3::new(v.x, v.z, v.y) / 100.0;
-                                world.as_ref().is_none_or(|w| f13_core::collision::segment_hit(w, b(c), b(lamp.at), 0.1).is_none_or(|t| t > 0.98))
+                                pk.points.map(|q| {
+                                    let c = q + pk.normal * 5.0;
+                                    c.distance(lamp.at) < lamp.range && world.as_ref().is_none_or(|w| f13_core::collision::segment_hit(w, b(c), b(lamp.at), 0.1).is_none_or(|t| t > 0.98))
+                                })
                             })
                             .collect()
                     })
@@ -434,10 +434,8 @@ fn solve(
                     continue;
                 }
                 let mut sum = Vec4::ZERO;
-                for (pk, &v) in packets.iter().zip(seen) {
-                    if v {
-                        sum += pk.points.iter().map(|p| lamp.at_point(*p, pk.normal)).sum::<Vec4>() / 4.0;
-                    }
+                for (pk, v) in packets.iter().zip(seen) {
+                    sum += pk.points.iter().zip(v).filter(|(_, v)| **v).map(|(p, _)| lamp.at_point(*p, pk.normal)).sum::<Vec4>() / 4.0;
                 }
                 *light += sum / packets.len() as f32;
             }
