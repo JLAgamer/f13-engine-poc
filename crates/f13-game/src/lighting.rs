@@ -553,6 +553,8 @@ fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
                 if l.flag("CastShadows", true) && l.flag("CastDynamicShadows", true) {
                     commands.entity(e).insert(ShadowCaster);
                 }
+                // (Its share of the indirect light: enlighten.rs.)
+                commands.entity(e).insert(crate::enlighten::IndirectIntensity(l.num("IndirectLightingIntensity", 1.0)));
                 match l.props.get("LightFunctionMaterial").and_then(Value::as_str).and_then(|m| m.split('\'').nth(1)) {
                     Some("M_FixedLightFunction") => {
                         commands.entity(e).insert(LightFunction::Pulse);

@@ -35,6 +35,8 @@ struct System {
     transport: Option<Transport>,
     workspace: InputWorkspace,
     atlas_base: (u32, u32),
+    /// Its input points' box (Unreal space, cm).
+    bounds: (Vec3, Vec3),
     /// Its clusters' light this solve (rgba).
     input: Vec<Vec4>,
 }
@@ -46,6 +48,47 @@ pub struct Enlighten {
     by_id: HashMap<u32, usize>,
     since: f32,
     dumped: bool,
+    /// Per (lamp, system): each cluster's packets seen from the lamp.
+    visibility: HashMap<(Entity, usize), Vec<Vec<bool>>>,
+}
+
+/// A local light's IndirectLightingIntensity (lighting.rs): its share of the indirect light.
+#[derive(Component, Clone, Copy)]
+pub struct IndirectIntensity(pub f32);
+
+/// A local light as an Enlighten input: Unreal space (cm), its UE intensity (lumens / 4 pi), its falloff (Some
+/// exponent: UE's radial falloff; None: inverse square), its range (cm), its spot cone (axis, cos outer, cos inner).
+struct Lamp {
+    at: Vec3,
+    intensity: Vec4,
+    falloff: Option<f32>,
+    range: f32,
+    cone: Option<(Vec3, f32, f32)>,
+}
+
+impl Lamp {
+    /// The irradiance it gives a point (cm) facing `n`, unoccluded.
+    fn at_point(&self, p: Vec3, n: Vec3) -> Vec4 {
+        let d = self.at - p;
+        let dist = d.length();
+        if dist >= self.range || dist < 1e-3 {
+            return Vec4::ZERO;
+        }
+        let l = d / dist;
+        let lambert = n.dot(l).max(0.0);
+        if lambert <= 0.0 {
+            return Vec4::ZERO;
+        }
+        let x = dist / self.range;
+        let falloff = match self.falloff {
+            // (Unreal: Intensity x (1 - (d/R)^2)^exponent lux.)
+            Some(e) => (1.0 - x * x).max(0.0).powf(e),
+            // (Inverse square in metres, windowed to the range: (1 - (d/R)^4)^2.)
+            None => (1.0 - x.powi(4)).max(0.0).powi(2) / (dist / 100.0).powi(2).max(1e-4),
+        };
+        let cone = self.cone.map_or(1.0, |(axis, cos_outer, cos_inner)| (((-l).dot(axis) - cos_outer) / (cos_inner - cos_outer).max(1e-4)).clamp(0.0, 1.0).powi(2));
+        self.intensity * (falloff * cone * lambert)
+    }
 }
 
 /// A single placement's component (its level package and its path after the level's ':'), for its meshes' lightmap.
@@ -101,7 +144,9 @@ fn load(mut commands: Commands, export: Res<crate::ExportRoot>, level: Res<crate
         if let Some(id) = id {
             by_id.insert(id, systems.len());
         }
-        systems.push(System { package, transport, workspace, atlas_base, input: Vec::new() });
+        let points = workspace.clusters.iter().flatten().flat_map(|p| p.points);
+        let bounds = points.fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), p| (lo.min(p), hi.max(p)));
+        systems.push(System { package, transport, workspace, atlas_base, bounds, input: Vec::new() });
     }
     let mut atlases = EnlightenAtlases::default();
     for (package, a) in index["atlases"].as_object().into_iter().flatten() {
@@ -132,7 +177,7 @@ fn load(mut commands: Commands, export: Res<crate::ExportRoot>, level: Res<crate
     commands.insert_resource(prims);
     let solved = systems.iter().filter(|s| s.transport.is_some()).count();
     info!("enlighten: {} systems ({solved} with output) in {} levels' atlases", systems.len(), atlases.0.len());
-    commands.insert_resource(Enlighten { systems, by_id, since: SOLVE_EVERY_S, dumped: false });
+    commands.insert_resource(Enlighten { systems, by_id, since: SOLVE_EVERY_S, dumped: false, visibility: HashMap::new() });
     commands.insert_resource(atlases);
 }
 
@@ -148,6 +193,8 @@ fn solve(
     mut images: ResMut<Assets<Image>>,
     moons: Query<(&DirectionalLight, &GlobalTransform), With<crate::weather::Moon>>,
     ambient: Option<Res<bevy::light::GlobalAmbientLight>>,
+    (points, spots): (Query<(Entity, &PointLight, &GlobalTransform, &IndirectIntensity)>, Query<(Entity, &SpotLight, &GlobalTransform, &IndirectIntensity)>),
+    collision: Option<crate::collision::Collision>,
 ) {
     gi.since += time.delta_secs();
     if gi.since < SOLVE_EVERY_S {
@@ -159,11 +206,75 @@ fn solve(
         let c = LinearRgba::from(l.color);
         (to_unreal_dir(g.forward().as_vec3()), Vec4::new(c.red, c.green, c.blue, 0.0) * l.illuminance)
     });
-    for s in &mut gi.systems {
+    // The lamps (their indirect share in): Unreal space, their UE intensity (lumens / 4 pi).
+    let ue = |p: Vec3| Vec3::new(p.x, p.z, p.y) * 100.0;
+    let rgb = |c: Color, k: f32| {
+        let c = LinearRgba::from(c);
+        Vec4::new(c.red, c.green, c.blue, 0.0) * k
+    };
+    let mut lamps: Vec<(Entity, Lamp)> = Vec::new();
+    for (e, l, g, k) in &points {
+        if l.intensity > 0.0 && k.0 > 0.0 {
+            lamps.push((e, Lamp { at: ue(g.translation()), intensity: rgb(l.color, l.intensity / (4.0 * std::f32::consts::PI) * k.0), falloff: (l.radius < 0.0).then_some(-l.radius), range: l.range * 100.0, cone: None }));
+        }
+    }
+    for (e, l, g, k) in &spots {
+        if l.intensity > 0.0 && k.0 > 0.0 {
+            let axis = to_unreal_dir(g.forward().as_vec3()).normalize_or_zero();
+            lamps.push((e, Lamp { at: ue(g.translation()), intensity: rgb(l.color, l.intensity / (4.0 * std::f32::consts::PI) * k.0), falloff: (l.radius < 0.0).then_some(-l.radius), range: l.range * 100.0, cone: Some((axis, l.outer_angle.cos(), l.inner_angle.cos())) }));
+        }
+    }
+    let world = collision.as_ref().map(|c| c.all());
+    let gi_ref = &mut *gi;
+    for (si, s) in gi_ref.systems.iter_mut().enumerate() {
         s.input = match moon {
-            Some((dir, color)) => s.workspace.directional(dir, color).into_iter().map(|v| v * ALBEDO).collect(),
+            Some((dir, color)) => s.workspace.directional(dir, color),
             None => vec![Vec4::ZERO; s.workspace.clusters.len()],
         };
+        for (le, lamp) in &lamps {
+            // (Only the lamps whose reach meets the system's box.)
+            if lamp.at.clamp(s.bounds.0, s.bounds.1).distance(lamp.at) >= lamp.range {
+                continue;
+            }
+            // (Its packets' visibility from the lamp, one ray each from the packet's centre, cached: the lamps don't
+            // move. PLACEHOLDER for the visibility data, GEVS.)
+            let vis = gi_ref.visibility.entry((*le, si)).or_insert_with(|| {
+                s.workspace
+                    .clusters
+                    .iter()
+                    .map(|packets| {
+                        packets
+                            .iter()
+                            .map(|pk| {
+                                let c = pk.points.iter().copied().sum::<Vec3>() / 4.0 + pk.normal * 5.0;
+                                if c.distance(lamp.at) >= lamp.range {
+                                    return false;
+                                }
+                                let b = |v: Vec3| Vec3::new(v.x, v.z, v.y) / 100.0;
+                                world.as_ref().is_none_or(|w| f13_core::collision::segment_hit(w, b(c), b(lamp.at), 0.1).is_none_or(|t| t > 0.98))
+                            })
+                            .collect()
+                    })
+                    .collect()
+            });
+            for ((packets, seen), light) in s.workspace.clusters.iter().zip(vis.iter()).zip(s.input.iter_mut()) {
+                if packets.is_empty() {
+                    continue;
+                }
+                let mut sum = Vec4::ZERO;
+                for (pk, &v) in packets.iter().zip(seen) {
+                    if v {
+                        sum += pk.points.iter().map(|p| lamp.at_point(*p, pk.normal)).sum::<Vec4>() / 4.0;
+                    }
+                }
+                *light += sum / packets.len() as f32;
+            }
+        }
+        // (The input in the environment's units, radiance: lit by a sky of radiance 1 an open pixel gathers 1
+        // (the transport's test). A cluster's light is irradiance E: its radiance ALBEDO x E / pi.)
+        for v in &mut s.input {
+            *v *= ALBEDO * std::f32::consts::FRAC_1_PI;
+        }
     }
     // The environment: the sky's mean colour on every environment cluster (PLACEHOLDER: the captured sky cube, x the
     // environment's Brightness).
@@ -174,6 +285,8 @@ fn solve(
     let env = vec![sky; 1 << 16];
     let dump = (!gi.dumped).then(|| std::env::var_os("F13_ENLIGHTEN_DUMP")).flatten();
     gi.dumped = true;
+    // (F13_ENLIGHTEN_SCALE=<k>: the output times k, to see which surfaces take the lightmap: debugging.)
+    let debug_scale = std::env::var("F13_ENLIGHTEN_SCALE").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0);
     let gi = &*gi;
     let mut per_atlas: HashMap<&str, Vec<(usize, Vec<Vec4>)>> = HashMap::new();
     for (i, s) in gi.systems.iter().enumerate() {
@@ -183,7 +296,7 @@ fn solve(
             .iter()
             .map(|id| if id[2] == 0xffff_fffe { Some(&env[..]) } else { gi.by_id.get(&id[1]).map(|&k| &gi.systems[k].input[..]) })
             .collect();
-        per_atlas.entry(&s.package).or_default().push((i, t.solve(&inputs, std::f32::consts::FRAC_1_PI)));
+        per_atlas.entry(&s.package).or_default().push((i, t.solve(&inputs, debug_scale)));
     }
     for (package, outputs) in per_atlas {
         let Some(mut image) = atlases.0.get(package).and_then(|h| images.get_mut(h)) else { continue };
@@ -239,8 +352,8 @@ fn vertex_key(p: [f32; 3], uv: [f32; 2]) -> [i64; 5] {
 
 /// A single placement's meshes, once loaded, take its atlas UVs as their UV1 (each glb vertex matched to its Unreal
 /// vertex by position and UV0: the glbs' are merged and reordered) and its level's atlas as their lightmap. Bevy adds
-/// lightmap x the diffuse colour to the indirect light, so the atlas holds Enlighten's irradiance (/ pi: the
-/// Lambertian's) . PLACEHOLDER: a vertex with several Unreal matches (the same position and UV, other normals) takes the
+/// lightmap x the diffuse colour to the indirect light: the atlas holds the solve's output as it is, the radiance
+/// gathered (a Lambertian under it reflects albedo x that). PLACEHOLDER: a vertex with several Unreal matches (the same position and UV, other normals) takes the
 /// first.
 #[allow(clippy::type_complexity)]
 fn light_meshes(
