@@ -422,11 +422,12 @@ struct LimbCapped;
 fn drop_falling(
     mut commands: Commands,
     time: Res<Time>,
-    collision: Res<crate::collision::WorldCollision>,
-    dynamic: Res<crate::collision::DynamicColliders>,
+    // (None with --fly: no world collision.)
+    collision: Option<crate::collision::Collision>,
     mut limbs: Query<(Entity, &mut Transform, &mut Dropping)>,
 ) {
-    let world = collision.with(&dynamic);
+    let Some(collision) = collision else { return };
+    let world = collision.all();
     let dt = time.delta_secs();
     for (e, mut xf, mut d) in &mut limbs {
         d.0 += 9.8 * dt;

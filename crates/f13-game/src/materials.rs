@@ -1220,6 +1220,13 @@ fn apply_materials(
             }
         };
         let mut e = commands.entity(entity);
+        // A translucent material casts no dynamic shadow (UE: only opaque and masked ones go into the shadow depths,
+        // unless bCastDynamicShadowAsMasked, which none of the exported translucent masters set: the porch lamps'
+        // M_PropGlass_Master is BLEND_Translucent without it). Bevy draws blended meshes into the shadow maps, so the
+        // lamps' glass shut their own spot lights in.
+        if matches!(info.blend.as_str(), "BLEND_Translucent" | "BLEND_Additive" | "BLEND_Modulate") {
+            e.insert(bevy::light::NotShadowCaster);
+        }
         if let (Built::Skin(h), Some(masks)) = (&built, parents.iter_ancestors(entity).find_map(|a| skin_masks.get(a).ok())) {
             // (Per skin masks: the same skin under another outfit is clipped by that outfit's.)
             let key = format!("{key}|skin|{}", masks.0.join("|"));
