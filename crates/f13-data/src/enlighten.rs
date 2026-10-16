@@ -537,8 +537,9 @@ impl ProbeOctree {
     }
 
     /// The light at `p` (Unreal space, cm) and the size of the cell it came from: in the smallest node holding it,
-    /// trilinear between the corners of its octant. None outside the octree. PLACEHOLDER: the game's interpolation
-    /// (DoProbeInterpolationTask) isn't read.
+    /// trilinear between the corners of its octant, as GetProbeInterpolants (0x141d7c9e0, its leaf 0x141d87b80; from
+    /// DoProbeInterpolationTask 0x141d7add0). None outside the octree. PLACEHOLDER: the game also drops the corners
+    /// its interpolation visibility (GEPV, the core's +0xf0: a bit mask per leaf) marks unseen, and renormalises.
     pub fn sample(&self, values: &[ProbeSh], p: Vec3) -> Option<(ProbeSh, f32)> {
         let rel = p - self.origin;
         if rel.min_element() < 0.0 || rel.max_element() >= self.size {
