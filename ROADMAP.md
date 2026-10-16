@@ -10,9 +10,8 @@ Base content (asset paths in the player's install; all gameplay values come from
 Lighting first (the user, 2026-10-14):
 - [ ] Lighting: Enlighten GI, on behind F13_ENLIGHTEN (MODLOG "Enlighten"): left are the game's own versions of
       what's fitted or guessed (the local lights' visibility: one ray per packet; the landscape's UVs: fitted; the
-      foliage's: one point per instance; the probes' interpolation and per-pixel clipmap), and its render cost:
-      +3.9 ms a frame (Bevy's lightmaps take a slot per entity, a bind group per 4 rebuilt each frame; sharing slots by
-      image needs a Bevy change), before turning it on by default
+      foliage's: one point per instance; the probes' interpolation and per-pixel clipmap), and turning it on by default
+      (its cost: +1.4 ms render world, the solve on the async pool)
 - [ ] Lighting: the local lights' shadow caching and fade: whole-map caching gains nothing (the shadowed lights are near
       her, so always dirty: tried, MODLOG "Shadow caching: tried and reverted"); it needs UE's static / movable split, two
       shadow views a face in a reworked bevy_pbr

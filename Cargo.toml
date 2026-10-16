@@ -7,5 +7,8 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 # bevy_audio 0.19.1, its output reopened when the device fails or changes (vendor/bevy_audio/src/audio_output.rs).
+# bevy_pbr 0.19.1, Lightmap entities sharing an image sharing its slot (vendor/bevy_pbr/src/lightmap/mod.rs: stock Bevy
+# gives each its own, so Enlighten's thousands of lightmapped meshes made thousands of slabs, a bind group each).
 [patch.crates-io]
 bevy_audio = { path = "vendor/bevy_audio" }
+bevy_pbr = { path = "vendor/bevy_pbr" }

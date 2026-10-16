@@ -753,7 +753,7 @@ fn light_meshes(
     mut weight_uv: ResMut<LandscapeWeightUv>,
 ) {
     let Primitives { uvs: all_uvs, instances, zero_uv1, land, meshes: ue_meshes, counts, logged } = &mut *prims;
-    let instance_lightmaps = std::env::var_os("F13_ENLIGHTEN_INSTANCES").is_some();
+    let instance_lightmaps = std::env::var_os("F13_ENLIGHTEN_NO_INSTANCES").is_none();
     for (e, mesh3d) in &new {
         if let Some(owner) = parents.iter_ancestors(e).find_map(|a| landscapes.get(a).ok()) {
             // (A component's vertices, in Unreal space (cm): its cell by their centre.)
@@ -795,10 +795,9 @@ fn light_meshes(
             continue;
         }
         if let Some(owner) = parents.iter_ancestors(e).find_map(|a| instance_owners.get(a).ok()) {
-            // (By default the instances take the probe volume's light instead, the light where they stand too: Bevy
-            // gives every Lightmap entity a slot of its own, 4 to a bind group rebuilt each frame, and the ~12,000
-            // instances' slabs cost ~6 ms of prepare_mesh_bind_groups and their batching. F13_ENLIGHTEN_INSTANCES=1: the
-            // atlas point per instance, as the game.)
+            // (F13_ENLIGHTEN_NO_INSTANCES: the instances take the probe volume's light instead. Each instance's
+            // Lightmap costs little since vendor/bevy_pbr shares a slot between the entities of one image: stock Bevy's
+            // slot per entity made ~3,700 slabs, 11 ms a frame.)
             if !instance_lightmaps {
                 commands.entity(e).insert(Lightmapped);
                 continue;
