@@ -480,7 +480,7 @@ const POLICE_STUN_ITERATION_DEG: f32 = 4.0;
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn turn_back_jason(
     mut commands: Commands,
-    (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
+    collision: crate::collision::Collision,
     arrived: Option<Res<PoliceArrived>>,
     zones: Query<(&EscapeZone, &GlobalTransform)>,
     spawners: Query<&PoliceSpawner>,
@@ -496,7 +496,7 @@ fn turn_back_jason(
     let Some(tuning) = tuning else { return };
     let cap = tuning.capsule;
     let out = zone.radius_m + cap.radius + 0.05;
-    let world = collision.with(&dynamic);
+    let world = collision.all();
     for (je, jason, mut j) in &mut jasons {
         // Busy (a move he can't be stunned out of): the police wait for him (the game defers it past special moves).
         if !overlaps(j.translation, &cap, center, zone.radius_m) || !jason.stunnable() {

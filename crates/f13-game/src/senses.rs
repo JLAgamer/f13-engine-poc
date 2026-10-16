@@ -332,13 +332,13 @@ fn sense_highlights(
     time: Res<Time>,
     values: Option<Res<SenseValues>>,
     surroundings: Option<Res<crate::fear_events::Surroundings>>,
-    (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
+    collision: crate::collision::Collision,
     mut jasons: Query<(&Transform, &mut Knowledge), With<Jason>>,
     players: Query<(Entity, &Player, &Transform, Option<&Hiding>), (Without<Jason>, Without<crate::vehicle::Escaped>)>,
 ) {
     let Some(v) = values else { return };
     let now = time.elapsed_secs();
-    let world = collision.with(&dynamic);
+    let world = collision.all();
     let cabin_at = |at: Vec3| surroundings.as_ref().and_then(|s| s.cabin_at(at));
     for (jxf, mut k) in &mut jasons {
         let (mut lit, mut cabins) = (Vec::new(), Vec::new());
@@ -381,7 +381,7 @@ pub(crate) fn perceive(
     mut commands: Commands,
     time: Res<Time>,
     values: Option<Res<SenseValues>>,
-    (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
+    collision: crate::collision::Collision,
     mut jasons: Query<(&Jason, &Transform, &mut Knowledge)>,
     players: Query<(&Player, &Transform, Option<&Hiding>), Without<Jason>>,
     target: Option<Res<crate::jason::JasonTarget>>,
@@ -394,7 +394,7 @@ pub(crate) fn perceive(
     let asked = controls.as_mut().map(|c| std::mem::take(&mut c.sense));
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
-    let world = collision.with(&dynamic);
+    let world = collision.all();
     let Some(target) = target.and_then(|t| t.0) else { return };
     let Ok((p, pxf, hiding)) = players.get(target) else { return };
     for (j, jxf, mut k) in &mut jasons {

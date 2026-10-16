@@ -130,6 +130,18 @@ fn make_targets(mut commands: Commands, mut images: ResMut<Assets<Image>>, expor
     commands.insert_resource(PreviewImage { counselor, wardrobe, emote, killer });
 }
 
+/// A class's MenuTransform in a menu's class list (its entries' CharacterClass, a Blueprint class `<class>_C`).
+fn menu_transform(list: &Value, class: &str) -> Value {
+    let field = |e: &Value, prefix: &str| e.as_object().and_then(|o| o.iter().find(|(k, _)| k.starts_with(prefix)).map(|(_, v)| v.clone()));
+    let path = format!("/{class}.{class}_C");
+    list.as_array()
+        .into_iter()
+        .flatten()
+        .find(|e| field(e, "CharacterClass").is_some_and(|c| c["AssetPathName"].as_str().is_some_and(|p| p.ends_with(&path))))
+        .and_then(|e| field(e, "MenuTransform"))
+        .unwrap_or_default()
+}
+
 /// A component's RelativeLocation / RelativeRotation (Unreal) in Bevy's space under its root.
 fn relative(c: &Value) -> Transform {
     let n = |v: &Value, k: &str| v[k].as_f64().unwrap_or(0.0) as f32;
@@ -270,24 +282,8 @@ fn show_preview(
     // Her actor (Unreal: the capsule's centre, facing +X) at the class's MenuTransform under the root (the wardrobe's:
     // at the root); her model's owner is her feet, facing +Z.
     let menu_transform = match which {
-        Which::Killer => setup.killer_menu["Defaults"]["JasonClassList"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|e| {
-                e.as_object().and_then(|o| o.iter().find(|(k, _)| k.starts_with("CharacterClass"))).and_then(|(_, v)| v["AssetPathName"].as_str()).is_some_and(|p| p.ends_with(&format!("/{class}.{class}_C")))
-            })
-            .and_then(|e| e.as_object()?.iter().find(|(k, _)| k.starts_with("MenuTransform")).map(|(_, v)| v.clone()))
-            .unwrap_or_default(),
-        Which::Counselor => setup.menu["Defaults"]["CharacterClassList"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|e| {
-                e.as_object().and_then(|o| o.iter().find(|(k, _)| k.starts_with("CharacterClass"))).and_then(|(_, v)| v["AssetPathName"].as_str()).is_some_and(|p| p.ends_with(&format!("/{class}_Counselor.{class}_Counselor_C")))
-            })
-            .and_then(|e| e.as_object()?.iter().find(|(k, _)| k.starts_with("MenuTransform")).map(|(_, v)| v.clone()))
-            .unwrap_or_default(),
+        Which::Killer => menu_transform(&setup.killer_menu["Defaults"]["JasonClassList"], class),
+        Which::Counselor => menu_transform(&setup.menu["Defaults"]["CharacterClassList"], &format!("{class}_Counselor")),
         // PLACEHOLDER: turned to face its capture. SCCounselorWardrobeWidget::SetPreviewClass spawns her at the preview's
         // root (SpawnPreviewActor: identity, snapped), facing its +X, which the capture (at -222 cm) looks along; the
         // wardrobe's only turns are the player's (its NativeTick and mouse move: AddActorLocalRotation by

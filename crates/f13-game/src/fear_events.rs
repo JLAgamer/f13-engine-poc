@@ -210,7 +210,7 @@ fn push_events(
     tuning: Option<Res<FearTuning>>,
     surroundings: Option<Res<Surroundings>>,
     (counselor, killer): (Option<Res<CounselorCharacter>>, Option<Res<KillerCharacter>>),
-    (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
+    collision: crate::collision::Collision,
     mut players: Query<(Entity, &mut Player, &Transform, &mut CounselorFear, &mut Pushed, Option<&Inventory>, Option<&Hiding>, Has<Held>, Option<&crate::lighting::Flashlight>, Has<crate::controls::LocalPlayer>), Without<Jason>>,
     pads: crate::controls::Pads,
     jasons: Query<&Transform, (With<Jason>, Without<Player>)>,
@@ -289,7 +289,7 @@ fn push_events(
         let ahead = (target - eye).dot(forward) * 100.0;
         target.distance(centre) * 100.0 < cv("MaxVisibilityDistance", 6000.0)
             && ahead >= VIEW_FOV_DEG * 0.5
-            && f13_core::collision::segment_hit(&collision.with(&dynamic), eye, target, 4.0).is_none()
+            && f13_core::collision::segment_hit(&collision.all(), eye, target, 4.0).is_none()
     });
     if in_view != pushed.spotted {
         debug!("fear: Jason {} view", if in_view { "in" } else { "out of" });
@@ -300,7 +300,7 @@ fn push_events(
     // down.
     for &(e, c, alive) in counselors.iter().filter(|(e, ..)| *e != pe) {
         let seen = view.is_some_and(|(eye, forward)| {
-            c.distance(centre) * 100.0 < visibility_cm && (c - eye).dot(forward) * 100.0 >= VIEW_FOV_DEG * 0.5 && f13_core::collision::segment_hit(&collision.with(&dynamic), eye, c, 4.0).is_none()
+            c.distance(centre) * 100.0 < visibility_cm && (c - eye).dot(forward) * 100.0 >= VIEW_FOV_DEG * 0.5 && f13_core::collision::segment_hit(&collision.all(), eye, c, 4.0).is_none()
         });
         let was = pushed.in_view.contains(&e);
         if seen && !was {

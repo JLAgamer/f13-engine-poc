@@ -792,7 +792,7 @@ fn tick_action(
     (pads, anims, tuning): (crate::controls::Pads, Res<crate::Anims>, Res<crate::player::PlayerTuning>),
     mut wear: Query<Option<&mut Wear>>,
     items: Query<&Item>,
-    (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
+    collision: crate::collision::Collision,
     mut assets: (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>),
     (globals, killer, character, rigs, killer_model): (Query<&GlobalTransform>, Option<Res<crate::jason::KillerTuning>>, Option<Res<CounselorCharacter>>, Query<(&ChildOf, &Rig)>, Option<Res<crate::character::KillerCharacter>>),
     sounds: Option<Res<crate::audio::Sounds>>,
@@ -838,7 +838,7 @@ fn tick_action(
                     let now = stats.volume.zip(globals.get(a.item).ok()).map(|((local, ..), g)| g.mul_transform(local).compute_transform());
                     let prev = a.trace.or(now);
                     a.trace = now;
-                    let world = collision.with(&dynamic);
+                    let world = collision.all();
                     let hit = jason.filter(|(je, jxf)| {
                         let (Some(now), Some(prev), Some((_, radius, half)), Some(cap), Some(c)) = (now, prev, stats.volume, killer.as_ref().map(|k| k.capsule), character.as_ref()) else {
                             return false;
@@ -930,7 +930,7 @@ fn tick_action(
                         seed ^= seed << 17;
                         (seed % 32768) as f32 / 32767.0
                     };
-                    let world = collision.with(&dynamic);
+                    let world = collision.all();
                     let axis = aim.cross(Vec3::Y).normalize_or(Vec3::X);
                     let mut on_jason = 0;
                     for _ in 0..pellets {
@@ -1007,7 +1007,7 @@ fn tick_action(
             }
             Use::PlaceTrap => {
                 a.done = true;
-                let world = collision.with(&dynamic);
+                let world = collision.all();
                 let at = xf.translation + facing * 0.7;
                 let y = surface_below(&world, at.x, at.z, at.y + 0.5, at.y - 2.0).map_or(at.y, |s| s.0);
                 inv.hand = None;
@@ -1034,14 +1034,14 @@ fn tick_action(
 fn fly(
     mut commands: Commands,
     time: Res<Time>,
-    (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
+    collision: crate::collision::Collision,
     mut crackers: Query<(Entity, &mut Firecracker, &mut Transform), Without<Flare>>,
     mut flares: Query<(Entity, &mut Flare, &mut Transform), Without<Firecracker>>,
     jasons: Query<(Entity, &Transform), (With<Jason>, Without<Firecracker>, Without<Flare>)>,
     mut lights: Query<&mut PointLight>,
 ) {
     let dt = time.delta_secs();
-    let world = collision.with(&dynamic);
+    let world = collision.all();
     let ground = |p: Vec3| surface_below(&world, p.x, p.z, p.y + 0.3, p.y - 50.0);
     for (e, mut f, mut xf) in &mut crackers {
         f.age += dt;

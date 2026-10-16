@@ -131,7 +131,7 @@ pub(crate) fn kill_camera(
     mut camera: Single<(&mut Transform, &mut Projection), With<PlayerCamera>>,
     windows: Query<&Window>,
     her: Query<&Transform, (With<crate::player::Player>, Without<PlayerCamera>)>,
-    (collision, dynamic): (Res<crate::collision::WorldCollision>, Res<crate::collision::DynamicColliders>),
+    collision: crate::collision::Collision,
     (play, locals, jasons): (Option<Res<crate::jason_player::PlayJason>>, Query<(), With<crate::controls::LocalPlayer>>, Query<(), With<crate::jason::Jason>>),
 ) {
     let (ref mut xf, ref mut proj) = *camera;
@@ -169,7 +169,7 @@ pub(crate) fn kill_camera(
     xf.rotation = world.rotation * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
     let mut fov = p.fov;
     xf.translation = match her.iter().next() {
-        Some(h) => trace(&collision.with(&dynamic), world.translation, world.rotation * Vec3::X, h.translation + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M, &mut fov),
+        Some(h) => trace(&collision.all(), world.translation, world.rotation * Vec3::X, h.translation + Vec3::Y * crate::player::CAPSULE_HALF_HEIGHT_M, &mut fov),
         None => world.translation,
     };
     // Unreal's FieldOfView is horizontal.

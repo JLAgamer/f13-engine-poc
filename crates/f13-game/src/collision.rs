@@ -46,6 +46,25 @@ impl WorldCollision {
     }
 }
 
+/// The static world and the moving colliders together, as the systems' line traces take them.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct Collision<'w> {
+    pub world: Res<'w, WorldCollision>,
+    pub dynamic: Res<'w, DynamicColliders>,
+}
+
+impl Collision<'_> {
+    /// Everything that blocks (see [`WorldCollision::with`]).
+    pub fn all(&self) -> (&TriGrid, &[TriList]) {
+        self.world.with(&self.dynamic)
+    }
+
+    /// Everything that blocks but the moving colliders `skip` names (see [`WorldCollision::without`]).
+    pub fn without(&self, skip: impl Fn(Entity) -> bool) -> (&TriGrid, Vec<&TriList>) {
+        self.world.without(&self.dynamic, skip)
+    }
+}
+
 /// Blocking triangles in the entity's own space; active while the entity is visible.
 #[derive(Component, Clone)]
 pub struct Collider(pub std::sync::Arc<Vec<Tri>>);
