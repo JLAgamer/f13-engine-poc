@@ -1,7 +1,8 @@
 //! `--perf`: where a frame's time goes. Bevy's own diagnostics (frame time, entity count, GPU pass times) plus the
 //! time each top-level schedule of the main world takes (an empty marker schedule between each pair stamps the time),
 //! and the render world's system sets (a stamp system in each). Logged every few seconds as averages. Built with
-//! `--features profile`, also the costliest systems (Bevy's tracing spans).
+//! `--features profile`, also the costliest systems (Bevy's tracing spans). Also a census of what can pile up (entities
+//! and the loaded assets by type), for finding leaks: what keeps growing over a long match.
 
 use bevy::app::{First, Last, MainScheduleOrder, PostUpdate, PreUpdate, RunFixedMainLoop, SpawnScene, Update};
 use bevy::ecs::schedule::ScheduleLabel;
@@ -71,7 +72,7 @@ impl Plugin for PerfPlugin {
             bevy::diagnostic::EntityCountDiagnosticsPlugin::default(),
             bevy::render::diagnostic::RenderDiagnosticsPlugin,
         ));
-        app.insert_resource(MainTimes(Times::new(&MAIN)));
+        app.insert_resource(MainTimes(Times::new(&MAIN))).add_systems(Last, census);
         #[cfg(feature = "profile")]
         app.add_systems(Last, systems::log_top);
         let labels: [bevy::ecs::intern::Interned<dyn ScheduleLabel>; 7] =
@@ -95,6 +96,45 @@ impl Plugin for PerfPlugin {
             render.add_systems(Render, (move |mut t: ResMut<RenderTimes>| t.0.stamp(i, "render world")).in_set(set));
         }
     }
+}
+
+/// Every [`LOG_EVERY`]: the entity count and each asset type's count.
+#[allow(clippy::too_many_arguments)]
+fn census(
+    entities: &bevy::ecs::entity::Entities,
+    (meshes, standard, images, clips, graphs): (Res<Assets<Mesh>>, Res<Assets<StandardMaterial>>, Res<Assets<Image>>, Res<Assets<AnimationClip>>, Res<Assets<AnimationGraph>>),
+    (audio, worlds, buffers): (Res<Assets<AudioSource>>, Res<Assets<bevy::world_serialization::WorldAsset>>, Res<Assets<bevy::render::storage::ShaderBuffer>>),
+    (particles, mesh_particles): (Res<Assets<crate::particles::ParticleMaterial>>, Res<Assets<crate::particles::MeshParticleMaterial>>),
+    named: Query<&Name>,
+    mut since: Local<Option<Instant>>,
+) {
+    if since.is_some_and(|s| s.elapsed() < LOG_EVERY) {
+        return;
+    }
+    *since = Some(Instant::now());
+    // (The most common entity names: what a growing count is made of.)
+    let mut names: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+    for n in &named {
+        *names.entry(n.as_str()).or_default() += 1;
+    }
+    let mut top: Vec<_> = names.into_iter().collect();
+    top.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    let top: Vec<String> = top.iter().take(6).map(|(n, c)| format!("{n} {c}")).collect();
+    info!(
+        "census: {} entities ({}); meshes {}, standard materials {}, images {}, clips {}, graphs {}, sounds {}, scenes {}, buffers {}, particle materials {}, mesh particle materials {}",
+        entities.count_spawned(),
+        top.join(", "),
+        meshes.len(),
+        standard.len(),
+        images.len(),
+        clips.len(),
+        graphs.len(),
+        audio.len(),
+        worlds.len(),
+        buffers.len(),
+        particles.len(),
+        mesh_particles.len()
+    );
 }
 
 /// With the `profile` feature: Bevy's per-system tracing spans, totalled by system name (main and render world alike)
