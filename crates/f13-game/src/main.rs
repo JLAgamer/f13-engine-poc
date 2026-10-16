@@ -792,7 +792,7 @@ fn main() {
     if args.perf {
         app.add_plugins(perf::PerfPlugin);
     }
-    // (F13_ENLIGHTEN: Enlighten's indirect light, solved into its atlases: work in progress, the meshes don't sample them yet.)
+    // (F13_ENLIGHTEN: Enlighten's indirect light, solved into its atlases and on the meshes as lightmaps: work in progress.)
     if std::env::var_os("F13_ENLIGHTEN").is_some() {
         app.add_plugins(enlighten::EnlightenPlugin);
     }
@@ -883,6 +883,8 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
             cabins.insert((a.level.as_str(), a.name.as_str()), (i, lit));
         }
     }
+    // (The placements' Enlighten tags, for their lightmaps: enlighten.rs.)
+    let enlighten = std::env::var_os("F13_ENLIGHTEN").is_some();
     for layout in &level.layouts {
         for p in &layout.placements {
             let component = p.component.rsplit('.').next().unwrap_or_default();
@@ -938,9 +940,9 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
                 }
                 // (A single placement's component, for its Enlighten lightmap: enlighten.rs.)
                 let component = || p.component.rsplit_once(':').map_or(p.component.as_str(), |(_, c)| c).to_string();
-                if p.instances.is_none() {
+                if enlighten && p.instances.is_none() {
                     e.insert(enlighten::EnlightenPrimitive { level: p.level.clone(), component: component() });
-                } else if j < instances {
+                } else if enlighten && j < instances {
                     e.insert(enlighten::EnlightenInstance { level: p.level.clone(), component: component(), index: j });
                 }
                 spawned += 1;
@@ -954,7 +956,10 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
                 .and_then(|a| a.transform.as_ref())
                 .map(to_transform)
                 .unwrap_or_default();
-            commands.spawn((WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(l.file.clone()))), xf, enlighten::EnlightenLandscape { level: l.level.clone() }));
+            let mut e = commands.spawn((WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(l.file.clone()))), xf));
+            if enlighten {
+                e.insert(enlighten::EnlightenLandscape { level: l.level.clone() });
+            }
         }
     }
     info!("spawned {spawned} mesh instances from {} unique meshes", scenes.len());
