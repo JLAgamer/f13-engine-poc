@@ -3,6 +3,7 @@
 pub mod character;
 pub mod classes;
 pub mod collision;
+pub mod enlighten;
 pub mod glb;
 pub mod kill_camera;
 pub mod level;
