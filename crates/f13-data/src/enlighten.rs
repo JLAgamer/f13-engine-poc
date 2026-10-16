@@ -215,6 +215,45 @@ impl InputWorkspace {
     }
 }
 
+/// A system's resampling of its output onto its clusters (GERD, ResamplingData; DoResampleBounce 0x141db1950): per
+/// cluster the output pixels (x, y) it averages and their weights (summing to about 1). The bounce: each cluster's
+/// light from the last solve.
+#[derive(Clone, Debug, Default)]
+pub struct Resampling {
+    pub clusters: Vec<Vec<(u16, u16, f32)>>,
+}
+
+impl Resampling {
+    /// Reads a GERD block (from its magic): "GERD", version 2, u32 cluster count, u32, u32 sample count, then from
+    /// +0x20 a u16 per cluster (its samples), then (8-aligned) the samples: u16 x, u16 y, f32 weight.
+    pub fn read(b: &[u8]) -> Option<Self> {
+        if b.get(0..4)? != b"GERD" || u32_at(b, 4)? != 2 {
+            return None;
+        }
+        let clusters = u32_at(b, 8)? as usize;
+        let samples = u32_at(b, 16)? as usize;
+        let mut p = (0x20 + 2 * clusters + 7) & !7;
+        let mut out = Vec::with_capacity(clusters);
+        let mut total = 0;
+        for c in 0..clusters {
+            let n = u16_at(b, 0x20 + 2 * c)? as usize;
+            total += n;
+            let mut v = Vec::with_capacity(n);
+            for _ in 0..n {
+                v.push((u16_at(b, p)?, u16_at(b, p + 2)?, f32_at(b, p + 4)?));
+                p += 8;
+            }
+            out.push(v);
+        }
+        (total == samples).then_some(Resampling { clusters: out })
+    }
+
+    /// Each cluster's bounce from the output (width `w`, row-major).
+    pub fn bounce(&self, output: &[Vec4], w: usize) -> Vec<Vec4> {
+        self.clusters.iter().map(|s| s.iter().map(|&(x, y, k)| output.get(y as usize * w + x as usize).copied().unwrap_or(Vec4::ZERO) * k).sum()).collect()
+    }
+}
+
 impl InputWorkspace {
     /// Each cluster's light from a directional light shining along `dir` (Unreal space, normalised) with `color`, as
     /// DoDirectInputLighting's type 2 kernel (0x141dd3f10): per packet the mean of max(0, N . -dir) over its four
@@ -252,7 +291,7 @@ mod tests {
             let path = f.path();
             let name = path.file_name().unwrap().to_string_lossy().to_string();
             // (Only the blocks: the folder also holds meshes/ and the primitives' UVs.)
-            if !name.ends_with(".gesg.bin") && !name.ends_with(".geiw.bin") {
+            if !name.ends_with(".gesg.bin") && !name.ends_with(".geiw.bin") && !name.ends_with(".gerd.bin") {
                 continue;
             }
             let bytes = std::fs::read(&path).unwrap();
@@ -269,6 +308,8 @@ mod tests {
                 assert!(e.iter().all(|v| v.x >= 0.0 && v.x < 2.0), "{name}: the sky's share {m}");
                 shares.extend(e.iter().map(|v| v.x).filter(|&x| x > 0.0));
                 transports += 1;
+            } else if name.ends_with(".gerd.bin") {
+                Resampling::read(&bytes).unwrap_or_else(|| panic!("{name}: resampling doesn't read"));
             } else if name.ends_with(".geiw.bin") {
                 // (Some systems have no clusters.)
                 InputWorkspace::read(&bytes).unwrap_or_else(|| panic!("{name}: workspace doesn't read"));

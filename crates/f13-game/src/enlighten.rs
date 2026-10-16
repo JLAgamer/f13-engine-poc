@@ -13,7 +13,7 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use f13_data::enlighten::{InputWorkspace, Transport};
+use f13_data::enlighten::{InputWorkspace, Resampling, Transport};
 use std::collections::HashMap;
 
 /// How often the systems are re-solved (s).
@@ -35,6 +35,9 @@ struct System {
     transport: Option<Transport>,
     workspace: InputWorkspace,
     atlas_base: (u32, u32),
+    /// Its output resampled onto its clusters (the bounce), and its last output.
+    resampling: Option<Resampling>,
+    output: Vec<Vec4>,
     /// Its input points' box (Unreal space, cm).
     bounds: (Vec3, Vec3),
     /// Its clusters' light this solve (rgba).
@@ -137,6 +140,7 @@ fn load(mut commands: Commands, export: Res<crate::ExportRoot>, level: Res<crate
         let name = format!("{package}.{}", s["name"].as_str().unwrap_or(""));
         let Some(workspace) = std::fs::read(dir.join(format!("{name}.geiw.bin"))).ok().and_then(|b| InputWorkspace::read(&b)) else { continue };
         let transport = std::fs::read(dir.join(format!("{name}.gesg.bin"))).ok().and_then(|b| Transport::read(&b));
+        let resampling = std::fs::read(dir.join(format!("{name}.gerd.bin"))).ok().and_then(|b| Resampling::read(&b));
         let alloc = &s["atlas"][0];
         let atlas_base = (alloc["AtlasBaseX"].as_u64().unwrap_or(0) as u32, alloc["AtlasBaseY"].as_u64().unwrap_or(0) as u32);
         // (UE SystemGuid's first u32, its hex's first eight digits little-endian.)
@@ -146,7 +150,7 @@ fn load(mut commands: Commands, export: Res<crate::ExportRoot>, level: Res<crate
         }
         let points = workspace.clusters.iter().flatten().flat_map(|p| p.points);
         let bounds = points.fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), p| (lo.min(p), hi.max(p)));
-        systems.push(System { package, transport, workspace, atlas_base, bounds, input: Vec::new() });
+        systems.push(System { package, transport, workspace, resampling, output: Vec::new(), atlas_base, bounds, input: Vec::new() });
     }
     let mut atlases = EnlightenAtlases::default();
     for (package, a) in index["atlases"].as_object().into_iter().flatten() {
@@ -275,6 +279,15 @@ fn solve(
         for v in &mut s.input {
             *v *= ALBEDO * std::f32::consts::FRAC_1_PI;
         }
+        // The bounce (DoIndirectInputLighting): the last solve's output resampled onto the clusters (GERD), already a
+        // radiance gathered, times the albedo; each solve feeds the next, as the game's every frame.
+        if let (Some(r), Some(t)) = (&s.resampling, &s.transport) {
+            if !s.output.is_empty() {
+                for (v, b) in s.input.iter_mut().zip(r.bounce(&s.output, t.width as usize)) {
+                    *v += b * ALBEDO;
+                }
+            }
+        }
     }
     // The environment: the sky's mean colour on every environment cluster (PLACEHOLDER: the captured sky cube, x the
     // environment's Brightness).
@@ -284,26 +297,33 @@ fn solve(
     });
     let env = vec![sky; 1 << 16];
     let dump = (!gi.dumped).then(|| std::env::var_os("F13_ENLIGHTEN_DUMP")).flatten();
+    let mut outputs_kept: Vec<(usize, Vec<Vec4>)> = Vec::new();
     gi.dumped = true;
     // (F13_ENLIGHTEN_SCALE=<k>: the output times k, to see which surfaces take the lightmap: debugging.)
     let debug_scale = std::env::var("F13_ENLIGHTEN_SCALE").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0);
-    let gi = &*gi;
+    let gr = &*gi;
     let mut per_atlas: HashMap<&str, Vec<(usize, Vec<Vec4>)>> = HashMap::new();
-    for (i, s) in gi.systems.iter().enumerate() {
+    for (i, s) in gr.systems.iter().enumerate() {
         let Some(t) = &s.transport else { continue };
         let inputs: Vec<Option<&[Vec4]>> = t
             .inputs
             .iter()
-            .map(|id| if id[2] == 0xffff_fffe { Some(&env[..]) } else { gi.by_id.get(&id[1]).map(|&k| &gi.systems[k].input[..]) })
+            .map(|id| if id[2] == 0xffff_fffe { Some(&env[..]) } else { gr.by_id.get(&id[1]).map(|&k| &gr.systems[k].input[..]) })
             .collect();
         per_atlas.entry(&s.package).or_default().push((i, t.solve(&inputs, debug_scale)));
     }
-    for (package, outputs) in per_atlas {
+    let mut per_atlas = per_atlas;
+    for outputs in per_atlas.values() {
+        for (i, out) in outputs {
+            outputs_kept.push((*i, out.clone()));
+        }
+    }
+    for (package, outputs) in per_atlas.drain() {
         let Some(mut image) = atlases.0.get(package).and_then(|h| images.get_mut(h)) else { continue };
         let (w, h) = (image.width() as usize, image.height() as usize);
         let Some(data) = image.data.as_mut() else { continue };
         for (i, out) in outputs {
-            let s = &gi.systems[i];
+            let s = &gr.systems[i];
             let t = s.transport.as_ref().unwrap();
             let (bx, by) = (s.atlas_base.0 as usize, s.atlas_base.1 as usize);
             for y in 0..t.height as usize {
@@ -334,6 +354,9 @@ fn solve(
                 Err(e) => warn!("enlighten: {}: {e}", path.display()),
             }
         }
+    }
+    for (i, out) in outputs_kept {
+        gi.systems[i].output = out;
     }
 }
 
