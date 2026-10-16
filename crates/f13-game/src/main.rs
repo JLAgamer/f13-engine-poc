@@ -85,6 +85,8 @@ mod prop_anim;
 mod props;
 mod ragdoll;
 mod senses;
+mod shadow_cull;
+mod smoothing;
 mod spline_meshes;
 mod ui;
 mod windows;
@@ -754,6 +756,8 @@ fn main() {
         .insert_resource(ExportRoot(args.export.clone()))
         .add_plugins(props::PropsPlugin { seed, near_car: args.near_car && !(args.fly || args.aerial) })
         .add_plugins(lighting::LightingPlugin { flashlight: args.flashlight, unlit: args.unlit })
+        .add_plugins(shadow_cull::ShadowCullPlugin)
+        .add_plugins(smoothing::SmoothingPlugin)
         .add_systems(Startup, spawn_level)
         .add_systems(PostUpdate, apply_placed.before(bevy::camera::visibility::VisibilitySystems::CheckVisibility));
     // The HUD, hers or Jason's when he's played (embedded shader and UI material: after the asset and render plugins).

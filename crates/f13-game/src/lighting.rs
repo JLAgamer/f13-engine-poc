@@ -327,6 +327,17 @@ const TEXELS_PER_PIXEL_SPOT: f32 = 2.54648;
 /// lamp seen from beyond its reach goes without.
 const SHADOW_BUDGET: usize = 4;
 
+/// The shadow budget, or another for measuring (`F13_SHADOW_BUDGET=<n>`).
+fn shadow_budget() -> usize {
+    static BUDGET: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *BUDGET.get_or_init(|| std::env::var("F13_SHADOW_BUDGET").ok().and_then(|v| v.parse().ok()).unwrap_or(SHADOW_BUDGET))
+}
+
+/// The moon's shadow cascades, or another count for measuring (`F13_SUN_CASCADES=<n>`, 0 none).
+fn moon_cascades() -> usize {
+    std::env::var("F13_SUN_CASCADES").ok().and_then(|v| v.parse().ok()).unwrap_or(3)
+}
+
 /// A placed light's distance fade: MaxDrawDistance and MaxDistanceFadeRange (m), and its full intensity.
 #[derive(Component)]
 struct DrawDistance {
@@ -513,8 +524,8 @@ fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
                 let shadow_m = l.num("DynamicShadowDistanceMovableLight", 20000.0) / 100.0;
                 info!("lighting: moon {:.2} lux, shadows to {shadow_m:.0} m", l.num("Intensity", 10.0));
                 commands.spawn((
-                    DirectionalLight { color: l.color().into(), illuminance: l.num("Intensity", 10.0), shadow_maps_enabled: true, ..default() },
-                    CascadeShadowConfigBuilder { num_cascades: 3, maximum_distance: shadow_m, first_cascade_far_bound: 8.0, ..default() }.build(),
+                    DirectionalLight { color: l.color().into(), illuminance: l.num("Intensity", 10.0), shadow_maps_enabled: moon_cascades() > 0, ..default() },
+                    CascadeShadowConfigBuilder { num_cascades: moon_cascades().max(1), maximum_distance: shadow_m, first_cascade_far_bound: 8.0, ..default() }.build(),
                     Transform::default().looking_to(dir, Vec3::Y),
                     crate::weather::Moon,
                 ));
@@ -752,7 +763,7 @@ fn shadow_casters(
         }
     }
     wanted.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let on: Vec<Entity> = wanted.iter().take(SHADOW_BUDGET).map(|w| w.1).collect();
+    let on: Vec<Entity> = wanted.iter().take(shadow_budget()).map(|w| w.1).collect();
     for (e, mut l, _, _) in &mut points {
         let want = on.contains(&e);
         if l.shadow_maps_enabled != want {

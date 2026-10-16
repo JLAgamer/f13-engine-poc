@@ -106,6 +106,13 @@ fn census(
     (audio, worlds, buffers): (Res<Assets<AudioSource>>, Res<Assets<bevy::world_serialization::WorldAsset>>, Res<Assets<bevy::render::storage::ShaderBuffer>>),
     (particles, mesh_particles): (Res<Assets<crate::particles::ParticleMaterial>>, Res<Assets<crate::particles::MeshParticleMaterial>>),
     named: Query<&Name>,
+    (points, spots, suns): (Query<&PointLight>, Query<&SpotLight>, Query<(&DirectionalLight, &bevy::light::CascadeShadowConfig)>),
+    (standard_users, prop_users, master_users, blend_users): (
+        Query<&MeshMaterial3d<StandardMaterial>>,
+        Query<&MeshMaterial3d<crate::materials::PropMaterial>>,
+        Query<&MeshMaterial3d<crate::materials::MasterMaterial>>,
+        Query<&MeshMaterial3d<crate::materials::BlendMaterial>>,
+    ),
     mut since: Local<Option<Instant>>,
 ) {
     if since.is_some_and(|s| s.elapsed() < LOG_EVERY) {
@@ -120,6 +127,24 @@ fn census(
     let mut top: Vec<_> = names.into_iter().collect();
     top.sort_unstable_by(|a, b| b.1.cmp(&a.1));
     let top: Vec<String> = top.iter().take(6).map(|(n, c)| format!("{n} {c}")).collect();
+    // (Each shadowed point light draws six views, a spot one, the sun one per cascade.)
+    let shadowed = |p: bool| p as usize;
+    let (point_views, spot_views) = (points.iter().map(|l| 6 * shadowed(l.shadow_maps_enabled)).sum::<usize>(), spots.iter().map(|l| shadowed(l.shadow_maps_enabled)).sum::<usize>());
+    let sun_views: usize = suns.iter().filter(|(l, _)| l.shadow_maps_enabled).map(|(_, c)| c.bounds.len()).sum();
+    info!("census: shadow views: {point_views} point, {spot_views} spot, {sun_views} sun cascades");
+    // (Meshes per material type and the distinct materials among them: each is a bind group of its own, so a draw.)
+    fn users<'a, M: bevy::pbr::Material>(q: impl Iterator<Item = &'a MeshMaterial3d<M>>) -> (usize, usize) {
+        let ids: Vec<AssetId<M>> = q.map(|m| m.0.id()).collect();
+        let distinct = ids.iter().collect::<std::collections::HashSet<_>>().len();
+        (ids.len(), distinct)
+    }
+    info!(
+        "census: meshes (materials): standard {:?}, prop {:?}, master {:?}, blend {:?}",
+        users(standard_users.iter()),
+        users(prop_users.iter()),
+        users(master_users.iter()),
+        users(blend_users.iter())
+    );
     info!(
         "census: {} entities ({}); meshes {}, standard materials {}, images {}, clips {}, graphs {}, sounds {}, scenes {}, buffers {}, particle materials {}, mesh particle materials {}",
         entities.count_spawned(),
