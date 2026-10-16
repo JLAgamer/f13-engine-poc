@@ -18,6 +18,8 @@ struct TerrainParams {
     // Bit i: layer i has an RMA map.
     rma_mask: u32,
     _pad: u32,
+    // The weight maps' UV from UV0 (scale, offset) when UV1 holds the Enlighten lightmap's; zero: UV1.
+    weight_uv: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> params: TerrainParams;
@@ -75,7 +77,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 #endif
 #ifdef VERTEX_UVS_B
     // UV1 runs over vertex positions; weight map texels sit on the vertices, so shift by half a texel.
-    let wuv = in.uv_b + 0.5 / vec2<f32>(textureDimensions(weights0));
+#ifdef VERTEX_UVS_A
+    let uv1 = select(in.uv_b, in.uv * params.weight_uv.xy + params.weight_uv.zw, any(params.weight_uv.xy != vec2(0.0)));
+#else
+    let uv1 = in.uv_b;
+#endif
+    let wuv = uv1 + 0.5 / vec2<f32>(textureDimensions(weights0));
 #else
     let wuv = vec2(0.0);
 #endif

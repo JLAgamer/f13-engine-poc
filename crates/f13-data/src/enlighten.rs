@@ -254,20 +254,129 @@ impl Resampling {
     }
 }
 
+/// A system's precomputed visibility of directional lights (GEVS v5, PrecomputedVisibilityData; SetDirectionalVisibility
+/// 0x141d8ab50 -> 0x141db2090, the direction's lookup 0x141db1700 via 0x141db15b0, the slices' decoding 0x141db0a50):
+/// per direction on a sphere of rings (ring 0 the pole), a slice holding each cluster's visibility in 1, 2, 4 or 8 bits.
+/// The header: +0x1c the entries per byte, +0x24 the blocks' offset table, +0x28 the data's size, +0x2c the data's
+/// offset, +0x30 the block count, +0x34 slices per block, +0x38 the ring count, +0x40 u16 each ring's first slice,
+/// +0x140 u16 each ring's slice count. A block's slices are run-length coded: a byte c < 0x80 then c literal bytes, or
+/// c >= 0x80 then one byte repeated c - 0x80 times.
+#[derive(Clone, Debug, Default)]
+pub struct Visibility {
+    per_byte: u32,
+    rings: Vec<(u16, u16)>,
+    slices: Vec<Vec<u8>>,
+}
+
+impl Visibility {
+    pub fn read(g: &[u8]) -> Option<Self> {
+        if g.get(0..4)? != b"GEVS" || u32_at(g, 4)? != 5 {
+            return None;
+        }
+        let per_byte = u32_at(g, 0x1c)?;
+        if ![1, 2, 4, 8].contains(&per_byte) {
+            return None;
+        }
+        let (table, size, data, blocks, per_block) = (u32_at(g, 0x24)? as usize, u32_at(g, 0x28)? as usize, u32_at(g, 0x2c)? as usize, u32_at(g, 0x30)? as usize, u32_at(g, 0x34)? as usize);
+        let n = u32_at(g, 0x38)? as usize;
+        if n == 0 || n > 128 || per_block == 0 {
+            return None;
+        }
+        let rings: Option<Vec<_>> = (0..n).map(|r| Some((u16_at(g, 0x40 + 2 * r)?, u16_at(g, 0x140 + 2 * r)?))).collect();
+        let mut slices = Vec::with_capacity(blocks * per_block);
+        let mut slice_bytes = None;
+        for b in 0..blocks {
+            let at = u32_at(g, table + 4 * b)? as usize;
+            let end = if b + 1 == blocks { size } else { u32_at(g, table + 4 * (b + 1))? as usize };
+            let src = g.get(data + at..data + end)?;
+            let mut out = Vec::new();
+            let mut i = 0;
+            while i < src.len() {
+                let c = src[i] as usize;
+                if c < 0x80 {
+                    out.extend_from_slice(src.get(i + 1..i + 1 + c)?);
+                    i += 1 + c;
+                } else {
+                    out.extend(std::iter::repeat_n(*src.get(i + 1)?, c - 0x80));
+                    i += 2;
+                }
+            }
+            // (A slice's bytes: the first block's over its slices; the last block may hold fewer slices.)
+            // (A system with no clusters: empty slices.)
+            let each = *slice_bytes.get_or_insert(out.len() / per_block);
+            if each == 0 {
+                slices.extend(std::iter::repeat_n(Vec::new(), per_block));
+                continue;
+            }
+            if out.len() % each != 0 {
+                return None;
+            }
+            slices.extend(out.chunks_exact(each).map(<[u8]>::to_vec));
+        }
+        Some(Visibility { per_byte, rings: rings?, slices })
+    }
+
+    /// Each cluster's visibility (0..1) of a directional light towards `to_light` (Unreal space): the four slices
+    /// round the direction (two in each of the two nearest rings) blended bilinearly, the weights in bytes as the
+    /// game's (the first 255 less the others).
+    pub fn directional(&self, to_light: Vec3, clusters: usize) -> Vec<f32> {
+        let d = to_light.normalize_or_zero();
+        let n = self.rings.len() as i32;
+        let e = d.y.clamp(-1.0, 1.0).acos() * std::f32::consts::FRAC_1_PI * (n as f32 - 1.0);
+        let r0 = (e as i32).min(n - 1).max(0);
+        let r1 = (e as i32 + 1).min(n - 1).max(0);
+        let fe = e - r0 as f32;
+        let a = d.z.atan2(-d.x) * (0.5 * std::f32::consts::FRAC_1_PI) + 0.5;
+        let around = |r: i32| {
+            let (start, count) = self.rings[r as usize];
+            let s = count as f32 * a;
+            let j = (s as i32).min(count as i32 - 1).max(0);
+            let k = if j + 1 < count as i32 { j + 1 } else { j + 1 - count as i32 };
+            (start as usize + j as usize, start as usize + k as usize, s - j as f32)
+        };
+        let (i0, i1, f0) = around(r0);
+        let (i2, i3, f1) = around(r1);
+        let w = [(1.0 - f0) * (1.0 - fe), (1.0 - fe) * f0, (1.0 - f1) * fe, f1 * fe].map(|w| (w * 255.0) as i32 as u8);
+        let w = [255u8.wrapping_sub(w[3]).wrapping_sub(w[2]).wrapping_sub(w[1]), w[1], w[2], w[3]];
+        let bits = 8 / self.per_byte;
+        let mask = (1u32 << bits) - 1;
+        let shift = self.per_byte.trailing_zeros();
+        let slices = [i0, i1, i2, i3].map(|i| self.slices.get(i));
+        (0..clusters)
+            .map(|c| {
+                let byte = c >> shift;
+                let bit = ((c as u32) & (self.per_byte - 1)) * bits;
+                let v: u32 = slices.iter().zip(w).map(|(s, w)| s.and_then(|s| s.get(byte)).map_or(0, |&b| (b as u32 >> bit) & mask) * w as u32).sum();
+                v as f32 / (mask * 255) as f32
+            })
+            .collect()
+    }
+}
+
 impl InputWorkspace {
     /// Each cluster's light from a directional light shining along `dir` (Unreal space, normalised) with `color`, as
     /// DoDirectInputLighting's type 2 kernel (0x141dd3f10): per packet the mean of max(0, N . -dir) over its four
-    /// points, the cluster the mean over its packets (rcp of their count). PLACEHOLDER: every point seen (the light's
-    /// visibility bits, PrecomputedVisibilityData GEVS, aren't read yet).
-    pub fn directional(&self, dir: Vec3, color: Vec4) -> Vec<Vec4> {
+    /// points, the cluster the mean over its packets (rcp of their count). `seen`: each cluster's visibility of the
+    /// light ([`Visibility::directional`]; None: every point seen), as SetDirectionalVisibility's bits: of a cluster's
+    /// 4 x P points the first floor(seen x 4P), in packet order, see it.
+    pub fn directional(&self, dir: Vec3, color: Vec4, seen: Option<&[f32]>) -> Vec<Vec4> {
         let to_light = -dir;
         self.clusters
             .iter()
-            .map(|packets| {
+            .enumerate()
+            .map(|(c, packets)| {
                 if packets.is_empty() {
                     return Vec4::ZERO;
                 }
-                let sum: f32 = packets.iter().map(|p| p.normal.dot(to_light).max(0.0)).sum();
+                let mut points = seen.map_or(usize::MAX, |s| (s.get(c).copied().unwrap_or(1.0) * 4.0 * packets.len() as f32) as usize);
+                let sum: f32 = packets
+                    .iter()
+                    .map(|p| {
+                        let k = points.min(4);
+                        points -= k;
+                        p.normal.dot(to_light).max(0.0) * k as f32 / 4.0
+                    })
+                    .sum();
                 color * (sum / packets.len() as f32)
             })
             .collect()
@@ -285,13 +394,13 @@ mod tests {
     fn exported_systems_read() {
         let Some(root) = std::env::var_os("F13_EXPORT").map(std::path::PathBuf::from) else { return };
         let Ok(dir) = std::fs::read_dir(root.join("enlighten")) else { return };
-        let (mut transports, mut workspaces, mut max) = (0, 0, 0.0f32);
+        let (mut transports, mut workspaces, mut visibilities, mut max) = (0, 0, 0, 0.0f32);
         let mut shares = Vec::new();
         for f in dir.flatten() {
             let path = f.path();
             let name = path.file_name().unwrap().to_string_lossy().to_string();
             // (Only the blocks: the folder also holds meshes/ and the primitives' UVs.)
-            if !name.ends_with(".gesg.bin") && !name.ends_with(".geiw.bin") && !name.ends_with(".gerd.bin") {
+            if ![".gesg.bin", ".geiw.bin", ".gerd.bin", ".gevs.bin"].iter().any(|e| name.ends_with(e)) {
                 continue;
             }
             let bytes = std::fs::read(&path).unwrap();
@@ -308,6 +417,9 @@ mod tests {
                 assert!(e.iter().all(|v| v.x >= 0.0 && v.x < 2.0), "{name}: the sky's share {m}");
                 shares.extend(e.iter().map(|v| v.x).filter(|&x| x > 0.0));
                 transports += 1;
+            } else if name.ends_with(".gevs.bin") {
+                Visibility::read(&bytes).unwrap_or_else(|| panic!("{name}: visibility doesn't read"));
+                visibilities += 1;
             } else if name.ends_with(".gerd.bin") {
                 Resampling::read(&bytes).unwrap_or_else(|| panic!("{name}: resampling doesn't read"));
             } else if name.ends_with(".geiw.bin") {
@@ -316,15 +428,19 @@ mod tests {
                 workspaces += 1;
             }
         }
-        assert!(transports > 200 && workspaces > 500, "{transports} transports, {workspaces} workspaces");
+        assert!(transports > 200 && workspaces > 500 && visibilities > 500, "{transports} transports, {workspaces} workspaces, {visibilities} visibilities");
 
         // A light straight down on the terrain's (mostly upward) clusters lights them nearly fully; straight up, not at all.
         let t = std::fs::read(root.join("enlighten/CrystalLake_Small_Terrain.EnlightenSystem_Medium_Dynamic_12.geiw.bin")).unwrap();
         let w = InputWorkspace::read(&t).unwrap();
-        let down = w.directional(Vec3::NEG_Z, Vec4::ONE);
-        let up = w.directional(Vec3::Z, Vec4::ONE);
+        let down = w.directional(Vec3::NEG_Z, Vec4::ONE, None);
+        let up = w.directional(Vec3::Z, Vec4::ONE, None);
         let mean = |v: &[Vec4]| v.iter().map(|c| c.x).sum::<f32>() / v.len() as f32;
         assert!(mean(&down) > 0.8 && mean(&up) < 0.05, "down {} up {}", mean(&down), mean(&up));
+        // Its precomputed visibility: every cluster sees a light above it, none one below.
+        let v = Visibility::read(&std::fs::read(root.join("enlighten/CrystalLake_Small_Terrain.EnlightenSystem_Medium_Dynamic_12.gevs.bin")).unwrap()).unwrap();
+        let seen = |d: Vec3| v.directional(d, w.clusters.len()).iter().sum::<f32>() / w.clusters.len() as f32;
+        assert!(seen(Vec3::Z) > 0.99 && seen(Vec3::NEG_Z) < 0.01, "above {} below {}", seen(Vec3::Z), seen(Vec3::NEG_Z));
         shares.sort_by(f32::total_cmp);
         let at = |f: f64| shares[((shares.len() - 1) as f64 * f) as usize];
         eprintln!("{transports} transports, {workspaces} workspaces; the sky's share: median {}, p99 {}, p99.9 {}, max {max}", at(0.5), at(0.99), at(0.999));

@@ -5,27 +5,29 @@
 //! and the environment (the sky) into its output pixels (SolveIrradianceTask), placed in its level's atlas.
 //!
 //! f13-rs: the systems of the loaded levels, re-solved a few times a second off the main thread's hot path; their
-//! output in one atlas image per level (`EnlightenAtlases`). PLACEHOLDERS: the clusters' albedo is one grey (the
-//! game renders it from the materials: EnlightenAlbedoPS); every point sees every light (the visibility data, GEVS,
-//! isn't read); the lamps aren't inputs yet, nor the bounce (the output resampled back to the clusters, GERD); the
-//! environment's clusters all take the sky's mean colour.
+//! output in one atlas image per level (`EnlightenAtlases`). The clusters' albedo is each system's saved albedo
+//! buffer; the moon's visibility its precomputed visibility (GEVS); the environment is the weather level's (uniform).
+//! The lamps' visibility is one ray per packet from its centre (the game's comes from its own run-time visibility: the
+//! precomputed data serves directional lights only).
 
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use f13_data::enlighten::{InputWorkspace, Resampling, Transport};
+use f13_data::enlighten::{InputWorkspace, Resampling, Transport, Visibility};
 use std::collections::HashMap;
 
 /// How often the systems are re-solved (s).
 const SOLVE_EVERY_S: f32 = 0.25;
-/// PLACEHOLDER: every cluster's albedo.
+/// PLACEHOLDER: the albedo of a system's clusters when its saved albedo buffer is missing.
 const ALBEDO: f32 = 0.35;
 
 pub struct EnlightenPlugin;
 
 impl Plugin for EnlightenPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, load).add_systems(Update, (solve, light_meshes).run_if(resource_exists::<Enlighten>));
+        app.init_resource::<LandscapeWeightUv>()
+            .add_systems(Startup, load)
+            .add_systems(Update, (solve, light_meshes, landscape_weight_uv).run_if(resource_exists::<Enlighten>));
     }
 }
 
@@ -42,6 +44,13 @@ struct System {
     bounds: (Vec3, Vec3),
     /// Its clusters' light this solve (rgba).
     input: Vec<Vec4>,
+    /// Its clusters' albedo (linear rgb): the system's saved albedo buffer (`<name>.alb.bin`, extract.py), an 8-bit
+    /// rgba per cluster, linear (x / 255)^2 as DoIndirectInputLighting takes it.
+    albedo: Vec<Vec4>,
+    /// Its clusters' precomputed visibility of directional lights (GEVS), and the moon's last (its direction, each
+    /// cluster's), kept while the moon doesn't turn.
+    visibility: Option<Visibility>,
+    moon_seen: Option<(Vec3, Vec<f32>)>,
 }
 
 #[derive(Resource)]
@@ -53,6 +62,8 @@ pub struct Enlighten {
     dumped: bool,
     /// Per (lamp, system): each cluster's packets seen from the lamp.
     visibility: HashMap<(Entity, usize), Vec<Vec<bool>>>,
+    /// The environment's radiance, every texel of its cube alike (see `environment`).
+    environment: Vec4,
 }
 
 /// A local light's IndirectLightingIntensity (lighting.rs): its share of the indirect light.
@@ -101,6 +112,53 @@ pub struct EnlightenPrimitive {
     pub component: String,
 }
 
+/// An instanced placement's instance (its level package, its component's path after ':', its index), for its meshes'
+/// lightmap: the instanced vertex shader's Enlighten UV is the mesh's stream x the instance's UVScaleBias scale + its
+/// bias (M_Leaves_Master's s061: mad o5.xy, v13.xy, v14.xy, v14.zw). The instances' biases fall in the systems whose
+/// boxes hold them (instances.py: all 48,528 Terrain instances checked): the light where the instance stands.
+/// PLACEHOLDER: the mesh's stream taken as zero (the foliage meshes have no Enlighten UVs in their package's UV buffer
+/// collection): one atlas point per instance.
+#[derive(Component, Clone, Debug)]
+pub struct EnlightenInstance {
+    pub level: String,
+    pub component: String,
+    pub index: usize,
+}
+
+/// A landscape (its level package), for its components' lightmap. A landscape component isn't one of its atlas's
+/// primitives: its system's output covers it flat, one Terrain system per one to four components (one 63-quad
+/// component per 18 x 18-ish chart). Each component's map from world XY to the atlas is fitted from the data
+/// (F13-decomp/enlighten/landfit.py: its clusters' places, GEIW, against the output pixels each resamples, GERD;
+/// residuals mostly under a pixel) into `<level>.land.json`. PLACEHOLDER for the game's own (generated at run time;
+/// not read).
+#[derive(Component, Clone, Debug)]
+pub struct EnlightenLandscape {
+    pub level: String,
+}
+
+/// The landscape's weight-map UV as a function of its UV0 (scale u, v, offset u, v), its glb's UV1 being exactly
+/// UV0 x scale + offset (Landscape_0: 1/316, 1/379, -63/316, -63/379): found as its meshes take the lightmap UV in
+/// their UV1, then handed to the terrain materials (materials.rs TerrainParams::weight_uv). One landscape per map.
+#[derive(Resource, Default)]
+struct LandscapeWeightUv(Option<Vec4>);
+
+fn landscape_weight_uv(uv: Res<LandscapeWeightUv>, mut terrains: ResMut<Assets<crate::materials::TerrainMaterial>>) {
+    let Some(v) = uv.0 else { return };
+    let stale: Vec<_> = terrains.iter().filter(|(_, m)| m.extension.params.weight_uv != v).map(|(id, _)| id).collect();
+    for id in stale {
+        if let Some(mut m) = terrains.get_mut(id) {
+            m.extension.params.weight_uv = v;
+        }
+    }
+}
+
+/// A level's landscape cells: the grid (UE cm) and per cell its world XY -> atlas UV map.
+struct Land {
+    origin: f32,
+    size: f32,
+    cells: HashMap<(i32, i32), [[f32; 3]; 2]>,
+}
+
 /// A mesh given its Enlighten lightmap (or found to have none).
 #[derive(Component)]
 struct Lightmapped;
@@ -111,6 +169,13 @@ struct Lightmapped;
 #[derive(Resource, Default)]
 struct Primitives {
     uvs: HashMap<(String, String), Vec<u32>>,
+    /// Each instanced component's instances' UVScaleBias (scale u, v, bias u, v), by (level, component):
+    /// `<level>.inst.bin` (F13-decomp/enlighten/instances.py).
+    instances: HashMap<(String, String), Vec<[f32; 4]>>,
+    /// Per mesh, its copy with a zero UV1 (the instances' lightmap UV comes from their Lightmap's rect).
+    zero_uv1: HashMap<AssetId<Mesh>, Handle<Mesh>>,
+    /// Each level's landscape cells (`<level>.land.json`).
+    land: HashMap<String, Land>,
     meshes: HashMap<String, Option<Vec<[f32; 5]>>>,
     /// Meshes lit, not matched, of placements not in the data (logged as they change).
     counts: [usize; 3],
@@ -141,6 +206,13 @@ fn load(mut commands: Commands, export: Res<crate::ExportRoot>, level: Res<crate
         let Some(workspace) = std::fs::read(dir.join(format!("{name}.geiw.bin"))).ok().and_then(|b| InputWorkspace::read(&b)) else { continue };
         let transport = std::fs::read(dir.join(format!("{name}.gesg.bin"))).ok().and_then(|b| Transport::read(&b));
         let resampling = std::fs::read(dir.join(format!("{name}.gerd.bin"))).ok().and_then(|b| Resampling::read(&b));
+        let n = workspace.clusters.len();
+        let visibility = std::fs::read(dir.join(format!("{name}.gevs.bin"))).ok().and_then(|b| Visibility::read(&b));
+        let albedo = std::fs::read(dir.join(format!("{name}.alb.bin")))
+            .ok()
+            .filter(|b| b.len() == 4 * n)
+            .map(|b| b.chunks_exact(4).map(|c| Vec4::new(c[0] as f32, c[1] as f32, c[2] as f32, 0.0) / 255.0).map(|c| c * c).collect())
+            .unwrap_or_else(|| vec![Vec4::new(ALBEDO, ALBEDO, ALBEDO, 0.0); n]);
         let alloc = &s["atlas"][0];
         let atlas_base = (alloc["AtlasBaseX"].as_u64().unwrap_or(0) as u32, alloc["AtlasBaseY"].as_u64().unwrap_or(0) as u32);
         // (UE SystemGuid's first u32, its hex's first eight digits little-endian.)
@@ -150,7 +222,7 @@ fn load(mut commands: Commands, export: Res<crate::ExportRoot>, level: Res<crate
         }
         let points = workspace.clusters.iter().flatten().flat_map(|p| p.points);
         let bounds = points.fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), p| (lo.min(p), hi.max(p)));
-        systems.push(System { package, transport, workspace, resampling, output: Vec::new(), atlas_base, bounds, input: Vec::new() });
+        systems.push(System { package, transport, workspace, resampling, output: Vec::new(), atlas_base, bounds, input: Vec::new(), albedo, visibility, moon_seen: None });
     }
     let mut atlases = EnlightenAtlases::default();
     for (package, a) in index["atlases"].as_object().into_iter().flatten() {
@@ -177,12 +249,57 @@ fn load(mut commands: Commands, export: Res<crate::ExportRoot>, level: Res<crate
             prims.uvs.insert((package.clone(), comp), uvs);
         }
     }
-    info!("enlighten: {} primitives with atlas UVs", prims.uvs.len());
+    for package in &packages {
+        let Ok(b) = std::fs::read(dir.join(format!("{package}.inst.bin"))) else { continue };
+        let u32_at = |o: usize| b.get(o..o + 4).map(|x| u32::from_le_bytes(x.try_into().unwrap()));
+        let (Some(n), mut o) = (u32_at(0), 4) else { continue };
+        for _ in 0..n {
+            let Some(len) = b.get(o..o + 2).map(|x| u16::from_le_bytes(x.try_into().unwrap()) as usize) else { break };
+            let comp = String::from_utf8_lossy(&b[o + 2..o + 2 + len]).to_string();
+            o += 2 + len;
+            let Some(count) = u32_at(o).map(|c| c as usize) else { break };
+            o += 4;
+            let Some(data) = b.get(o..o + 16 * count) else { break };
+            let v = data.chunks_exact(16).map(|c| std::array::from_fn(|k| f32::from_le_bytes(c[4 * k..4 * k + 4].try_into().unwrap()))).collect();
+            o += 16 * count;
+            prims.instances.insert((package.clone(), comp), v);
+        }
+    }
+    for package in &packages {
+        let Some(j) = std::fs::read_to_string(dir.join(format!("{package}.land.json"))).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) else { continue };
+        let f = |v: &serde_json::Value| v.as_f64().unwrap_or(0.0) as f32;
+        let cells = j["cells"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|c| ((c["cell"][0].as_i64().unwrap_or(0) as i32, c["cell"][1].as_i64().unwrap_or(0) as i32), std::array::from_fn(|r| std::array::from_fn(|k| f(&c["m"][r][k])))))
+            .collect();
+        prims.land.insert(package.clone(), Land { origin: f(&j["origin"]), size: f(&j["size"]), cells });
+    }
+    info!("enlighten: {} primitives with atlas UVs, {} instanced, {} landscapes", prims.uvs.len(), prims.instances.len(), prims.land.len());
     commands.insert_resource(prims);
     let solved = systems.iter().filter(|s| s.transport.is_some()).count();
     info!("enlighten: {} systems ({solved} with output) in {} levels' atlases", systems.len(), atlases.0.len());
-    commands.insert_resource(Enlighten { systems, by_id, since: SOLVE_EVERY_S, dumped: false, visibility: HashMap::new() });
+    let environment = environment(&level);
+    info!("enlighten: environment {:.3} {:.3} {:.3}", environment.x, environment.y, environment.z);
+    commands.insert_resource(Enlighten { systems, by_id, since: SOLVE_EVERY_S, dumped: false, visibility: HashMap::new(), environment });
     commands.insert_resource(atlases);
+}
+
+/// The environment the transports gather (their input entry [0, 0, 0xfffffffe, 0]): a cube's texels, 16 x 16 per face
+/// then its 8, 4, 2 and 1 texel mips (2046 in all; faces +X -X +Y -Y +Z (up) -Z). The loaded levels' environment
+/// components add into it (their proxy 0x1409c0200): each its Brightness x EnvironmentColor (linear; the constructors'
+/// defaults 1 and white) on every texel, times its CubemapTexture's when it has one. The weather levels' (CLsm_RainOn /
+/// CLsm_RainOff's EnlightenTextureEnvironment) name no texture: a uniform 0.01 in the rain, 0.05 when clear.
+fn environment(level: &crate::Level) -> Vec4 {
+    let mut sum = Vec4::ZERO;
+    for c in level.layouts.iter().flat_map(|l| &l.actors).flat_map(|a| &a.components).filter(|c| c.kind == "EnlightenEnvironmentTextureComponent" || c.kind == "EnlightenEnvironmentComponent") {
+        let b = c.props.get("Brightness").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+        // (An FColor, sRGB: Conv_ColorToLinearColor.)
+        let ch = |k: &str| c.props.get("EnvironmentColor").and_then(|v| v.get(k)).and_then(|v| v.as_f64()).map_or(1.0, |v| Color::srgb_u8(v as u8, 0, 0).to_linear().red);
+        sum += Vec4::new(ch("R"), ch("G"), ch("B"), 0.0) * b;
+    }
+    sum
 }
 
 /// Unreal space from Bevy's (x, y, z) = (ue x, ue z, ue y) / 100: directions only.
@@ -196,7 +313,6 @@ fn solve(
     atlases: Res<EnlightenAtlases>,
     mut images: ResMut<Assets<Image>>,
     moons: Query<(&DirectionalLight, &GlobalTransform), With<crate::weather::Moon>>,
-    ambient: Option<Res<bevy::light::GlobalAmbientLight>>,
     (points, spots): (Query<(Entity, &PointLight, &GlobalTransform, &IndirectIntensity)>, Query<(Entity, &SpotLight, &GlobalTransform, &IndirectIntensity)>),
     collision: Option<crate::collision::Collision>,
 ) {
@@ -232,7 +348,15 @@ fn solve(
     let gi_ref = &mut *gi;
     for (si, s) in gi_ref.systems.iter_mut().enumerate() {
         s.input = match moon {
-            Some((dir, color)) => s.workspace.directional(dir, color),
+            Some((dir, color)) => {
+                // (Its visibility, SetDirectionalVisibility's: towards the light.)
+                if let Some(v) = &s.visibility {
+                    if s.moon_seen.as_ref().is_none_or(|(d, _)| d.distance_squared(dir) > 1e-8) {
+                        s.moon_seen = Some((dir, v.directional(-dir, s.workspace.clusters.len())));
+                    }
+                }
+                s.workspace.directional(dir, color, s.moon_seen.as_ref().map(|(_, v)| &v[..]))
+            }
             None => vec![Vec4::ZERO; s.workspace.clusters.len()],
         };
         for (le, lamp) in &lamps {
@@ -241,7 +365,8 @@ fn solve(
                 continue;
             }
             // (Its packets' visibility from the lamp, one ray each from the packet's centre, cached: the lamps don't
-            // move. PLACEHOLDER for the visibility data, GEVS.)
+            // move. PLACEHOLDER: the game's local lights' visibility is made at run time (GEVS serves directional
+            // lights only); how, not read.)
             let vis = gi_ref.visibility.entry((*le, si)).or_insert_with(|| {
                 s.workspace
                     .clusters
@@ -275,27 +400,22 @@ fn solve(
             }
         }
         // (The input in the environment's units, radiance: lit by a sky of radiance 1 an open pixel gathers 1
-        // (the transport's test). A cluster's light is irradiance E: its radiance ALBEDO x E / pi.)
-        for v in &mut s.input {
-            *v *= ALBEDO * std::f32::consts::FRAC_1_PI;
+        // (the transport's test). A cluster's light is irradiance E: its radiance albedo x E / pi.)
+        for (v, a) in s.input.iter_mut().zip(&s.albedo) {
+            *v *= *a * std::f32::consts::FRAC_1_PI;
         }
         // The bounce (DoIndirectInputLighting): the last solve's output resampled onto the clusters (GERD), already a
         // radiance gathered, times the albedo; each solve feeds the next, as the game's every frame.
         if let (Some(r), Some(t)) = (&s.resampling, &s.transport) {
             if !s.output.is_empty() {
-                for (v, b) in s.input.iter_mut().zip(r.bounce(&s.output, t.width as usize)) {
-                    *v += b * ALBEDO;
+                for ((v, b), a) in s.input.iter_mut().zip(r.bounce(&s.output, t.width as usize)).zip(&s.albedo) {
+                    *v += b * *a;
                 }
             }
         }
     }
-    // The environment: the sky's mean colour on every environment cluster (PLACEHOLDER: the captured sky cube, x the
-    // environment's Brightness).
-    let sky = ambient.map_or(Vec4::ZERO, |a| {
-        let c = LinearRgba::from(a.color) * a.brightness;
-        Vec4::new(c.red, c.green, c.blue, 0.0)
-    });
-    let env = vec![sky; 1 << 16];
+    // The environment: uniform (`environment`).
+    let env = vec![gi.environment; 2046];
     let dump = (!gi.dumped).then(|| std::env::var_os("F13_ENLIGHTEN_DUMP")).flatten();
     let mut outputs_kept: Vec<(usize, Vec<Vec4>)> = Vec::new();
     gi.dumped = true;
@@ -360,6 +480,10 @@ fn solve(
     }
 }
 
+fn atlas_of(atlases: &EnlightenAtlases, level: &str) -> Option<Handle<Image>> {
+    atlases.0.get(level).cloned()
+}
+
 /// Unreal's LOD 0 vertices of a mesh (position in cm, UV0): `meshes/<glb without .glb>.uvb`.
 fn read_uvb(path: &std::path::Path) -> Option<Vec<[f32; 5]>> {
     let b = std::fs::read(path).ok()?;
@@ -390,9 +514,74 @@ fn light_meshes(
     new: Query<(Entity, &Mesh3d), Without<Lightmapped>>,
     parents: Query<&ChildOf>,
     owners: Query<&EnlightenPrimitive>,
+    instance_owners: Query<&EnlightenInstance>,
+    landscapes: Query<&EnlightenLandscape>,
+    transforms: bevy::transform::helper::TransformHelper,
+    mut weight_uv: ResMut<LandscapeWeightUv>,
 ) {
-    let Primitives { uvs: all_uvs, meshes: ue_meshes, counts, logged } = &mut *prims;
+    let Primitives { uvs: all_uvs, instances, zero_uv1, land, meshes: ue_meshes, counts, logged } = &mut *prims;
     for (e, mesh3d) in &new {
+        if let Some(owner) = parents.iter_ancestors(e).find_map(|a| landscapes.get(a).ok()) {
+            // (A component's vertices, in Unreal space (cm): its cell by their centre.)
+            let (Some(l), Some(atlas), Some(mesh), Ok(g)) = (land.get(&owner.level), atlas_of(&atlases, &owner.level), meshes.get(&mesh3d.0), transforms.compute_global_transform(e)) else {
+                if meshes.get(&mesh3d.0).is_some() {
+                    counts[2] += 1;
+                    commands.entity(e).insert(Lightmapped);
+                }
+                continue;
+            };
+            let Some(bevy::mesh::VertexAttributeValues::Float32x3(pos)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
+                commands.entity(e).insert(Lightmapped);
+                continue;
+            };
+            let world: Vec<Vec2> = pos.iter().map(|p| g.transform_point(Vec3::from(*p))).map(|b| Vec2::new(b.x, b.z) * 100.0).collect();
+            let centre = world.iter().copied().sum::<Vec2>() / world.len().max(1) as f32;
+            let cell = (((centre.x - l.origin) / l.size).floor() as i32, ((centre.y - l.origin) / l.size).floor() as i32);
+            let Some(m) = l.cells.get(&cell) else {
+                counts[2] += 1;
+                commands.entity(e).insert(Lightmapped);
+                continue;
+            };
+            // (Its weight maps' UV from UV0, before UV1 takes the lightmap's: the extremes' line, the map being affine.)
+            if weight_uv.0.is_none() {
+                if let (Some(bevy::mesh::VertexAttributeValues::Float32x2(u0)), Some(bevy::mesh::VertexAttributeValues::Float32x2(u1))) = (mesh.attribute(Mesh::ATTRIBUTE_UV_0), mesh.attribute(Mesh::ATTRIBUTE_UV_1)) {
+                    let axis = |k: usize| {
+                        let (lo, hi) = (0..u0.len()).fold((0, 0), |(lo, hi), i| (if u0[i][k] < u0[lo][k] { i } else { lo }, if u0[i][k] > u0[hi][k] { i } else { hi }));
+                        let scale = (u1[hi][k] - u1[lo][k]) / (u0[hi][k] - u0[lo][k]).max(1e-6);
+                        (scale, u1[lo][k] - scale * u0[lo][k])
+                    };
+                    let ((su, ou), (sv, ov)) = (axis(0), axis(1));
+                    weight_uv.0 = Some(Vec4::new(su, sv, ou, ov));
+                }
+            }
+            let uv1: Vec<[f32; 2]> = world.iter().map(|w| [m[0][0] * w.x + m[0][1] * w.y + m[0][2], m[1][0] * w.x + m[1][1] * w.y + m[1][2]]).collect();
+            let lit = mesh.clone().with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, uv1);
+            counts[0] += 1;
+            commands.entity(e).insert((Mesh3d(meshes.add(lit)), bevy::pbr::Lightmap { image: atlas, uv_rect: Rect::new(0.0, 0.0, 1.0, 1.0), bicubic_sampling: false }, Lightmapped));
+            continue;
+        }
+        if let Some(owner) = parents.iter_ancestors(e).find_map(|a| instance_owners.get(a).ok()) {
+            let (Some(uvsb), Some(atlas)) = (instances.get(&(owner.level.clone(), owner.component.clone())).and_then(|v| v.get(owner.index)), atlases.0.get(&owner.level)) else {
+                counts[2] += 1;
+                commands.entity(e).insert(Lightmapped);
+                continue;
+            };
+            let lit = match zero_uv1.get(&mesh3d.0.id()) {
+                Some(h) => h.clone(),
+                None => {
+                    let Some(mesh) = meshes.get(&mesh3d.0).cloned() else { continue };
+                    let n = mesh.count_vertices();
+                    let h = meshes.add(mesh.with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, vec![[0.0f32, 0.0]; n]));
+                    zero_uv1.insert(mesh3d.0.id(), h.clone());
+                    h
+                }
+            };
+            // (Its UV: the stream (zero) x scale + bias: the rect from the bias.)
+            let at = Vec2::new(uvsb[2], uvsb[3]);
+            counts[0] += 1;
+            commands.entity(e).insert((Mesh3d(lit), bevy::pbr::Lightmap { image: atlas.clone(), uv_rect: Rect::from_corners(at, at), bicubic_sampling: false }, Lightmapped));
+            continue;
+        }
         let Some(owner) = parents.iter_ancestors(e).find_map(|a| owners.get(a).ok()) else {
             commands.entity(e).insert(Lightmapped);
             continue;

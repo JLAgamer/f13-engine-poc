@@ -292,7 +292,7 @@ impl MaterialExtension for BlendExt {
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
 pub(crate) struct TerrainExt {
     #[uniform(100)]
-    params: TerrainParams,
+    pub(crate) params: TerrainParams,
     #[texture(101)]
     weights0: Handle<Image>,
     #[texture(102)]
@@ -337,11 +337,14 @@ pub(crate) struct TerrainExt {
 }
 
 #[derive(ShaderType, Reflect, Debug, Clone)]
-struct TerrainParams {
+pub(crate) struct TerrainParams {
     mapping_scale: f32,
     layer_count: u32,
     rma_mask: u32,
     _pad: u32,
+    /// The weight maps' UV from UV0 (scale u, v, offset u, v) when UV1 holds the Enlighten lightmap's (enlighten.rs);
+    /// zero: UV1 as it is.
+    pub(crate) weight_uv: Vec4,
 }
 
 impl MaterialExtension for TerrainExt {
@@ -1466,7 +1469,7 @@ fn terrain_material(
     ExtendedMaterial {
         base: StandardMaterial::default(),
         extension: TerrainExt {
-            params: TerrainParams { mapping_scale: land.mapping_scale.max(0.001), layer_count: layers.len() as u32, rma_mask, _pad: 0 },
+            params: TerrainParams { mapping_scale: land.mapping_scale.max(0.001), layer_count: layers.len() as u32, rma_mask, _pad: 0, weight_uv: Vec4::ZERO },
             weights0,
             weights1,
             d0: d(0),

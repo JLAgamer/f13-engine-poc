@@ -909,7 +909,8 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
             // A phone box's mesh (its broken one swapped in by police.rs).
             let box_mesh = actor_of(&p.component)
                 .filter(|a| p.component.ends_with(".Mesh") && layout.actors.iter().any(|x| x.name == *a && x.level == p.level && classes.is_child_of(&x.class, "SCPhoneJunctionBox")));
-            for x in xforms {
+            let instances = p.instances.as_ref().map_or(0, Vec::len);
+            for (j, x) in xforms.enumerate() {
                 let mut e = commands.spawn((WorldAssetRoot(scene.clone()), to_transform(x)));
                 if let Some(o) = &overrides {
                     e.insert(o.clone());
@@ -936,9 +937,11 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
                     e.insert(sense_view::CabinPart(i));
                 }
                 // (A single placement's component, for its Enlighten lightmap: enlighten.rs.)
+                let component = || p.component.rsplit_once(':').map_or(p.component.as_str(), |(_, c)| c).to_string();
                 if p.instances.is_none() {
-                    let component = p.component.rsplit_once(':').map_or(p.component.as_str(), |(_, c)| c).to_string();
-                    e.insert(enlighten::EnlightenPrimitive { level: p.level.clone(), component });
+                    e.insert(enlighten::EnlightenPrimitive { level: p.level.clone(), component: component() });
+                } else if j < instances {
+                    e.insert(enlighten::EnlightenInstance { level: p.level.clone(), component: component(), index: j });
                 }
                 spawned += 1;
             }
@@ -951,7 +954,7 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
                 .and_then(|a| a.transform.as_ref())
                 .map(to_transform)
                 .unwrap_or_default();
-            commands.spawn((WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(l.file.clone()))), xf));
+            commands.spawn((WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(l.file.clone()))), xf, enlighten::EnlightenLandscape { level: l.level.clone() }));
         }
     }
     info!("spawned {spawned} mesh instances from {} unique meshes", scenes.len());
