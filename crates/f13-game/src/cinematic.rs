@@ -451,7 +451,8 @@ fn anchor(parent: Entity, bone: &Option<String>, children: &Query<&Children>, na
     }
 }
 
-/// A staged light and its placed properties.
+/// A staged light and its placed properties: on a child of its actor, turned so that Bevy's light axis (-Z) is the
+/// actor's +X, the way Unreal's spot lights shine (as the cine camera's turn below).
 #[derive(Component)]
 struct StagedLight(PlacedLight);
 
@@ -574,14 +575,14 @@ fn start(
                 let l = PlacedLight { kind, world: xf.clone(), props, powered: false };
                 let color: Color = l.color().into();
                 let (lumens, range) = (l.lumens(), l.radius() / 100.0);
+                let axis = Transform::from_rotation(Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2));
                 if kind == LightKind::Spot {
                     let (inner, outer) = l.cone();
                     let outer = outer.clamp(0.5, 89.0).to_radians();
-                    e.insert(SpotLight { color, intensity: lumens, range, radius: l.sphere_radius(), inner_angle: inner.to_radians().min(outer), outer_angle: outer, shadow_maps_enabled: false, ..default() });
+                    e.with_child((SpotLight { color, intensity: lumens, range, radius: l.sphere_radius(), inner_angle: inner.to_radians().min(outer), outer_angle: outer, shadow_maps_enabled: false, ..default() }, axis, StagedLight(l)));
                 } else {
-                    e.insert(PointLight { color, intensity: lumens, range, radius: l.sphere_radius(), shadow_maps_enabled: false, ..default() });
+                    e.with_child((PointLight { color, intensity: lumens, range, radius: l.sphere_radius(), shadow_maps_enabled: false, ..default() }, axis, StagedLight(l)));
                 }
-                e.insert(StagedLight(l));
             }
         }
         if class.starts_with("Base_Cinematic_Face") {
@@ -1032,6 +1033,7 @@ fn play(
     }
     for (actor, props) in light_props {
         let Some(&e) = p.actors.get(actor) else { continue };
+        let Some(e) = children.get(e).ok().and_then(|c| c.iter().find(|&c| lights.contains(c))) else { continue };
         let Ok((l, spot, point)) = lights.get_mut(e) else { continue };
         let mut placed = l.0.clone();
         for (k, v) in props {
