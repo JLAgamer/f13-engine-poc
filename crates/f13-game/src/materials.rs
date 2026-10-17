@@ -559,6 +559,17 @@ fn prop_params(info: &MaterialInfo, loader: &Loader) -> Option<(Handle<Image>, P
     // WeaponBloodMask.r x ShowWeaponBlood (extra.z; extra.w 1: the mask in the lights' slot). The other Jasons' weapons'
     // masters are the same graph (MatLayerBlend_Simple of their own _Layer function and Blood_Layer, ShowWeaponBlood,
     // WeaponBloodMask; their compiled passes not compared: PLACEHOLDER).
+    // J7's machete (jason_machete: its compiled base pass s001, F13-decomp shaders/jason_machete): its layer function
+    // samples machete_source (base colour), machete_metalness (metallic, .r), machete_roughness (roughness r x 0.4 +
+    // 0.1) and machete_normal; specular 0.5; the blood as the pickaxe's (WeaponBloodMask.r x ShowWeaponBlood: base
+    // colour towards (0.04, 0.003936, 0), metallic and roughness towards 0.2). Its RMA composed here from the two maps.
+    if info.master == "jason_machete" {
+        info!("material: J7's machete, with its blood layer");
+        let rma = machete_rma(loader)?;
+        let mask = loader.load(info.textures.get("WeaponBloodMask")?, Tex::Data)?;
+        let extra = Vec4::new(0.0, 0.0, info.scalar("ShowWeaponBlood", 0.0), 1.0);
+        return Some((rma, PropParams { mults: Vec4::new(1.0, 1.0, 0.5, 0.0), extra, lights: Vec4::ZERO }, Some(mask)));
+    }
     const WEAPONS: [&str; 6] = ["M_JasonV2_PickAxe", "M_JasonV3_Axe", "M_JasonV4_PigSplitter", "M_JasonV5_Shears", "M_JasonV8_Axe", "M_Weapon_Spear_01b_BloodMask"];
     if WEAPONS.contains(&info.master.as_str()) {
         info!("material: Jason's weapon ({}), with its blood layer", info.master);
@@ -1222,7 +1233,11 @@ fn apply_materials(
                     Built::Master(masters.add(m))
                 } else if let Some((rma, params, lights)) = prop_params(info, &loader) {
                     let lights = lights.unwrap_or_else(|| fallback.black.clone());
-                    Built::Prop(props.add(ExtendedMaterial { base: standard_material(&index.root, info, &loader), extension: PropExt { params, rma, lights } }))
+                    let mut base = standard_material(&index.root, info, &loader);
+                    if info.master == "jason_machete" {
+                        base.base_color_texture = loader.load(&format!("{MACHETE_TEXTURES}source"), Tex::Color);
+                    }
+                    Built::Prop(props.add(ExtendedMaterial { base, extension: PropExt { params, rma, lights } }))
                 } else {
                     let mut m = standard_material(&index.root, info, &loader);
                     if info.master == "M_Lightsources_Ceiling_Bulbs" {
@@ -1496,6 +1511,33 @@ fn terrain_material(
             r5: r(5),
         },
     }
+}
+
+/// J7's machete's maps (its material's layer function samples them; not parameters).
+const MACHETE_TEXTURES: &str = "SummerCamp/Content/Characters/Killers/Jason/J7/Textures/machete_";
+
+/// J7's machete's RMA for the prop shader: R its roughness map's r x 0.4 + 0.1 (the base pass's), G its metalness
+/// map's r, B 1 (its base pass writes no occlusion).
+fn machete_rma(loader: &Loader) -> Option<Handle<Image>> {
+    let read = |name: &str| {
+        let bytes = std::fs::read(loader.root.join(format!("{MACHETE_TEXTURES}{name}.png"))).ok()?;
+        Image::from_buffer(&bytes, ImageType::Extension("png"), CompressedImageFormats::NONE, false, ImageSampler::Default, RenderAssetUsages::MAIN_WORLD).ok()?.convert(bevy::render::render_resource::TextureFormat::Rgba8Unorm)
+    };
+    let (rough, metal) = (read("roughness")?, read("metalness")?);
+    // (The metalness map is half the roughness map's size: its texel at the same UV.)
+    let (size, msize) = (rough.size(), metal.size());
+    let (r, m) = (rough.data.as_ref()?, metal.data.as_ref()?);
+    let mut data = Vec::with_capacity(r.len());
+    for y in 0..size.y {
+        for x in 0..size.x {
+            let mi = ((y * msize.y / size.y) * msize.x + x * msize.x / size.x) as usize * 4;
+            let ri = ((y * size.x + x) * 4) as usize;
+            data.extend([(r[ri] as f32 * 0.4 + 25.5).round() as u8, m.get(mi).copied().unwrap_or(0), 255, 255]);
+        }
+    }
+    let mut image = Image::new(Extent3d { width: size.x, height: size.y, depth_or_array_layers: 1 }, TextureDimension::D2, data, bevy::render::render_resource::TextureFormat::Rgba8Unorm, RenderAssetUsages::RENDER_WORLD);
+    image.sampler = ImageSampler::linear();
+    Some(loader.assets.add(image))
 }
 
 /// Packs the exported per-layer weight maps (`<landscape>/<layer>_LayerInfo.png`, greyscale) four to an RGBA image.

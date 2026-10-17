@@ -1542,8 +1542,11 @@ static class Mvp
         "/Game/Characters/Killers/Jason/J2/Textures/Jason_V2_Pick_Axe_Normal",
         "/Game/Characters/Killers/Jason/J2/Textures/Jason_V2_Pick_Axe_RMA",
         // The other Jasons' weapons' base layers likewise (M_JasonV3_Axe_Layer, M_JasonV4_PigSplitter_Layer,
-        // M_JasonV5_Shears_Layer, Weapon_Spear_01b_Layer, M_JasonV8_Axe_Layer). (J7's machete layer samples separate
-        // source / metalness / roughness maps: not yet.)
+        // M_JasonV5_Shears_Layer, Weapon_Spear_01b_Layer, M_JasonV8_Axe_Layer), and J7's machete's (jason_machete_layer:
+        // separate source / metalness / roughness maps, f13-game materials.rs composes its RMA).
+        "/Game/Characters/Killers/Jason/J7/Textures/machete_source",
+        "/Game/Characters/Killers/Jason/J7/Textures/machete_metalness",
+        "/Game/Characters/Killers/Jason/J7/Textures/machete_roughness",
         "/Game/Characters/Killers/Jason/J3/Textures/Jason_V3_Axe_Diffuse",
         "/Game/Characters/Killers/Jason/J3/Textures/Jason_V3_Axe_Normal",
         "/Game/Characters/Killers/Jason/J3/Textures/Jason_V3_Axe_RMA",
