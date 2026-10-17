@@ -523,11 +523,11 @@ pub const MAX_FLOOR_DIST_M: f32 = 0.024;
 pub const AVG_FLOOR_DIST_M: f32 = 0.0215;
 
 /// Where an upright capsule (feet at `from`, `radius`, `half_height`) moving to `to` first touches a triangle, as a
-/// fraction of the way: SetActorTransform's sweep. It's swept from [`MAX_FLOOR_DIST_M`] over its floor (its feet rest
-/// [`AVG_FLOOR_DIST_M`] over it), and
+/// fraction of the way: SetActorTransform's sweep. It's swept from [`MAX_FLOOR_DIST_M`] over `from` (a walking
+/// character's feet rest [`AVG_FLOOR_DIST_M`] over its floor; the special moves' spots and placements are on it), and
 /// triangles it already touches at the start don't stop it (a sweep moving out of contact goes on).
 pub fn capsule_sweep(world: &(impl TriSource + ?Sized), from: Vec3, to: Vec3, radius: f32, half_height: f32) -> Option<f32> {
-    let lift = Vec3::Y * (MAX_FLOOR_DIST_M - AVG_FLOOR_DIST_M);
+    let lift = Vec3::Y * MAX_FLOOR_DIST_M;
     let (lo, hi) = (lift + Vec3::Y * radius, lift + Vec3::Y * (2.0 * half_height - radius).max(radius));
     let r = Vec3::splat(radius);
     let mut tris = Vec::new();
