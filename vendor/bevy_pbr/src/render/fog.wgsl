@@ -46,7 +46,9 @@ fn exponential_fog(
 ) -> vec4<f32> {
     var fog_color = scattering_adjusted_fog_color(fog_params, scattering);
     let density = fog_params.be.x;
-    fog_color.a *= 1.0 - 1.0 / exp(distance * density);
+    // f13-rs: the colour's alpha is Unreal's FogMaxOpacity, a cap on the fog (FExponentialHeightFogPS: transmittance
+    // max(exp2(-integral), 1 - FogMaxOpacity)), not a factor (stock Bevy: a x (1 - e^-dD), a fifth of the rain's fog).
+    fog_color.a = min(1.0 - 1.0 / exp(distance * density), fog_color.a);
     return vec4<f32>(mix(input_color.rgb, fog_color.rgb, fog_color.a), input_color.a);
 }
 
