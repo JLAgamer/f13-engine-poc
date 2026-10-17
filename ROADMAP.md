@@ -15,9 +15,8 @@ Lighting first (the user, 2026-10-14):
 - [ ] Lighting: the local lights' shadow caching and fade: whole-map caching gains nothing (the shadowed lights are near
       her, so always dirty: tried, MODLOG "Shadow caching: tried and reverted"); it needs UE's static / movable split, two
       shadow views a face in a reworked bevy_pbr
-- [ ] Lighting against the user's 2026-10-17 shots (MODLOG "Too dark overall"): Zane's lamp-lit walls about 1.6x short
-      (Enlighten's light input: the UE integration's fill unread; a shell panel's clusters get no direct input); the
-      fog's height falloff along the ray; Chad's hair in the intro is brown, near black in the game
+- [ ] Lighting against the user's 2026-10-17 shots (MODLOG "Too dark overall"): the fog's height falloff along the ray
+      and its directional inscattering; Chad's hair in the intro is brown, near black in the game
 - [ ] The lobby's mouse controls: all wired (lobby.rs lobby_clicks, ui.rs entry_hover: buttons, list entries, the emote
       wheel, hover looks, sounds); to try with a real mouse (the user)
 - [ ] The lobby's rest: a full 8-player run (needs more machines: at most 2 instances run here)
