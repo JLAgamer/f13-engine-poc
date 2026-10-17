@@ -550,6 +550,12 @@ fn counselor_prompts(
         let Some(class) = item.map(|i| i.class.as_str()).or(name.map(|n| n.as_str())) else { continue };
         let comps = class_prompts.entry(class.to_string()).or_insert_with(|| {
             let Some(info) = classes.get(class) else { return Vec::new() };
+            // (Not a context kill's: its ContextKillComponent's InteractorSpecialClass is a Jason, KINDS' or not (the
+            // coat hook's WallHook_PlacedKill, the knife, screwdriver, stove and toilet kills: spawners' actors without a
+            // PlacedKill here).)
+            if classes.is_child_of(class, "SCContextKillActor") {
+                return Vec::new();
+            }
             let interactables = info.components.iter().filter(|c| classes.is_child_of(&c.kind, "ILLInteractableComponent"));
             let door = classes.is_child_of(class, "SCDoor");
             interactables
