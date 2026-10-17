@@ -515,15 +515,19 @@ pub fn sphere_sweep(world: &(impl TriSource + ?Sized), from: Vec3, to: Vec3, rad
     None
 }
 
-/// Unreal's walking capsule rests this far above its floor (UCharacterMovementComponent's MAX_FLOOR_DIST, 2.4 cm), so
-/// sweeps from rest don't hit it.
+/// Unreal's walking capsule rests between MIN_FLOOR_DIST (1.9 cm) and MAX_FLOOR_DIST (2.4 cm) above its floor
+/// (UCharacterMovementComponent), AdjustFloorHeight moving it to their mean when it's outside: [`AVG_FLOOR_DIST_M`].
 pub const MAX_FLOOR_DIST_M: f32 = 0.024;
+/// (MIN_FLOOR_DIST + MAX_FLOOR_DIST) / 2: where a walking capsule's bottom rests over its floor (its mesh with it: a
+/// counselor's feet 3 cm under her capsule's bottom, MeshTransform -85 against half height 82).
+pub const AVG_FLOOR_DIST_M: f32 = 0.0215;
 
 /// Where an upright capsule (feet at `from`, `radius`, `half_height`) moving to `to` first touches a triangle, as a
-/// fraction of the way: SetActorTransform's sweep. It's swept from [`MAX_FLOOR_DIST_M`] over its floor, and
+/// fraction of the way: SetActorTransform's sweep. It's swept from [`MAX_FLOOR_DIST_M`] over its floor (its feet rest
+/// [`AVG_FLOOR_DIST_M`] over it), and
 /// triangles it already touches at the start don't stop it (a sweep moving out of contact goes on).
 pub fn capsule_sweep(world: &(impl TriSource + ?Sized), from: Vec3, to: Vec3, radius: f32, half_height: f32) -> Option<f32> {
-    let lift = Vec3::Y * MAX_FLOOR_DIST_M;
+    let lift = Vec3::Y * (MAX_FLOOR_DIST_M - AVG_FLOOR_DIST_M);
     let (lo, hi) = (lift + Vec3::Y * radius, lift + Vec3::Y * (2.0 * half_height - radius).max(radius));
     let r = Vec3::splat(radius);
     let mut tris = Vec::new();
@@ -673,8 +677,9 @@ fn find_floor(world: &(impl TriSource + ?Sized), feet: Vec3, cap: &Capsule, s: &
         };
         if let Some((y, n)) = surface_below(world, feet.x + offset.x, feet.z + offset.y, top, bottom) {
             let walkable = n.y >= s.walkable_normal_y;
-            if (walkable || k == 0) && best.is_none_or(|(b, _)| y > b) {
-                best = Some((y, walkable));
+            if (walkable || k == 0) && best.is_none_or(|(b, _)| y + AVG_FLOOR_DIST_M > b) {
+                // (The capsule rests AVG_FLOOR_DIST over it.)
+                best = Some((y + AVG_FLOOR_DIST_M, walkable));
             }
         }
     }
@@ -912,7 +917,7 @@ mod tests {
             normal += r.wall_normal;
         }
         assert!(grounded);
-        assert!(feet.y.abs() < 1e-4, "{feet}");
+        assert!((feet.y - AVG_FLOOR_DIST_M).abs() < 1e-4, "{feet}");
         // Wall face at x = 1.9: the capsule stops a radius before it.
         assert!((feet.x - (1.9 - CAP.radius)).abs() < 0.02, "{feet}");
         assert!(normal.x < 0.0);
@@ -931,7 +936,7 @@ mod tests {
         for _ in 0..200 {
             grounded = move_capsule(&g, &mut feet, &mut vy, grounded, Vec2::new(0.05, 0.0), 1.0 / 60.0, &CAP, &WALK).grounded;
         }
-        assert!((feet.y - 0.3).abs() < 1e-3, "on the step: {feet}");
+        assert!((feet.y - 0.3 - AVG_FLOOR_DIST_M).abs() < 1e-3, "on the step: {feet}");
         assert!(feet.x < 4.0 - CAP.radius + 0.02, "stopped by the block: {feet}");
     }
 
@@ -949,7 +954,7 @@ mod tests {
             grounded = r.grounded;
         }
         assert!(airborne);
-        assert!(grounded && feet.y.abs() < 1e-4, "{feet}");
+        assert!(grounded && (feet.y - AVG_FLOOR_DIST_M).abs() < 1e-4, "{feet}");
     }
 
     #[test]

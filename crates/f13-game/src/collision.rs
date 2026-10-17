@@ -14,6 +14,32 @@ impl Plugin for CollisionPlugin {
         app.init_resource::<DynamicColliders>()
             .add_systems(PreStartup, build_world)
             .add_systems(PreUpdate, refresh_dynamic);
+        if std::env::var_os("F13_FEET_DEBUG").is_some() {
+            app.add_systems(Last, feet_debug);
+        }
+    }
+}
+
+/// F13_FEET_DEBUG: every half second, each foot and ball bone of the player and Jason over the ground under it (the
+/// feet in the ground: f13-core AVG_FLOOR_DIST_M).
+fn feet_debug(time: Res<Time>, mut last: Local<f32>, bones: Query<(Entity, &Name, &GlobalTransform)>, parents: Query<&ChildOf>, players: Query<(), With<crate::player::Player>>, jasons: Query<(), With<crate::jason::Jason>>, collision: Collision) {
+    if time.elapsed_secs() - *last < 0.5 {
+        return;
+    }
+    *last = time.elapsed_secs();
+    let world = collision.all();
+    for (e, n, g) in &bones {
+        let name = n.as_str();
+        if !matches!(name, "foot_l" | "foot_r" | "ball_l" | "ball_r") {
+            continue;
+        }
+        let Some(who) = parents.iter_ancestors(e).find_map(|a| if players.contains(a) { Some("her") } else if jasons.contains(a) { Some("him") } else { None }) else { continue };
+        let p = g.translation();
+        let (a, b) = (p + Vec3::Y * 1.0, p - Vec3::Y * 1.0);
+        if let Some(t) = f13_core::collision::segment_hit(&world, a, b, 0.5) {
+            let ground = a.y + (b.y - a.y) * t;
+            info!("FEET {who} {name} {:+.3} m above ground at {:.1}", p.y - ground, p);
+        }
     }
 }
 
