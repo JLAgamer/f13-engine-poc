@@ -42,9 +42,9 @@ Lighting first (the user, 2026-10-14):
       emotes, a main menu
 - [ ] The Jason and kill menus by a real mouse and keys (Q opens the weapons, 1-4 the grab kill slots: PLACEHOLDER keys)
 
-- [ ] Playtest (2026-10-17): counselors see the environment kill prompt (only Jason should); Jason's and the
-      counselors' feet sometimes sink into the terrain or cabin floors; some weapons miss their materials (the
-      Machete)
+- [ ] Playtest (2026-10-17): Jason's boots about 10 cm in the ground (the game's own data: his mesh 102 cm under an
+      88 cm capsule's centre, nothing found resizing it; to compare in the game). (Done: counselors' feet, the context
+      kill prompts, J7's machete.)
 
 ## Later
 - All unlockables and perks available by default
