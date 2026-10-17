@@ -8,10 +8,10 @@ Base content (asset paths in the player's install; all gameplay values come from
 
 ## Todo
 Lighting first (the user, 2026-10-14):
-- [ ] Lighting: Enlighten GI, on behind F13_ENLIGHTEN (MODLOG "Enlighten"): left are the game's own versions of
-      what's fitted or guessed (the local lights' visibility: one ray per packet; the landscape's UVs: fitted; the
-      foliage's: one point per instance; the probes' interpolation and per-pixel clipmap), and turning it on by default
-      (its cost: +1.4 ms render world, the solve on the async pool)
+- [ ] Lighting: Enlighten GI (on by default; F13_ENLIGHTEN=0 off): left are the game's own versions of what's fitted
+      or guessed (the lights' input: albedo x E, matched to the user's shots, the UE integration's fill unread; the
+      local lights' visibility: one ray per point; the landscape's UVs: fitted; the foliage's: one point per instance;
+      the probes' interpolation and per-pixel clipmap)
 - [ ] Lighting: the local lights' shadow caching and fade: whole-map caching gains nothing (the shadowed lights are near
       her, so always dirty: tried, MODLOG "Shadow caching: tried and reverted"); it needs UE's static / movable split, two
       shadow views a face in a reworked bevy_pbr

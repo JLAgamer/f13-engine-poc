@@ -580,10 +580,13 @@ impl Solver {
                     *light += sum / packets.len() as f32;
                 }
             }
-            // (The input in the environment's units, radiance: lit by a sky of radiance 1 an open pixel gathers 1
-            // (the transport's test). A cluster's light is irradiance E: its radiance albedo x E / pi.)
+            // (A cluster's input is its albedo x the irradiance E, as DoDirectInputLighting's kernels add it: no 1 / pi
+            // (MODLOG "Enlighten GI: first look"); its bounce the same. PLACEHOLDER: the UE integration's fill of
+            // Enlighten's lights isn't read; with E / pi (a radiance, as the environment's) every lamp-lit and moonlit
+            // interior was about pi too dark against the user's shots, with E they match: Zane's cabin, Jason's shack,
+            // Rod Fielder's logs (MODLOG "Too dark overall").)
             for (v, a) in s.input.iter_mut().zip(&s.albedo) {
-                *v *= *a * std::f32::consts::FRAC_1_PI;
+                *v *= *a;
             }
             // The bounce (DoIndirectInputLighting): the last solve's output resampled onto the clusters (GERD), already
             // a radiance gathered, times the albedo; each solve feeds the next, as the game's every frame.

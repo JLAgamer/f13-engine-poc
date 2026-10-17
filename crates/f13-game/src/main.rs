@@ -456,6 +456,11 @@ fn parse_args() -> Args {
     Args { net, bot_net, bot_net_abilities, bot_spectate, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_passenger, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, jason_health, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, override_spawning, no_voice, net_id, last_jason, bot_hooks, last_match, open_mic, bot_radio, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, counselor_class, bot_tommy, bot_sweater, bot_kill_jason, bot_mask, camera, round_time, flashlight, rain }
 }
 
+/// Whether Enlighten's indirect light runs (on unless F13_ENLIGHTEN=0).
+pub(crate) fn enlighten_enabled() -> bool {
+    std::env::var("F13_ENLIGHTEN").map_or(true, |v| v != "0")
+}
+
 #[derive(Resource)]
 pub(crate) struct Level {
     pub(crate) layouts: Vec<LevelLayout>,
@@ -792,8 +797,9 @@ fn main() {
     if args.perf {
         app.add_plugins(perf::PerfPlugin);
     }
-    // (F13_ENLIGHTEN: Enlighten's indirect light, solved into its atlases and on the meshes as lightmaps: work in progress.)
-    if std::env::var_os("F13_ENLIGHTEN").is_some() {
+    // Enlighten's indirect light, solved into its atlases and on the meshes as lightmaps, as the game always has it
+    // (F13_ENLIGHTEN=0: off, for comparisons; none for --unlit or a dedicated server, which draws nothing).
+    if enlighten_enabled() && !args.unlit && !args.dedicated {
         app.add_plugins(enlighten::EnlightenPlugin);
     }
     let exit = app.run();
@@ -884,7 +890,7 @@ fn spawn_level(mut commands: Commands, assets: Res<AssetServer>, mut level: ResM
         }
     }
     // (The placements' Enlighten tags, for their lightmaps: enlighten.rs.)
-    let enlighten = std::env::var_os("F13_ENLIGHTEN").is_some();
+    let enlighten = enlighten_enabled();
     for layout in &level.layouts {
         for p in &layout.placements {
             let component = p.component.rsplit('.').next().unwrap_or_default();
