@@ -18,6 +18,15 @@
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var mask_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var mask_b: texture_2d<f32>;
 
+// skin.wgsl's SkinParams: spec.w 1 when mask_a is the Skin Diffuse (its alpha clips).
+struct SkinParams {
+    dark_tint: vec4<f32>,
+    rough: vec4<f32>,
+    spec: vec4<f32>,
+    selection: vec4<f32>,
+}
+@group(#{MATERIAL_BIND_GROUP}) @binding(103) var<uniform> params: SkinParams;
+
 fn clip(in: prepass_io::VertexOutput) {
 #ifdef VERTEX_UVS_A
 #ifdef BINDLESS
@@ -26,9 +35,9 @@ fn clip(in: prepass_io::VertexOutput) {
 #else
     let cutoff = pbr_bindings::material.alpha_cutoff;
 #endif
-    let a = textureSample(mask_a, mask_sampler, in.uv).r;
+    let m = textureSample(mask_a, mask_sampler, in.uv);
     let b = textureSample(mask_b, mask_sampler, in.uv).r;
-    if saturate(1.0 - a * (1.0 - b)) < cutoff {
+    if select(saturate(1.0 - m.r * (1.0 - b)), m.a, params.spec.w > 0.5) < cutoff {
         discard;
     }
 #endif

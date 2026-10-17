@@ -27,7 +27,7 @@ struct SkinParams {
     dark_tint: vec4<f32>,
     // RoughMin, RoughMax, RoughnessMultiplier, RainGloss
     rough: vec4<f32>,
-    // 0.35 + Sweat, PoreSpecWeight, Rain_MPC's Rain, -
+    // 0.35 + Sweat, PoreSpecWeight, Rain_MPC's Rain, 1 when mask_a is Skin Diffuse (no masks: its alpha clips)
     spec: vec4<f32>,
     // SelectionColor
     selection: vec4<f32>,
@@ -54,7 +54,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 #ifdef VERTEX_UVS_A
     let a = textureSample(mask_a, mask_sampler, in.uv).r;
     let b = textureSample(mask_b, mask_sampler, in.uv).r;
-    pbr_input.material.base_color.a = saturate(1.0 - a * (1.0 - b));
+    pbr_input.material.base_color.a = select(saturate(1.0 - a * (1.0 - b)), textureSample(mask_a, mask_sampler, in.uv).a, params.spec.w > 0.5);
 #ifdef VERTEX_UVS_B
     let uv = in.uv;
     let uv2 = in.uv_b;

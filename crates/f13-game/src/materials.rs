@@ -606,8 +606,10 @@ struct SkinParams {
     selection: Vec4,
 }
 
-/// A SkinGoreMaster instance (the master's defaults: uniexpr.py on it), nothing clipped (black masks: the face; the
-/// body takes its own: [`MaterialIndex::skin_material`]) and no damage yet.
+/// A SkinGoreMaster instance (the master's defaults: uniexpr.py on it), clipped by its Skin Diffuse's alpha (the base
+/// pass's opacity: the intro's Counselor_Male_* bodies, whose M_*_Body_Masked_Inst alpha keeps only the skin outside
+/// the clothes and not the head under the cinematic face) until a character's masks replace it
+/// ([`MaterialIndex::skin_material`]: the alpha mask compiler's target in place of Skin Diffuse), and no damage yet.
 fn skin_gore_material(root: &Path, info: &MaterialInfo, loader: &Loader, fallback: &Fallback) -> SkinMaterial {
     let v = |name: &str, d: [f32; 4]| info.vectors.get(name).map_or(Vec4::from_array(d), |v| Vec4::from_array(*v));
     let tex = |name: &str, kind: Tex, d: &Handle<Image>| info.textures.get(name).and_then(|p| loader.load(p, kind)).unwrap_or_else(|| d.clone());
@@ -622,15 +624,16 @@ fn skin_gore_material(root: &Path, info: &MaterialInfo, loader: &Loader, fallbac
         base.normal_map_texture = Some(n);
         base.flip_normal_map_y = true;
     }
+    let diffuse = base.base_color_texture.clone().unwrap_or_else(|| fallback.white.clone());
     ExtendedMaterial {
         base,
         extension: SkinMaskExt {
-            mask_a: fallback.black.clone(),
+            mask_a: diffuse,
             mask_b: fallback.black.clone(),
             params: SkinParams {
                 dark_tint: v("Skin_diffuse_DarkTint", [1.0; 4]),
                 rough: Vec4::new(info.scalar("RoughMin", 0.1), info.scalar("RoughMax", 0.9), v("RoughnessMultiplier", [1.0; 4]).x, info.scalar("RainGloss", 0.55)),
-                spec: Vec4::new(0.35 + info.scalar("Sweat", 0.2), info.scalar("PoreSpecWeight", 0.0), 0.0, 0.0),
+                spec: Vec4::new(0.35 + info.scalar("Sweat", 0.2), info.scalar("PoreSpecWeight", 0.0), 0.0, 1.0),
                 selection: v("SelectionColor", [0.0; 4]).with_w(0.0),
             },
             damage: fallback.clear.clone(),
@@ -700,6 +703,7 @@ impl MaterialIndex {
         let mut skin = skin;
         skin.extension.mask_a = loader.load(a, Tex::Data)?;
         skin.extension.mask_b = loader.load(b, Tex::Data)?;
+        skin.extension.params.spec.w = 0.0;
         Some(skin)
     }
 }
