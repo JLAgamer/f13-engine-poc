@@ -276,7 +276,9 @@ fn load(mut commands: Commands, export: Res<crate::ExportRoot>, level: Res<crate
         if !packages.contains(package) || w == 0 || h == 0 {
             continue;
         }
-        let image = Image::new_fill(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, &[0; 16], TextureFormat::Rgba32Float, RenderAssetUsages::default());
+        // (Half floats: filterable on every adapter (Rgba32Float needs FLOAT32_FILTERABLE), for the bilinear sample the
+        // lightmap shader divides by the coverage in alpha, as the game's base pass does.)
+        let image = Image::new_fill(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, &[0; 8], TextureFormat::Rgba16Float, RenderAssetUsages::default());
         atlases.0.insert(package.clone(), images.add(image));
     }
     let mut prims = Primitives::default();
@@ -469,10 +471,10 @@ fn apply(
             for y in 0..*th {
                 for x in 0..*tw {
                     let v = out[y * tw + x];
-                    let o = ((*by as usize + y) * w + *bx as usize + x) * 16;
-                    if let Some(px) = data.get_mut(o..o + 16) {
+                    let o = ((*by as usize + y) * w + *bx as usize + x) * 8;
+                    if let Some(px) = data.get_mut(o..o + 8) {
                         for (k, c) in v.to_array().iter().enumerate() {
-                            px[4 * k..4 * k + 4].copy_from_slice(&c.to_le_bytes());
+                            px[2 * k..2 * k + 2].copy_from_slice(&f16_bits(*c).to_le_bytes());
                         }
                     }
                 }
@@ -480,7 +482,7 @@ fn apply(
         }
         // (F13_ENLIGHTEN_DUMP=<dir>: the first solve's atlases as PPMs, scaled to their brightest pixel, for checking.)
         if let Some(dir) = &dump {
-            let px: Vec<f32> = data.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+            let px: Vec<f32> = data.chunks_exact(2).map(|b| f16_value(u16::from_le_bytes([b[0], b[1]]))).collect();
             let max = px.iter().copied().fold(1e-9f32, f32::max);
             let rgb: Vec<u8> = px.chunks_exact(4).flat_map(|c| [c[0], c[1], c[2]].map(|v| ((v / max).clamp(0.0, 1.0).sqrt() * 255.0) as u8)).collect();
             let path = std::path::Path::new(dir).join(format!("{package}.ppm"));
@@ -606,7 +608,7 @@ impl Solver {
                 .collect();
             let out = t.solve(&inputs, 1.0);
             // (The debug scale on what's drawn only: the output itself feeds the bounce.)
-            outputs.push((s.package.clone(), s.atlas_base, (t.width as usize, t.height as usize), out.iter().map(|v| *v * f.debug_scale).collect()));
+            outputs.push((s.package.clone(), s.atlas_base, (t.width as usize, t.height as usize), out.iter().map(|v| (v.truncate() * f.debug_scale).extend(v.w)).collect()));
             new_outputs.push((i, out));
         }
         for (i, out) in new_outputs {
@@ -697,6 +699,17 @@ static SOLVE_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 
 const PROBE_VOXELS: UVec3 = UVec3::new(48, 24, 48);
 const PROBE_VOXEL_M: f32 = 2.0;
+
+/// A half float's value (the atlas dump).
+fn f16_value(h: u16) -> f32 {
+    let (sign, exp, man) = ((h >> 15) as u32, ((h >> 10) & 0x1f) as i32, (h & 0x3ff) as f32);
+    let v = match exp {
+        0 => man / 1024.0 * 2f32.powi(-14),
+        31 => f32::INFINITY,
+        e => (1.0 + man / 1024.0) * 2f32.powi(e - 15),
+    };
+    if sign == 1 { -v } else { v }
+}
 
 fn f16_bits(v: f32) -> u16 {
     let x = v.to_bits();

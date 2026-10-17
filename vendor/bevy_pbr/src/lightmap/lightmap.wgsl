@@ -60,10 +60,14 @@ fn sample(uv: vec2<f32>, lightmap_slot: u32) -> vec3<f32> {
     // islands, so there's no harm in using mip level 0 and it lets us avoid
     // control flow uniformity problems.
 #ifdef MULTIPLE_LIGHTMAPS_IN_ARRAY
-    return textureSampleLevel(lightmaps_textures[lightmap_slot], lightmaps_samplers[lightmap_slot], uv, 0.0).rgb;
+    let s = textureSampleLevel(lightmaps_textures[lightmap_slot], lightmaps_samplers[lightmap_slot], uv, 0.0);
 #else
-    return textureSampleLevel(lightmaps_texture, lightmaps_sampler, uv, 0.0).rgb;
+    let s = textureSampleLevel(lightmaps_texture, lightmaps_sampler, uv, 0.0);
 #endif
+    // f13-rs: the Enlighten atlas's alpha is its coverage (1 where the solve wrote): the filtered sample divided by it,
+    // as Unreal's base pass does with the irradiance texture (max(coverage, 0.01)), so the texels no system writes don't
+    // darken a chart's edge (its charts are a few texels wide).
+    return s.rgb / max(s.a, 0.01);
 }
 
 fn w0(a: f32) -> f32 {

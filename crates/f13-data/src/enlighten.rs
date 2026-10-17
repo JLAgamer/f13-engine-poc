@@ -159,7 +159,9 @@ impl Transport {
             for (p, &(x, y)) in b.pixels.iter().enumerate() {
                 let row = &b.coefficients[p * n..(p + 1) * n];
                 let e = row.iter().zip(&g).fold(Vec4::ZERO, |a, (&k, v)| a + *v * k as f32);
-                out[y as usize * w + x as usize] = e.max(Vec4::ZERO) * scale;
+                // (Alpha 1: a pixel the solve writes. The game's irradiance texture carries that coverage, by which
+                // its base pass divides the filtered sample: max(t7.w, 0.01), M_Prop_Master s071.)
+                out[y as usize * w + x as usize] = (e.truncate().max(Vec3::ZERO) * scale).extend(1.0);
             }
             for &((dx, dy), (sx, sy)) in &b.duplicates {
                 out[dy as usize * w + dx as usize] = out[sy as usize * w + sx as usize];
