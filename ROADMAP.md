@@ -15,8 +15,8 @@ Lighting first (the user, 2026-10-14):
 - [ ] Lighting: the local lights' shadow caching and fade: whole-map caching gains nothing (the shadowed lights are near
       her, so always dirty: tried, MODLOG "Shadow caching: tried and reverted"); it needs UE's static / movable split, two
       shadow views a face in a reworked bevy_pbr
-- [ ] Post-processing and lighting: compare against the game's own screenshots (the user's cabin porch reference,
-      2026-10-12: its wall lamp's spots light sharp bands up and down the logs)
+- [ ] Post-processing and lighting: compare against the game's own screenshots (the user's 2026-10-17 shots still to
+      place: a lodge's hall and bedroom by its EXIT sign, a dark shed, a counselor's face in the rain)
 - [ ] The lobby's mouse controls: all wired (lobby.rs lobby_clicks, ui.rs entry_hover: buttons, list entries, the emote
       wheel, hover looks, sounds); to try with a real mouse (the user)
 - [ ] The lobby's rest: a full 8-player run (needs more machines: at most 2 instances run here)

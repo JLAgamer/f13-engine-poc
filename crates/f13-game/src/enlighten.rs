@@ -414,7 +414,9 @@ fn solve(
         let c = LinearRgba::from(l.color);
         (to_unreal_dir(g.forward().as_vec3()), Vec4::new(c.red, c.green, c.blue, 0.0) * l.illuminance)
     });
-    // The lamps (their indirect share in): Unreal space, their UE intensity (lumens / 4 pi).
+    // The lamps (their indirect share in): Unreal space, their UE intensity (lumens / 4 pi). PLACEHOLDER: an
+    // inverse-square lamp's input takes the deferred lighting's x16 (lighting.rs); the UE integration's fill of
+    // Enlighten's light (its colour at +0x90) isn't read.
     let ue = |p: Vec3| Vec3::new(p.x, p.z, p.y) * 100.0;
     let rgb = |c: Color, k: f32| {
         let c = LinearRgba::from(c);
