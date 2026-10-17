@@ -42,6 +42,10 @@ Lighting first (the user, 2026-10-14):
       emotes, a main menu
 - [ ] The Jason and kill menus by a real mouse and keys (Q opens the weapons, 1-4 the grab kill slots: PLACEHOLDER keys)
 
+- [ ] Playtest (2026-10-17): counselors see the environment kill prompt (only Jason should); Jason's and the
+      counselors' feet sometimes sink into the terrain or cabin floors; some weapons miss their materials (the
+      Machete)
+
 ## Later
 - All unlockables and perks available by default
 - Server browser using Steamworks
