@@ -442,7 +442,10 @@ fn actor_loop(
     trace!("loop {} on {}", ev.prop, ev.actor);
     let Some((voices, att)) = sounds.play(&name, &mut || rng.0.frand()) else { return };
     for v in voices {
-        let settings = PlaybackSettings { mode: PlaybackMode::Loop, speed: v.pitch, volume: Volume::Linear(v.volume), ..PlaybackSettings::LOOP };
+        // (Only its looping voices loop, as an AudioComponent plays a cue: V6Engine's Car_Start_01 is a one-shot before
+        // its idle loop; looped with the rest, the car's start replayed over itself, ever louder.)
+        let mode = if v.looping || v.reloop { PlaybackMode::Loop } else { PlaybackMode::Despawn };
+        let settings = PlaybackSettings { mode, speed: v.pitch, volume: Volume::Linear(v.volume), ..PlaybackSettings::LOOP };
         let source = AudioPlayer::new(assets.load(format!("sounds/{}", v.file)));
         let mut e = commands.spawn((source, settings, Transform::from_translation(Vec3::Y), ChildOf(ev.actor), LoopOf(ev.prop), VoiceClass(v.class.clone())));
         if let Some(att) = att.clone().filter(|a| a.attenuate || a.spatialize) {

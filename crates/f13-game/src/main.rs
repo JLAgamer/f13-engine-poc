@@ -748,6 +748,11 @@ fn main() {
                     }),
                     ..default()
                 })
+                // A dedicated server plays no one and hears nothing (its sounds still run for the clients' shouts).
+                .set(bevy::audio::AudioPlugin {
+                    global_volume: bevy::audio::GlobalVolume::new(bevy::audio::Volume::Linear(if args.dedicated { 0.0 } else { 1.0 })),
+                    ..default()
+                })
                 // Unreal meshes carry up to 8 UV sets; Bevy warns once per extra set per mesh.
                 .set(bevy::log::LogPlugin {
                     filter: "wgpu=error,naga=warn,bevy_gltf::loader=error".into(),
