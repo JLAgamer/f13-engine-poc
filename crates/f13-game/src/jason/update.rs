@@ -1135,10 +1135,12 @@ pub(crate) fn update_jason(
                 }
                 // His swing meeting the world (his OnHit for a hit that isn't a counselor: a door or a window take his
                 // damage, and any other mesh within his weapon's MaximumRecoilAngle of his facing recoils him; each
-                // spawns his weapon's impact, by its surface). PLACEHOLDER: his weapon's sweep, a line from his chest
-                // along his facing to his attack range through the level (doors' closed leaves in it) in the swing's
-                // window, the swing over at the first hit (the recoil, the door's or window's damage and the weapon
-                // getting stuck not ported).
+                // spawns his weapon's impact, by its surface). A door takes TakeDamage(DamageWorldModifier x his
+                // weapon's Damage) (0x140401c49: not the door he's using, +0x1650); a window's TakeDamage is AActor's
+                // (SCWindow overrides none, its Blueprint binds no damage event), so only the impact. PLACEHOLDER: his
+                // weapon's sweep, a line from his chest along his facing to his attack range through the level
+                // (doors' closed leaves in it) in the swing's window, the swing over at the first hit (the recoil and
+                // the weapon getting stuck not ported).
                 if !hit && at >= window.0 && at <= window.1 {
                     let fwd = (xf.rotation * Vec3::Z).with_y(0.0).normalize_or(Vec3::Z);
                     let chest = xf.translation + Vec3::Y * 1.3;
@@ -1149,6 +1151,31 @@ pub(crate) fn update_jason(
                         let n = if n.dot(fwd) > 0.0 { -n } else { n };
                         hit = true;
                         info!("Jason: his swing hit the world (surface {surface}) at {point}");
+                        // The door whose closed leaf the line met first (a leaf's pivot hangs on the door's root).
+                        let struck = collision
+                            .dynamic
+                            .iter()
+                            .filter(|(e, _)| !open_leaves.contains(e))
+                            .filter_map(|(e, tris)| {
+                                let pivot = leaves.get(e).ok()?.1.parent();
+                                let door = parents.get(pivot).ok()?.parent();
+                                doors.contains(door).then_some((door, tris))
+                            })
+                            .filter_map(|(door, tris)| f13_core::collision::segment_hit_tri(tris, chest, reach, 1.0).map(|(g, ..)| (door, g)))
+                            .filter(|&(_, g)| g <= f + 1e-4)
+                            .min_by(|a, b| a.1.total_cmp(&b.1))
+                            .map(|(door, _)| door);
+                        if let Some(de) = struck {
+                            let barred = barricades.iter().any(|b| b.door == Some(de) && b.enabled);
+                            if let Ok((_, mut d, g)) = doors.get_mut(de) {
+                                if d.damage(t.world_damage, barred, &mut commands) {
+                                    info!("Jason: his swing broke the door");
+                                    break_door(&mut d, g, de, xf.translation, &mut barricades, &mut commands);
+                                } else {
+                                    info!("Jason: his swing hit the door ({:.0} left)", d.health);
+                                }
+                            }
+                        }
                         if let Some(imp) = current_weapon().and_then(|w| swing_impacts.as_ref()?.0.get(&w.class)) {
                             imp.play(&mut commands, crate::props::ImpactOn::Surface(surface), heavy, false, point, n, fwd, None, |a, b| {
                                 f13_core::collision::segment_hit_tri(&level, a, b, 2.0).map(|(t, n, _)| (a + (b - a) * t, n))
@@ -1268,14 +1295,7 @@ pub(crate) fn update_jason(
                         hit = true;
                         if d.damage(t.world_damage, barred, &mut commands) {
                             info!("Jason: broke the door down");
-                            if let Some(v) = &d.visuals {
-                                let origin = crate::doors::BreakApart::origin(g.transform_point(d.out_arrow), g.transform_point(d.interact), xf.translation, 5.0);
-                                crate::net_world::shout(&mut commands, crate::net_world::Shout::BreakApart(crate::doors::BreakApart { piece: v.leaf, origin, radius: 30.0, force: d.break_force, lifespan: d.lifespan }));
-                            }
-                            commands.entity(d.pivot).insert(Visibility::Hidden);
-                            for mut b in barricades.iter_mut().filter(|b| b.door == Some(de)) {
-                                b.enabled = false;
-                            }
+                            break_door(&mut d, g, de, xf.translation, &mut barricades, &mut commands);
                         } else {
                             info!("Jason: hit the door ({:.0} left)", d.health);
                         }
@@ -1734,5 +1754,18 @@ pub(crate) fn update_jason(
                 }
             }
         }
+    }
+}
+
+/// A door his damage broke (SCDoor's TakeDamage at 0 health): its leaf breaks apart from its OutArrow toward him
+/// (BreakExplosionForce), the leaf's pivot is hidden, its barricades go.
+fn break_door(d: &mut crate::doors::Door, g: &GlobalTransform, de: Entity, killer: Vec3, barricades: &mut Query<&mut crate::windows::Barricade>, commands: &mut Commands) {
+    if let Some(v) = &d.visuals {
+        let origin = crate::doors::BreakApart::origin(g.transform_point(d.out_arrow), g.transform_point(d.interact), killer, 5.0);
+        crate::net_world::shout(commands, crate::net_world::Shout::BreakApart(crate::doors::BreakApart { piece: v.leaf, origin, radius: 30.0, force: d.break_force, lifespan: d.lifespan }));
+    }
+    commands.entity(d.pivot).insert(Visibility::Hidden);
+    for mut b in barricades.iter_mut().filter(|b| b.door == Some(de)) {
+        b.enabled = false;
     }
 }

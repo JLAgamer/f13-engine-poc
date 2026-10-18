@@ -27,7 +27,7 @@ Lighting first (the user, 2026-10-14):
       MODLOG "The eyes' look", "The counselor's face")
 - [ ] Melee impacts, the approximations left (MODLOG "All melee impacts"): the recoil animations (vt +0xd40: her and his
       swings just end at a wall), weapons getting stuck (FUN_14044d4b0, vt +0xd48: StuckChance, StuckSurfaceTypes,
-      MaximumStuckAngle), a swing's damage to doors and windows (his OnHit's vt +0x548), Jason's weapon sweep (a chest
+      MaximumStuckAngle), Jason's weapon sweep (a chest
       line along his facing now), where a hit lands on a character (a fixed point on the chest now)
 - [ ] Lighting: Enlighten's remaining stand-ins: the lamps' visibility (a ray per point for the game's shadow-map
       test), the landscape's per-component UV scale and bias (fitted from the data; set per draw at run time)
