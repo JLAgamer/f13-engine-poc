@@ -90,6 +90,9 @@ pub struct FuseBox {
     pub reach: f32,
     pub hold_time: f32,
     pub has_pips: bool,
+    /// Where she stands to repair it: its RepairSpecialMove (Counselor_PowerGridRepair: ContextMontage
+    /// AM_normal_stand_repair_generator, whose sections are the phone box repair's takes), world.
+    pub stand: Option<Transform>,
 }
 
 /// A powered light (in grid `.0`).
@@ -135,6 +138,7 @@ fn spawn_fuse_boxes(mut commands: Commands, level: Res<crate::Level>, export: Re
                 reach: props.and_then(|p| p["DistanceLimit"].as_f64()).map_or(150.0, |v| v as f32),
                 hold_time: props.and_then(|p| p["HoldTimeLimit"].as_f64()).map_or(15.0, |v| v as f32),
                 has_pips: props.is_some_and(|p| p["Pips"].as_array().is_some_and(|p| !p.is_empty())),
+                stand: crate::police::world_of(&classes, &a.class, "RepairSpecialMove", &t),
             },
             crate::to_transform(&t),
             Name::new(a.name.clone()),

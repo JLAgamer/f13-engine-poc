@@ -1134,6 +1134,7 @@ fn act(
             if !pads.pressed(player_entity, Button::Interact) {
                 if interaction.hold.take().is_some_and(|h| h.started) {
                     info!("fuse box repair cancelled");
+                    end_repair_anim(&mut commands, player_entity, Some(&crate::police::PHONE_BOX_TAKE.to_string()), false);
                 }
                 continue;
             }
@@ -1148,6 +1149,12 @@ fn act(
             hold.tick(time.delta_secs(), &p.counselor.stats, p.counselor.perks.get("RepairSpeedModifier"), &tuning.minigame, &mut rng.0, &mut events);
             if events.contains(&MinigameEvent::Started) {
                 info!("fuse box repair started: {} pips, {:.1}s", hold.pips.len(), hold.hold_time);
+                // Her RepairSpecialMove (Counselor_PowerGridRepair): to its spot, then AM_normal_stand_repair_generator,
+                // whose Enter / Idle / Exit / Failure sections are the phone box repair's takes.
+                let to = fuse.stand.map_or(*player_xf, |stand| standing_on(player_xf, stand));
+                move_to_spot(&mut commands, player_entity, *player_xf, to, mv(f, "RepairSpecialMove"), move |w| {
+                    w.entity_mut(player_entity).insert(repair_start(crate::police::PHONE_BOX_TAKE));
+                });
             }
             if !events.contains(&MinigameEvent::Completed) {
                 continue;
@@ -1155,6 +1162,7 @@ fn act(
             if let Some(g) = grids.as_mut() {
                 crate::power::set_destroyed(&mut fuse, false, g);
             }
+            end_repair_anim(&mut commands, player_entity, Some(&crate::police::PHONE_BOX_TAKE.to_string()), true);
             commands.trigger(ClassScore::new(player_entity, &fuse.class, "RepairScoreEvent"));
             interaction.hold = None;
             interaction.target = None;

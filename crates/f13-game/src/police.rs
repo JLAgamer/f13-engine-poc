@@ -178,7 +178,7 @@ pub struct PoliceArrived {
     pub zone: Entity,
 }
 
-fn world_of(classes: &ClassDb, class: &str, component: &str, actor: &Xform) -> Option<Transform> {
+pub(crate) fn world_of(classes: &ClassDb, class: &str, component: &str, actor: &Xform) -> Option<Transform> {
     let c = classes.get(class)?.components.iter().find(|c| c.name == component)?;
     Some(crate::to_transform(&c.local.unwrap_or(Xform::IDENTITY).then(actor)))
 }
