@@ -1260,6 +1260,15 @@ pub(crate) fn update_jason(
                         if index(at - dt) != Some(i) {
                             commands.entity(je).insert(PlayAction(takes[i].clone()));
                         }
+                        // The montage's ILLCameraShakeAnimNotifies (montage time; the stuck takes' ImpactShake): his
+                        // own camera.
+                        let windows = killer.info.animations.get(takes[0].as_str()).map_or(&[][..], |a| a.windows.as_slice());
+                        for w in windows.iter().filter(|w| w.start > at - dt && w.start <= at) {
+                            let mut parts = w.name.split(' ');
+                            if let (Some("CameraShake"), Some(shake), Some(scale)) = (parts.next(), parts.next(), parts.next().and_then(|s| s.parse::<f32>().ok())) {
+                                commands.trigger(JasonCameraShake { shake: crate::audio::intern(shake), scale });
+                            }
+                        }
                         j.state = JasonState::Recoiling { t: at, takes, stuck };
                     }
                 }

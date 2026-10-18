@@ -100,12 +100,20 @@ const JASON_HEIGHT_M: f32 = 1.76;
 pub(crate) const SWING_1H: [&str; 2] = ["f_combat_stand_1h_melee_light_01", "f_combat_stand_1h_melee_heavy_01"];
 /// The weapons' NeutralAttack / ForwardAttack montages (her female ones; every melee weapon class names one of these
 /// two pairs) whose segments are the takes above: their root motion carries her through the swing (anims.json).
-const SWING_MONTAGES: [(&str, &str); 4] = [
+const SWING_MONTAGES: [(&str, &str); 8] = [
     ("f_combat_stand_2h_melee_light_01", "AM_F_combat_stand_2h_axe_attack_light"),
     ("f_combat_stand_2h_melee_heavy_01", "AM_F_combat_stand_2h_axe_attack_heavy"),
     ("f_combat_stand_1h_melee_light_01", "AM_F_combat_stand_1h_attack_light"),
     ("f_combat_stand_1h_melee_heavy_01", "AM_F_combat_stand_1h_attack_heavy"),
+    ("f_combat_stand_2h_melee_light_recoil_01", "AM_F_combat_stand_2h_Light_Recoil"),
+    ("f_combat_stand_2h_melee_heavy_recoil_01", "AM_F_combat_stand_2h_Heavy_Recoil"),
+    ("f_combat_stand_1h_melee_light_recoil_01", "AM_F_combat_stand_1h_Light_Recoil"),
+    ("f_combat_stand_1h_melee_heavy_recoil_01", "AM_F_combat_stand_1h_Heavy_Recoil"),
 ];
+/// The swings' RecoilMontages' takes (light, heavy; each female attack names its own: AM_F_combat_stand_1h/2h_Light /
+/// Heavy_Recoil, whose ImpactMontage is the same, and no counselor weapon has a StuckChance).
+const RECOIL_1H: [&str; 2] = ["f_combat_stand_1h_melee_light_recoil_01", "f_combat_stand_1h_melee_heavy_recoil_01"];
+const RECOIL_2H: [&str; 2] = ["f_combat_stand_2h_melee_light_recoil_01", "f_combat_stand_2h_melee_heavy_recoil_01"];
 
 /// A swing take's root motion (local cm/s: x right, y forward), from its montage's segment.
 fn swing_root(anims: &crate::Anims, take: &str) -> Option<Vec2> {
@@ -885,8 +893,9 @@ fn tick_action(
                     })();
                     // The world first (SCCharacter's OnHit 0x1402e81a0, her own 0x1403cbef0 passing it a hit that isn't a
                     // character's): its static or skeletal mesh spawns her weapon's impact by its surface, and within
-                    // her weapon's MaximumRecoilAngle of her facing it recoils her, her swing over (PLACEHOLDER: the
-                    // recoil's animation (vt +0xd40), the weapon getting stuck (FUN_14044d4b0, vt +0xd48) not ported).
+                    // her weapon's MaximumRecoilAngle of her facing it recoils her, her swing over: MULTICAST_PlayRecoil
+                    // (vt +0xd40) plays the attack's RecoilMontage (SCAnimInstance 0x14031b770, rate 1). (Her weapons
+                    // have no StuckChance: FUN_14044d4b0 never sticks them.)
                     if let Some(SwingHit::World(point, n, surface)) = found {
                         a.world_hit = true;
                         let surface = if surface == f13_core::collision::Tri::TERRAIN { sounds.as_ref().map_or(0, |s| s.terrain_surface(point.x, point.z)) } else { surface };
@@ -899,6 +908,15 @@ fn tick_action(
                         }
                         if angle <= stats.max_recoil_deg {
                             a.done = true;
+                            let take = if stats.two_handed { RECOIL_2H } else { RECOIL_1H }[heavy as usize];
+                            if let Some(len) = character.as_ref().and_then(|c| c.length(take)) {
+                                info!("swing recoiled ({take})");
+                                a.t = 0.0;
+                                a.len = len;
+                                a.hold = None;
+                                a.root = swing_root(&anims, take);
+                                commands.entity(pe).insert(PlayAction(take.into()));
+                            }
                         }
                     }
                     let hit = matches!(found, Some(SwingHit::Jason)).then_some(jason).flatten();

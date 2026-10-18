@@ -1612,6 +1612,11 @@ static class Mvp
         "/Game/Characters/Counselors/Base/Female/Animation/Combat/Swings/AM_F_combat_stand_2h_axe_attack_heavy",
         "/Game/Characters/Counselors/Base/Female/Animation/Combat/Swings/AM_F_combat_stand_1h_attack_light",
         "/Game/Characters/Counselors/Base/Female/Animation/Combat/Swings/AM_F_combat_stand_1h_attack_heavy",
+        // And their RecoilMontages.
+        "/Game/Characters/Counselors/Base/Female/Animation/Combat/Swings/AM_F_combat_stand_2h_Light_Recoil",
+        "/Game/Characters/Counselors/Base/Female/Animation/Combat/Swings/AM_F_combat_stand_2h_Heavy_Recoil",
+        "/Game/Characters/Counselors/Base/Female/Animation/Combat/Swings/AM_F_combat_stand_1h_Light_Recoil",
+        "/Game/Characters/Counselors/Base/Female/Animation/Combat/Swings/AM_F_combat_stand_1h_Heavy_Recoil",
     ];
     public const string Counselor = "/Game/Characters/Counselors/Athlete/Athlete_Counselor";
     // Widgets f13-game draws: the counselor's HUD (with the widgets it nests) and the repair and struggle minigames.
@@ -1865,6 +1870,11 @@ static class Mvp
         $"{Female}/Combat/Swings/AM_F_combat_stand_1h_attack_heavy",
         $"{Female}/Combat/Swings/AM_F_combat_stand_2h_axe_attack_light",
         $"{Female}/Combat/Swings/AM_F_combat_stand_2h_axe_attack_heavy",
+        // Their RecoilMontages (her swing thrown back off the world: SCAnimInstance 0x14031b770).
+        $"{Female}/Combat/Swings/AM_F_combat_stand_1h_Light_Recoil",
+        $"{Female}/Combat/Swings/AM_F_combat_stand_1h_Heavy_Recoil",
+        $"{Female}/Combat/Swings/AM_F_combat_stand_2h_Light_Recoil",
+        $"{Female}/Combat/Swings/AM_F_combat_stand_2h_Heavy_Recoil",
         $"{Shared}/Interaction/Items/AM_normal_stand_use_firecracker",
         $"{Shared}/Interaction/Items/AM_normal_stand_use_flare",
         // Turning a radio on or off, changing its song (Counselor_UseRadio).

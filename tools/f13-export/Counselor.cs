@@ -698,10 +698,11 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             if (CurveValue(cls, name) is { } keys) info.Curves[name] = keys;
 
         // His cameras (Jason_Base's ILLDynamicCameraComponents) and his camera shakes: Shift's (OnShiftChange: ED_Shake),
-        // the grab montage's ILLCameraShakeAnimNotifies (a miss's CineCamShakeMedium, a grab's CineCamShakeHard).
+        // the grab montage's ILLCameraShakeAnimNotifies (a miss's CineCamShakeMedium, a grab's CineCamShakeHard), the stuck
+        // weapons' ImpactMontages' (ImpactShake).
         info.Cameras = DynamicCameras(cls);
         info.CameraShakes = new Newtonsoft.Json.Linq.JObject();
-        foreach (var shake in new[] { "SummerCamp/Content/Cameras/CameraShakes/ED_Shake", "SummerCamp/Content/Cameras/CameraShakes/CineCamShakeMedium", "SummerCamp/Content/Cameras/CameraShakes/CineCamShakeHard" })
+        foreach (var shake in new[] { "SummerCamp/Content/Cameras/CameraShakes/ED_Shake", "SummerCamp/Content/Cameras/CameraShakes/CineCamShakeMedium", "SummerCamp/Content/Cameras/CameraShakes/CineCamShakeHard", "SummerCamp/Content/Cameras/CameraShakes/ImpactShake" })
             if (provider.LoadPackageObject<UBlueprintGeneratedClass>(shake + "." + shake.Split('/')[^1] + "_C").ClassDefaultObject.Load() is { } shakeCdo)
                 info.CameraShakes[shake.Split('/')[^1]] = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(shakeCdo))["Properties"] ?? new Newtonsoft.Json.Linq.JObject();
 
@@ -763,11 +764,18 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         var obj = provider.LoadPackageObject(path + "." + path.Split('/')[^1]);
         var list = obj.GetOrDefault<FStructFallback[]>("Notifies", [])
             // (SCAnimNotifyState_SloMo's NotifyName rounds its SloMoSpeed: the window carries the value itself.)
+            // (An ILLCameraShakeAnimNotify with no ShakeRange, not bPlayForAllClients, shakes its owner's own camera:
+            // "CameraShake <shake> <Scale>" (0x140232260; Scale 1 by its constructor 0x14020f660).)
             .Select(n => (Name: n.GetOrDefault<FPackageIndex>("NotifyStateClass")?.Load() is { ExportType: "SCAnimNotifyState_SloMo" } slomo
                     ? "SloMo " + slomo.GetOrDefault<float>("SloMoSpeed", 1f).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    : n.GetOrDefault<FPackageIndex>("Notify")?.Load() is { ExportType: "ILLCameraShakeAnimNotify" } shake
+                        && shake.GetOrDefault("ShakeRange", 0f) <= 0 && !shake.GetOrDefault("bPlayForAllClients", false)
+                        && shake.GetOrDefault<FPackageIndex>("CameraShake") is { IsNull: false } cls
+                    ? $"CameraShake {cls.Name.Replace("_C", "")} " + shake.GetOrDefault("Scale", 1f).ToString(System.Globalization.CultureInfo.InvariantCulture)
                     : n.GetOrDefault<FName>("NotifyName").Text,
                 Start: n.GetOrDefault<float>("LinkValue"), Duration: n.GetOrDefault<float>("Duration"),
-                Named: n.GetOrDefault<FPackageIndex>("Notify") is not { IsNull: false } && n.GetOrDefault<FPackageIndex>("NotifyStateClass") is not { IsNull: false }))
+                Named: n.GetOrDefault<FPackageIndex>("NotifyStateClass") is not { IsNull: false }
+                    && (n.GetOrDefault<FPackageIndex>("Notify") is not { IsNull: false } || n.GetOrDefault<FPackageIndex>("Notify")?.Load() is { ExportType: "ILLCameraShakeAnimNotify" })))
             .Where(n => n.Duration > 0 || n.Named)
             .Select(n => new Window { Name = n.Name, Start = n.Start, End = n.Start + n.Duration })
             .ToList();
