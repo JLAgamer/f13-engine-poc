@@ -77,9 +77,9 @@ UStaticMesh? EngineMesh(string path)
 Collision.LoadProfiles(game);
 // The animation lists with every grab kill's montages added (GrabKills: Kill_Select_Widget's), hers and his.
 string[] CounselorAnims() => Mvp.CounselorAnims.Concat(GrabKills.All(provider).Select(g => g.Hers)).Distinct().ToArray();
-// (And every Jason weapon's light and heavy swings: Weapons.)
+// (And every Jason weapon's light and heavy swings, their recoils and stuck takes: Weapons.)
 string[] KillerAnims() => Mvp.KillerAnims.Concat(GrabKills.All(provider).Select(g => g.His))
-    .Concat(Weapons.All(provider, Mvp.Jasons).SelectMany(w => new[] { w.Light, w.Heavy }).Where(m => m.Length > 0)).Distinct().ToArray();
+    .Concat(Weapons.All(provider, Mvp.Jasons).SelectMany(w => new[] { w.Light, w.Heavy }).SelectMany(a => new[] { a.Montage, a.Recoil, a.Impact }).Where(m => m.Length > 0)).Distinct().ToArray();
 // The animations' PlaySound notifies (anim_sounds.json); returns their cues for the sound export.
 List<string> WriteAnimSounds()
 {

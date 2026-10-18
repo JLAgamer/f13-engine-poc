@@ -25,10 +25,10 @@ Lighting first (the user, 2026-10-14):
       global shader cache: MODLOG "Foliage subsurface: blocked")
 - [ ] Counselor model: the eye look against a capture of the game (it rolls the eyes 90 degrees from their bind:
       MODLOG "The eyes' look", "The counselor's face")
-- [ ] Melee impacts, the approximations left (MODLOG "All melee impacts"): the recoil animations (vt +0xd40: her and his
-      swings just end at a wall), weapons getting stuck (FUN_14044d4b0, vt +0xd48: StuckChance, StuckSurfaceTypes,
-      MaximumStuckAngle), Jason's weapon sweep (a chest
-      line along his facing now), where a hit lands on a character (a fixed point on the chest now)
+- [ ] Melee impacts, the approximations left (MODLOG "All melee impacts", "Jason's swing recoiling"): her swings'
+      recoil and stuck takes (vt +0xd40 / +0xd48: her swing just ends at a wall), Jason's weapon sweep (a chest line
+      along his facing now: its penetration and distance stand in for the hit's), the stuck takes' ImpactShake camera
+      shakes, where a hit lands on a character (a fixed point on the chest now)
 - [ ] Lighting: Enlighten's remaining stand-ins: the lamps' visibility (a ray per point for the game's shadow-map
       test), the landscape's per-component UV scale and bias (fitted from the data; set per draw at run time)
 - [ ] Optimize performance further (2026-10-15, a counselor at her start, --perf --features profile: 8.0 ms a frame,

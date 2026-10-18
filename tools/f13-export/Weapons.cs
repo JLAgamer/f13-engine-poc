@@ -11,9 +11,12 @@ using Newtonsoft.Json.Linq;
 
 /// A killer weapon (a Jason's WeaponClass or one of his AllowedWeaponClasses: the menu's WeaponSelectionMenu): its
 /// FriendlyName and ThumbnailImage (GetKillerWeaponDetails), its ItemMesh3P mesh, WeaponStats.Damage, DefaultGrabKill,
-/// and its NeutralAttack / ForwardAttack montages (the light and heavy swings: /Game paths and their takes) and
-/// CombatIdleAsset. Each value is the nearest one up the class chain (PigSplitter and FireAxe inherit some).
-record Weapon(string Class, string Name, string Image, UStaticMesh? Mesh, float Damage, string DefaultGrabKill, string Light, string LightTake, string Heavy, string HeavyTake, string CombatIdle);
+/// and its NeutralAttack / ForwardAttack montages (the light and heavy swings: /Game paths and their takes, with their
+/// RecoilMontage and ImpactMontage: a recoil off the world, the weapon stuck), its WeaponStats' stuck and recoil values
+/// (SCWeapon's constructor 0x14044bfb0 sets MaximumStuckAngle 15, MaximumRecoilAngle 35) and CombatIdleAsset. Each
+/// value is the nearest one up the class chain (PigSplitter and FireAxe inherit some).
+record Attack(string Montage, string Take, string Recoil, string[] RecoilTakes, string Impact, string[] ImpactTakes);
+record Weapon(string Class, string Name, string Image, UStaticMesh? Mesh, float Damage, string DefaultGrabKill, Attack Light, Attack Heavy, string CombatIdle, JObject Stuck);
 
 static class Weapons
 {
@@ -53,19 +56,34 @@ static class Weapons
             try
             {
                 var cls = provider.LoadPackageObject<UBlueprintGeneratedClass>(p);
-                (string, string) Montage(string prop)
+                static string[] Takes(UAnimMontage? m) =>
+                    m?.SlotAnimTracks?.SelectMany(s => s.AnimTrack.AnimSegments ?? []).Select(s => s.AnimReference.TryLoad(out UAnimSequence? q) ? q?.Name : null).OfType<string>().ToArray() ?? [];
+                Attack Montage(string prop)
                 {
+                    // The first entry with an AttackMontage (the male one where there are two).
                     var list = ClassValue<FStructFallback[]>(cls, prop) ?? [];
-                    var m = list.Select(s => s.GetOrDefault<FPackageIndex?>("AttackMontage")?.Load<UAnimMontage>()).FirstOrDefault(m => m != null);
-                    var take = m?.SlotAnimTracks?.SelectMany(s => s.AnimTrack.AnimSegments ?? []).Select(s => s.AnimReference.TryLoad(out UAnimSequence? q) ? q : null).FirstOrDefault(q => q != null)?.Name;
-                    return m == null || take == null ? ("", "") : (GamePath(m.GetPathName()), take);
+                    var s = list.FirstOrDefault(s => s.GetOrDefault<FPackageIndex?>("AttackMontage")?.Load<UAnimMontage>() != null);
+                    UAnimMontage? M(string name) => s?.GetOrDefault<FPackageIndex?>(name)?.Load<UAnimMontage>();
+                    var (m, r, i) = (M("AttackMontage"), M("RecoilMontage"), M("ImpactMontage"));
+                    var take = Takes(m).FirstOrDefault();
+                    return new Attack(m == null || take == null ? "" : GamePath(m.GetPathName()), take ?? "",
+                        r == null ? "" : GamePath(r.GetPathName()), Takes(r), i == null ? "" : GamePath(i.GetPathName()), Takes(i));
                 }
-                var (light, lightTake) = Montage("NeutralAttack");
-                var (heavy, heavyTake) = Montage("ForwardAttack");
+                var light = Montage("NeutralAttack");
+                var heavy = Montage("ForwardAttack");
                 var item = ClassValue<FPackageIndex>(cls, "ItemMesh3P")?.Load();
                 var mesh = item == null ? null : Inherited<FPackageIndex>(item, "StaticMesh")?.Load<UStaticMesh>();
                 var stats = ClassValue<FStructFallback>(cls, "WeaponStats");
                 var idle = ClassValue<FPackageIndex>(cls, "CombatIdleAsset")?.Load();
+                var stuck = new JObject
+                {
+                    ["StuckChance"] = stats?.GetOrDefault("StuckChance", 0) ?? 0,
+                    ["StuckSurfaceTypes"] = new JArray((stats?.GetOrDefault<FName[]>("StuckSurfaceTypes", []) ?? [])
+                        .Select(n => System.Text.RegularExpressions.Regex.Match(n.Text, @"SurfaceType(\d+)") is { Success: true } m ? int.Parse(m.Groups[1].Value) : 0)),
+                    ["MinimumSurfacePenetration"] = stats?.GetOrDefault("MinimumSurfacePenetration", 0f) ?? 0f,
+                    ["MaximumStuckAngle"] = stats?.GetOrDefault("MaximumStuckAngle", 15f) ?? 15f,
+                    ["MaximumRecoilAngle"] = stats?.GetOrDefault("MaximumRecoilAngle", 35f) ?? 35f,
+                };
                 cache.Add(new Weapon(
                     cls.Name,
                     ClassValue<FText>(cls, "FriendlyName")?.Text ?? cls.Name,
@@ -73,8 +91,8 @@ static class Weapons
                     mesh,
                     stats?.GetOrDefault("Damage", 20f) ?? 20f,
                     ClassValue<FPackageIndex>(cls, "DefaultGrabKill")?.Name ?? "",
-                    light, lightTake, heavy, heavyTake,
-                    idle?.Name ?? ""));
+                    light, heavy,
+                    idle?.Name ?? "", stuck));
             }
             catch (Exception e)
             {
@@ -101,8 +119,13 @@ static class Weapons
                 ["Mesh"] = w.Mesh == null ? "" : new CUE4Parse_Conversion.Exporters.StaticMeshExporter(w.Mesh).SavePath + ".glb",
                 ["Damage"] = w.Damage,
                 ["DefaultGrabKill"] = w.DefaultGrabKill,
-                ["LightTake"] = w.LightTake,
-                ["HeavyTake"] = w.HeavyTake,
+                ["LightTake"] = w.Light.Take,
+                ["HeavyTake"] = w.Heavy.Take,
+                ["LightRecoil"] = new JArray(w.Light.RecoilTakes),
+                ["LightImpact"] = new JArray(w.Light.ImpactTakes),
+                ["HeavyRecoil"] = new JArray(w.Heavy.RecoilTakes),
+                ["HeavyImpact"] = new JArray(w.Heavy.ImpactTakes),
+                ["Stuck"] = w.Stuck,
                 ["CombatIdle"] = w.CombatIdle,
             });
         }

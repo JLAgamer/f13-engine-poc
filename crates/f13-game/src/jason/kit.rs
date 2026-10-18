@@ -144,7 +144,8 @@ pub fn load_kills(export: &std::path::Path) {
 /// A Jason weapon (weapons.json: f13-export Weapons): its class, FriendlyName, ThumbnailImage (.png), ItemMesh3P
 /// (.glb), WeaponStats.Damage, DefaultGrabKill, and its NeutralAttack / ForwardAttack takes (the light and heavy
 /// swings: the pickaxe and axe two-handed, the pig splitter, shears, machete and fire axe one-handed, the spear's
-/// lunge).
+/// lunge), each one's RecoilMontage and ImpactMontage takes (a recoil off the world; stuck in it), and its stuck and
+/// recoil values.
 #[derive(Clone, Debug)]
 pub struct WeaponInfo {
     pub class: String,
@@ -155,6 +156,42 @@ pub struct WeaponInfo {
     pub default_grab_kill: String,
     pub light: String,
     pub heavy: String,
+    /// The light and heavy swings' RecoilMontage and ImpactMontage takes, in order.
+    pub light_recoil: Vec<String>,
+    pub light_impact: Vec<String>,
+    pub heavy_recoil: Vec<String>,
+    pub heavy_impact: Vec<String>,
+    pub stuck: StuckStats,
+}
+
+/// WeaponStats' stuck and recoil values (SCWeapon's constructor: MaximumStuckAngle 15, MaximumRecoilAngle 35).
+#[derive(Clone, Debug)]
+pub struct StuckStats {
+    /// Percent.
+    pub chance: i32,
+    /// The surfaces it sticks in (EPhysicalSurface numbers).
+    pub surfaces: Vec<u8>,
+    /// cm, degrees.
+    pub min_penetration: f32,
+    pub max_stuck_angle: f32,
+    pub max_recoil_angle: f32,
+}
+
+impl Default for StuckStats {
+    fn default() -> Self {
+        StuckStats { chance: 0, surfaces: Vec::new(), min_penetration: 0.0, max_stuck_angle: 15.0, max_recoil_angle: 35.0 }
+    }
+}
+
+impl WeaponInfo {
+    /// A swing's recoil and stuck takes (its NeutralAttack's, or its ForwardAttack's when heavy).
+    pub fn recoil(&self, heavy: bool) -> &[String] {
+        if heavy { &self.heavy_recoil } else { &self.light_recoil }
+    }
+
+    pub fn impact(&self, heavy: bool) -> &[String] {
+        if heavy { &self.heavy_impact } else { &self.light_impact }
+    }
 }
 
 pub(super) static WEAPON_TABLE: std::sync::OnceLock<Vec<WeaponInfo>> = std::sync::OnceLock::new();
@@ -177,6 +214,7 @@ pub(super) fn load_weapons(export: &std::path::Path) {
         .flatten()
         .filter_map(|w| {
             let s = |n: &str| w[n].as_str().map(str::to_string);
+            let takes = |v: &serde_json::Value| v.as_array().into_iter().flatten().filter_map(|t| t.as_str().map(str::to_string)).collect();
             Some(WeaponInfo {
                 class: s("Class")?,
                 name: s("Name").unwrap_or_default(),
@@ -186,6 +224,22 @@ pub(super) fn load_weapons(export: &std::path::Path) {
                 default_grab_kill: s("DefaultGrabKill").unwrap_or_default().trim_end_matches("_C").to_string(),
                 light: s("LightTake").unwrap_or_default(),
                 heavy: s("HeavyTake").unwrap_or_default(),
+                light_recoil: takes(&w["LightRecoil"]),
+                light_impact: takes(&w["LightImpact"]),
+                heavy_recoil: takes(&w["HeavyRecoil"]),
+                heavy_impact: takes(&w["HeavyImpact"]),
+                stuck: {
+                    let st = &w["Stuck"];
+                    let d = StuckStats::default();
+                    let f = |n: &str, d: f32| st[n].as_f64().map_or(d, |v| v as f32);
+                    StuckStats {
+                        chance: st["StuckChance"].as_i64().unwrap_or(0) as i32,
+                        surfaces: st["StuckSurfaceTypes"].as_array().into_iter().flatten().filter_map(|v| v.as_u64()).map(|v| v as u8).collect(),
+                        min_penetration: f("MinimumSurfacePenetration", d.min_penetration),
+                        max_stuck_angle: f("MaximumStuckAngle", d.max_stuck_angle),
+                        max_recoil_angle: f("MaximumRecoilAngle", d.max_recoil_angle),
+                    }
+                },
             })
         })
         .collect();

@@ -504,6 +504,10 @@ pub enum JasonState {
     HideKill { spot: Entity, t: f32, end: Transform, anim: &'static str, victim: &'static str },
     /// Hit without being stunned: a short flinch (its hit reaction, or a blocked hit's).
     Flinching { t: f32, anim: &'static str },
+    /// His swing thrown back off the world or a blocking counselor (MULTICAST_PlayRecoil: the attack's
+    /// RecoilMontage), or his weapon stuck in the world (MULTICAST_PlayWeaponImpact: its ImpactMontage, tugged and
+    /// pulled out): s into the takes, played in order.
+    Recoiling { t: f32, takes: &'static [String], stuck: bool },
     /// Shifting (f13-core::killer_moves).
     Shifting { shift: Shift },
     /// Morphing: s into it, and where he'll be.
@@ -541,6 +545,7 @@ impl Jason {
                     | JasonState::Missed { .. }
                     | JasonState::Holding { .. }
                     | JasonState::Flinching { .. }
+                    | JasonState::Recoiling { .. }
                     | JasonState::OpeningDoor { .. }
                     | JasonState::BreakingDoor { .. }
                     | JasonState::BurstingDoor { .. }

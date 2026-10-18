@@ -1092,6 +1092,9 @@ pub(crate) fn update_jason(
                 }
                 walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, Some(face_dir), dt, &t, &world);
                 let mut hit = hit;
+                // His swing thrown back (false) or stuck (true): his OnHit's MULTICAST_PlayRecoil (vt +0xd40) or
+                // MULTICAST_PlayWeaponImpact (vt +0xd48).
+                let mut recoil: Option<bool> = None;
                 let (window, length) = if heavy { (t.heavy_window, t.heavy_length) } else { (t.attack_window, t.attack_length) };
                 // (Not through the world: the AttackTraceNotify's weapon sweep stops at what it meets first; PLACEHOLDER: a
                 // chest-high line from him to her, the map and its doors and walls in the way.)
@@ -1112,6 +1115,8 @@ pub(crate) fn update_jason(
                     }
                     info!("Jason: hit Vanessa for {:.0}{} (health {:.0})", r.dealt, if blocking { ", blocked" } else { "" }, p.counselor.health);
                     if blocking {
+                        // A blocking counselor's mesh recoils his swing (0x140401d39: her +0x1008).
+                        recoil = Some(false);
                         commands.trigger(crate::items::BlockedHit(pe));
                         // A heavy attack ends the block (after its blocked damage).
                         if heavy {
@@ -1137,20 +1142,30 @@ pub(crate) fn update_jason(
                 // damage, and any other mesh within his weapon's MaximumRecoilAngle of his facing recoils him; each
                 // spawns his weapon's impact, by its surface). A door takes TakeDamage(DamageWorldModifier x his
                 // weapon's Damage) (0x140401c49: not the door he's using, +0x1650); a window's TakeDamage is AActor's
-                // (SCWindow overrides none, its Blueprint binds no damage event), so only the impact. PLACEHOLDER: his
-                // weapon's sweep, a line from his chest along his facing to his attack range through the level
-                // (doors' closed leaves in it) in the swing's window, the swing over at the first hit (the recoil and
-                // the weapon getting stuck not ported).
+                // (SCWindow overrides none, its Blueprint binds no damage event), so only the impact. Then, outside a
+                // special move, a static or skeletal mesh (a door's leaf too; not the landscape: nothing at all there)
+                // gets stuck in (FUN_14044d4b0: a roll min(int(rand / 32767 x 101), 100) under StuckChance, the hit's
+                // PenetrationDepth at least MinimumSurfacePenetration, the angle between his facing and the level
+                // line from him to the impact point at most MaximumStuckAngle, not a door, wall, window or character,
+                // its surface one of StuckSurfaceTypes) or recoils from (within MaximumRecoilAngle, or the hit's
+                // Distance at least MinimumSurfacePenetration); neither: the actor is ignored, no impact. PLACEHOLDER:
+                // his weapon's sweep, a line from his chest along his facing to his attack range through the level
+                // (doors' closed leaves in it) in the swing's window, the swing over at the first hit; its
+                // penetration the line's length past the surface, its Distance the length to it.
                 if !hit && at >= window.0 && at <= window.1 {
                     let fwd = (xf.rotation * Vec3::Z).with_y(0.0).normalize_or(Vec3::Z);
                     let chest = xf.translation + Vec3::Y * 1.3;
                     let reach = chest + fwd * t.attack_range_m;
-                    if let Some((f, n, surface)) = f13_core::collision::segment_hit_tri(&level, chest, reach, 1.0) {
+                    if let Some((f, n, surface_raw)) = f13_core::collision::segment_hit_tri(&level, chest, reach, 1.0) {
                         let point = chest + (reach - chest) * f;
+                        let surface = surface_raw;
                         let surface = if surface == f13_core::collision::Tri::TERRAIN { sounds.as_ref().map_or(0, |s| s.terrain_surface(point.x, point.z)) } else { surface };
                         let n = if n.dot(fwd) > 0.0 { -n } else { n };
-                        hit = true;
-                        info!("Jason: his swing hit the world (surface {surface}) at {point}");
+                        let terrain = surface_raw == f13_core::collision::Tri::TERRAIN;
+                        let st = current_weapon().map(|w| w.stuck.clone()).unwrap_or_default();
+                        let angle = fwd.dot((point - xf.translation).with_y(0.0).normalize_or(fwd)).clamp(-1.0, 1.0).acos().to_degrees();
+                        let distance_cm = f * t.attack_range_m * 100.0;
+                        let penetration_cm = (1.0 - f) * t.attack_range_m * 100.0;
                         // The door whose closed leaf the line met first (a leaf's pivot hangs on the door's root).
                         let struck = collision
                             .dynamic
@@ -1166,6 +1181,7 @@ pub(crate) fn update_jason(
                             .min_by(|a, b| a.1.total_cmp(&b.1))
                             .map(|(door, _)| door);
                         if let Some(de) = struck {
+                            hit = true;
                             let barred = barricades.iter().any(|b| b.door == Some(de) && b.enabled);
                             if let Ok((_, mut d, g)) = doors.get_mut(de) {
                                 if d.damage(t.world_damage, barred, &mut commands) {
@@ -1175,21 +1191,77 @@ pub(crate) fn update_jason(
                                     info!("Jason: his swing hit the door ({:.0} left)", d.health);
                                 }
                             }
+                            if angle <= st.max_recoil_angle || distance_cm >= st.min_penetration {
+                                recoil = Some(false);
+                            }
+                        } else if !terrain {
+                            let roll = ((rng.0.frand() * 101.0) as i32).min(100);
+                            if roll < st.chance && penetration_cm >= st.min_penetration && angle <= st.max_stuck_angle && st.surfaces.contains(&surface) {
+                                recoil = Some(true);
+                            } else if angle <= st.max_recoil_angle || distance_cm >= st.min_penetration {
+                                recoil = Some(false);
+                            }
+                            hit = recoil.is_some();
                         }
-                        if let Some(imp) = current_weapon().and_then(|w| swing_impacts.as_ref()?.0.get(&w.class)) {
+                        if hit {
+                            info!("Jason: his swing hit the world (surface {surface}) at {point}{}", match recoil {
+                                Some(true) => ", stuck",
+                                Some(false) => ", recoiled",
+                                None => "",
+                            });
+                        }
+                        if let Some(imp) = current_weapon().and_then(|w| swing_impacts.as_ref()?.0.get(&w.class)).filter(|_| hit) {
                             imp.play(&mut commands, crate::props::ImpactOn::Surface(surface), heavy, false, point, n, fwd, None, |a, b| {
                                 f13_core::collision::segment_hit_tri(&level, a, b, 2.0).map(|(t, n, _)| (a + (b - a) * t, n))
                             });
                         }
                     }
                 }
-                if at >= length {
+                // The attack's RecoilMontage or ImpactMontage (SCAnimInstance 0x14031b770 / 0x14031cd90: bIsRecoiling or
+                // bIsWeaponStuck, the montage at rate 1), its takes in his animations.
+                let takes = recoil.and_then(|stuck| current_weapon().map(|w| (stuck, if stuck { w.impact(heavy) } else { w.recoil(heavy) })));
+                if let Some((stuck, takes)) = takes.filter(|(_, ts)| !ts.is_empty() && ts.iter().all(|n| killer.info.animations.contains_key(n.as_str()))) {
+                    info!("Jason: {} ({})", if stuck { "his weapon stuck" } else { "his swing recoiled" }, takes.join(", "));
+                    j.state = JasonState::Recoiling { t: 0.0, takes, stuck };
+                    j.attack_hold = None;
+                    commands.entity(je).insert(PlayAction(takes[0].clone()));
+                } else if at >= length {
                     j.state = JasonState::Hunting;
                     j.cooldown = t.attack_delay;
                     j.wants_grab = rng.0.frand() < GRAB_ODDS;
                     commands.entity(je).remove::<PlayAction>();
                 } else {
                     j.state = JasonState::Swinging { t: at, hit, heavy };
+                }
+            }
+            JasonState::Recoiling { t: at, takes, stuck } => {
+                let at = at + dt;
+                walk(&mut j, &mut xf, Vec2::ZERO, t.walk_speed, None, dt, &t, &world);
+                // The take playing at `s` (the montage's segments in order), None past the last.
+                let lengths: Vec<f32> = takes.iter().map(|n| killer.length(n).unwrap_or(0.5)).collect();
+                let index = |s: f32| {
+                    let mut start = 0.0;
+                    for (i, l) in lengths.iter().enumerate() {
+                        if s < start + l {
+                            return Some(i);
+                        }
+                        start += l;
+                    }
+                    None
+                };
+                match index(at) {
+                    None => {
+                        j.state = JasonState::Hunting;
+                        j.cooldown = t.attack_delay;
+                        j.wants_grab = rng.0.frand() < GRAB_ODDS;
+                        commands.entity(je).remove::<PlayAction>();
+                    }
+                    Some(i) => {
+                        if index(at - dt) != Some(i) {
+                            commands.entity(je).insert(PlayAction(takes[i].clone()));
+                        }
+                        j.state = JasonState::Recoiling { t: at, takes, stuck };
+                    }
                 }
             }
             JasonState::OpeningDoor { door: de, t: at, anim } => {
