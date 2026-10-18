@@ -16,7 +16,8 @@ Lighting first (the user, 2026-10-14):
       her, so always dirty: tried, MODLOG "Shadow caching: tried and reverted"); it needs UE's static / movable split, two
       shadow views a face in a reworked bevy_pbr
 - [ ] Lighting against the user's 2026-10-17 shots (MODLOG "Too dark overall"): the fog's height falloff along the ray
-      and its directional inscattering; Chad's hair in the intro is brown, near black in the game
+      and its directional inscattering; Chad's hair in the intro still mid brown, near black in the game (its
+      permutation's colour now as compiled; the rest unread: UE's hair shading against Bevy's standard lighting?)
 - [ ] The lobby's mouse controls: all wired (lobby.rs lobby_clicks, ui.rs entry_hover: buttons, list entries, the emote
       wheel, hover looks, sounds); to try with a real mouse (the user)
 - [ ] The lobby's rest: a full 8-player run (needs more machines: at most 2 instances run here)
@@ -37,7 +38,7 @@ Lighting first (the user, 2026-10-14):
 - [ ] Music: Jason's own music (JasonsMusic, for one spectating him: MODLOG "Jason's music, read further"; Jason is
       spectated only in private matches, so it waits for those)
 - [ ] More content, one at a time: maps (with their boat and other escapes), Jasons (J2-J8 play with every grab kill
-      and weapon; still: J9, JTS1, JX, J7's machete and J9's battle axe textures, the kills' limb mesh swaps, exported in
+      and weapon; still: J9, JTS1, JX, J9's battle axe textures, the kills' limb mesh swaps, exported in
       anim_gore.json and BodyParts' MeshSwaps, and the weapons' combat idles), Jason skins, counselors, perks, skins,
       emotes, a main menu
 - [ ] The Jason and kill menus by a real mouse and keys (Q opens the weapons, 1-4 the grab kill slots: PLACEHOLDER keys)

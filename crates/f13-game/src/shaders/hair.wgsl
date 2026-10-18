@@ -3,7 +3,8 @@
 // models; here their colour, roughness and specular go to Bevy's standard lighting.
 // Mode 0, HairMaster_03_m (uv TEXCOORD_0, uv_b TEXCOORD_1, the vertex colour's red c):
 // - colour: lerp(Diffuse Hair Color 1, lerp(Diffuse Hair Color 2, HairColor3, Diffuse 2 Hair Mask), Mask x c) x Hair
-//   Diffuse Texture (at uv_b) x Diffuse Brightness, saturated;
+//   Diffuse Texture (at uv_b) x Diffuse Brightness, saturated; with Use Second Hair Color off (M_Prep_Hair_Inst's
+//   permutation) Diffuse Hair Color 2 itself in the inner lerp's place;
 // - specular: lerp(Haircolor 1 Specular, Haircolor 2 Specular, c); roughness: Roughness;
 // - opacity: RootMask^HairAlphaContrast plus the dither ((x + 2y) mod 5) / 6 over 0.9 (its scatter, tangent and pixel
 //   depth offset aren't drawn).
@@ -23,7 +24,7 @@ struct HairParams {
     color3: vec4<f32>,
     // Diffuse Brightness, Haircolor 1 Specular, Haircolor 2 Specular, Roughness.
     a: vec4<f32>,
-    // HairAlphaContrast, mode, SelectionColor's luminance unused.
+    // HairAlphaContrast, mode, Use Second Hair Color (1 on).
     b: vec4<f32>,
 }
 
@@ -59,7 +60,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         if alpha + dither(in.position.xy) / 6.0 - 0.9 < 0.0 {
             discard;
         }
-        var col = mix(params.color2.rgb, params.color3.rgb, textureSample(tex_a, tex_sampler, uv).rgb);
+        var col = params.color2.rgb;
+        if params.b.z > 0.5 {
+            col = mix(col, params.color3.rgb, textureSample(tex_a, tex_sampler, uv).rgb);
+        }
         col = mix(params.color1.rgb, col, textureSample(tex_b, tex_sampler, uv).rgb * c);
         col = saturate(col * textureSample(tex_c, tex_sampler, uv2).rgb * params.a.x);
         pbr_input.material.base_color = vec4(col, 1.0);

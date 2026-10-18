@@ -1388,7 +1388,10 @@ static void ResolveParameters(UObject mat, MaterialInfo info)
         }
         foreach (var s in m.GetOrDefault<FStructFallback[]>("TextureParameterValues", []))
             if (TexPath(s.GetOrDefault<FPackageIndex?>("ParameterValue")) is { } tp) info.Textures.TryAdd(Key(s), tp);
-        // Static switches live in the instance's StaticParameters (native data CUE4Parse does not expose by name).
+        // Static switches: the instance's StaticParameters (its own permutation's; overridden ones only).
+        if (m is CUE4Parse.UE4.Assets.Exports.Material.UMaterialInstance mi && mi.StaticParameters is { } sp)
+            foreach (var s in sp.StaticSwitchParameters.Where(s => s.bOverride))
+                info.Switches.TryAdd(s.ParameterInfo.Name.Text, s.Value);
     }
 }
 

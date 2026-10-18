@@ -91,6 +91,7 @@ impl Plugin for MaterialsPlugin {
             scalars: HashMap::from([("Power".into(), 8.0)]),
             vectors: HashMap::new(),
             textures: HashMap::new(),
+            switches: HashMap::new(),
             landscape: None,
         });
         app.insert_resource(MaterialIndex { root: self.export.clone(), entries, ..default() })
@@ -141,6 +142,9 @@ struct MaterialInfo {
     vectors: HashMap<String, [f32; 4]>,
     #[serde(default)]
     textures: HashMap<String, String>,
+    /// The static switches (the instance's overrides, else the master's defaults).
+    #[serde(default)]
+    switches: HashMap<String, bool>,
     #[serde(default)]
     landscape: Option<LandscapeInfo>,
 }
@@ -1029,7 +1033,9 @@ fn hair_material(root: &Path, info: &MaterialInfo, loader: &Loader, fallback: &F
                 color2: v("Diffuse Hair Color 2", [0.95, 0.399, 0.656799, 1.0]),
                 color3: v("HairColor3", [1.0, 0.605633, 0.12, 1.0]),
                 a: Vec4::new(info.scalar("Diffuse Brightness", 3.0), info.scalar("Haircolor 1 Specular", 0.12), info.scalar("Haircolor 2 Specular", 0.1), info.scalar("Roughness", 0.35)),
-                b: Vec4::new(info.scalar("HairAlphaContrast", 2.0), if athlete { 1.0 } else { 0.0 }, 0.0, 0.0),
+                // Use Second Hair Color off (M_Prep_Hair_Inst's permutation, its s188): colour 2 itself, no lerp to
+                // HairColor3 by Diffuse 2 Hair Mask.
+                b: Vec4::new(info.scalar("HairAlphaContrast", 2.0), if athlete { 1.0 } else { 0.0 }, if info.switches.get("Use Second Hair Color (For Dyed Hair Highlights)").copied().unwrap_or(true) { 1.0 } else { 0.0 }, 0.0),
             },
             tex_a: if athlete { fixed(&format!("{OWN}_D"), Tex::Color, &fallback.white) } else { tex("Diffuse 2 Hair Mask", Tex::Data, &fallback.white) },
             tex_b: tex("Mask", Tex::Data, &fallback.white),
