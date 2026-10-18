@@ -66,10 +66,13 @@ const RUNTIME_VISIBILITY: &[(&str, Vis)] = &[
     ("Image_0", Vis::Collapsed),
 ];
 
-/// The pips' colors: waiting (the template pip's tint), hit, missed.
-const PIP_WAITING: [f32; 4] = [0.854993, 0.030713, 0.017642, 1.0];
-const PIP_HIT: [f32; 4] = [0.552012, 0.527115, 0.434154, 1.0];
-const PIP_MISSED: [f32; 4] = [0.854993, 0.030713, 0.017642, 0.2];
+/// The pips' colors (SCInteractMinigame_Widget's defaults, all half transparent: the progress and the needle show
+/// through), as FUN_140441e10 sets each pip's material Color by its state: waiting PipDefaultColor, active
+/// PipActiveColor, hit PipHitColor until the progress is past it (then PipActiveColor), missed PipMissColor.
+const PIP_WAITING: [f32; 4] = [0.212596, 0.203007, 0.23, 0.5];
+const PIP_ACTIVE: [f32; 4] = [0.995, 1.0, 1.0, 0.5];
+const PIP_HIT: [f32; 4] = [0.106459, 0.865, 0.284412, 0.5];
+const PIP_MISSED: [f32; 4] = [0.854993, 0.030713, 0.017642, 0.5];
 
 /// The keys ActionMapWidgets show for their PrimaryAction (the game picks a key glyph or name from the input
 /// settings: DefaultInput.ini's keyboard mappings here); the others (the gamepad's item cycling and powers, the
@@ -1885,9 +1888,11 @@ fn dial(
     };
     for (p, &a) in h.pips.iter().zip(&arcs) {
         let c = match p.state {
-            PipState::Hit => PIP_HIT,
+            // (Its end + 1.5 degrees, as the game's: DAT_142179354 over the 1/360 scale.)
+            PipState::Hit if progress <= (p.position + p.width + 1.5) / 360.0 => PIP_HIT,
+            PipState::Hit | PipState::Active => PIP_ACTIVE,
             PipState::Missed => PIP_MISSED,
-            _ => PIP_WAITING,
+            PipState::Waiting => PIP_WAITING,
         };
         let c = LinearRgba::from(linear(c));
         if let Some(m) = nodes.get(a).ok().map(|n| n.0.clone()) {
