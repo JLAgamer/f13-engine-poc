@@ -53,6 +53,8 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         public bool KeepRoot;
         /// The montage's notify states (e.g. AttackTraceNotify: when the weapon hits) and named notifies, seconds.
         public List<Window>? Windows;
+        /// Where this take starts in the montage its windows came from (its segment's StartPos), seconds.
+        public float MontageStart;
         /// The montage's float curves (its RawCurveData, e.g. "Barricade": how far the plank has swung), by name.
         public SortedDictionary<string, List<CurveKey>>? Curves;
         /// The montage's sections (CompositeSections: name, start, length in montage seconds).
@@ -392,12 +394,17 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
             var sections = Sections(path);
             var blendIn = (provider.LoadPackageObject(path + "." + path.Split('/')[^1]) as UAnimMontage)?.GetOrDefault<FStructFallback?>("BlendIn")?.GetOrDefault<float?>("BlendTime");
             var k = 0;
+            var starts = SegmentStarts(path);
+            var segment = 0;
             foreach (var seq in Sequences(path))
             {
+                var start = segment < starts.Count ? starts[segment] : 0f;
+                segment++;
                 var key = names.Count > 0 ? names[k++] : seq.Name;
                 // Already written from another montage: still give it this montage's notifies and curves if it has none.
                 if (info.Animations.TryGetValue(key, out var have))
                 {
+                    if (have.Windows == null && windows != null) have.MontageStart = start;
                     have.Windows ??= windows;
                     have.Curves ??= curves;
                     have.Sections ??= sections;
@@ -406,6 +413,7 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
                 }
                 var a = WriteSequence(seq, skeleton, dir, keepRoot.Contains(path));
                 a.Windows = windows;
+                a.MontageStart = start;
                 a.Curves = curves;
                 a.Sections = sections;
                 a.BlendIn = blendIn;
@@ -711,6 +719,10 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         AddBones(info, body, skeleton);
         AddSockets(info, body, skeleton);
         WriteAnimations(info, skeleton, animations, "anims/jason", keepRoot);
+        // And every shake his takes' notifies name.
+        foreach (var (name, path) in shakeClasses)
+            if (info.CameraShakes[name] == null && provider.TryLoadPackageObject<UBlueprintGeneratedClass>(path, out var shakeCls) && shakeCls.ClassDefaultObject.Load() is { } shakeCdo)
+                info.CameraShakes[name] = Newtonsoft.Json.Linq.JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(shakeCdo))["Properties"] ?? new Newtonsoft.Json.Linq.JObject();
         Save(info, "killers");
     }
 
@@ -759,6 +771,16 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
         return list.Count > 0 ? list : null;
     }
 
+    /// The camera shake classes the notifies name (their short name -> class path), for the CameraShakes export.
+    readonly Dictionary<string, string> shakeClasses = new();
+
+    string Shake(FPackageIndex cls)
+    {
+        var name = cls.Name.Replace("_C", "");
+        if (cls.ResolvedObject?.GetPathName() is { } path) shakeClasses.TryAdd(name, path);
+        return name;
+    }
+
     List<Window>? Windows(string path)
     {
         var obj = provider.LoadPackageObject(path + "." + path.Split('/')[^1]);
@@ -771,7 +793,7 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
                     : n.GetOrDefault<FPackageIndex>("Notify")?.Load() is { ExportType: "ILLCameraShakeAnimNotify" } shake
                         && shake.GetOrDefault("ShakeRange", 0f) <= 0 && !shake.GetOrDefault("bPlayForAllClients", false)
                         && shake.GetOrDefault<FPackageIndex>("CameraShake") is { IsNull: false } cls
-                    ? $"CameraShake {cls.Name.Replace("_C", "")} " + shake.GetOrDefault("Scale", 1f).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    ? $"CameraShake {Shake(cls)} " + shake.GetOrDefault("Scale", 1f).ToString(System.Globalization.CultureInfo.InvariantCulture)
                     : n.GetOrDefault<FName>("NotifyName").Text,
                 Start: n.GetOrDefault<float>("LinkValue"), Duration: n.GetOrDefault<float>("Duration"),
                 Named: n.GetOrDefault<FPackageIndex>("NotifyStateClass") is not { IsNull: false }
@@ -1302,6 +1324,15 @@ class CounselorExporter(DefaultFileProvider provider, string outDir, Action<UObj
     }
 
     /// A sequence, or each sequence a montage plays.
+    /// A montage's segments' StartPos, in the order [`Sequences`] gives their sequences (a sequence: 0).
+    List<float> SegmentStarts(string path)
+    {
+        var obj = provider.LoadPackageObject(path + "." + path.Split('/')[^1]);
+        if (obj is not UAnimMontage m) return [0f];
+        return (m.SlotAnimTracks ?? []).SelectMany(slot => slot.AnimTrack.AnimSegments ?? [])
+            .Where(seg => seg.AnimReference.TryLoad(out UAnimSequence? seq) && seq != null).Select(seg => seg.StartPos).ToList();
+    }
+
     IEnumerable<UAnimSequence> Sequences(string path)
     {
         var obj = provider.LoadPackageObject(path + "." + path.Split('/')[^1]);

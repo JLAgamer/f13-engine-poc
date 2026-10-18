@@ -451,6 +451,10 @@ pub struct AnimInfo {
     /// length, e.g. `shouldRagdoll`), in seconds.
     #[serde(default, deserialize_with = "crate::level::null_as_empty")]
     pub windows: Vec<Window>,
+    /// Where this take starts in the montage its windows came from (its segment's StartPos), seconds: a window at
+    /// montage time w is at w - montage_start into the take.
+    #[serde(default)]
+    pub montage_start: f32,
     /// The montage's float curves (e.g. "Barricade"), keyed in seconds into it.
     #[serde(default, deserialize_with = "crate::level::null_as_empty")]
     pub curves: BTreeMap<String, Vec<CurveKey>>,

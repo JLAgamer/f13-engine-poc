@@ -28,8 +28,6 @@ Lighting first (the user, 2026-10-14):
 - [ ] Melee impacts, the approximations left (MODLOG "All melee impacts", "Jason's swing recoiling"): Jason's weapon
       sweep (a chest line along his facing now: its penetration and distance stand in for the hit's), where a hit
       lands on a character (a fixed point on the chest now)
-- [ ] Anim notify camera shakes on every take (exported as "CameraShake" windows; played only for his recoil and stuck
-      takes, the grab's by hand; most shake classes not in CameraShakes yet)
 - [ ] Lighting: Enlighten's remaining stand-ins: the lamps' visibility (a ray per point for the game's shadow-map
       test), the landscape's per-component UV scale and bias (fitted from the data; set per draw at run time)
 - [ ] Optimize performance further (2026-10-15, a counselor at her start, --perf --features profile: 8.0 ms a frame,

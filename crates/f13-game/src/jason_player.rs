@@ -99,6 +99,7 @@ impl Plugin for PlayJasonPlugin {
                 jason_camera.after(look).after(crate::counselor_camera::counselor_camera).after(crate::hiding::hiding_camera).before(crate::kill_camera::kill_camera).run_if(on),
             )
             .add_systems(Update, place_for_test.run_if(on).run_if(|| std::env::var("F13_JASON_AT").is_ok()))
+            .add_systems(Update, notify_shakes.after(crate::character::animate).run_if(on))
             .add_systems(Startup, spawn_hud)
             .add_observer(anim_shake);
     }
@@ -599,6 +600,42 @@ fn look(
     }
     controls.yaw = cam.yaw;
     controls.pitch = cam.pitch;
+}
+
+/// His takes' ILLCameraShakeAnimNotifies (their "CameraShake <shake> <scale>" windows, montage time less the take's
+/// MontageStart) as his take passes them: [`anim_shake`].
+fn notify_shakes(
+    mut commands: Commands,
+    killer: Option<Res<crate::character::KillerCharacter>>,
+    rigs: Query<(Entity, &crate::character::Rig, &ChildOf)>,
+    jasons: Query<(), With<crate::jason::Jason>>,
+    mut last: Local<std::collections::HashMap<Entity, (String, f32)>>,
+) {
+    let Some(killer) = killer else { return };
+    for (e, rig, parent) in &rigs {
+        if !matches!(rig.model, crate::character::Model::Killer) || !jasons.contains(parent.parent()) {
+            continue;
+        }
+        let Some((name, t)) = rig.action.clone() else {
+            last.remove(&e);
+            continue;
+        };
+        // Since the last frame's time in the same take, or from the start of a new one.
+        let from = last.get(&e).filter(|(n, _)| *n == name).map_or(f32::NEG_INFINITY, |(_, t)| *t);
+        if let Some(a) = killer.info.animations.get(name.as_str()) {
+            for w in &a.windows {
+                let at = w.start - a.montage_start;
+                if at < 0.0 || at > a.length || !(from < at && at <= t) {
+                    continue;
+                }
+                let mut parts = w.name.split(' ');
+                if let (Some("CameraShake"), Some(shake), Some(scale)) = (parts.next(), parts.next(), parts.next().and_then(|s| s.parse::<f32>().ok())) {
+                    commands.trigger(crate::jason::JasonCameraShake { shake: crate::audio::intern(shake), scale });
+                }
+            }
+        }
+        last.insert(e, (name, t));
+    }
 }
 
 /// An anim notify's camera shake (jason.rs): on his camera when he's played (the notify's locally controlled case).
