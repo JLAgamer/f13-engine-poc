@@ -177,8 +177,8 @@ fn drive(
             }
             v.started = true;
             info!("{} started after holding {:.1}s", v.class, hold.timer);
-            // The key turning, then the engine running (EngineStartCue, EngineCue).
-            crate::net_world::shout(&mut commands, crate::net_world::Shout::ActorSound(crate::audio::ActorSound { actor: player.vehicle, prop: "EngineStartCue" }));
+            // The engine running: OnRep_IsStarted (0x140439d80) sets EngineAudioComponent's sound to EngineCue and
+            // plays it. EngineStartCue (V6TurnKey, a looping wave) is read by no code or Blueprint: not played.
             // SCDriveableVehicle::StartVehicle (0x140446ad0): the starter's AppliedLastPart line.
             crate::net_world::shout(&mut commands, crate::net_world::Shout::ActorSound(crate::audio::ActorSound { actor: driver, prop: "VO:AppliedLastPart" }));
             crate::net_world::shout(&mut commands, crate::net_world::Shout::ActorLoop(crate::audio::ActorLoop { actor: player.vehicle, prop: "EngineCue" }));
