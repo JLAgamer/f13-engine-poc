@@ -737,7 +737,7 @@ const PROBE_VOXELS: UVec3 = UVec3::new(48, 24, 48);
 const PROBE_VOXEL_M: f32 = 2.0;
 
 /// A half float's value (the atlas dump).
-fn f16_value(h: u16) -> f32 {
+pub(crate) fn f16_value(h: u16) -> f32 {
     let (sign, exp, man) = ((h >> 15) as u32, ((h >> 10) & 0x1f) as i32, (h & 0x3ff) as f32);
     let v = match exp {
         0 => man / 1024.0 * 2f32.powi(-14),
@@ -747,7 +747,7 @@ fn f16_value(h: u16) -> f32 {
     if sign == 1 { -v } else { v }
 }
 
-fn f16_bits(v: f32) -> u16 {
+pub(crate) fn f16_bits(v: f32) -> u16 {
     let x = v.to_bits();
     let sign = ((x >> 16) & 0x8000) as u16;
     let exp = ((x >> 23) & 0xff) as i32 - 127 + 15;

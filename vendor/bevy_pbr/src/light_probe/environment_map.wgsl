@@ -89,9 +89,9 @@ fn compute_cubemap_sample_dir(
     // it is equivalent to rotating the environment cubemap itself.
     sample_dir = quat_rotate(view_rotation, sample_dir);
 
-    // Cubemaps are left-handed, so we negate the Z coordinate.
-    sample_dir.z = -sample_dir.z;
-    return sample_dir;
+    // f13-rs: the cube is Unreal's (its ambient cubemap as cooked, D3D's layout), looked up with Unreal's axes:
+    // Bevy (x, y, z) = Unreal (x, z, y).
+    return sample_dir.xzy;
 }
 
 // Define two versions of this function, one for the case in which there are
@@ -159,12 +159,16 @@ fn compute_radiances(
         }
 
         // Split-sum approximation for image based lighting: https://cdn2.unrealengine.com/Resources/files/2013SiggraphPresentationsNotes-26915738.pdf
-        let radiance_level = perceptual_roughness * f32(textureNumLevels(
-            bindings::specular_environment_maps[query_result.texture_index]) - 1u);
+        // f13-rs: FPostProcessAmbientPS's mips: specular (MipCount - 1) - (3 - 1.15 log2(roughness)), diffuse
+        // MipCount - 4.
+        let mip_count = f32(textureNumLevels(bindings::specular_environment_maps[query_result.texture_index]));
+        let radiance_level = clamp(mip_count - 1.0 - (3.0 - 1.15 * log2(max(perceptual_roughness, 1e-4))), 0.0, mip_count - 1.0);
+        let irradiance_level = max(mip_count - 4.0, 0.0);
 
         // If we're lightmapped, and we shouldn't accumulate diffuse light from the
         // environment map, note that.
-        var enable_diffuse = !found_diffuse_indirect;
+        // f13-rs: the game's ambient cubemap pass adds to every pixel, Enlighten's lightmaps and probes or not.
+        var enable_diffuse = true;
 #ifdef LIGHTMAP
         enable_diffuse = enable_diffuse &&
             (query_result.flags & LIGHT_PROBE_FLAG_AFFECTS_LIGHTMAPPED_MESH_DIFFUSE) != 0u;
@@ -185,7 +189,7 @@ fn compute_radiances(
                 bindings::diffuse_environment_maps[query_result.texture_index],
                 bindings::environment_map_sampler,
                 irradiance_sample_dir,
-                0.0).rgb * query_result.intensity * query_result.weight;
+                irradiance_level).rgb * query_result.intensity * query_result.weight;
         }
 
         var radiance_sample_dir = radiance_sample_direction(N, R, roughness);
@@ -241,13 +245,17 @@ fn compute_radiances(
     // Split-sum approximation for image based lighting: https://cdn2.unrealengine.com/Resources/files/2013SiggraphPresentationsNotes-26915738.pdf
     // Technically we could use textureNumLevels(specular_environment_map) - 1 here, but we use a uniform
     // because textureNumLevels() does not work on WebGL2
-    let radiance_level = perceptual_roughness * f32(light_probes.smallest_specular_mip_level_for_view);
+    // f13-rs: FPostProcessAmbientPS's mips (see the array version).
+    let mip_count = f32(light_probes.smallest_specular_mip_level_for_view) + 1.0;
+    let radiance_level = clamp(mip_count - 1.0 - (3.0 - 1.15 * log2(max(perceptual_roughness, 1e-4))), 0.0, mip_count - 1.0);
+    let irradiance_level = max(mip_count - 4.0, 0.0);
 
     let intensity = light_probes.intensity_for_view;
 
     // If we're lightmapped, and we shouldn't accumulate diffuse light from the
     // environment map, note that.
-    var enable_diffuse = !found_diffuse_indirect;
+    // f13-rs: the game's ambient cubemap pass adds to every pixel, Enlighten's lightmaps and probes or not.
+    var enable_diffuse = true;
 #ifdef LIGHTMAP
     enable_diffuse = enable_diffuse &&
         light_probes.view_environment_map_affects_lightmapped_mesh_diffuse;
@@ -258,21 +266,21 @@ fn compute_radiances(
         // Rotating the world space ray direction by the environment map light view rotation,
         // it is equivalent to rotating the environment cubemap itself.
         irradiance_sample_dir = quat_rotate(light_probes.view_rotation, irradiance_sample_dir);
-        // Cube maps are left-handed so we negate the z coordinate.
-        irradiance_sample_dir.z = -irradiance_sample_dir.z;
+        // f13-rs: Unreal's axes (see compute_cubemap_sample_dir).
+        irradiance_sample_dir = irradiance_sample_dir.xzy;
         radiances.irradiance = textureSampleLevel(
             bindings::diffuse_environment_map,
             bindings::environment_map_sampler,
             irradiance_sample_dir,
-            0.0).rgb * intensity;
+            irradiance_level).rgb * intensity;
     }
 
     var radiance_sample_dir = radiance_sample_direction(N, R, roughness);
     // Rotating the world space ray direction by the environment map light view rotation,
     // it is equivalent to rotating the environment cubemap itself.
     radiance_sample_dir = quat_rotate(light_probes.view_rotation, radiance_sample_dir);
-    // Cube maps are left-handed so we negate the z coordinate.
-    radiance_sample_dir.z = -radiance_sample_dir.z;
+    // f13-rs: Unreal's axes (see compute_cubemap_sample_dir).
+    radiance_sample_dir = radiance_sample_dir.xzy;
     radiances.radiance = textureSampleLevel(
         bindings::specular_environment_map,
         bindings::environment_map_sampler,
@@ -386,11 +394,8 @@ fn environment_map_light(
     let FmsEms = mix(ms_dielectric.FmsEms, ms_metallic.FmsEms, metallic);
     let kD = diffuse_color * ms_dielectric.Edss;
 
-    if (!found_diffuse_indirect) {
-        out.diffuse = (FmsEms + kD) * radiances.irradiance;
-    } else {
-        out.diffuse = vec3(0.0);
-    }
+    // f13-rs: FPostProcessAmbientPS: DiffuseColor x the cube, whatever else lit the pixel.
+    out.diffuse = diffuse_color * radiances.irradiance;
 
     out.specular = FssEss * radiances.radiance;
 

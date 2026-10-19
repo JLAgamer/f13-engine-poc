@@ -211,7 +211,11 @@ void ExportLevel(string mapPath, params string[] extra)
                 // The ambient cubemap's mean radiance (linear RGB): f13-game lights the scene with it.
                 if (actor.ExportType == "PostProcessVolume" && actor.GetOrDefault<FStructFallback?>("Settings") is { } pp
                     && pp.GetOrDefault<FPackageIndex?>("AmbientCubemap")?.Load<UTextureCube>() is { } cube && CubeAverage(cube) is { } avg)
+                {
                     info.Props["AmbientCubemapAverage"] = new Newtonsoft.Json.Linq.JArray(avg);
+                    // And the cube itself, for the ambient pass's per-pixel samples (FPostProcessAmbientPS).
+                    if (WriteCube(cube, outDir!) is { } cubeFile) info.Props["AmbientCubemapFile"] = cubeFile;
+                }
                 // Its colour grading LUT (a 256 x 16 strip of 16 slices; f13-game reads its PNG to build the volume's
                 // combined LUT as the engine's CombineLUTs pass does).
                 if (actor.ExportType == "PostProcessVolume" && actor.GetOrDefault<FStructFallback?>("Settings") is { } pps
@@ -530,6 +534,23 @@ void WriteClasses()
 }
 
 // Mean colour of an RGBA16F cubemap's top mip (all six faces), or null for another format.
+// A PF_FloatRGBA cube's every mip as raw half floats (<path>.cube: "F13C", u32 size, u32 mips, then per mip its six faces,
+// +X -X +Y -Y +Z -Z in Unreal's (D3D's) cube layout, size^2 x 8 bytes each), the file's export-relative path; null
+// for another format.
+static string? WriteCube(UTextureCube cube, string outDir)
+{
+    if (cube.Format != EPixelFormat.PF_FloatRGBA) return null;
+    var rel = cube.GetPathName().Split('.')[0].TrimStart('/').Replace("Game/", "SummerCamp/Content/") + ".cube";
+    var path = Path.Combine(outDir, rel);
+    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+    using var w = new BinaryWriter(File.Create(path));
+    w.Write("F13C"u8.ToArray());
+    w.Write((uint)cube.PlatformData.Mips[0].SizeX);
+    w.Write((uint)cube.PlatformData.Mips.Length);
+    foreach (var mip in cube.PlatformData.Mips) w.Write(mip.BulkData?.Data ?? new byte[mip.SizeX * mip.SizeY * 6 * 8]);
+    return rel;
+}
+
 static float[]? CubeAverage(UTextureCube cube)
 {
     if (cube.Format != EPixelFormat.PF_FloatRGBA || cube.PlatformData.Mips[0].BulkData?.Data is not { } data) return null;

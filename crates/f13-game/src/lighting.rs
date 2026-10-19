@@ -411,7 +411,7 @@ impl Plugin for LightingPlugin {
             .add_systems(Update, patch_falloff)
             .init_resource::<Cookies>()
             .add_systems(Update, light_cookies)
-            .add_systems(Update, (setup_cameras, update_fog, fade_lights, light_functions, shadow_casters, add_flashlight, toggle_flashlight, aim_flashlight).chain());
+            .add_systems(Update, (setup_cameras, ambient_cube_cameras, update_fog, fade_lights, light_functions, shadow_casters, add_flashlight, toggle_flashlight, aim_flashlight).chain());
     }
 }
 
@@ -498,7 +498,7 @@ fn light_cookies(
 #[derive(Resource)]
 struct FlickerTexture(Handle<Image>);
 
-fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<crate::ExportRoot>, unlit: Option<Res<Unlit>>, assets: Res<AssetServer>) {
+fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<crate::ExportRoot>, unlit: Option<Res<Unlit>>, assets: Res<AssetServer>, mut images: ResMut<Assets<Image>>) {
     if unlit.is_some() {
         info!("lighting: off (--unlit)");
         commands.insert_resource(GlobalAmbientLight { color: Color::WHITE, brightness: UNLIT_AMBIENT, ..default() });
@@ -613,11 +613,19 @@ fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
     let volume = actors().find(|a| a.class == "PostProcessVolume" && a.props["bUnbound"].as_bool() == Some(true));
     let settings = volume.map(|v| &v.props["Settings"]);
     let mean = volume.and_then(|v| v.props["AmbientCubemapAverage"].as_array()).map(|a| a.iter().filter_map(Value::as_f64).map(|v| v as f32).collect::<Vec<_>>());
-    if let (Some(s), Some(mean)) = (settings, mean.filter(|m| m.len() == 3)) {
+    let cube = volume.and_then(|v| v.props["AmbientCubemapFile"].as_str()).and_then(|f| std::fs::read(export.0.join(f)).ok());
+    if let (Some(s), Some(cube)) = (settings, cube.as_deref().zip(settings).and_then(|(b, s)| ambient_cube(b, s))) {
+        // FPostProcessAmbientPS: per pixel the cube along its normal (diffuse) and its reflection (specular), x
+        // AmbientCubemapIntensity x tint (the tint in the texels), on every pixel (the vendored environment map shader).
+        let intensity = s["AmbientCubemapIntensity"].as_f64().unwrap_or(1.0) as f32;
+        info!("lighting: ambient cubemap ({} mips), intensity {intensity}", cube.texture_descriptor.mip_level_count);
+        commands.insert_resource(AmbientCube { image: images.add(cube), intensity });
+        commands.insert_resource(GlobalAmbientLight { color: Color::BLACK, brightness: 0.0, ..default() });
+    } else if let (Some(s), Some(mean)) = (settings, mean.filter(|m| m.len() == 3)) {
         let scale = s["AmbientCubemapIntensity"].as_f64().unwrap_or(1.0) as f32;
         let tint = |k: &str| s["AmbientCubemapTint"][k].as_f64().unwrap_or(1.0) as f32;
         let c = LinearRgba::rgb(mean[0] * scale * tint("R"), mean[1] * scale * tint("G"), mean[2] * scale * tint("B"));
-        info!("lighting: ambient {:.4} {:.4} {:.4}", c.red, c.green, c.blue);
+        warn!("lighting: no ambient cubemap file (re-export the map): its mean {:.4} {:.4} {:.4} as uniform ambient", c.red, c.green, c.blue);
         commands.insert_resource(GlobalAmbientLight { color: c.into(), brightness: 1.0, ..default() });
     } else {
         warn!("lighting: no ambient cubemap in the export (re-export the map)");
@@ -655,6 +663,60 @@ fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
             directional_exponent: num("DirectionalInscatteringExponent", 4.0),
             directional_start: num("DirectionalInscatteringStartDistance", 10000.0) / 100.0,
             sun,
+        });
+    }
+}
+
+/// The post-process volume's ambient cubemap (its cooked mips, Unreal's face layout and axes: the vendored
+/// environment map shader looks it up so) and AmbientCubemapIntensity, for the cameras' EnvironmentMapLight.
+#[derive(Resource, Clone)]
+struct AmbientCube {
+    image: Handle<Image>,
+    intensity: f32,
+}
+
+/// An f13-export `.cube` ("F13C", u32 size, u32 mips, per mip six faces of half-float RGBA) as a cube image with its
+/// mips, its texels times the volume's AmbientCubemapTint.
+fn ambient_cube(b: &[u8], settings: &Value) -> Option<Image> {
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension};
+    if b.get(0..4)? != b"F13C" {
+        return None;
+    }
+    let size = u32::from_le_bytes(b.get(4..8)?.try_into().ok()?);
+    let mips = u32::from_le_bytes(b.get(8..12)?.try_into().ok()?);
+    let tint = |k: &str| settings["AmbientCubemapTint"][k].as_f64().unwrap_or(1.0) as f32;
+    let tint = [tint("R"), tint("G"), tint("B"), 1.0];
+    let mut data = b.get(12..)?.to_vec();
+    let expected: usize = (0..mips).map(|m| ((size >> m).max(1) as usize).pow(2) * 6 * 8).sum();
+    if data.len() != expected {
+        return None;
+    }
+    for (i, px) in data.chunks_exact_mut(2).enumerate() {
+        let v = crate::enlighten::f16_value(u16::from_le_bytes([px[0], px[1]])) * tint[i % 4];
+        px.copy_from_slice(&crate::enlighten::f16_bits(v).to_le_bytes());
+    }
+    let mut image = Image::default();
+    image.texture_descriptor.size = Extent3d { width: size, height: size, depth_or_array_layers: 6 };
+    image.texture_descriptor.dimension = TextureDimension::D2;
+    image.texture_descriptor.format = TextureFormat::Rgba16Float;
+    image.texture_descriptor.mip_level_count = mips;
+    image.data = Some(data);
+    image.data_order = bevy::render::render_resource::TextureDataOrder::MipMajor;
+    image.texture_view_descriptor = Some(TextureViewDescriptor { dimension: Some(TextureViewDimension::Cube), ..default() });
+    image.sampler = bevy::image::ImageSampler::linear();
+    Some(image)
+}
+
+/// Each lit camera's environment light: the ambient cubemap.
+fn ambient_cube_cameras(mut commands: Commands, cube: Option<Res<AmbientCube>>, cameras: Query<Entity, (With<Lit>, Without<EnvironmentMapLight>)>) {
+    let Some(cube) = cube else { return };
+    for e in &cameras {
+        commands.entity(e).insert(EnvironmentMapLight {
+            diffuse_map: cube.image.clone(),
+            specular_map: cube.image.clone(),
+            intensity: cube.intensity,
+            affects_lightmapped_mesh_diffuse: true,
+            ..default()
         });
     }
 }
