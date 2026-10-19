@@ -69,6 +69,11 @@ use bevy_light::{
 };
 use bevy_shader::{load_shader_library, ShaderRef};
 pub use cluster::*;
+
+/// f13-rs: a point or spot light's shadow strength, 0..1 (Unreal's CalculateShadowFadeAlpha: the shadow lerped toward
+/// unshadowed as its resolution falls); 1 without it.
+#[derive(bevy_ecs::component::Component, Clone, Copy, Debug)]
+pub struct ShadowFade(pub f32);
 pub use decal::clustered::ClusteredDecalPlugin;
 pub use extended_material::*;
 pub use fog::*;

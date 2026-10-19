@@ -12,7 +12,7 @@ Lighting first (the user, 2026-10-14):
       or guessed (the lights' input: albedo x E, matched to the user's shots, the UE integration's fill unread; the
       local lights' visibility: one ray per point; the landscape's UVs: fitted; the foliage's: one point per instance;
       the probes' interpolation and per-pixel clipmap)
-- [ ] Lighting: the local lights' shadow caching and fade: whole-map caching gains nothing (the shadowed lights are near
+- [ ] Lighting: the local lights' shadow caching (their fade is ported): whole-map caching gains nothing (the shadowed lights are near
       her, so always dirty: tried, MODLOG "Shadow caching: tried and reverted"); it needs UE's static / movable split, two
       shadow views a face in a reworked bevy_pbr
 - [ ] Lighting against the user's 2026-10-17 shots (MODLOG "Too dark overall", "The height fog along the ray"): with the

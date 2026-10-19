@@ -28,7 +28,8 @@ pub(crate) mod gpu;
 
 // NOTE: this must be kept in sync with the same constants in
 // `mesh_view_types.wgsl`.
-pub const MAX_UNIFORM_BUFFER_CLUSTERABLE_OBJECTS: usize = 204;
+// f13-rs: 170 (was 204): GpuClusteredLight is 96 bytes with its shadow_fade.
+pub const MAX_UNIFORM_BUFFER_CLUSTERABLE_OBJECTS: usize = 170;
 // Make sure that the clusterable object buffer doesn't overflow the maximum
 // size of a UBO on WebGL 2.
 const _: () =
@@ -128,6 +129,11 @@ pub struct GpuClusteredLight {
     pub(crate) decal_index: u32,
     /// The radius of the range that the light affects, used for clustering.
     pub(crate) range: f32,
+    /// f13-rs: the shadow's strength ([`crate::ShadowFade`]), and padding to 16 bytes.
+    pub(crate) shadow_fade: f32,
+    pub(crate) pad0: f32,
+    pub(crate) pad1: f32,
+    pub(crate) pad2: f32,
 }
 
 /// Contains information about clusterable objects in the scene that's global:

@@ -484,6 +484,8 @@ fn apply_pbr_lighting(
         if ((in.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u
                 && (view_bindings::clustered_lights.data[light_id].flags & mesh_view_types::POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
             shadow = shadows::fetch_point_shadow(light_id, in.world_position, in.world_normal, in.frag_coord.xy);
+            // f13-rs: ShadowFade.
+            shadow = mix(1.0, shadow, view_bindings::clustered_lights.data[light_id].shadow_fade);
         }
 
 #ifdef CONTACT_SHADOWS
@@ -549,6 +551,8 @@ fn apply_pbr_lighting(
                 view_bindings::clustered_lights.data[light_id].shadow_map_near_z,
                 in.frag_coord.xy,
             );
+            // f13-rs: ShadowFade.
+            shadow = mix(1.0, shadow, view_bindings::clustered_lights.data[light_id].shadow_fade);
         }
 
 #ifdef CONTACT_SHADOWS

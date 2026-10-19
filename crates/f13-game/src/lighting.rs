@@ -322,6 +322,14 @@ struct ShadowCaster;
 /// r.Shadow.MinResolution (32; the cvar 0x14014f490, no ini override): a shadow whose unclamped resolution isn't over
 /// it fades to nothing (CalculateShadowFadeAlpha; r.Shadow.FadeResolution 64 the top of the fade).
 const SHADOW_MIN_RESOLUTION: f32 = 32.0;
+/// r.Shadow.FadeResolution (64; the cvar 0x14014fe40): the shadow at full strength from this resolution.
+const SHADOW_FADE_RESOLUTION: f32 = 64.0;
+
+/// CalculateShadowFadeAlpha (FUN_140dd3e30): a shadow of unclamped resolution `r`'s strength: 1 from FadeResolution,
+/// ((r - MinResolution) / (FadeResolution - MinResolution))^1.25 between, 0 at or below MinResolution.
+fn shadow_fade_alpha(r: f32) -> f32 {
+    ((r - SHADOW_MIN_RESOLUTION) / (SHADOW_FADE_RESOLUTION - SHADOW_MIN_RESOLUTION)).clamp(0.0, 1.0).powf(1.25)
+}
 /// r.Shadow.TexelsPerPixelPointlight (1.27324) and ...Spotlight (2.54648): texels per screen pixel of the light's
 /// radius (the cvars 0x14014ff40 / 0x14014ffc0).
 const TEXELS_PER_PIXEL_POINT: f32 = 1.27324;
@@ -740,13 +748,16 @@ fn light_functions(
 /// Which lights render shadow maps this frame, as the engine picks its whole-scene shadows: a shadow-casting light
 /// that's on, whose sphere meets the view's frustum, and whose shadow would be over r.Shadow.MinResolution: texels per
 /// pixel x max(width / 2 x P[0][0], height / 2 x P[1][1]) x its radius / max(its distance, 1 cm) (the shadow fade's
-/// resolution, FUN_140b571d0); of those, the [`SHADOW_BUDGET`] nearest whose range reaches the camera. PLACEHOLDER: the fade between 32 and 64 texels (a shadow here is on or off) and the
-/// shadow map's own resolution (Bevy's one size for all; the game's clamps that resolution to r.Shadow.MaxResolution).
+/// resolution, FUN_140b571d0); of those, the [`SHADOW_BUDGET`] nearest whose range reaches the camera, each at its fade's
+/// strength ([`shadow_fade_alpha`], vendored bevy_pbr's ShadowFade). PLACEHOLDER: the shadow map's own resolution
+/// (Bevy's one size for all; the game's clamps that resolution to r.Shadow.MaxResolution).
 #[allow(clippy::type_complexity)]
 fn shadow_casters(
     cameras: Query<(&GlobalTransform, &Projection, &bevy::camera::primitives::Frustum, &Camera), (With<Lit>, With<Camera3d>)>,
     mut points: Query<(Entity, &mut PointLight, &GlobalTransform, &InheritedVisibility), (With<ShadowCaster>, Without<SpotLight>)>,
     mut spots: Query<(Entity, &mut SpotLight, &GlobalTransform, &InheritedVisibility), (With<ShadowCaster>, Without<PointLight>)>,
+    fades: Query<&bevy::pbr::ShadowFade>,
+    mut commands: Commands,
 ) {
     let Some((cam, projection, frustum, camera)) = cameras.iter().find(|c| c.3.is_active) else { return };
     let clip = projection.get_clip_from_view();
@@ -759,21 +770,29 @@ fn shadow_casters(
         let seen = frustum.intersects_sphere(&bevy::camera::primitives::Sphere { center: at.into(), radius: range }, true);
         let d = at.distance(eye);
         let r = texels * screen * range / d.max(0.01);
-        (seen && r > SHADOW_MIN_RESOLUTION && d < range).then_some(d)
+        (seen && r > SHADOW_MIN_RESOLUTION && d < range).then_some((d, shadow_fade_alpha(r)))
     };
-    let mut wanted: Vec<(f32, Entity)> = vec![];
+    let mut wanted: Vec<(f32, Entity, f32)> = vec![];
     for (e, l, g, v) in &points {
-        if let Some(r) = qualifies(g.translation(), l.range, TEXELS_PER_PIXEL_POINT).filter(|_| v.get() && l.intensity > 0.0) {
-            wanted.push((r, e));
+        if let Some((d, a)) = qualifies(g.translation(), l.range, TEXELS_PER_PIXEL_POINT).filter(|_| v.get() && l.intensity > 0.0) {
+            wanted.push((d, e, a));
         }
     }
     for (e, l, g, v) in &spots {
-        if let Some(r) = qualifies(g.translation(), l.range, TEXELS_PER_PIXEL_SPOT).filter(|_| v.get() && l.intensity > 0.0) {
-            wanted.push((r, e));
+        if let Some((d, a)) = qualifies(g.translation(), l.range, TEXELS_PER_PIXEL_SPOT).filter(|_| v.get() && l.intensity > 0.0) {
+            wanted.push((d, e, a));
         }
     }
     wanted.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let on: Vec<Entity> = wanted.iter().take(shadow_budget()).map(|w| w.1).collect();
+    wanted.truncate(shadow_budget());
+    let on: Vec<Entity> = wanted.iter().map(|w| w.1).collect();
+    // Their strength, set when it moves (each change re-extracts the light).
+    for &(_, e, a) in &wanted {
+        if fades.get(e).is_ok_and(|f| (f.0 - a).abs() < 0.01) {
+            continue;
+        }
+        commands.entity(e).insert(bevy::pbr::ShadowFade(a));
+    }
     for (e, mut l, _, _) in &mut points {
         let want = on.contains(&e);
         if l.shadow_maps_enabled != want {
@@ -887,6 +906,15 @@ fn aim_flashlight(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shadow_fades_between_min_and_fade_resolution() {
+        assert_eq!(shadow_fade_alpha(20.0), 0.0);
+        assert_eq!(shadow_fade_alpha(32.0), 0.0);
+        assert!((shadow_fade_alpha(48.0) - 0.5f32.powf(1.25)).abs() < 1e-6);
+        assert_eq!(shadow_fade_alpha(64.0), 1.0);
+        assert_eq!(shadow_fade_alpha(500.0), 1.0);
+    }
 
     #[test]
     fn falloff_light_is_its_intensity_at_the_centre() {

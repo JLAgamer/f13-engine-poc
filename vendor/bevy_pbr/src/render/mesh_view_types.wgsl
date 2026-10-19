@@ -15,6 +15,11 @@ struct ClusteredLight {
     shadow_map_near_z: f32,
     decal_index: u32,
     range: f32,
+    // f13-rs: the shadow's strength (ShadowFade), then padding.
+    shadow_fade: f32,
+    pad0: f32,
+    pad1: f32,
+    pad2: f32,
 };
 
 const POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT: u32                    = 1u << 0u;
@@ -124,7 +129,7 @@ struct ClusterOffsetsAndCounts {
 };
 #else
 struct ClusteredLights {
-    data: array<ClusteredLight, 204u>,
+    data: array<ClusteredLight, 170u>,
 };
 struct ClusterableObjectIndexLists {
     // each u32 contains 4 u8 indices into the ClusterableObjects array

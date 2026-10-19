@@ -94,6 +94,8 @@ pub struct ExtractedPointLight {
     pub soft_shadows_enabled: bool,
     /// whether this point light contributes diffuse light to lightmapped meshes
     pub affects_lightmapped_mesh_diffuse: bool,
+    /// f13-rs: [`crate::ShadowFade`] (1 without it).
+    pub shadow_fade: f32,
 }
 
 #[derive(Component, Debug)]
@@ -332,9 +334,11 @@ pub fn extract_lights(
                 &CubemapFrusta,
                 Option<&RenderLayers>,
                 Option<&VolumetricLight>,
+                Option<&crate::ShadowFade>,
             ),
             Or<(
                 Changed<PointLight>,
+                Changed<crate::ShadowFade>,
                 Changed<CubemapVisibleEntities>,
                 Changed<GlobalTransform>,
                 Changed<ViewVisibility>,
@@ -356,9 +360,11 @@ pub fn extract_lights(
                 &Frustum,
                 Option<&RenderLayers>,
                 Option<&VolumetricLight>,
+                Option<&crate::ShadowFade>,
             ),
             Or<(
                 Changed<SpotLight>,
+                Changed<crate::ShadowFade>,
                 Changed<VisibleMeshEntities>,
                 Changed<GlobalTransform>,
                 Changed<ViewVisibility>,
@@ -458,6 +464,7 @@ pub fn extract_lights(
         frusta,
         maybe_render_layers,
         volumetric_light,
+        shadow_fade,
     ) in point_lights.iter()
     {
         if !view_visibility.get() {
@@ -549,6 +556,7 @@ pub fn extract_lights(
             spot_light_angles: None,
             volumetric: volumetric_light.is_some(),
             affects_lightmapped_mesh_diffuse: point_light.affects_lightmapped_mesh_diffuse,
+            shadow_fade: shadow_fade.map_or(1.0, |f| f.0),
             #[cfg(feature = "experimental_pbr_pcss")]
             soft_shadows_enabled: point_light.soft_shadows_enabled,
             #[cfg(not(feature = "experimental_pbr_pcss"))]
@@ -572,6 +580,7 @@ pub fn extract_lights(
         frustum,
         maybe_render_layers,
         volumetric_light,
+        shadow_fade,
     ) in spot_lights.iter()
     {
         if !view_visibility.get() {
@@ -678,6 +687,7 @@ pub fn extract_lights(
             spot_light_angles: Some((inner_angle, outer_angle)),
             volumetric: volumetric_light.is_some(),
             affects_lightmapped_mesh_diffuse: spot_light.affects_lightmapped_mesh_diffuse,
+            shadow_fade: shadow_fade.map_or(1.0, |f| f.0),
             #[cfg(feature = "experimental_pbr_pcss")]
             soft_shadows_enabled: spot_light.soft_shadows_enabled,
             #[cfg(not(feature = "experimental_pbr_pcss"))]
@@ -1337,6 +1347,10 @@ pub fn prepare_lights(
                     .and_then(|index| index.try_into().ok())
                     .unwrap_or(u32::MAX),
                 range: light.range,
+                shadow_fade: light.shadow_fade,
+                pad0: 0.0,
+                pad1: 0.0,
+                pad2: 0.0,
                 soft_shadow_size: if light.soft_shadows_enabled {
                     light.radius
                 } else {
