@@ -39,6 +39,7 @@ const GPU_FOG_MODE_LINEAR: u32 = 1;
 const GPU_FOG_MODE_EXPONENTIAL: u32 = 2;
 const GPU_FOG_MODE_EXPONENTIAL_SQUARED: u32 = 3;
 const GPU_FOG_MODE_ATMOSPHERIC: u32 = 4;
+const GPU_FOG_MODE_HEIGHT: u32 = 5;
 
 /// Metadata for fog
 #[derive(Default, Resource)]
@@ -103,6 +104,20 @@ pub fn prepare_fog(
                     directional_light_exponent: fog.directional_light_exponent,
                     be: *extinction,
                     bi: *inscattering,
+                },
+                FogFalloff::HeightFog {
+                    density,
+                    falloff,
+                    height,
+                    directional_start,
+                } => GpuFog {
+                    mode: GPU_FOG_MODE_HEIGHT,
+                    base_color: LinearRgba::from(fog.color).to_vec4(),
+                    directional_light_color: LinearRgba::from(fog.directional_light_color)
+                        .to_vec4(),
+                    directional_light_exponent: fog.directional_light_exponent,
+                    be: Vec3::new(*density, *falloff, *height),
+                    bi: Vec3::new(*directional_start, 0.0, 0.0),
                 },
             }
         };

@@ -25,11 +25,12 @@
 //! - **Ambient**: the ambient cubemap's mean radiance (computed by the exporter) × AmbientCubemapIntensity × tint,
 //!   as uniform ambient light.
 //! - **Fog** (ExponentialHeightFog):
-//!   - density FogDensity / 1000 per cm in base 2, thinning by `2^(-FogHeightFalloff/1000 per cm)` with the
-//!     camera's height above the fog actor;
-//!   - capped at FogMaxOpacity;
-//!   - inscattering colours as radiance.
-//!   - Bevy fog is uniform along the ray, so the height falloff is taken at the camera only.
+//!   - density FogDensity / 1000 per cm in base 2, thinning by `2^(-FogHeightFalloff/1000 per cm)` with height
+//!     above the fog actor, integrated along each view ray (FExponentialHeightFogPS: vendored bevy_pbr's
+//!     FogFalloff::HeightFog);
+//!   - the transmittance capped below by 1 - FogMaxOpacity;
+//!   - inscattering colours as radiance; with a directional light (the clear night's moon, its
+//!     bUsedAsAtmosphereSunLight) DirectionalInscatteringColor past DirectionalInscatteringStartDistance, not capped.
 //! - **Flashlight**:
 //!   - The counselor's Flashlight spot light, toggled with F (CSLR_Flashlight). Hiding turns it off.
 //!   - It sits where the counselor constructor attaches it: (-3.5, 50, 88) cm in the mesh's space, i.e. 50 cm in
@@ -302,6 +303,11 @@ struct HeightFog {
     inscattering: LinearRgba,
     directional: LinearRgba,
     directional_exponent: f32,
+    /// DirectionalInscatteringStartDistance (m; the component's constructor 0x141350280: 10000 cm).
+    directional_start: f32,
+    /// A directional light with bUsedAsAtmosphereSunLight: the fill (0x140b58325) gives the fog directional
+    /// inscattering only from such a light (the clear night's moon; the rain's has none).
+    sun: bool,
 }
 
 /// A placed light that casts dynamic shadows (its CastShadows and CastDynamicShadows: LightComponentBase's constructor
@@ -620,6 +626,7 @@ fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
     }
 
     // The weather's height fog.
+    let sun = placed_components(&level, &classes, |k| k == "DirectionalLightComponent").iter().any(|(_, _, p)| p.get("bUsedAsAtmosphereSunLight").and_then(Value::as_bool) == Some(true));
     if let Some(fog) = placed_components(&level, &classes, |k| k == "ExponentialHeightFogComponent").first() {
         let (_, world, p) = fog;
         let num = |k: &str, d: f64| p.get(k).and_then(Value::as_f64).unwrap_or(d) as f32;
@@ -638,6 +645,8 @@ fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
             inscattering: color("FogInscatteringColor", [0.447, 0.638, 1.0]),
             directional: color("DirectionalInscatteringColor", [0.25, 0.25, 0.125]),
             directional_exponent: num("DirectionalInscatteringExponent", 4.0),
+            directional_start: num("DirectionalInscatteringStartDistance", 10000.0) / 100.0,
+            sun,
         });
     }
 }
@@ -649,19 +658,17 @@ fn setup_cameras(mut commands: Commands, cameras: Query<Entity, (With<Camera3d>,
     }
 }
 
-fn update_fog(mut commands: Commands, fog: Option<Res<HeightFog>>, cameras: Query<(Entity, &GlobalTransform), With<Lit>>) {
+fn update_fog(mut commands: Commands, fog: Option<Res<HeightFog>>, cameras: Query<Entity, With<Lit>>) {
     let Some(f) = fog else { return };
     // Pixels are radiance / 1.2 (the exposure); Bevy adds fog after exposure.
     let exposure = Exposure { ev100: 0.0 }.exposure();
-    for (e, xf) in &cameras {
-        let above = xf.translation().y - f.height;
-        let density = f.density * 2f32.powf(-f.falloff * above) * std::f32::consts::LN_2;
+    for e in &cameras {
         let c = f.inscattering * exposure;
         commands.entity(e).insert(DistanceFog {
             color: Color::linear_rgba(c.red, c.green, c.blue, f.max_opacity),
-            directional_light_color: f.directional.with_alpha(1.0).into(),
+            directional_light_color: f.directional.with_alpha(if f.sun { 1.0 } else { 0.0 }).into(),
             directional_light_exponent: f.directional_exponent,
-            falloff: FogFalloff::Exponential { density },
+            falloff: FogFalloff::HeightFog { density: f.density, falloff: f.falloff, height: f.height, directional_start: f.directional_start },
         });
     }
 }

@@ -110,6 +110,7 @@ const FOG_MODE_LINEAR: u32                = 1u;
 const FOG_MODE_EXPONENTIAL: u32           = 2u;
 const FOG_MODE_EXPONENTIAL_SQUARED: u32   = 3u;
 const FOG_MODE_ATMOSPHERIC: u32           = 4u;
+const FOG_MODE_HEIGHT: u32                = 5u;
 
 #if AVAILABLE_STORAGE_BUFFER_BINDINGS >= 3
 struct ClusteredLights {

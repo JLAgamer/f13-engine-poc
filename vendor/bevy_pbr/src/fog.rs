@@ -304,6 +304,21 @@ pub enum FogFalloff {
         /// For artistic control, use the [`FogFalloff::from_visibility_colors()`] convenience method.
         inscattering: Vec3,
     },
+
+    /// f13-rs: Unreal's exponential height fog (FExponentialHeightFogPS, UE 4.18): its density integrated along the
+    /// view ray through the fog's height falloff, the transmittance capped below by `1 - color.a` (FogMaxOpacity),
+    /// with directional inscattering (`directional_light_color`, `directional_light_exponent`) from the directional
+    /// lights past `directional_start`, not capped.
+    HeightFog {
+        /// FogDensity at the fog's height, base-2 per metre.
+        density: f32,
+        /// FogHeightFalloff, base-2 per metre of height.
+        falloff: f32,
+        /// The fog actor's height (world Y, m).
+        height: f32,
+        /// DirectionalInscatteringStartDistance (m).
+        directional_start: f32,
+    },
 }
 
 impl FogFalloff {
