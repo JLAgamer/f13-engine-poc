@@ -12,9 +12,9 @@ Lighting first (the user, 2026-10-14):
       or guessed (the lights' input: albedo x E, matched to the user's shots, the UE integration's fill unread; the
       local lights' visibility: one ray per point; the landscape's UVs: fitted; the foliage's: one point per instance;
       the probes' per-pixel clipmap (their per-pixel reconstruction ported))
-- [ ] Lighting: the local lights' shadow caching (their fade is ported): whole-map caching gains nothing (the shadowed lights are near
-      her, so always dirty: tried, MODLOG "Shadow caching: tried and reverted"); it needs UE's static / movable split, two
-      shadow views a face in a reworked bevy_pbr
+- [ ] Lighting: every qualifying lamp shadowed, as the game (a budget of 4 now: all of them double the frame). The game's
+      static / movable shadow cache, tried in bevy_pbr, gains nothing here: the cost is per shadow view (encoding), so
+      it's the performance work's (MODLOG "Shadow caching: tried and reverted", "The local lights' shadow fade")
 - [ ] Lighting against the user's 2026-10-17 shots (MODLOG "Too dark overall", "The height fog along the ray"): with the
       game's own fog the unlit views are 30-40% short again (Rod's logs, the intro's background; Zane's 10%): the
       fill left is Enlighten's (its input scale fitted, PLACEHOLDER); the light shafts (the fog's occlusion, the moon's bloom: MODLOG "Light shafts") not drawn;
