@@ -64,22 +64,30 @@ fn irradiance_volume_light(
         let stp = clamp((unit_pos + 0.5) * resolution, vec3(0.5f), resolution - vec3(0.5f));
         let uvw = stp / atlas_resolution;
 
-        // The bottom half of each cube slice is the negative part, so choose it if applicable on each
-        // slice.
-        let neg_offset = select(vec3(0.0f), vec3(0.5f), N < vec3(0.0f));
-
-        let uvw_x = uvw + vec3(0.0f, neg_offset.x, 0.0f);
-        let uvw_y = uvw + vec3(0.0f, neg_offset.y, 1.0f / 3.0f);
-        let uvw_z = uvw + vec3(0.0f, neg_offset.z, 2.0f / 3.0f);
-
-        let rgb_x = textureSampleLevel(irradiance_volume_texture, irradiance_volume_sampler, uvw_x, 0.0).rgb;
-        let rgb_y = textureSampleLevel(irradiance_volume_texture, irradiance_volume_sampler, uvw_y, 0.0).rgb;
-        let rgb_z = textureSampleLevel(irradiance_volume_texture, irradiance_volume_sampler, uvw_z, 0.0).rgb;
-
-        // Use Valve's formula to sample.
-        let NN = N * N;
-        total_irradiance += (rgb_x * NN.x + rgb_y * NN.y + rgb_z * NN.z) * query_result.intensity *
-            query_result.weight;
+        // f13-rs: the volume holds Enlighten's L1 probes (f13-game enlighten.rs ProbeVolume): the +X slot their L0,
+        // -X / +Y / -Y their L1 along x / y / z (signed), and the game's movable base pass (M_Prop_Master s001)
+        // reconstructs each channel per pixel: r = |L1| / L0, q = saturate(dot(N, L1 / |L1|) / 2 + 1/2),
+        // a = (1 - r) / (1 + r), p = 1 + 2r: L0 (a + (1 - a)(p + 1) q^p) (L0 alone with no L1).
+        let l0 = textureSampleLevel(irradiance_volume_texture, irradiance_volume_sampler, uvw, 0.0).rgb;
+        let lx = textureSampleLevel(irradiance_volume_texture, irradiance_volume_sampler, uvw + vec3(0.0f, 0.5f, 0.0f), 0.0).rgb;
+        let ly = textureSampleLevel(irradiance_volume_texture, irradiance_volume_sampler, uvw + vec3(0.0f, 0.0f, 1.0f / 3.0f), 0.0).rgb;
+        let lz = textureSampleLevel(irradiance_volume_texture, irradiance_volume_sampler, uvw + vec3(0.0f, 0.5f, 1.0f / 3.0f), 0.0).rgb;
+        var rgb = vec3(0.0);
+        for (var c = 0; c < 3; c += 1) {
+            let L0 = l0[c];
+            let L1 = vec3(lx[c], ly[c], lz[c]);
+            let len = length(L1);
+            var v = L0;
+            if (len != 0.0 && L0 > 0.0) {
+                let r = len / L0;
+                let q = saturate(dot(N, L1 / len) * 0.5 + 0.5);
+                let a = (1.0 - r) / (1.0 + r);
+                let p = 1.0 + 2.0 * r;
+                v = L0 * (a + (1.0 - a) * (p + 1.0) * pow(q, p));
+            }
+            rgb[c] = max(v, 0.0);
+        }
+        total_irradiance += rgb * query_result.intensity * query_result.weight;
 
         total_weight += query_result.weight;
     }

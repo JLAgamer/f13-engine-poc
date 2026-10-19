@@ -632,9 +632,9 @@ impl Solver {
         Solved { outputs, volume, ms: started.elapsed().as_secs_f32() * 1000.0 }
     }
 
-    /// The probe volume's texels round `at` (Bevy space, on the voxel grid): per voxel its ambient cube (see
-    /// [`ProbeVolume`]), the axes' + faces in the texture's upper halves, their - faces below, axis k in its k-th
-    /// third of the depth.
+    /// The probe volume's texels round `at` (Bevy space, on the voxel grid): per voxel its L1 probe in the layout of
+    /// Bevy's ambient cube (see [`ProbeVolume`]): the +X slot its L0, -X / +Y / -Y its moment along Bevy's x / y / z;
+    /// +Z / -Z zero.
     fn volume(&self, at: Vec3, debug_scale: f32) -> Vec<u8> {
         let r = PROBE_VOXELS;
         let extent = r.as_vec3() * PROBE_VOXEL_M;
@@ -653,9 +653,8 @@ impl Solver {
                 .min_by(|a, b| a.1.total_cmp(&b.1));
             let Some((sh, _)) = best else { return [Vec3::ZERO; 6] };
             let sh = sh.map(|c| c * debug_scale);
-            // Bevy's axes: +X = Unreal's x, +Y = its z (up), +Z = its y; per axis its + and - faces.
-            let (c0, m) = (sh[0], [sh[1], sh[3], sh[2]]);
-            std::array::from_fn(|k| (c0 + m[k / 2] * if k % 2 == 0 { 2.0 } else { -2.0 }).max(Vec3::ZERO))
+            // Bevy's axes: +X = Unreal's x, +Y = its z (up), +Z = its y.
+            [sh[0], sh[1], sh[3], sh[2], Vec3::ZERO, Vec3::ZERO]
         };
         // (A slice of z per thread.)
         let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(nz);
@@ -690,9 +689,10 @@ impl Solver {
 /// The probe volume: a box of voxels round the camera (`PROBE_VOXELS` of `PROBE_VOXEL_M`), each the probes' light
 /// there as an ambient cube (Bevy's IrradianceVolume, for the meshes without a lightmap: characters, props, the
 /// Blueprint parts), refilled by each solve where the camera then was. A voxel takes the probe set whose cell under it
-/// is the smallest (sets of several levels overlap). An L1 probe (mean c0, moment c) gives E(n) / pi = c0 + 2 c . n
-/// (its radiance c0 + 3 c . w, cosine-weighted over n's hemisphere), so each face of the cube holds c0 +- 2 c along its
-/// axis. PLACEHOLDER for the game's per-pixel probe interpolation (PPPI and its clipmap).
+/// is the smallest (sets of several levels overlap). Each voxel holds its L1 probe, and the vendored irradiance volume
+/// shader reconstructs it per pixel as the game's movable base pass does (Enlighten's R0: M_Prop_Master s001).
+/// PLACEHOLDER for the game's per-pixel probe interpolation's own volume (PPPI and its clipmap: here a box of 2 m
+/// voxels round the camera, filled per solve).
 #[derive(Component)]
 struct ProbeVolume {
     image: Handle<Image>,
