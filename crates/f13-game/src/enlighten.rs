@@ -523,11 +523,61 @@ fn apply(
     }
 }
 
+/// Each of a system's input points seen from `lamp` (see [`Solver::step`]): one ray from the point, 5 cm off its
+/// surface, to the lamp through the static world.
+fn lamp_visibility(workspace: &InputWorkspace, lamp: &Lamp, world: Option<&f13_core::collision::TriGrid>) -> Vec<Vec<[bool; 4]>> {
+    let b = |v: Vec3| Vec3::new(v.x, v.z, v.y) / 100.0;
+    workspace
+        .clusters
+        .iter()
+        .map(|packets| {
+            packets
+                .iter()
+                .map(|pk| {
+                    pk.points.map(|q| {
+                        let c = q + pk.normal * 5.0;
+                        c.distance(lamp.at) < lamp.range && world.is_none_or(|w| f13_core::collision::segment_hit(w, b(c), b(lamp.at), 0.1).is_none_or(|t| t > 0.98))
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}
+
 impl Solver {
     /// One solve: the clusters' light, the transports, the probe sets, the probe volume's voxels.
     fn step(&mut self, f: Frame) -> Solved {
         let started = std::time::Instant::now();
         let world = f.world.as_deref();
+        // The lamps' visibility not yet cached (new lamps: the intro's staged lights all at once), traced across the
+        // threads before the solve (a single thread took ~12 s for the intro's first).
+        let todo: Vec<(Entity, usize, &Lamp)> = f
+            .lamps
+            .iter()
+            .flat_map(|(le, lamp)| self.systems.iter().enumerate().map(move |(si, s)| (le, si, s, lamp)))
+            .filter(|(le, si, s, lamp)| lamp.at.clamp(s.bounds.0, s.bounds.1).distance(lamp.at) < lamp.range && !self.visibility.contains_key(&(**le, *si)))
+            .map(|(le, si, _, lamp)| (*le, si, lamp))
+            .collect();
+        if !todo.is_empty() {
+            let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(todo.len());
+            let systems = &self.systems;
+            let traced: Vec<((Entity, usize), Vec<Vec<[bool; 4]>>)> = std::thread::scope(|sc| {
+                let handles: Vec<_> = (0..threads)
+                    .map(|t| {
+                        let todo = &todo;
+                        sc.spawn(move || {
+                            todo.iter()
+                                .skip(t)
+                                .step_by(threads)
+                                .map(|&(le, si, lamp)| ((le, si), lamp_visibility(&systems[si].workspace, lamp, world)))
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .collect();
+                handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
+            });
+            self.visibility.extend(traced);
+        }
         for (si, s) in self.systems.iter_mut().enumerate() {
             s.input = match f.moon {
                 Some((dir, color)) => {
@@ -551,24 +601,7 @@ impl Solver {
                 // 0x141ddb2f0, from its Enlighten shadow pass, FEnlightenShadowPixelShader): here one ray each from the
                 // point (5 cm off its surface) to the lamp, cached, the lamps not moving. PLACEHOLDER: a ray for the
                 // shadow map's test.)
-                let vis = self.visibility.entry((*le, si)).or_insert_with(|| {
-                    let b = |v: Vec3| Vec3::new(v.x, v.z, v.y) / 100.0;
-                    s.workspace
-                        .clusters
-                        .iter()
-                        .map(|packets| {
-                            packets
-                                .iter()
-                                .map(|pk| {
-                                    pk.points.map(|q| {
-                                        let c = q + pk.normal * 5.0;
-                                        c.distance(lamp.at) < lamp.range && world.is_none_or(|w| f13_core::collision::segment_hit(w, b(c), b(lamp.at), 0.1).is_none_or(|t| t > 0.98))
-                                    })
-                                })
-                                .collect()
-                        })
-                        .collect()
-                });
+                let vis = self.visibility.entry((*le, si)).or_insert_with(|| lamp_visibility(&s.workspace, lamp, world));
                 for ((packets, seen), light) in s.workspace.clusters.iter().zip(vis.iter()).zip(s.input.iter_mut()) {
                     if packets.is_empty() {
                         continue;
