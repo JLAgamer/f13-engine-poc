@@ -11,7 +11,7 @@ Lighting first (the user, 2026-10-14):
 - [ ] Lighting: Enlighten GI (on by default; F13_ENLIGHTEN=0 off): left are the game's own versions of what's fitted
       or guessed (the lights' input: albedo x E, matched to the user's shots, the UE integration's fill unread; the
       local lights' visibility: one ray per point; the landscape's UVs: fitted; the foliage's: one point per instance;
-      the probes' per-pixel clipmap (their per-pixel reconstruction ported); )
+      the probes' per-pixel clipmap (their per-pixel reconstruction ported))
 - [ ] Lighting: the local lights' shadow caching (their fade is ported): whole-map caching gains nothing (the shadowed lights are near
       her, so always dirty: tried, MODLOG "Shadow caching: tried and reverted"); it needs UE's static / movable split, two
       shadow views a face in a reworked bevy_pbr
@@ -30,8 +30,6 @@ Lighting first (the user, 2026-10-14):
 - [ ] Melee impacts, the approximations left (MODLOG "All melee impacts", "Jason's swing recoiling"): Jason's weapon
       sweep (a chest line along his facing now: its penetration and distance stand in for the hit's), where a hit
       lands on a character (a fixed point on the chest now)
-- [ ] Lighting: Enlighten's remaining stand-ins: the lamps' visibility (a ray per point for the game's shadow-map
-      test), the landscape's per-component UV scale and bias (fitted from the data; set per draw at run time)
 - [ ] Optimize performance further (2026-10-15, a counselor at her start, --perf --features profile: 8.0 ms a frame,
       from 13.4 that day; render world 7.3 ms, mostly encoding 4.7; main world 4.5, PostUpdate 2.9; particles 0.9.
       Left: the remaining non-bindless materials (masters, terrain, water, characters), the moon's cascades ~3 ms,
