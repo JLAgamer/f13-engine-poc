@@ -1,309 +1,104 @@
 # f13recomp
 
-A fan reimplementation that runs on your own copy of *Friday the 13th: The Game*: its gameplay rules rebuilt
-from scratch in Rust on Bevy, using the assets and tuning read from your install. (In the code its crates and tools
-keep their `f13-` names.)
+A fan remake of *Friday the 13th: The Game* that runs on your own copy of the game: the gameplay rebuilt in Rust on
+Bevy, with the map, characters, sounds and gameplay values read from your install. It ships no game files.
 
-This repository contains no game files, extracted assets or decompiled code. Gameplay values are not
-shipped. They are passed in at runtime, and a loader will read them from the player's install.
+Today it has one map (Crystal Lake, small) with its four cabin layouts, every counselor and the Jasons, and online
+play with friends.
 
 ## Install
 
 You need your own copy of *Friday the 13th: The Game* with its files unpacked (its content as loose files under
-`SummerCamp/Content`). Nothing else: the installer brings everything it needs.
+`SummerCamp/Content`).
 
-1. Download `f13recomp-windows-x64.zip` from the releases page and unzip it anywhere.
-2. Run `f13recomp-setup.exe`.
-3. Pick your game folder (the one with `SummerCamp` in it). The installer checks it and says if it's still packed.
-4. Press **Install**. It reads the gameplay values, the map, characters, sounds and effects from your game into the
-   `export` folder next to it (a few minutes).
-5. Press **Play**. Afterwards, start `f13recomp.exe` directly. Run the installer again (Reinstall) after a game update.
+1. Download `f13recomp-windows-x64.zip` from the [releases page](https://github.com/JLAgamer/f13recomp/releases) and
+   unzip it anywhere.
+2. Run `f13recomp-setup.exe` and pick your game folder (the one with `SummerCamp` in it).
+3. Press **Install** (a few minutes: it reads everything it needs from your game), then **Play**.
 
-The zip contains no game files: everything comes from your copy.
+Afterwards, start `f13recomp.exe` directly. Run setup again (Reinstall) after a game update, or when a new f13recomp
+release asks for it.
 
-**Requirements:** Windows 10 or 11 (64-bit), a DirectX 12 or Vulkan graphics card, about 6 GB free for the
-export. Supported game build: the Steam release current in October 2026 (see CHANGELOG.md).
+**Requirements:** Windows 10 or 11 (64-bit), a DirectX 12 or Vulkan graphics card, about 12 GB free.
 
-**Troubleshooting:** if Install fails, the installer's log (below its buttons) says which step and why; a still-packed
-game folder is the usual cause. `f13recomp.exe` writes its log to the console: start it from a terminal to see it.
-Multiplayer is between f13recomp players only (see Playing together); it never connects to the game's own servers.
+**Troubleshooting:** if Install fails, setup's log (below its buttons) says which step and why; a game folder that's
+still packed is the usual cause. `f13recomp.exe` writes its log to the console: start it from a terminal to see it.
 
-**Uninstall:** delete the unzipped folder, and `%USERPROFILE%\.f13recomp` (the gameplay values).
+**Uninstall:** delete the unzipped folder and `%USERPROFILE%\.f13recomp` (your settings and profiles).
+
+## Controls
+
+| Counselor | |
+|---|---|
+| WASD, mouse | move (running), look |
+| Shift / X / Ctrl | sprint / walk / crouch |
+| E | use, pick up, open, hide |
+| Left click | swing or use what you hold |
+| C | combat stance (double-tap a direction to dodge; hold right click to block) |
+| F | flashlight |
+| M | map (when you carry one) |
+| 1-3, G | pocket items, drop |
+| T | push-to-talk |
+
+Jason: left click attack, right click grab, C combat stance, R trap, 1 Morph, 2 Sense, 3 Shift, 4 Stalk, middle
+click to aim and throw a knife, E to use or destroy. Holding a counselor, 1-4 pick a grab kill.
+
+## Playing with friends
+
+One player hosts, the others join. Open a terminal in the f13recomp folder.
+
+Host:
+
+```bash
+f13recomp.exe --server 5000 --lobby --name Host
+```
+
+Everyone else (with the host's IP address):
+
+```bash
+f13recomp.exe --connect 203.0.113.7:5000 --name Guest
+```
+
+- In the lobby, 1 / 2 / 3 say whether you'd rather be a counselor, have no preference, or be Jason; Enter readies you.
+  Once everyone's ready, the game picks Jason as the real game does and the match starts.
+- Voice chat is push-to-talk (hold T). In the lobby, P toggles push-to-talk and Shift + a player's number mutes them.
+- Over the internet the host forwards **UDP ports 5000 and 5001** (the port given and the next one) to their PC. On
+  the same network, use the host's local address.
+- `--dedicated` hosts without playing. Everyone must run the same f13recomp version.
+- f13recomp players only play each other; it never connects to the game's own servers.
 
 ## Building from source
 
-Developers build the same pieces by hand (below), and `python tools/package.py [--dotnet <dotnet.exe>]` builds the
-release zip into `dist/` (the Rust binaries in release, the exporter published self-contained). The zip names them
-for players: f13-game is `f13recomp.exe`, f13-installer `f13recomp-setup.exe`, the exporter
-`tools/f13recomp-export/f13recomp-export.exe` (f13-host, a developers' tool, isn't shipped).
-
-### Crates
-- `f13-core`: engine-independent rules (no Bevy dependency), unit-tested
-  - `killer_abilities`: Jason's ability unlock order and intervals, recharge, availability, rage
-  - `killer_moves`: Shift (wind-up, speed, length), Stalk (timer, slower standing still), Morph's destination, the
-    teleport fade
-  - `fear`: counselor fear driven by fear events (delays, caps, auto-deactivate, throttled updates, cosmetic easing)
-  - `stats`: counselor stats and stat-modified values (e.g. Composure scaling fear gain)
-  - `counselor`: stance, walk/run/sprint rules, stamina, max speed, wounded state
-  - `movement`: Unreal 4.18 walking velocity (acceleration, friction, braking)
-  - `curve`: float curves matching Unreal 4.18 `FRichCurve` evaluation
-  - `spawn`: match-start spawning of vehicles, repair parts and items (the game mode's rules)
-  - `game_mode`: the match's states and one-second timer, when it ends, and the XP its score events award
-  - `collision`: the capsule mover over the game's collision (walls, steps, slopes, falling)
-  - `nav`: paths for computer-controlled characters over the same collision (grid A*)
-- `f13-data`: loads `tuning.json` into the core types, plus the exporter's level layouts and class descriptions,
-  and builds a match's actors (`world`)
-- `f13-bevy`: Bevy 0.19 plugin (`F13GameplayPlugin`) with components, `FixedUpdate` systems and messages
-- `f13-game`: the game client; for now a viewer for the MVP map built from your own export
-- `f13-host`: sends the host's commands to a running f13-game (see Host commands)
-- `f13-installer`: the players' setup window (the exporter's tuning and export, then Play); `--install <game>` runs
-  the same without the window
-
-### Tuning from your own install
-Gameplay values are read from your copy of the game, never shipped here:
-
-```
-dotnet run --project tools/f13-export -- --game "<path to F13Game>" --out "<export dir>" tuning
-```
-
-This writes `~/.f13recomp/tuning.json` (`%USERPROFILE%\.f13recomp\tuning.json` on Windows; give a path after `tuning` to
-write elsewhere), which `f13_data::load(&f13_data::default_path())` reads: the Blueprints' class defaults, curves and
-montage lengths, the executable's C++ constructor defaults and DefaultGame.ini. Re-run it when a new build reports a
-different tuning format. It checks the game executable's build before reading any constant from it.
-
-### Meshes and maps from your own install
-`tools/f13-export` is a small C# tool (.NET 10, using [CUE4Parse](https://github.com/FabianFG/CUE4Parse)) that
-reads your install's loose files and writes glTF meshes, PNG textures, material info and level layouts (see the note below):
-
-```
-dotnet run --project tools/f13-export -- --game "<path to F13Game>" --out "<export dir>" mvp
-```
-
-then the same with `sequences` (the intro and outro) and `particles` (the effects; it reads the levels `mvp` wrote).
-
-- `levels/<map>.json`: every mesh placement (including foliage instances), landscape and gameplay actor, in Unreal
-  space. `f13_data::level` loads it and converts transforms to Bevy space.
-- `materials.json`: per material: exported file, effective blend mode and two-sidedness, its master material and
-  every parameter it ends up with (instance overrides, then the master's defaults), and for landscape materials the
-  layer table. The game draws cabins, terrain and water with shaders ported from the game's own (re-export after
-  pulling if your export predates this). `tools/f13-export ... materials` rewrites just this file.
-- `*.dds` next to each texture PNG: the game's own block-compressed texture data with its mip chain (BC1/BC3/BC5),
-  which the game loads in preference to the PNG (a quarter of the GPU memory, no shimmer at a distance).
-  `tools/f13-export ... dds` writes just these.
-- `counselors/<Blueprint>.json` and `anims/*.anim`: the counselor's character as the Blueprint assembles it (base
-  body, default outfit with its default materials, face on the head bone, hair on the face, skin masks), the shared
-  skeleton's bones with their retargeting modes, and her animations sampled per frame. `tools/f13-export ... counselor`
-  writes just these.
-- `killers/Jason_SackHead.json` and `anims/jason/*.anim`: Jason Part 2 the same way (body, sack mask, his pickaxe in
-  its hand socket), his gameplay values (speeds, attack and grab ranges, attack delay, weapon damage: Blueprint
-  overrides, else the C++ constructor's) and his animations with their notify windows (when a swing can hit).
-  `tools/f13-export ... killer` writes just these.
-- `collision.json`: each static mesh's simple collision (convex point sets); level placements and class components
-  say whether they block counselors (their collision profile, read from the game's DefaultEngine.ini), and
-  BlockingVolumes carry their hulls, and each mesh its physical surface (footsteps); each landscape's
-  `surfaces.json` gives its paint layers' surfaces. `tools/f13-export ... collision` writes just these (and the level
-  files).
-- `sounds/`: the SoundCues f13-game plays (footsteps, and every cue the exported classes name) as node graphs (random, modulator, mixer, looping, attenuation...) with their
-  waves decoded (Ogg Vorbis), and `footsteps.json`, the counselor's footstep sounds by surface, decoded from her
-  animation Blueprint's script. `tools/f13-export ... sounds` writes just these.
-- `ui/`: the HUD's UMG widget trees (CounselorHUDWidget and the user widgets in it, the breath, inventory item and
-  minigame widgets) as JSON (each widget's properties, slot and children; their textures as PNG; UI materials' texture
-  samples and parameters), `textures.json` (the item icons the classes name) and the game's font (`fonts/`, its loose
-  .ufont files). `tools/f13-export ... ui` writes just these.
-- `water.json`: the map's water volumes (their brush boxes). `tools/f13-export ... water` writes just this.
-- `kill_cameras.json`: each kill's camera spline (its SCCameraSplineComponent's curves). `tools/f13-export ...
-  killcams` writes just this.
-- `props/`: skeletal props' own animations (the bear trap's), as `.anim` with an index per mesh. `tools/f13-export ...
-  props` writes just these.
-- `anims.json`: length and root motion of the montages the rules use (dodges, stumbles); dodges and stumbles move
-  the counselor by it, as the game's root motion does.
-- `classes.json`: Blueprint classes the match can spawn (cabinets, items, cars, doors...): parents, defaults and
-  components in actor space. Level files also carry each gameplay actor's properties and components.
-- `enlighten/`: the map's Enlighten precomputed lighting (each system's and probe set's data, the placements' atlas UVs,
-  the placed meshes' vertices in Unreal's order). `tools/f13-export ... enlighten-meshes` and `... enlighten` (after
-  `mvp`) write it.
-- Keep the export directory outside this repository.
-- Both tools need the game's content extracted to loose files under `SummerCamp/Content` (the usual modding
-  setup). A stock install keeps it in `Content/Paks/*.pak`, which isn't a standard Unreal pak, so it can't be read
-  yet; the tools detect this and say so.
-
-Play on the map (Crystal Lake, small). Each match gets one of its four cabin layouts, picked at random as the game
-picks it (`--seed n` repeats a match; `--layout 1-4` picks the layout yourself):
-
-```
-cargo run -p f13-game --release -- --export "<export dir>"
-```
-
-Without `--export`, f13-game uses the `export` folder next to its executable (where the installer puts it).
-
-Building needs CMake for libopus (voice chat): put it on the PATH, or point `CMAKE` at it (Visual Studio's Build
-Tools ship one under `Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe`; a `.cargo/config.toml`
-`[env]` entry works).
-
-
-By default you play Vanessa, in her default outfit and animated (idle, walk/run/sprint, crouch, combat strafing,
-dodges, stumbles, first aid; `--capsule` for the old placeholder): WASD move (running by default), Shift sprint, X toggle walk, Ctrl crouch, C combat stance (double-tap
-A/D/S to dodge), click to capture the mouse,
-Esc to release. The HUD is the game's own (its UMG widgets laid out as Slate does, in its textures and font): the
-match and police timers (the counselor's match timer shows only at the end, as in the game), the stamina ring, the
-noise rings on the minimap, XP lines, the pocket items and, while hiding, the breath bars; like the game it has no health or
-fear meter. F3 shows debug text instead (health, stamina, fear, speed, Jason's state). `--demo` sprints in a straight line and logs stamina every second.
-Counselors stumble as in the game (by fear, stamina and wounds). Fear comes from the game's fear events: darkness
-(out of reach of the map's lamps and cabin lights), being outdoors and alone, wounded, Jason near (by distance), Jason
-in view, grabbed, hiding (calms her) and holding a weapon; it raises stumbles and lets Jason's Sense reach further.
-`--fear 0-100` holds it at a fixed level instead. Health is the game's (wounded at 50, dead at 0); `--health 1-100`
-starts you hurt.
-
-The night is lit as the game lights it, from the export:
-- the moon, its height fog and the sky colour come from the clear-weather level (CLsm_RainOff);
-- the map's 162 lamps, porch and cabin lights;
-- Enlighten's bounce light, solved from the map's own precomputed data as the game does;
-- the moon's light shafts darkening the fog through the trees;
-- the fixed exposure and ambient cubemap of the map's post-process volume;
-- the game's own tonemapper, colour grading and bloom;
-- shadows from the moon, the flashlight and the nearest lamps;
-- rain on some nights, as the game rolls it (`--rain on|off` picks).
-
-F turns your flashlight on and off (the game's settings: cone, range, colour, the way it turns with you). While it's
-on, darkness doesn't scare you. `--flashlight` starts with it on.
-
-Sound: your footsteps are the game's, by what you step on (dirt, grass, leaves, gravel, rock, wooden floors...) and
-whether you walk or run, panned and fading with distance as the game sets them; doors (opening, closing, locked,
-Jason's blows, breaking), windows and barricades play their own cues. Jason's music swells as he closes in (full
-within 3 m, gone beyond 43 m) and falls silent while he stalks; your own music is the game's too (the match start
-track, the idle music between tracks, the two-minute warning, death or survival). Stingers, Jason's own sounds, items
-and the car aren't heard yet.
-
-Not yet:
-- the moon's light shaft bloom;
-- the lamps' shadow caching (the game's rules for which lamps keep a shadow).
-
-Jason (Part 2) starts at the layout's killer start and hunts you: he walks or runs (his own speeds), opens doors in
-his way (his own door-opening animations) and breaks down locked or barricaded ones with the game's break-down
-move (an axe chop every 2 s: three on a cabin door, one on Higgins Haven's outer doors, twice that through a
-barricade; the door splinters as it weakens), or once enraged bursts straight through any closed door, swings his pickaxe (20 damage, one swing
-per 1.3 s, hitting during the swing's attack window) and grabs you; a grab ends in the pickaxe's Throat Hack kill.
-He's a computer player that only knows what he perceives: what he sees (100 m, the counselor's visibility distance),
-the sound pings your noise puts on his screen (the game's formula: sprinting is heard far off, walking at average
-Stealth isn't, standing still is silent) and Sense (unlocked 46 s in; it reaches further with your fear and late in
-the match, and finds hiders only once he's enraged). Out of sight, he goes where he last saw, heard or sensed you and
-searches the hiding spots around there. His other abilities work as the game's:
-- Morph (ready 1 s in) puts him on the map's morph point nearest a far-off clue, a second after he vanishes.
-- Stalk (256 s in) lasts 20 s, ten times longer standing still. It has no effect yet (it silences his music).
-- Shift (136 s in) winds up for 0.7 s, then he rushes at you, unseen, at 10 m/s for up to 4 s, and grabs you
-  out of it.
-
-When he uses them is the computer player's choice. He carries Part 2's kit: two throwing knives (30 damage each,
-thrown from 5 to 25 m, 3.5 s apart) and seven traps, which he sets in doorways and which catch you but not him.
-He finds his way on a navmesh built at load time from the map's collision
-with the game's own settings, like the game's runtime navmesh (about 4 s in the background; the HUD shows its
-progress, and `--nav-debug` draws it around you).
-`--no-jason` leaves him out, `--jason-delay s` gives you a head start, and `--bot-jason` waits to be killed
-(screenshots of the swing, grab and kill go to the temp folder). `--bot-abilities` gives him every ability at the
-start and tells him where you are: he Morphs over, Stalks, Shifts at you and kills you. The counselor bots below leave
-him out.
-Hiding: E at a wardrobe, outhouse, bed or tent hides you (the game's enter, idle and exit animations; the view is
-the spot's hiding camera, turned with the mouse), E again leaves. Hold Space to hold your breath (the game's breath
-meter, refilling as you breathe); hiding with your fear at 70 or more and Jason in view nearby, you whimper unless
-you hold it, and he hears it. If Jason watched you get in, or lost you nearby, he
-searches it: an empty spot breaks, an occupied one ends in its hiding spot kill. `--bot-hide` hides out of his sight
-and comes out after 60 s; `--bot-hide-seen` hides where he sees and passes when he finds her. `--bot-locked-in` and
-`--bot-barred-in` shut her in behind a locked or barricaded door and pass when he breaks it down in a hit per 20 of
-its health (10 barricaded) and kills her; `--bot-raged-in` does it with him enraged (one burst).
-`--fly` gives a free camera instead. Add `--grass` for grass and flowers.
-
-The match runs as the game's offline mode does. The 20-minute timer (RoundTime) starts once you're in the world
-and shows at the top of the screen. The match ends when you die or escape (after its first 10 s), or when the time
-runs out. The end-of-match outro waits 10 s, then the results list the XP you scored and their total for 20 s,
-then the game closes. The game would go back to the lobby here.
-XP comes from the game's score events, where the game awards them: picking up weapons and car parts, repairs,
-first aid, barricading, firecrackers, traps, hitting and stunning Jason, breaking his grab, escaping, and the match's
-own (time bonus, unscathed, match complete, team escaped). Each one shows on the right as it's scored.
-`--round-time s` shortens the match for testing; `--kill <name>` makes Jason use one grab kill (e.g. `curbstomp`; else one of the pickaxe's five at random); `--cut-power` starts every fuse box destroyed (hold E at one to repair it); `--spawn x,y,z` starts her there (metres, Bevy axes). The level's intro cinematic plays first and the characters appear once it ends (Jason's abilities count from then); the outro plays at the end while Jason lives. `--no-intro` skips both.
-
-Items, cabinets and cars spawn as in the game (`--seed n` repeats a match; the log lists where the cars and parts
-are). E picks up (preferring what the camera looks at), searches drawers and installs parts. The game's keys for
-items: the mouse wheel selects a pocket, G uses the selected small item, 1-3 select that pocket and use it, Z drops
-the selected small item (held, the item in her hands); a small item picked up with full pockets takes the selected
-one's place. Doors: E opens/closes, hold E from inside a closed door to lock or
-unlock it, or to put up / take down its barricade (from outside, hold E unlocks a locked one). Windows: E opens a
-closed window or climbs through an open or broken one; sprint + E dives through (breaking the glass, 20 damage);
-hold E closes an open one (first aid heals after its 2 s animation). Repairs are the game's skill check: hold E
-and, when the needle reaches a pip on the dial (the game's interaction dial), press its mouse button (R = right, L = left); hits speed
-the repair up, misses roll it back. Escape by car: install the gas
-can and the battery, get in the driver's seat (E), hold E to start with the keys in your pockets (about 5 s), drive (WASD; H the horn) into
-a car escape zone; F gets out. `--near-car` starts you next to a car. `--bot-escape` plays the whole escape
-automatically (teleporting between goals), waits for the match's results and exits; `--bot-heal` fetches and uses a first aid spray;
-`--bot-dodge` dodges in each direction and checks the distance and stamina; `--bot-door` runs 16 checks on a door, a
-barricaded door and a window.
-Against Jason: left mouse swings the weapon in your hands (held in combat stance: the heavy swing; each weapon's stun chance
-and durability are the game's), fires the flare gun or shotgun at what the middle of the screen shows (one shot), or
-places a bear trap in front of you; 1-3 throw firecrackers from that pocket (they go off 1.5 s later and stun him if
-he comes within 2 m). In combat stance, hold right mouse to block with a weapon: his blow does a fraction of its
-damage (the game's BlockingDamageMod: a fifth, less with more Strength and Luck) and wears the weapon; a grab goes
-through a block (`--bot-block` checks it). Step into an armed bear trap (yours too) and it bites for 50 damage and holds you: mash A / D to open it, as the
-game's stun minigame runs (`--bot-trap`). A pocket knife frees you the moment he grabs you; otherwise mash A / D to struggle free. M opens
-the map (when you carry one). Radios: E turns one on or off, holding E changes the song; a played Jason smashes one with E (and sees a playing one's sound rings).
-Crystal Lake's cabins never spawn radios in a normal match, so `--override-spawning` forces them in (testing).
-Once you're dead or out, you spectate: the game's "You died" / "You survived" screen, then Space changes the view,
-clicks pick the next or previous player and H hides the HUD. A dead counselor goes limp (a
-ragdoll from her physics asset; in a kill, where the kill animation hands her over, as in the game). `--give Class,Class` starts with items (e.g. `--give BaseballBat_C,BP_PocketKnife_C`);
-`--bot-fight` uses them on Jason and passes once he's been stunned and recovers.
-`--perf` logs where a frame's time goes every 5 s (built with `--features profile`, also the costliest systems): the main world's schedules, the render world's system sets, GPU
-pass times and entity counts (vsync off, to measure the real cost).
-For screenshots: `--screenshot out.png` (after loading; `--screenshot-after s` waits longer), `--camera
-x,y,z,tx,ty,tz` (eye and look-at, relative to her feet), `--pose <animation>@<seconds>` (holds her in one animation).
-`--speed x` runs the game clock faster (bots included; 4 keeps every result the same and cuts a bot run to ~15 s).
-
-## Playing as Jason
-
-`--play-jason` puts you in Jason's boots (the counselor stands idle unless a `--bot-*` plays her), with the game's keys: WASD walk, Left Shift fast walk, mouse look; left click attack (held in combat stance: the heavy attack), right click grab, middle click held aims a knife and letting go throws it (right click puts it away), C combat stance, R set a trap, 1 Morph (his map comes out with a red cursor: click where to go and he Morphs to the morph point nearest it; 1 again puts it away), M his map, 2 Sense, 3 Shift, 4 Stalk, E destroy a fuse box (its grid's lights go out), pick up throwing knives (their prompt shows from 20 m) or, holding her, use a placed kill; holding her, 1-4 (on release) pick a grab kill and a click does the default one. F3 shows a debug readout. Doors open or break, and destructible walls break, as you walk into them. Like the game's Jason, you see a ring on screen wherever a counselor makes enough noise (and where a firecracker or a playing radio is). `--play-jason-demo` scripts the input (testing).
-
-## Playing together
-
-One game hosts and the others join it:
+You need [Rust](https://rustup.rs), the [.NET 10 SDK](https://dotnet.microsoft.com) and CMake (for voice chat's
+libopus; on the PATH, or set `CMAKE`). Build, export from your game, and play:
 
 ```bash
-cargo run -p f13-game --release -- --export "<export dir>" --server 5000 --lobby --name Host
+cargo build --release -p f13-installer -p f13-game
 ```
 
 ```bash
-cargo run -p f13-game --release -- --export "<export dir>" --connect 127.0.0.1:5000 --name Guest
+dotnet build tools/f13-export -c Release
 ```
-
-In the lobby, 1, 2 and 3 say whether you'd rather be a counselor, have no preference, or be Jason, and Enter readies
-you up; once everyone's ready, the game picks Jason as the game does and the match starts. `--prefer
-counselor|none|jason` sets your preference from the start, and `--dedicated` hosts without playing.
-
-Voice chat is on, push-to-talk as in the game: hold T to talk into your default microphone (`--open-mic` sends
-whenever you speak). Players hear each other from their characters within about 36 m; two counselors carrying
-walkie-talkies hear each other at any range, Jason only nearby, and the dead and escaped only each other.
-In the lobby, P turns push-to-talk off and on and Shift + a player's number mutes them (for you only).
-`--no-voice` turns it off (handy for several games on one machine).
-
-## Host commands
-
-Start the game with `--host` (`--host-port n`, default 7713; it listens on 127.0.0.1 only) and drive it with `f13-host`:
 
 ```bash
-cargo run -p f13-host --release -- status
+target/release/f13-installer --install "<path to F13Game>"
 ```
 
-Commands: `status`, `give <Class>` (one of the match's items into her hands or pockets), `teleport counselor|jason x y z` (metres, Bevy axes), `start`, `end`, `kick` (the game closes), `jason` (you become Jason: his controls and camera; she's left without a player). Without a command, `f13-host` reads them from stdin, one per line.
+```bash
+target/release/f13-game
+```
 
-## Tests
-```
-cargo test
-```
+`python tools/package.py` builds the release zip; `cargo test` runs the tests. The crates, the exporter, the game's
+options and the developer tools are in [docs/DEVELOPING.md](docs/DEVELOPING.md).
 
 ## Credits
 
 - Built with [Bevy](https://bevyengine.org), [lightyear](https://github.com/cBournhonesal/lightyear) (networking),
-  [egui](https://github.com/emilk/egui) (the installer), [cpal](https://github.com/RustAudio/cpal) and libopus (voice
-  chat), and [CUE4Parse](https://github.com/FabianFG/CUE4Parse) (reading the game's files in the exporter). Every
-  bundled library's licence is in THIRD-PARTY-NOTICES.md in the release.
-- *Friday the 13th: The Game* is by IllFonic and Gun Media. f13recomp is an unofficial fan reimplementation, not
-  affiliated with or endorsed by them; it ships none of their files and needs your own copy.
+  [egui](https://github.com/emilk/egui) (setup), [cpal](https://github.com/RustAudio/cpal) and libopus (voice chat),
+  and [CUE4Parse](https://github.com/FabianFG/CUE4Parse) (reading the game's files). Every bundled library's licence is
+  in THIRD-PARTY-NOTICES.md in the release.
+- *Friday the 13th: The Game* is by IllFonic and Gun Media. f13recomp is an unofficial fan project, not affiliated
+  with or endorsed by them; it ships none of their files and needs your own copy.
 - Made with AI: the code, tools and documentation were written with Claude Code (Anthropic's Claude Opus models),
   directed and tested by the project's maintainer. No generated art or audio: everything you see and hear comes from
   your copy of the game.
