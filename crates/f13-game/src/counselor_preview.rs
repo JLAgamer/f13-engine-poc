@@ -13,10 +13,10 @@
 //! panel on her (none: her pose as above).
 //!
 //! Each capture (SceneCaptureComponent2D) sees only her, lit by its preview's spot lights and (Counselor_Menu's) its
-//! PostProcess component's ambient cubemap (f13-rs: its mean radiance, as lighting.rs does the map's); the menus'
+//! PostProcess component's ambient cubemap (f13recomp: its mean radiance, as lighting.rs does the map's); the menus'
 //! preview materials draw its colour with opacity 1 - its alpha (where she is).
 //!
-//! f13-rs: the preview far under the map on its own render layer, a camera rendering it into an image the menu's
+//! f13recomp: the preview far under the map on its own render layer, a camera rendering it into an image the menu's
 //! CharacterPreviewImage shows (ui.rs). The capture's alpha is a cleared transparent background; its colour untonemapped
 //! at the game's exposure (lighting.rs), as SCS_SceneColorHDR's. PLACEHOLDER: the wardrobe preview has no ambient (the
 //! world's at the preview's place in the game's menu level, not read).

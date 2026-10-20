@@ -1,5 +1,5 @@
 // f13-export: exports meshes and level layouts from YOUR OWN install of Friday the 13th: The Game to glTF + JSON,
-// for f13-rs to load. Nothing is uploaded or written into the install; output goes to --out (keep it out of the repo).
+// for f13recomp to load. Nothing is uploaded or written into the install; output goes to --out (keep it out of the repo).
 //
 //   f13-export --game <F13Game dir> --out <dir> assets <object path>...   e.g. /Game/Characters/Counselors/Athlete/Meshes/Body/Athlete_Body
 //   f13-export --game <F13Game dir> --out <dir> level <map path>          e.g. /Game/Maps/CrystalLake_Small/CrystalLake_Small
@@ -628,7 +628,7 @@ switch (rest[0])
     {
         // (export/enlighten/meshes/<mesh>.uvb: u32 LOD count, per LOD u32 vertex count and per vertex its position (3 f32,
         // cm) and first UV (2 f32). The glbs' vertices are SharpGLTF's, merged and reordered; Enlighten's per-vertex UVs
-        // (the atlas's records, UEnlightenUVBufferCollection's buffers) are Unreal's: f13-rs maps one to the other.)
+        // (the atlas's records, UEnlightenUVBufferCollection's buffers) are Unreal's: f13recomp maps one to the other.)
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         string? GamePath(string? p)
         {
@@ -867,7 +867,7 @@ switch (rest[0])
             wx.Fonts(game!);
         }
         break;
-    case "tuning": // tuning [out file]: the gameplay values (tuning.json; default ~/.f13-rs/tuning.json), (a port of the former tools/extract_tuning.py)
+    case "tuning": // tuning [out file]: the gameplay values (tuning.json; default ~/.f13recomp/tuning.json), (a port of the former tools/extract_tuning.py)
         return Tuning.Write(provider, game!, rest.Count > 1 ? rest[1] : null);
     case "sounds": // the sounds f13-game plays (sounds/): the counselor's footsteps, the classes' cues, the animations' (anim_sounds.json), Mvp.Sounds
     {

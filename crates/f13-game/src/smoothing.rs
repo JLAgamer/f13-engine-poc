@@ -1,6 +1,6 @@
 //! Counselors and Jason drawn between their fixed ticks. They move in FixedUpdate (64 Hz: net.rs TICK), and a frame
 //! drew where the last tick left them: at 60 Hz one frame in sixteen took two ticks and, unsynced (--perf), frames
-//! took none, so they jittered. (The game moves its characters every frame: f13-rs ticks them for the netcode.)
+//! took none, so they jittered. (The game moves its characters every frame: f13recomp ticks them for the netcode.)
 //!
 //! Each tick's start and end are kept; after the fixed loop the transform shows the blend of the two by the
 //! frame's place in the next tick (Time<Fixed>'s overstep), and the next tick starts from the tick's own end

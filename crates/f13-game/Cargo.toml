@@ -3,7 +3,7 @@ name = "f13-game"
 version = "0.2.1"
 edition.workspace = true
 license.workspace = true
-description = "The f13-rs game client (currently a level viewer for the MVP map)"
+description = "The f13recomp game client (currently a level viewer for the MVP map)"
 
 [dependencies]
 f13-core = { path = "../f13-core" }

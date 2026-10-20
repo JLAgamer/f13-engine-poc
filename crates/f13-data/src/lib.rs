@@ -322,14 +322,20 @@ impl std::fmt::Display for LoadError {
 
 impl std::error::Error for LoadError {}
 
-/// Default location written by the extractor: `<home>/.f13-rs/tuning.json`.
+/// Default location written by the extractor: `<home>/.f13recomp/tuning.json`.
 /// (Not `%APPDATA%`: packaged Windows apps get their AppData writes redirected, hiding the file from other programs.)
 pub fn default_path() -> PathBuf {
     let home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
-    home.join(".f13-rs").join("tuning.json")
+    let dir = home.join(".f13recomp");
+    // The project was f13-rs: its folder (tuning, profiles, settings) moves to the new name once.
+    let old = home.join(".f13-rs");
+    if !dir.exists() && old.is_dir() {
+        let _ = std::fs::rename(&old, &dir);
+    }
+    dir.join("tuning.json")
 }
 
 /// tuning.json format this build reads; older files must be re-extracted.

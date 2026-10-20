@@ -1,5 +1,5 @@
 //! Jason's loadout: the player's picks for each Jason (the game's SCCharacterSelectionsSaveGame killer profiles:
-//! GrabKills, SelectedWeapon, the ability order; f13-rs: `<home>/.f13-rs/killer_profiles.json`), sent to the lobby's
+//! GrabKills, SelectedWeapon, the ability order; f13recomp: `<home>/.f13recomp/killer_profiles.json`), sent to the lobby's
 //! server with the Jason pick (lobby.rs LobbyMsg::Loadout) and applied to the match's Jason by whoever plays him
 //! (SCKillerCharacter::InitFromPlayerState 0x1403fb9f0: each grab kill slot the PlayerState's PickedGrabKills names, else
 //! his own: jason.rs grab_kill_slots).

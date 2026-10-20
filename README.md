@@ -1,4 +1,4 @@
-# Lakeside
+# f13recomp
 
 A fan reimplementation that runs on your own copy of *Friday the 13th: The Game*: its gameplay rules rebuilt
 from scratch in Rust on Bevy, using the assets and tuning read from your install. (In the code its crates and tools
@@ -12,12 +12,12 @@ shipped. They are passed in at runtime, and a loader will read them from the pla
 You need your own copy of *Friday the 13th: The Game* with its files unpacked (its content as loose files under
 `SummerCamp/Content`). Nothing else: the installer brings everything it needs.
 
-1. Download `lakeside-windows-x64.zip` from the releases page and unzip it anywhere.
-2. Run `lakeside-setup.exe`.
+1. Download `f13recomp-windows-x64.zip` from the releases page and unzip it anywhere.
+2. Run `f13recomp-setup.exe`.
 3. Pick your game folder (the one with `SummerCamp` in it). The installer checks it and says if it's still packed.
 4. Press **Install**. It reads the gameplay values, the map, characters, sounds and effects from your game into the
    `export` folder next to it (a few minutes).
-5. Press **Play**. Afterwards, start `lakeside.exe` directly. Run the installer again (Reinstall) after a game update.
+5. Press **Play**. Afterwards, start `f13recomp.exe` directly. Run the installer again (Reinstall) after a game update.
 
 The zip contains no game files: everything comes from your copy.
 
@@ -25,17 +25,17 @@ The zip contains no game files: everything comes from your copy.
 export. Supported game build: the Steam release current in October 2026 (see CHANGELOG.md).
 
 **Troubleshooting:** if Install fails, the installer's log (below its buttons) says which step and why; a still-packed
-game folder is the usual cause. `lakeside.exe` writes its log to the console: start it from a terminal to see it.
-Multiplayer is between Lakeside players only (see Playing together); it never connects to the game's own servers.
+game folder is the usual cause. `f13recomp.exe` writes its log to the console: start it from a terminal to see it.
+Multiplayer is between f13recomp players only (see Playing together); it never connects to the game's own servers.
 
-**Uninstall:** delete the unzipped folder, and `%USERPROFILE%\.f13-rs` (the gameplay values).
+**Uninstall:** delete the unzipped folder, and `%USERPROFILE%\.f13recomp` (the gameplay values).
 
 ## Building from source
 
 Developers build the same pieces by hand (below), and `python tools/package.py [--dotnet <dotnet.exe>]` builds the
 release zip into `dist/` (the Rust binaries in release, the exporter published self-contained). The zip names them
-for players: f13-game is `lakeside.exe`, f13-installer `lakeside-setup.exe`, the exporter
-`tools/lakeside-export/lakeside-export.exe` (f13-host, a developers' tool, isn't shipped).
+for players: f13-game is `f13recomp.exe`, f13-installer `f13recomp-setup.exe`, the exporter
+`tools/f13recomp-export/f13recomp-export.exe` (f13-host, a developers' tool, isn't shipped).
 
 ### Crates
 - `f13-core`: engine-independent rules (no Bevy dependency), unit-tested
@@ -66,7 +66,7 @@ Gameplay values are read from your copy of the game, never shipped here:
 dotnet run --project tools/f13-export -- --game "<path to F13Game>" --out "<export dir>" tuning
 ```
 
-This writes `~/.f13-rs/tuning.json` (`%USERPROFILE%\.f13-rs\tuning.json` on Windows; give a path after `tuning` to
+This writes `~/.f13recomp/tuning.json` (`%USERPROFILE%\.f13recomp\tuning.json` on Windows; give a path after `tuning` to
 write elsewhere), which `f13_data::load(&f13_data::default_path())` reads: the Blueprints' class defaults, curves and
 montage lengths, the executable's C++ constructor defaults and DefaultGame.ini. Re-run it when a new build reports a
 different tuning format. It checks the game executable's build before reading any constant from it.
@@ -297,7 +297,7 @@ cargo test
   [egui](https://github.com/emilk/egui) (the installer), [cpal](https://github.com/RustAudio/cpal) and libopus (voice
   chat), and [CUE4Parse](https://github.com/FabianFG/CUE4Parse) (reading the game's files in the exporter). Every
   bundled library's licence is in THIRD-PARTY-NOTICES.md in the release.
-- *Friday the 13th: The Game* is by IllFonic and Gun Media. Lakeside is an unofficial fan reimplementation, not
+- *Friday the 13th: The Game* is by IllFonic and Gun Media. f13recomp is an unofficial fan reimplementation, not
   affiliated with or endorsed by them; it ships none of their files and needs your own copy.
 - Made with AI: the code, tools and documentation were written with Claude Code (Anthropic's Claude Opus models),
   directed and tested by the project's maintainer. No generated art or audio: everything you see and hear comes from
@@ -305,4 +305,4 @@ cargo test
 
 ## License
 
-Lakeside is licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+f13recomp is licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

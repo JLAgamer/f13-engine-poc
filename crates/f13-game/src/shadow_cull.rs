@@ -6,7 +6,7 @@
 //! d^2 x T^2 x the view's LOD distance factor squared (+0xad0) <= R^2. (Reflective shadow maps take
 //! r.Shadow.RadiusThresholdRSM instead; the game has none.)
 //!
-//! f13-rs: Bevy's cascade culling (check_dir_light_mesh_visibility) fills each camera's cascades; this drops the
+//! f13recomp: Bevy's cascade culling (check_dir_light_mesh_visibility) fills each camera's cascades; this drops the
 //! casters below the threshold afterwards. PLACEHOLDERS: the view's LOD distance factor taken as 1
 //! (FSceneViewInitOptions' default; its writer not read), and a mesh's sphere radius as its box's half diagonal
 //! (UE's own bounding sphere isn't exported), per Bevy mesh (a glTF primitive, where UE's primitive is the whole

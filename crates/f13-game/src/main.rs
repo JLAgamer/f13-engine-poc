@@ -450,7 +450,7 @@ fn parse_args() -> Args {
     // Without --export: the installer's, the `export` folder next to the executable.
     let beside = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.join("export"))).filter(|d| d.join("levels").is_dir());
     let Some(export) = export.or(beside) else {
-        eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass] (or run the installer, lakeside-setup-installer)");
+        eprintln!("usage: f13-game --export <dir from tools/f13-export> [--layout 1-{LAYOUTS}] [--grass] (or run the installer, f13recomp-setup)");
         std::process::exit(2);
     };
     Args { net, bot_net, bot_net_abilities, bot_spectate, lobby, dedicated, name, prefer, counselors, export, layout, seed, near_car, bot_escape, bot_escape4, bot_passenger, bot_heal, bot_drop, bot_dodge, bot_door, bot_jason, bot_abilities, bot_block, bot_trap, bot_fight, bot_hide, bot_hide_seen, bot_locked_in, bot_raged, perf, nav_debug, give, aim, circle, particles, map_open, no_jason, no_intro, jason_delay, jason_health, unlit, grass, aerial, fly, capsule, demo, fear, speed, health, spawn, host, play_jason, override_spawning, no_voice, net_id, last_jason, bot_hooks, last_match, open_mic, bot_radio, kill, cut_power, bot_power, bot_police, bot_placed_kill, bot_drown, bot_car_grab, play_jason_demo, tuning, foliage, screenshot, screenshot_after, pose, outfit, counselor_class, bot_tommy, bot_sweater, bot_kill_jason, bot_mask, camera, round_time, flashlight, rain }
@@ -742,7 +742,7 @@ fn main() {
                 // --perf measures the frame's real cost: no waiting for the display.
                 .set(WindowPlugin {
                     primary_window: Some(bevy::window::Window {
-                        title: "Lakeside".into(),
+                        title: "f13recomp".into(),
                         present_mode: if args.perf { bevy::window::PresentMode::AutoNoVsync } else { bevy::window::PresentMode::AutoVsync },
                         ..default()
                     }),

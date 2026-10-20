@@ -5,9 +5,9 @@
 //! (USoundClass +0x28) to the volumes: Master, Menu, Music, SoundEffects and Voice (DefaultEngine.ini VoiPSoundClass:
 //! the voice chat's); VolumeVoiceOver has no class. bUsePushToTalk is the voice chat's push-to-talk (voice.rs OpenMic
 //! when off). Not traced: what bPlayPushToTalkSound plays and what bStreamingMode ("Mute Copyrighted Music",
-//! ILLGameUserSettings +0x1ca: IsUsingStreamingMode) mutes; f13-rs keeps both without an effect.
+//! ILLGameUserSettings +0x1ca: IsUsingStreamingMode) mutes; f13recomp keeps both without an effect.
 //!
-//! f13-rs keeps them in `<home>/.f13-rs/audio_settings.json` (the game: its save game slot).
+//! f13recomp keeps them in `<home>/.f13recomp/audio_settings.json` (the game: its save game slot).
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -177,7 +177,7 @@ const STEP: f32 = 0.01;
 const REPEAT_DELAY: f32 = 0.4;
 const REPEAT: f32 = 0.03;
 
-/// The menu (PLACEHOLDER key: the game opens it from its main or pause menu's Settings, which f13-rs doesn't have): O in
+/// The menu (PLACEHOLDER key: the game opens it from its main or pause menu's Settings, which f13recomp doesn't have): O in
 /// the lobby opens it; Up / Down (W / S) focus a row (MenuButtonFocusCue); on a slider Left / Right (A / D) step it
 /// (MenuSliderStepCue), on a boolean they flip it (SettingsOptionBooleanWidget's arrows); Enter applies (the action
 /// bar's Apply: OnSettingsApply, saving and applying them) and Escape backs out, the edits dropped (OnSettingsBack).

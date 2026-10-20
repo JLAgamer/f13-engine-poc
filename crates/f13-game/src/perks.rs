@@ -8,7 +8,7 @@
 //! negative modifiers' fields to their percentage x 0.01 and adds the legendary one's). The game reads each modifier as
 //! the sum over her ActivePerks where it applies (f13-core counselor.rs: stamina and speed).
 //!
-//! f13-rs has no backend: every perk is in the library once, at its class's own values (PLACEHOLDER: no rolls, rarity
+//! f13recomp has no backend: every perk is in the library once, at its class's own values (PLACEHOLDER: no rolls, rarity
 //! or legendary modifiers).
 //!
 //! Her perks' StartingItems (FUN_1403a5880, once at possession, authority): each perk's classes spawned and picked up

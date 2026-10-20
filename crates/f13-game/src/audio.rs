@@ -238,7 +238,7 @@ pub(crate) fn x3d_stereo(azimuth: f32, at_listener: bool) -> (f32, f32) {
 /// max(volume x VoiceCenterChannelVolume, X3DAudio's centre) (the sound classes leave it 0) and, on a six-channel
 /// device only, LFE and the front pair's pull toward the centre; the 6-channel submixes go to the device through
 /// FUN_141953d50's matrix (stereo: L = FL + 0.7 FC + 1.25 BL, R = FR + 0.7 FC + 1.25 BR), so a stereo output hears
-/// X3DAudio's pair as it is. PLACEHOLDER: f13-rs plays to a stereo device only (the game's 5.1 / 7.1 speaker layouts
+/// X3DAudio's pair as it is. PLACEHOLDER: f13recomp plays to a stereo device only (the game's 5.1 / 7.1 speaker layouts
 /// aren't used).
 fn pan(listener: Query<&GlobalTransform, With<SpatialListener>>, voices: Query<(&Pan, &GlobalTransform)>) {
     let Some(ear) = listener.iter().next() else { return };

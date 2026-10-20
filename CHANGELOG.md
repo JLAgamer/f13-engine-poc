@@ -1,7 +1,12 @@
 # Changelog
 
-All notable changes to Lakeside. Versions follow [semver](https://semver.org); the supported game build is named in
+All notable changes to f13recomp. Versions follow [semver](https://semver.org); the supported game build is named in
 each release.
+
+## Unreleased
+
+- The project is renamed f13recomp (was Lakeside): f13recomp.exe, f13recomp-setup.exe, tools/f13recomp-export. The
+  settings folder `.f13-rs` in your user folder moves to `.f13recomp` by itself on the first start.
 
 ## 0.2.1 (2026-10-15)
 

@@ -10,9 +10,9 @@
 //! until her stick is released, the rest until they end (SERVER_CancelEmote at the montage's length). Moving (the move
 //! axes, past the lock), attacking (unless locked) and crouching cancel it (MULTICAST_CancelEmote: Montage_Stop 0.25 s).
 //!
-//! f13-rs: the emote plays as her action (character.rs PlayAction: replicated); a client asks the server with
+//! f13recomp: the emote plays as her action (character.rs PlayAction: replicated); a client asks the server with
 //! [`EmoteMsg`]. PLACEHOLDER: the wheel's highlight from the mouse's travel since it opened (the radial widget's cursor
-//! mapping not read), and CanPlayEmote's checks as f13-rs's states have them. Not ported: the looping emotes' 0.35 s
+//! mapping not read), and CanPlayEmote's checks as f13recomp's states have them. Not ported: the looping emotes' 0.35 s
 //! SetIgnoreMoveInput.
 //!
 //! The counselor menu's emotes (Counselor_Emote_Menu, SCCounselorEmoteMenuWidget: decompiled): its CounselorEmoteButton
@@ -20,7 +20,7 @@
 //! (OnSelect: PendingIndex, ShowEmoteBox) shows the panel (Counselor_Emote_Panel: GetAvailableEmotesForCounselor's
 //! unlocked ones as EmoteButtonLarges, rows of nine), whose highlighted one her preview plays (CounselorEmotePreview:
 //! PlayPreviewEmote) and whose pick takes the section (SetEmote), back to the wheel (HideEmoteBox); Back from the panel
-//! returns to the wheel, from the wheel to the counselor menu with the profiles (SetUnsavedCounselorProfile; f13-rs
+//! returns to the wheel, from the wheel to the counselor menu with the profiles (SetUnsavedCounselorProfile; f13recomp
 //! saves them then: counselor_profiles.json). All unlocked; the available ones in emotes.json's order (PLACEHOLDER: the
 //! native list's order not read).
 
@@ -232,7 +232,7 @@ pub fn section(aim: Vec2) -> Option<usize> {
     Some(((degrees / 45.0).round() as i32).rem_euclid(8) as usize)
 }
 
-/// CanPlayEmote as f13-rs has her states: alive, on her feet on the ground, not in a car, hiding, Jason's hands or a
+/// CanPlayEmote as f13recomp has her states: alive, on her feet on the ground, not in a car, hiding, Jason's hands or a
 /// trap, no action or interaction under way, no gun raised.
 #[allow(clippy::type_complexity)]
 type CanEmote<'a> = (
