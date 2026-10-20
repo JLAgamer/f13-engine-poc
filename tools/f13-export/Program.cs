@@ -624,6 +624,9 @@ static Xform Xf(FTransform t) => new()
 
 switch (rest[0])
 {
+    case "enlighten": // the map's Enlighten precomputed data (enlighten/: index.json, its systems' and probe sets' blocks, the placements' atlas UVs), after mvp
+        Enlighten.Write(game!, outDir!);
+        break;
     case "enlighten-meshes": // the static meshes the levels and classes place, each LOD's vertices in Unreal's order
     {
         // (export/enlighten/meshes/<mesh>.uvb: u32 LOD count, per LOD u32 vertex count and per vertex its position (3 f32,

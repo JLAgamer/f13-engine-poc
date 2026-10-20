@@ -1,10 +1,10 @@
 //! f13-installer: sets f13recomp up from the player's own unpacked copy of Friday the 13th: The Game, then plays.
 //!
 //! The player picks the game's folder (its content extracted to loose files under `SummerCamp/Content`); Install then
-//! runs the exporter (`tools/f13recomp-export/f13recomp-export.exe`, self-contained .NET) four times:
+//! runs the exporter (`tools/f13recomp-export/f13recomp-export.exe`, self-contained .NET) once per step (STEPS):
 //! 1. `tuning`: the gameplay values, into `~/.f13recomp/tuning.json`;
-//! 2. `mvp`, `sequences` and `particles`: the map, characters, sounds, HUD, the intro and outro, the particle systems,
-//!    into `export/` next to this executable (where the game looks without `--export`).
+//! 2. the rest (`mvp`, the counselors, Jasons, sounds, menus, the intro and outro, the particle systems, the
+//!    precomputed lighting) into `export/` next to this executable (where the game looks without `--export`).
 //!
 //! Play starts the game. The folder picked is kept in `installer.json` beside the executable.
 //!
@@ -22,7 +22,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{channel, Receiver, Sender};
 
 /// The exporter's commands, in order (particles reads the levels mvp writes), and what each is shown as.
-const STEPS: [(&str, &str); 8] = [
+const STEPS: [(&str, &str); 10] = [
     ("tuning", "Reading the gameplay values"),
     ("mvp", "Exporting the map, characters, sounds and HUD"),
     ("counselors", "Exporting the counselors"),
@@ -32,6 +32,9 @@ const STEPS: [(&str, &str); 8] = [
     ("ui", "Exporting the menus"),
     ("sequences", "Exporting the intro and outro"),
     ("particles", "Exporting the particle effects"),
+    // (The precomputed lighting's: the placed meshes' vertices, and the map's Enlighten data, which read the levels mvp writes.)
+    ("enlighten-meshes", "Exporting the lighting's meshes"),
+    ("enlighten", "Exporting the precomputed lighting"),
 ];
 
 /// Windows: the exporter's console window stays hidden (CREATE_NO_WINDOW).

@@ -1,5 +1,5 @@
 //! Enlighten 3's precomputed data, as the game's runtime reads it (decompiled: F13-decomp/MODLOG "Enlighten GI"; the
-//! export: F13-decomp/enlighten/extract.py writes each system's blocks to `export/enlighten/`).
+//! export: f13-export `enlighten` writes each system's blocks to `export/enlighten/`).
 //!
 //! - [`Transport`]: a system's radiosity precompute (GESG, RadSystemCore's m_RadiosityPrecomp; the solve
 //!   SolveIrradianceTask's plain kernel 0x141db3980): its output pixels in blocks, each block gathering clusters of

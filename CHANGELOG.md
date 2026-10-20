@@ -3,10 +3,39 @@
 All notable changes to f13recomp. Versions follow [semver](https://semver.org); the supported game build is named in
 each release.
 
-## Unreleased
+## 0.3.0 (2026-10-20)
 
-- The project is renamed f13recomp (was Lakeside): f13recomp.exe, f13recomp-setup.exe, tools/f13recomp-export. The
-  settings folder `.f13-rs` in your user folder moves to `.f13recomp` by itself on the first start.
+Same map and supported game build as 0.2.1. **Install again** (setup's Reinstall): the export now includes the
+precomputed lighting, the ambient cubemap and more animations.
+
+The project is renamed **f13recomp** (was Lakeside): f13recomp.exe, f13recomp-setup.exe, tools/f13recomp-export. The
+settings folder `.f13-rs` in your user folder moves to `.f13recomp` by itself on the first start.
+
+### Lighting
+- Enlighten's bounce light, as the game has it: the map's own precomputed data solved from the moon and the lamps,
+  lightmaps on the world and probes for characters and props.
+- The height fog along each view ray as the game integrates it, capped by its maximum opacity; the moon's light
+  shafts darken it where trees and terrain stand between you and the moon.
+- The post-process volume's ambient cubemap on every pixel, by its normal and reflection.
+- The lamps as bright as the game's (its inverse-squared lights' factor); their shadows fade out with resolution as
+  the game's do.
+- The intro's staged spot lights point the right way; Chad's hair takes its own colour.
+- The porch lamps' glass; translucent materials cast no shadows.
+
+### Gameplay
+- Jason's swings damage the doors they hit, recoil off the world or a blocking counselor, and can get stuck.
+- A counselor's swing recoils off the world with its animation.
+- Jason's attacks shake the camera as in the game; every weapon plays its impact effects and sounds.
+- The fuse box repair plays its animation; the repair dial's pips use the game's colours.
+- Counselors no longer see the environment kills' prompts; characters' feet no longer sink into the ground.
+- J7's machete is textured.
+
+### Fixes and performance
+- About 40% less frame time at the counselor's start (13.4 -> 8.0 ms here): shared material bindings, lightmap slots.
+- Counselors and Jason move smoothly between network ticks (they jittered).
+- A dedicated server no longer plays sounds; looping sounds loop only their looping parts; the car has no key-turn
+  sound (the game plays none).
+- The Jason menu's 3D preview works again.
 
 ## 0.2.1 (2026-10-15)
 

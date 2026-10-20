@@ -44,7 +44,7 @@ struct System {
     bounds: (Vec3, Vec3),
     /// Its clusters' light this solve (rgba).
     input: Vec<Vec4>,
-    /// Its clusters' albedo (linear rgb): the system's saved albedo buffer (`<name>.alb.bin`, extract.py), an 8-bit
+    /// Its clusters' albedo (linear rgb): the system's saved albedo buffer (`<name>.alb.bin`, f13-export enlighten), an 8-bit
     /// rgba per cluster, linear (x / 255)^2 as DoIndirectInputLighting takes it.
     albedo: Vec<Vec4>,
     /// Its clusters' precomputed visibility of directional lights (GEVS), and the moon's last (its direction, each
@@ -173,7 +173,7 @@ pub struct EnlightenInstance {
 /// A landscape (its level package), for its components' lightmap. A landscape component isn't one of its atlas's
 /// primitives: its system's output covers it flat, one Terrain system per one to four components (one 63-quad
 /// component per 18 x 18-ish chart). Each component's map from world XY to the atlas is fitted from the data
-/// (F13-decomp/enlighten/landfit.py: its clusters' places, GEIW, against the output pixels each resamples, GERD;
+/// (f13-export enlighten: its clusters' places, GEIW, against the output pixels each resamples, GERD;
 /// residuals mostly under a pixel) into `<level>.land.json`. The game's has the same form: its terrain
 /// shaders' Enlighten UV (M_Terrain_CrystalLake s008: mad o3.xy, v5.xy, cb0[6].xy, cb0[6].zw) is a UV stream times a
 /// per-draw scale and bias, set per component at run time; PLACEHOLDER: those constants fitted rather than read.
@@ -210,13 +210,13 @@ struct Land {
 struct Lightmapped;
 
 /// Each primitive's atlas UVs per Unreal vertex (packed u16 u, v), by (level, component): `<level>.prims.bin`
-/// (F13-decomp/enlighten/prims.py, from the atlas's records); and each mesh's vertices in Unreal's order (position,
+/// (f13-export enlighten, from the atlas's records); and each mesh's vertices in Unreal's order (position,
 /// UV0), by its glb: `meshes/<glb>.uvb` (f13-export enlighten-meshes).
 #[derive(Resource, Default)]
 struct Primitives {
     uvs: HashMap<(String, String), Vec<u32>>,
     /// Each instanced component's instances' UVScaleBias (scale u, v, bias u, v), by (level, component):
-    /// `<level>.inst.bin` (F13-decomp/enlighten/instances.py).
+    /// `<level>.inst.bin` (f13-export enlighten).
     instances: HashMap<(String, String), Vec<[f32; 4]>>,
     /// Per mesh, its copy with a zero UV1 (the instances' lightmap UV comes from their Lightmap's rect).
     zero_uv1: HashMap<AssetId<Mesh>, Handle<Mesh>>,
@@ -235,7 +235,7 @@ pub struct EnlightenAtlases(pub HashMap<String, Handle<Image>>);
 fn load(mut commands: Commands, export: Res<crate::ExportRoot>, level: Res<crate::Level>, mut images: ResMut<Assets<Image>>) {
     let dir = export.0.join("enlighten");
     let Ok(text) = std::fs::read_to_string(dir.join("index.json")) else {
-        info!("enlighten: no export/enlighten (F13-decomp/enlighten/extract.py): no indirect light");
+        info!("enlighten: no export/enlighten (setup's Reinstall, or f13-export enlighten-meshes and enlighten): no indirect light");
         return;
     };
     let Ok(index) = serde_json::from_str::<serde_json::Value>(&text) else { return };

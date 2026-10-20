@@ -119,6 +119,9 @@ then the same with `sequences` (the intro and outro) and `particles` (the effect
   the counselor by it, as the game's root motion does.
 - `classes.json`: Blueprint classes the match can spawn (cabinets, items, cars, doors...): parents, defaults and
   components in actor space. Level files also carry each gameplay actor's properties and components.
+- `enlighten/`: the map's Enlighten precomputed lighting (each system's and probe set's data, the placements' atlas UVs,
+  the placed meshes' vertices in Unreal's order). `tools/f13-export ... enlighten-meshes` and `... enlighten` (after
+  `mvp`) write it.
 - Keep the export directory outside this repository.
 - Both tools need the game's content extracted to loose files under `SummerCamp/Content` (the usual modding
   setup). A stock install keeps it in `Content/Paks/*.pak`, which isn't a standard Unreal pak, so it can't be read
@@ -154,7 +157,9 @@ starts you hurt.
 The night is lit as the game lights it, from the export:
 - the moon, its height fog and the sky colour come from the clear-weather level (CLsm_RainOff);
 - the map's 162 lamps, porch and cabin lights;
-- the fixed exposure and ambient light of the map's post-process volume;
+- Enlighten's bounce light, solved from the map's own precomputed data as the game does;
+- the moon's light shafts darkening the fog through the trees;
+- the fixed exposure and ambient cubemap of the map's post-process volume;
 - the game's own tonemapper, colour grading and bloom;
 - shadows from the moon, the flashlight and the nearest lamps;
 - rain on some nights, as the game rolls it (`--rain on|off` picks).
@@ -170,7 +175,7 @@ track, the idle music between tracks, the two-minute warning, death or survival)
 and the car aren't heard yet.
 
 Not yet:
-- Enlighten's bounce light;
+- the moon's light shaft bloom;
 - the lamps' shadow caching (the game's rules for which lamps keep a shadow).
 
 Jason (Part 2) starts at the layout's killer start and hunts you: he walks or runs (his own speeds), opens doors in
