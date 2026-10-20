@@ -43,6 +43,9 @@
 
 #ifdef DISTANCE_FOG
 @group(0) @binding(13) var<uniform> fog: types::Fog;
+// f13recomp: the fog's light shaft occlusion (white without light shafts).
+@group(0) @binding(39) var fog_occlusion_texture: texture_2d<f32>;
+@group(0) @binding(40) var fog_occlusion_sampler: sampler;
 #endif
 
 const VISIBILITY_RANGE_UNIFORM_BUFFER_SIZE: u32 = 64u;

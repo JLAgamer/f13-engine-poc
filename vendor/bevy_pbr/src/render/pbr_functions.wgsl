@@ -939,7 +939,7 @@ fn apply_fog(
     } else if fog_params.mode == mesh_view_types::FOG_MODE_HEIGHT {
         // f13-rs: the fog uniform's fill (0x140b58325) takes the directional light (the atmosphere sun) at its
         // luminance (0.3, 0.59, 0.11) and no shadow: pow(saturate(dot(ray, -its direction)), exponent) x luminance.
-        // PLACEHOLDER: the light shafts' occlusion texture the game multiplies the fog by.
+        // The light shafts' occlusion (FExponentialHeightFogPS's t1 at the view's UV: light_shafts.rs) on the whole fog.
         var sun = 0.0;
         if fog_params.directional_light_color.a > 0.0 {
             let ray = view_to_world / distance;
@@ -949,7 +949,9 @@ fn apply_fog(
                     * dot(light.color.rgb, vec3<f32>(0.3, 0.59, 0.11)) * view_bindings::view.exposure;
             }
         }
-        return bevy_pbr::fog::height_fog(fog_params, input_color, distance, view_to_world.y, view_world_position.y, vec3<f32>(sun));
+        let uv = (frag_coord_xy - view_bindings::view.viewport.xy) / view_bindings::view.viewport.zw;
+        let occlusion = textureSampleLevel(view_bindings::fog_occlusion_texture, view_bindings::fog_occlusion_sampler, uv, 0.0).x;
+        return bevy_pbr::fog::height_fog(fog_params, input_color, distance, view_to_world.y, view_world_position.y, vec3<f32>(sun), occlusion);
     } else {
         return input_color;
     }

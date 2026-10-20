@@ -17,7 +17,7 @@ Lighting first (the user, 2026-10-14):
       it's the performance work's (MODLOG "Shadow caching: tried and reverted", "The local lights' shadow fade")
 - [ ] Lighting against the user's 2026-10-17 shots (MODLOG "Too dark overall", "The height fog along the ray"): with the
       game's own fog the unlit views are 30-40% short again (Rod's logs, the intro's background; Zane's 10%): the
-      fill left is Enlighten's (its input scale fitted, PLACEHOLDER); the light shafts (the fog's occlusion, the moon's bloom: MODLOG "Light shafts") not drawn;
+      fill left is Enlighten's (its input scale fitted, PLACEHOLDER); the moon's light shaft bloom (MODLOG "Light shafts") not drawn;
       Chad's hair in the intro still mid brown, near black in the game (its permutation's colour now as compiled; the
       rest unread: UE's hair shading against Bevy's standard lighting?)
 - [ ] The lobby's mouse controls: all wired (lobby.rs lobby_clicks, ui.rs entry_hover: buttons, list entries, the emote

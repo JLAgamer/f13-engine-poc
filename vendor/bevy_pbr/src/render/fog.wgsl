@@ -56,7 +56,8 @@ fn exponential_fog(
 // with directional inscattering, 128c4 permutations), its start distance 0. be: FogDensity at the fog's height and
 // FogHeightFalloff (base 2, per m), the fog's height; bi.x DirectionalInscatteringStartDistance; base_color.rgb the
 // inscattering, .a FogMaxOpacity. `ray_y` is the ray's rise, `view_y` the camera's height. `scattering`: the
-// directional light's pow(saturate(dot(ray, light)), exponent) x its luminance (apply_fog).
+// directional light's pow(saturate(dot(ray, light)), exponent) x its luminance (apply_fog). `occlusion`: the light
+// shafts' (1 without them).
 fn height_fog(
     fog_params: Fog,
     input_color: vec4<f32>,
@@ -64,6 +65,7 @@ fn height_fog(
     ray_y: f32,
     view_y: f32,
     scattering: vec3<f32>,
+    occlusion: f32,
 ) -> vec4<f32> {
     let density = fog_params.be.x;
     let falloff = fog_params.be.y;
@@ -79,8 +81,9 @@ fn height_fog(
     let transmittance = max(min(exp2(-integral * distance), 1.0), 1.0 - fog_params.base_color.a);
     // Directional inscattering past its start distance, not capped by FogMaxOpacity.
     let directional = 1.0 - min(exp2(-integral * max(distance - fog_params.bi.x, 0.0)), 1.0);
-    let color = fog_params.base_color.rgb * (1.0 - transmittance)
-        + fog_params.directional_light_color.rgb * scattering * directional;
+    // The whole inscattering times the light shafts' occlusion.
+    let color = (fog_params.base_color.rgb * (1.0 - transmittance)
+        + fog_params.directional_light_color.rgb * scattering * directional) * occlusion;
     return vec4<f32>(input_color.rgb * transmittance + color, input_color.a);
 }
 

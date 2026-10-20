@@ -55,7 +55,7 @@ use crate::{
     prepass,
     resources::{AtmosphereBuffer, AtmosphereSampler, AtmosphereTextures, GpuAtmosphere},
     Bluenoise, ExtractedAtmosphere, FogMeta, GlobalClusterableObjectMeta, GpuClusteredLights,
-    GpuFog, GpuLights, LightMeta, LightProbesBuffer, LightProbesUniform, MeshPipeline,
+    FogOcclusion, GpuFog, GpuLights, LightMeta, LightProbesBuffer, LightProbesUniform, MeshPipeline,
     MeshPipelineKey, RenderViewLightProbes, ScreenSpaceAmbientOcclusionResources,
     ScreenSpaceReflectionsBuffer, ScreenSpaceReflectionsUniform, ShadowSamplers,
     ViewClusterBindings, ViewShadowBindings, ViewTransmissionTexture,
@@ -357,6 +357,9 @@ fn layout_entries(
         entries = entries.extend_with_indices((
             // Fog
             (13, uniform_buffer::<GpuFog>(true)),
+            // f13recomp: the fog's light shaft occlusion (FogOcclusion)
+            (39, texture_2d(TextureSampleType::Float { filterable: true })),
+            (40, sampler(SamplerBindingType::Filtering)),
         ));
     }
     if layout_key.contains(MeshPipelineViewLayoutKey::SCREEN_SPACE_REFLECTIONS) {
@@ -646,7 +649,7 @@ pub fn prepare_mesh_view_bind_groups(
         &Msaa,
         Option<&ScreenSpaceAmbientOcclusionResources>,
         Option<&ViewPrepassTextures>,
-        Option<&ViewTransmissionTexture>,
+        (Option<&ViewTransmissionTexture>, Option<&FogOcclusion>),
         Option<&AtmosphereTextures>,
         &Tonemapping,
         (
@@ -727,7 +730,7 @@ pub fn prepare_mesh_view_bind_groups(
             msaa,
             ssao_resources,
             prepass_textures,
-            transmission_texture,
+            (transmission_texture, fog_occlusion),
             atmosphere_textures,
             tonemapping,
             (render_view_environment_maps, render_view_irradiance_volumes),
@@ -795,8 +798,14 @@ pub fn prepare_mesh_view_bind_groups(
             if let Some(view_fog_offset) = view_fog_offset {
                 layout_key |= MeshPipelineViewLayoutKey::DISTANCE_FOG;
                 offsets.push(view_fog_offset.offset);
-                entries =
-                    entries.extend_with_indices(((13, fog_meta.gpu_fogs.binding().unwrap()),));
+                let (occlusion_view, occlusion_sampler) = fog_occlusion
+                    .map(|o| (&o.view, &o.sampler))
+                    .unwrap_or((&fallback_image.d2.texture_view, &fallback_image.d2.sampler));
+                entries = entries.extend_with_indices((
+                    (13, fog_meta.gpu_fogs.binding().unwrap()),
+                    (39, occlusion_view),
+                    (40, occlusion_sampler),
+                ));
             }
 
             if let Some(view_ssr_offset) = view_ssr_offset {

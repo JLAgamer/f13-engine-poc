@@ -538,12 +538,21 @@ fn spawn_lights(mut commands: Commands, level: Res<crate::Level>, export: Res<cr
                 moon = true;
                 let shadow_m = l.num("DynamicShadowDistanceMovableLight", 20000.0) / 100.0;
                 info!("lighting: moon {:.2} lux, shadows to {shadow_m:.0} m", l.num("Intensity", 10.0));
-                commands.spawn((
-                    DirectionalLight { color: l.color().into(), illuminance: l.num("Intensity", 10.0), shadow_maps_enabled: moon_cascades() > 0, ..default() },
-                    CascadeShadowConfigBuilder { num_cascades: moon_cascades().max(1), maximum_distance: shadow_m, first_cascade_far_bound: 8.0, ..default() }.build(),
-                    Transform::default().looking_to(dir, Vec3::Y),
-                    crate::weather::Moon,
-                ));
+                let e = commands
+                    .spawn((
+                        DirectionalLight { color: l.color().into(), illuminance: l.num("Intensity", 10.0), shadow_maps_enabled: moon_cascades() > 0, ..default() },
+                        CascadeShadowConfigBuilder { num_cascades: moon_cascades().max(1), maximum_distance: shadow_m, first_cascade_far_bound: 8.0, ..default() }.build(),
+                        Transform::default().looking_to(dir, Vec3::Y),
+                        crate::weather::Moon,
+                    ))
+                    .id();
+                // Its light shaft occlusion (the clear night's moon), which darkens the fog (light_shafts.rs). The
+                // component's defaults (0x141350050): off, OcclusionMaskDarkness 0.05, OcclusionDepthRange 100000 cm.
+                if l.flag("bEnableLightShaftOcclusion", false) {
+                    let occlusion = crate::light_shafts::LightShaftOcclusion { darkness: l.num("OcclusionMaskDarkness", 0.05), depth_range: l.num("OcclusionDepthRange", 100000.0) / 100.0 };
+                    info!("lighting: moon light shafts, darkness {}, range {} m", occlusion.darkness, occlusion.depth_range);
+                    commands.entity(e).insert(occlusion);
+                }
             }
             LightKind::Point | LightKind::Spot => {
                 let lumens = l.lumens();

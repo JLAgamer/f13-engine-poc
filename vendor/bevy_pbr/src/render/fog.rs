@@ -13,6 +13,14 @@ use bevy_shader::load_shader_library;
 
 use crate::{DistanceFog, FogFalloff};
 
+/// f13recomp: a view's light shaft occlusion (Unreal's FExponentialHeightFogPS multiplies its fog by it, its t1),
+/// sampled at the view's UV; without one the fog binds a white texture (unoccluded).
+#[derive(Component, Clone)]
+pub struct FogOcclusion {
+    pub view: bevy_render::render_resource::TextureView,
+    pub sampler: bevy_render::render_resource::Sampler,
+}
+
 /// The GPU-side representation of the fog configuration that's sent as a uniform to the shader
 #[derive(Copy, Clone, ShaderType, Default, Debug)]
 pub struct GpuFog {
