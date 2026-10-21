@@ -1,15 +1,15 @@
-//! f13-installer: sets f13recomp up from the player's own unpacked copy of Friday the 13th: The Game, then plays.
+//! f13-installer: sets f13-engine-poc up from the player's own unpacked copy of Friday the 13th: The Game, then plays.
 //!
 //! The player picks the game's folder (its content extracted to loose files under `SummerCamp/Content`); Install then
-//! runs the exporter (`tools/f13recomp-export/f13recomp-export.exe`, self-contained .NET) once per step (STEPS):
-//! 1. `tuning`: the gameplay values, into `~/.f13recomp/tuning.json`;
+//! runs the exporter (`tools/f13-engine-poc-export/f13-engine-poc-export.exe`, self-contained .NET) once per step (STEPS):
+//! 1. `tuning`: the gameplay values, into `~/.f13-engine-poc/tuning.json`;
 //! 2. the rest (`mvp`, the counselors, Jasons, sounds, menus, the intro and outro, the particle systems, the
 //!    precomputed lighting) into `export/` next to this executable (where the game looks without `--export`).
 //!
 //! Play starts the game. The folder picked is kept in `installer.json` beside the executable.
 //!
-//! The release zip names the programs for players (tools/package.py): f13recomp.exe (f13-game), f13recomp-setup.exe
-//! (this), tools/f13recomp-export/f13recomp-export.exe; a source checkout keeps the f13- names.
+//! The release zip names the programs for players (tools/package.py): f13-engine-poc.exe (f13-game), f13-engine-poc-setup.exe
+//! (this), tools/f13-engine-poc-export/f13-engine-poc-export.exe; a source checkout keeps the f13- names.
 //!
 //! In the release zip the exporter sits in `tools/` next to this executable; run from a source checkout
 //! (`target/release`), the exporter's own Release build is used.
@@ -57,14 +57,14 @@ fn home() -> PathBuf {
 /// up two).
 fn exporter() -> Option<PathBuf> {
     let h = home();
-    let release = h.join("tools").join("f13recomp-export").join(if cfg!(windows) { "f13recomp-export.exe" } else { "f13recomp-export" });
+    let release = h.join("tools").join("f13-engine-poc-export").join(if cfg!(windows) { "f13-engine-poc-export.exe" } else { "f13-engine-poc-export" });
     [release, h.join("../../tools/f13-export/bin/Release/net10.0/f13-export.exe")].into_iter().find(|p| p.is_file())
 }
 
-/// The game: f13recomp.exe (the release zip), else f13-game.exe (a source checkout's target/release).
+/// The game: f13-engine-poc.exe (the release zip), else f13-game.exe (a source checkout's target/release).
 fn game_exe() -> PathBuf {
     let ext = if cfg!(windows) { ".exe" } else { "" };
-    let release = home().join(format!("f13recomp{ext}"));
+    let release = home().join(format!("f13-engine-poc{ext}"));
     if release.is_file() {
         release
     } else {
@@ -159,7 +159,7 @@ fn run(tx: &Sender<Progress>, ctx: &egui::Context, mut cmd: Command) -> Result<(
 
 fn install(tx: Sender<Progress>, ctx: egui::Context, game: PathBuf) {
     let result = (|| {
-        let export = exporter().ok_or("tools/f13recomp-export/f13recomp-export.exe is missing from the install")?;
+        let export = exporter().ok_or("tools/f13-engine-poc-export/f13-engine-poc-export.exe is missing from the install")?;
         for (i, (what, about)) in STEPS.iter().enumerate() {
             let _ = tx.send(Progress::Step(1 + i, about.to_string()));
             let mut cmd = Command::new(&export);
@@ -249,7 +249,7 @@ impl eframe::App for Installer {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll();
         egui::CentralPanel::default().show(ui, |ui| {
-            ui.heading("f13recomp setup");
+            ui.heading("f13-engine-poc setup");
             ui.label("Builds the game from your own copy of Friday the 13th: The Game.");
             ui.add_space(8.0);
             let busy = self.running();
@@ -293,7 +293,7 @@ impl eframe::App for Installer {
                 }
             });
             match &self.outcome {
-                Some(Ok(())) => status(ui, true, "Installed. Press Play (or start f13recomp.exe)."),
+                Some(Ok(())) => status(ui, true, "Installed. Press Play (or start f13-engine-poc.exe)."),
                 Some(Err(e)) => status(ui, false, &format!("Install failed: {e} (the log below says why)")),
                 None if Self::installed() && !busy => status(ui, true, "Already installed: Play, or Reinstall after a game update."),
                 None => {}
@@ -342,9 +342,9 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("f13recomp setup").with_inner_size([680.0, 420.0]).with_min_inner_size([520.0, 320.0]),
+        viewport: egui::ViewportBuilder::default().with_title("f13-engine-poc setup").with_inner_size([680.0, 420.0]).with_min_inner_size([520.0, 320.0]),
         ..Default::default()
     };
     let app = Installer { game: load_game_folder(), rx: None, step: None, log: Vec::new(), outcome: None };
-    eframe::run_native("f13recomp setup", options, Box::new(|_| Ok(Box::new(app))))
+    eframe::run_native("f13-engine-poc setup", options, Box::new(|_| Ok(Box::new(app))))
 }

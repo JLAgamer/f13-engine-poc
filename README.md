@@ -1,30 +1,34 @@
-# f13recomp
+# f13-engine-poc
 
-A fan remake of *Friday the 13th: The Game* that runs on your own copy of the game: the gameplay rebuilt in Rust on
-Bevy, with the map, characters, sounds and gameplay values read from your install. It ships no game files.
+**A proof of concept for a custom engine to play *Friday the 13th: The Game*.**
 
-Today it has one map (Crystal Lake, small) with its four cabin layouts, every counselor and the Jasons, and online
-play with friends.
+The original game runs on Unreal Engine 4. This project tests whether it can be played on an engine of its own
+instead: its rules, rendering, sound and networking rebuilt from scratch in Rust on [Bevy](https://bevyengine.org),
+with the map, characters, sounds and gameplay values read from your own copy of the game. It ships no game files.
+
+It's a proof of concept, not a finished game. Today it has one map (Crystal Lake, small) with its four cabin
+layouts, every counselor and the Jasons, and online play with friends; expect missing features, rough edges and bugs.
+It's an unofficial fan project, not affiliated with IllFonic or Gun Media.
 
 ## Install
 
 You need your own copy of *Friday the 13th: The Game* with its files unpacked (its content as loose files under
 `SummerCamp/Content`).
 
-1. Download `f13recomp-windows-x64.zip` from the [releases page](https://github.com/JLAgamer/f13recomp/releases) and
+1. Download `f13-engine-poc-windows-x64.zip` from the [releases page](https://github.com/JLAgamer/f13-engine-poc/releases) and
    unzip it anywhere.
-2. Run `f13recomp-setup.exe` and pick your game folder (the one with `SummerCamp` in it).
+2. Run `f13-engine-poc-setup.exe` and pick your game folder (the one with `SummerCamp` in it).
 3. Press **Install** (a few minutes: it reads everything it needs from your game), then **Play**.
 
-Afterwards, start `f13recomp.exe` directly. Run setup again (Reinstall) after a game update, or when a new f13recomp
+Afterwards, start `f13-engine-poc.exe` directly. Run setup again (Reinstall) after a game update, or when a new f13-engine-poc
 release asks for it.
 
 **Requirements:** Windows 10 or 11 (64-bit), a DirectX 12 or Vulkan graphics card, about 12 GB free.
 
 **Troubleshooting:** if Install fails, setup's log (below its buttons) says which step and why; a game folder that's
-still packed is the usual cause. `f13recomp.exe` writes its log to the console: start it from a terminal to see it.
+still packed is the usual cause. `f13-engine-poc.exe` writes its log to the console: start it from a terminal to see it.
 
-**Uninstall:** delete the unzipped folder and `%USERPROFILE%\.f13recomp` (your settings and profiles).
+**Uninstall:** delete the unzipped folder and `%USERPROFILE%\.f13-engine-poc` (your settings and profiles).
 
 ## Controls
 
@@ -45,18 +49,18 @@ click to aim and throw a knife, E to use or destroy. Holding a counselor, 1-4 pi
 
 ## Playing with friends
 
-One player hosts, the others join. Open a terminal in the f13recomp folder.
+One player hosts, the others join. Open a terminal in the f13-engine-poc folder.
 
 Host:
 
 ```bash
-f13recomp.exe --server 5000 --lobby --name Host
+f13-engine-poc.exe --server 5000 --lobby --name Host
 ```
 
 Everyone else (with the host's IP address):
 
 ```bash
-f13recomp.exe --connect 203.0.113.7:5000 --name Guest
+f13-engine-poc.exe --connect 203.0.113.7:5000 --name Guest
 ```
 
 - In the lobby, 1 / 2 / 3 say whether you'd rather be a counselor, have no preference, or be Jason; Enter readies you.
@@ -64,8 +68,8 @@ f13recomp.exe --connect 203.0.113.7:5000 --name Guest
 - Voice chat is push-to-talk (hold T). In the lobby, P toggles push-to-talk and Shift + a player's number mutes them.
 - Over the internet the host forwards **UDP ports 5000 and 5001** (the port given and the next one) to their PC. On
   the same network, use the host's local address.
-- `--dedicated` hosts without playing. Everyone must run the same f13recomp version.
-- f13recomp players only play each other; it never connects to the game's own servers.
+- `--dedicated` hosts without playing. Everyone must run the same f13-engine-poc version.
+- f13-engine-poc players only play each other; it never connects to the game's own servers.
 
 ## Building from source
 
@@ -97,7 +101,7 @@ options and the developer tools are in [docs/DEVELOPING.md](docs/DEVELOPING.md).
   [egui](https://github.com/emilk/egui) (setup), [cpal](https://github.com/RustAudio/cpal) and libopus (voice chat),
   and [CUE4Parse](https://github.com/FabianFG/CUE4Parse) (reading the game's files). Every bundled library's licence is
   in THIRD-PARTY-NOTICES.md in the release.
-- *Friday the 13th: The Game* is by IllFonic and Gun Media. f13recomp is an unofficial fan project, not affiliated
+- *Friday the 13th: The Game* is by IllFonic and Gun Media. f13-engine-poc is an unofficial fan project, not affiliated
   with or endorsed by them; it ships none of their files and needs your own copy.
 - Made with AI: the code, tools and documentation were written with Claude Code (Anthropic's Claude Opus models),
   directed and tested by the project's maintainer. No generated art or audio: everything you see and hear comes from
@@ -105,4 +109,4 @@ options and the developer tools are in [docs/DEVELOPING.md](docs/DEVELOPING.md).
 
 ## License
 
-f13recomp is licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+f13-engine-poc is licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

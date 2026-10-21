@@ -320,7 +320,7 @@ impl Plugin for JasonPlugin {
 }
 
 /// The counselor Jason's after this tick (his senses and his update act on her). PLACEHOLDER: the game's Jason AI was
-/// cut (Jason is a player), so this is f13recomp's choice: the counselor in his hands, else the nearest one alive, not
+/// cut (Jason is a player), so this is f13-engine-poc's choice: the counselor in his hands, else the nearest one alive, not
 /// escaped and not hidden (a hidden one only when she's the only one left).
 #[derive(Resource, Default)]
 pub struct JasonTarget(pub Option<Entity>);
@@ -758,7 +758,7 @@ impl Jason {
     }
 
     /// IsInSpecialMove for his anim instance (Jason_AnimBP's look-at switch): the moves the game plays through an
-    /// SCSpecialMoveComponent's handler. PLACEHOLDER: the set is read off the handlers f13recomp plays, not the binary.
+    /// SCSpecialMoveComponent's handler. PLACEHOLDER: the set is read off the handlers f13-engine-poc plays, not the binary.
     pub(crate) fn in_special_move(&self) -> bool {
         matches!(
             self.state,

@@ -1,4 +1,4 @@
-# Developing f13recomp
+# Developing f13-engine-poc
 
 The details behind the README: the crates, the exporter's files, the game's command-line options and the test tools.
 
@@ -6,8 +6,8 @@ The details behind the README: the crates, the exporter's files, the game's comm
 
 Developers build the same pieces by hand (below), and `python tools/package.py [--dotnet <dotnet.exe>]` builds the
 release zip into `dist/` (the Rust binaries in release, the exporter published self-contained). The zip names them
-for players: f13-game is `f13recomp.exe`, f13-installer `f13recomp-setup.exe`, the exporter
-`tools/f13recomp-export/f13recomp-export.exe` (f13-host, a developers' tool, isn't shipped).
+for players: f13-game is `f13-engine-poc.exe`, f13-installer `f13-engine-poc-setup.exe`, the exporter
+`tools/f13-engine-poc-export/f13-engine-poc-export.exe` (f13-host, a developers' tool, isn't shipped).
 
 ### Crates
 - `f13-core`: engine-independent rules (no Bevy dependency), unit-tested
@@ -38,7 +38,7 @@ Gameplay values are read from your copy of the game, never shipped here:
 dotnet run --project tools/f13-export -- --game "<path to F13Game>" --out "<export dir>" tuning
 ```
 
-This writes `~/.f13recomp/tuning.json` (`%USERPROFILE%\.f13recomp\tuning.json` on Windows; give a path after `tuning` to
+This writes `~/.f13-engine-poc/tuning.json` (`%USERPROFILE%\.f13-engine-poc\tuning.json` on Windows; give a path after `tuning` to
 write elsewhere), which `f13_data::load(&f13_data::default_path())` reads: the Blueprints' class defaults, curves and
 montage lengths, the executable's C++ constructor defaults and DefaultGame.ini. Re-run it when a new build reports a
 different tuning format. It checks the game executable's build before reading any constant from it.

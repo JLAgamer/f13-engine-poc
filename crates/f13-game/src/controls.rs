@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct LocalPlayer;
 
-/// A counselor's buttons (the game's DefaultInput.ini bindings as f13recomp maps them).
+/// A counselor's buttons (the game's DefaultInput.ini bindings as f13-engine-poc maps them).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum Button {

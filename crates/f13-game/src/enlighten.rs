@@ -4,7 +4,7 @@
 //! times their albedo (DoIndirectInputLighting); each system's transport gathers its own and its neighbours' clusters
 //! and the environment (the sky) into its output pixels (SolveIrradianceTask), placed in its level's atlas.
 //!
-//! f13recomp: the systems of the loaded levels, re-solved a few times a second off the main thread's hot path; their
+//! f13-engine-poc: the systems of the loaded levels, re-solved a few times a second off the main thread's hot path; their
 //! output in one atlas image per level (`EnlightenAtlases`). The clusters' albedo is each system's saved albedo
 //! buffer; the moon's visibility its precomputed visibility (GEVS); the environment is the weather level's (uniform).
 //! The lamps' visibility is a ray per input point (the game's a shadow-map test per point: the precomputed data serves

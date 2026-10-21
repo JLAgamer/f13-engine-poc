@@ -1,6 +1,6 @@
 //! The counselors' clothing: each class's outfit and its slots' options as the player chose them in the wardrobe
 //! (Counselor_Wardrobe_Menu, SCCounselorWardrobeWidget: decompiled), kept with their character profiles
-//! (SaveCharacterProfiles; f13recomp: `<home>/.f13recomp/counselor_profiles.json`), sent with their counselor pick
+//! (SaveCharacterProfiles; f13-engine-poc: `<home>/.f13-engine-poc/counselor_profiles.json`), sent with their counselor pick
 //! (SCPlayerState ServerReceivePerksAndOutfit: lobby.rs LobbyMsg::Outfit) and worn in the match (character.rs
 //! CounselorOutfit, replicated in net.rs NetCounselor).
 //!
@@ -8,7 +8,7 @@
 //! by SortIndex: Counselor_Outfit_Buttons with their OutfitIcon) picks the outfit (SetPreviewOutfit:
 //! SetCurrentOutfit(.., bUseMenuPose)), its slot buttons (Counselor_Slot_Button, the outfit's ClothingSlots) open their
 //! swatch lists (EnableSwatch: GetSelectedSwatchFromSave), whose buttons pick the slot's material (SetPreviewSwatch);
-//! SaveCharacterProfiles keeps it. All unlocked (f13recomp: no entitlements or levels).
+//! SaveCharacterProfiles keeps it. All unlocked (f13-engine-poc: no entitlements or levels).
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};

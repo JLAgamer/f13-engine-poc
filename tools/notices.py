@@ -75,7 +75,7 @@ def dotnet(published):
 
 def main():
     published, out_path = sys.argv[1], sys.argv[2]
-    head = ("# Third-party notices\n\nf13recomp is MIT OR Apache-2.0 (LICENSE-MIT, LICENSE-APACHE). It bundles the software "
+    head = ("# Third-party notices\n\nf13-engine-poc is MIT OR Apache-2.0 (LICENSE-MIT, LICENSE-APACHE). It bundles the software "
             "below under its own licences.\n\n")
     text = head + rust() + dotnet(published)
     open(out_path, "w", encoding="utf-8", newline="\n").write(text)

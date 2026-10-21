@@ -123,7 +123,7 @@ pub struct MatchResult {
 
 /// Where a lobby's server leaves the match's results for the lobby it starts again (`--last-match`).
 pub(crate) fn last_match_file() -> std::path::PathBuf {
-    std::env::temp_dir().join("f13recomp-last-match.json")
+    std::env::temp_dir().join("f13-engine-poc-last-match.json")
 }
 
 /// The results of the match that just ended, from its tallies (counselors by name) and Jason's score.

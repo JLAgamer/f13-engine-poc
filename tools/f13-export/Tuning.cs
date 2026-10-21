@@ -1,4 +1,4 @@
-// `tuning [out file]`: the gameplay values f13recomp reads (tuning.json; default ~/.f13recomp/tuning.json), from YOUR OWN
+// `tuning [out file]`: the gameplay values f13-engine-poc reads (tuning.json; default ~/.f13-engine-poc/tuning.json), from YOUR OWN
 // install: the Blueprints' class defaults and component templates, curves and montages (through CUE4Parse, as the
 // rest of the exporter reads them), the executable's C++ constructor defaults and DefaultGame.ini. A port of the
 // former tools/extract_tuning.py (which needed Python and UAssetGUI's tojson): the same values come out (checked
@@ -464,10 +464,14 @@ static class Tuning
     {
         if (outPath == null)
         {
-            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".f13recomp");
-            // The project was f13-rs: its folder (tuning, profiles, settings) moves to the new name once (as f13-data does).
-            var old = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".f13-rs");
-            if (!Directory.Exists(dir) && Directory.Exists(old)) try { Directory.Move(old, dir); } catch (IOException) { }
+            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".f13-engine-poc");
+            // The project was f13recomp, and before it f13-rs: its folder (tuning, profiles, settings) moves to the new
+            // name once (as f13-data does).
+            foreach (var name in new[] { ".f13recomp", ".f13-rs" })
+            {
+                var old = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), name);
+                if (!Directory.Exists(dir) && Directory.Exists(old)) try { Directory.Move(old, dir); } catch (IOException) { }
+            }
             outPath = Path.Combine(dir, "tuning.json");
         }
         var exe = Path.Combine(game, "SummerCamp", "Binaries", "Win64", "SummerCamp.exe");

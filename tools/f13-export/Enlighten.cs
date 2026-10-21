@@ -1,4 +1,4 @@
-// `enlighten`: the map's Enlighten precomputed data, for f13recomp's solve (f13-data enlighten.rs, f13-game enlighten.rs),
+// `enlighten`: the map's Enlighten precomputed data, for f13-engine-poc's solve (f13-data enlighten.rs, f13-game enlighten.rs),
 // into <out>/enlighten/: read from the map's own packages (SummerCamp/Content/Maps/CrystalLake_Small/*.umap / .uexp, as
 // UE 4.18 cooked them: a minimal reader of their names, imports, exports and tagged properties, since the Enlighten
 // objects' native data follows their tags), after `mvp` (its levels' placements).

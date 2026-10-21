@@ -1,7 +1,13 @@
 # Changelog
 
-All notable changes to f13recomp. Versions follow [semver](https://semver.org); the supported game build is named in
+All notable changes to f13-engine-poc (formerly f13recomp, and Lakeside before it). Versions follow [semver](https://semver.org); the supported game build is named in
 each release.
+
+## Unreleased
+
+- The project is renamed **f13-engine-poc** (was f13recomp): f13-engine-poc.exe, f13-engine-poc-setup.exe,
+  tools/f13-engine-poc-export. The settings folder `.f13recomp` (or `.f13-rs`) in your user folder moves to
+  `.f13-engine-poc` by itself on the first start.
 
 ## 0.3.0 (2026-10-20)
 
